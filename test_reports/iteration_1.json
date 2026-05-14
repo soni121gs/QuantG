@@ -1,0 +1,44 @@
+{
+  "summary": "Tested QuantDesk algo trading MVP. Backend: 18/18 pytest tests pass including auth, broker keys, market data, strategies CRUD, backtest, orders/positions, portfolio, and AI chat (Claude via Emergent LLM key). Frontend: login, dashboard, strategies, python editor (backtest renders), visual builder, orders flow all work. Critical issue found: /api-keys frontend route collides with Kubernetes ingress (which routes any path starting with /api to backend) — page returns backend 404 JSON instead of React UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/ai/chat", "issue": "Dead code path in ai_chat: prior history loop has a break after the first user message, never actually replays history. Conversation context relies solely on emergentintegrations session_id continuity. Not a failure, but misleading."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Frontend route /api-keys", "issue": "Route path '/api-keys' starts with '/api' which Kubernetes ingress routes to backend (port 8001). Visiting /api-keys returns {\"detail\":\"Not Found\"} JSON from FastAPI instead of the React page. The API Keys page is effectively unreachable in the deployed preview.", "selector": "route /api-keys", "priority": "CRITICAL"},
+      {"component": "Orders page (modal select)", "issue": "React hydration error: <span> rendered inside <option> element (Orders.jsx line ~74). Causes console error and possible hydration mismatch.", "selector": "select inside order modal", "priority": "MEDIUM"},
+      {"component": "Dashboard charts", "issue": "Recharts warning: width(-1) height(-1) - ResponsiveContainer parent has 0/undefined dimensions on initial render.", "selector": "equity-curve chart container", "priority": "LOW"},
+      {"component": "Layout/top bar", "issue": "data-testid='logout-btn' not present in DOM (test selector returned null). Logout button may use a different testid or be inside a dropdown not opened by default.", "selector": "[data-testid='logout-btn']", "priority": "MEDIUM"},
+      {"component": "AI Bot page", "issue": "Send button testid mismatch. Found [data-testid='ai-input'] but neither 'ai-send-btn' nor 'chat-send' present. Could not exercise the send flow via UI (backend AI chat verified separately and works).", "selector": "ai send button", "priority": "MEDIUM"},
+      {"component": "API Keys page", "issue": "Could not verify form testids (api-key-input/api-secret-input/save-broker-keys-btn) because route is unreachable (see CRITICAL). Even if selectors exist, the page never renders.", "selector": "n/a", "priority": "BLOCKED"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "RENAME frontend route '/api-keys' to something NOT starting with '/api' (e.g., '/broker-keys' or '/keys'). Update App.js route + Layout.jsx sidebar nav link. Ingress hijacks any path under /api*.",
+    "Fix Orders.jsx: remove the <span> wrapping inside <option>{s.symbol}</option> (likely auto-injected span from a dynamic expression component) - render plain text inside <option>.",
+    "Verify data-testid='logout-btn' is present and visible in Layout.jsx top bar (test could not find it).",
+    "Verify AI Bot send button data-testid (expected 'ai-send-btn' or similar) is wired in AIBot.jsx.",
+    "Fix Recharts ResponsiveContainer parent sizing on Dashboard (give parent min-height or fixed height).",
+    "Optional: clean up the dead history-replay code in /api/ai/chat that breaks after first iteration."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py exec()s user Python code in a sandbox with only restricted builtins, but no import restriction or timeout. A user could write infinite loops or memory abuse via list multiplication. Add resource/time limit (e.g., signal-based timeout or subprocess) before exposing to untrusted users.",
+    "JWT_SECRET is set in .env (good), but ACCESS_TOKEN_MINUTES=7 days is long without refresh-token rotation; acceptable for MVP.",
+    "/api/orders accepts any qty including negative/zero — add pydantic validators (qty > 0).",
+    "Routing collision: any frontend path starting with /api will be eaten by the ingress. Document this and avoid such paths."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "~70% (6/9 flows verified, 1 blocked by routing bug, 2 selector mismatches)"},
+  "test_credentials": "demo@quantdesk.io / demo1234 (working; auto-created on first login)",
+  "seed_data_creation": "Created TEST_ prefixed strategies and broker keys during tests; cleaned up via DELETE. INFY position may persist from order tests.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test suite at /app/backend/tests/backend_test.py covers all endpoints incl. AI chat. After main agent fixes /api-keys route name and logout/ai-send testids, re-run Playwright flows for those three areas only. AI chat backend WORKS — don't retest LLM unless route changes.",
+  "rca of the issue": "Kubernetes ingress is configured to route any URL path matching /api* to backend port 8001 (FastAPI). The frontend React route '/api-keys' matches this prefix, so the request never reaches the React SPA — instead FastAPI receives GET /api-keys, finds no matching route, and returns 404 JSON. Reproduction: open https://bottrader-pro-4.preview.emergentagent.com/api-keys → shows {\"detail\":\"Not Found\"}. Mitigation: rename route to /broker-keys (or /keys, /credentials) in App.js Router config AND in Layout.jsx sidebar link AND wherever navigate('/api-keys') is called."
+}
