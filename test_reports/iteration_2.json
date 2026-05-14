@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2 (Zerodha + Profile + Strategy Runner) tested end-to-end. Backend: 16/16 new pytest tests pass (profile defaults, profile update + validation, change-password guards, /zerodha/login-url + status + exchange + disconnect, watchlist mock fallback, paper-order placement, live-order rejected when not connected, max_position_size enforcement, holdings empty without Zerodha). Iteration 1 suite still green. Strategy runner confirmed to start in supervisor logs ('Strategy runner starting (tick=30s)'). Frontend: /profile route renders all 7 testid sections, mode-badge in top bar shows PAPER, toggle-mode-btn calls PUT /api/profile (200 OK), /broker-keys page renders Step1/2/3, copy-redirect works, Connect-without-keys triggers 400 with correct toast 'Save your Zerodha api_key + api_secret on Broker Keys first', Connect after saving bogus keys returns valid kite.zerodha.com URL and browser redirects (Kite then rejects bogus key as expected). nav-profile link works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/zerodha/exchange", "issue": "When `broker_keys` row exists but has no api_key (very unlikely path), kite_helper would raise unhandled. Currently guarded by 'Save Zerodha keys first' only when row missing. Defensive only."},
+      {"endpoint": "/api/orders", "issue": "Iteration-1 finding still open: no Pydantic validator on qty (accepts 0 or negative). Risk-guard catches absurd values via max_position_size but a qty=0 BUY would pass and insert a stub position with qty=0."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Recharts (Dashboard)", "issue": "Console warning 'width(-1)/height(-1) - container has no size' on initial render — iteration-1 finding still open.", "selector": "equity-curve chart", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/pytest/iteration2_results.xml"
+  ],
+  "action_items": [
+    "Optional: add Pydantic `gt=0` validator on OrderReq.qty to reject 0/negative.",
+    "Optional: fix Recharts ResponsiveContainer parent sizing (iteration-1 carryover).",
+    "Optional: clean up dead history-replay loop in /api/ai/chat (iteration-1 carryover)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~960 lines — getting close to the 700-line threshold. Consider splitting auth/profile/zerodha/orders/strategies into separate routers.",
+    "_safe_run_python in server.py and _safe_run in strategy_runner.py are near-duplicates. Extract to a shared sandbox module (DRY).",
+    "Strategy runner exec()s user Python code on every tick with NO time/memory cap. A malicious or buggy strategy can hang the runner event loop and block every other live strategy. Wrap in `asyncio.to_thread` + timeout, or run in a subprocess.",
+    "JWT_SECRET default fallback is 'dev-secret' if env missing — fail fast instead.",
+    "/api/profile PUT does not validate numeric ranges (e.g. max_position_size could be set to negative).",
+    "ProfileUpdateReq accepts paper_mode flip without re-auth or 2FA — for a 'real money' switch this is risky. Consider requiring password confirmation when going LIVE."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration2.py"],
+  "success_rate": {"backend": "100% (16/16 new tests + 18/18 iteration-1 tests)", "frontend": "100% (all 9 profile/broker-keys flows verified)"},
+  "test_credentials": "demo@quantdesk.io / demo1234 (working). Profile reset to safe defaults (paper_mode=true, default_qty=1, MIS, max_position_size=500000) after tests. Bogus Zerodha key cleaned up.",
+  "seed_data_creation": "Demo user profile fields populated; one INFY paper position may persist from order tests (harmless).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Two pytest files now: backend_test.py (iteration-1) and test_iteration2.py (Zerodha/Profile/orders modes). Run both with `REACT_APP_BACKEND_URL=... pytest /app/backend/tests/ -v`. Demo user is auto-created on first login. Real Kite OAuth round-trip cannot be tested without a live Zerodha login — only URL generation and exchange rejection on bogus token are covered."
+}

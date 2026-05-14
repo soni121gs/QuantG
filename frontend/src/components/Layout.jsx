@@ -13,6 +13,7 @@ import {
   Wallet,
   Menu,
   X,
+  UserCircle,
 } from "lucide-react";
 import TickerTape from "./TickerTape";
 import { useAuth } from "../contexts/AuthContext";
@@ -27,6 +28,7 @@ const NAV = [
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
   { to: "/broker-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
+  { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
 ];
 
 // Bottom-bar items for mobile (5 most-used)
@@ -43,6 +45,7 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(new Date());
   const [pnl, setPnl] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
@@ -51,10 +54,12 @@ export default function Layout({ children }) {
   }, []);
 
   useEffect(() => {
-    const fetch = () =>
+    const fetch = () => {
       api.get("/portfolio").then((r) => setPnl(r.data.total_pnl)).catch(() => {});
+      api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
+    };
     fetch();
-    const t = setInterval(fetch, 4000);
+    const t = setInterval(fetch, 5000);
     return () => clearInterval(t);
   }, []);
 
@@ -98,6 +103,19 @@ export default function Layout({ children }) {
                 {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
               </span>
             </div>
+            {profile && (
+              <span
+                className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm ${
+                  profile.paper_mode
+                    ? "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)] border border-[var(--qd-warn)]"
+                    : "bg-[rgba(255,59,48,0.12)] text-[var(--qd-loss)] border border-[var(--qd-loss)]"
+                }`}
+                data-testid="mode-badge"
+                title={profile.paper_mode ? "Paper mode — orders are simulated" : "LIVE — real money at risk"}
+              >
+                {profile.paper_mode ? "PAPER" : "LIVE ●"}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 md:gap-6">
             <div className="flex items-center gap-1.5 md:gap-2">
@@ -206,7 +224,17 @@ export default function Layout({ children }) {
         )}
 
         {/* Main */}
-        <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">{children}</main>
+        <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">
+          {profile?.zerodha?.reason === "expired" && (
+            <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 mb-4 flex items-center justify-between gap-3" data-testid="token-expired-banner">
+              <div className="text-sm text-[var(--qd-text-2)]">
+                <span className="text-[var(--qd-warn)] font-semibold">⚠ Zerodha session expired.</span> Re-connect on Broker Keys to resume live trading. Tokens expire at 6 AM IST.
+              </div>
+              <button onClick={() => navigate("/broker-keys")} className="bg-[var(--qd-warn)] text-black px-3 py-1.5 text-xs font-mono uppercase rounded-sm">Re-connect</button>
+            </div>
+          )}
+          {children}
+        </main>
       </div>
 
       {/* Mobile bottom nav */}

@@ -22,6 +22,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+import kite_helper
+import strategy_runner
+
 # Mongo
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -122,6 +125,25 @@ class OrderReq(BaseModel):
 class ChatReq(BaseModel):
     session_id: str
     message: str
+
+
+class ProfileUpdateReq(BaseModel):
+    name: Optional[str] = None
+    default_qty: Optional[int] = None
+    default_product: Optional[str] = None
+    max_daily_loss: Optional[float] = None
+    max_position_size: Optional[float] = None
+    paper_mode: Optional[bool] = None
+
+
+class ChangePasswordReq(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class KiteExchangeReq(BaseModel):
+    request_token: str
+    broker: str = "zerodha"
 
 
 # ============== Auth helpers ==============
@@ -293,23 +315,59 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 
 # ============== Routes: Market ==============
 @api.get("/market/watchlist")
-async def watchlist():
+async def watchlist(user=Depends(get_current_user)):
+    # Try live Kite first
+    kite, status = await get_user_kite(user["id"])
+    if kite:
+        instruments = [_nse_token(s["symbol"]) for s in SYMBOLS]
+        ltp_data = kite_helper.safe_ltp(kite, instruments)
+        if ltp_data:
+            out = []
+            for s in SYMBOLS:
+                key = _nse_token(s["symbol"])
+                node = ltp_data.get(key) or {}
+                price = node.get("last_price")
+                # Compute change vs ohlc close
+                ohlc_close = node.get("ohlc", {}).get("close") if isinstance(node, dict) else None
+                change = round((price or 0) - (ohlc_close or price or 0), 2)
+                pct = round((change / ohlc_close) * 100, 2) if ohlc_close else 0.0
+                out.append({"symbol": s["symbol"], "name": s["name"],
+                            "price": price or s["base"], "change": change, "pct": pct,
+                            "source": "live"})
+            return out
+    # Fallback: mock
     out = []
     for i, s in enumerate(SYMBOLS):
         lp = live_price(s["base"], i)
-        out.append({"symbol": s["symbol"], "name": s["name"], **lp})
+        out.append({"symbol": s["symbol"], "name": s["name"], **lp, "source": "mock"})
     return out
 
 
 @api.get("/market/quote/{symbol}")
-async def quote(symbol: str):
+async def quote(symbol: str, user=Depends(get_current_user)):
     found = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
     if not found:
         raise HTTPException(status_code=404, detail="Symbol not found")
     idx = SYMBOLS.index(found)
+    kite, _ = await get_user_kite(user["id"])
+    if kite:
+        q = kite_helper.safe_quote(kite, [_nse_token(found["symbol"])])
+        if q:
+            node = list(q.values())[0]
+            price = node.get("last_price", found["base"])
+            ohlc = node.get("ohlc", {}) or {}
+            ohlc_close = ohlc.get("close") or price
+            return {
+                "symbol": found["symbol"], "name": found["name"],
+                "price": price,
+                "change": round(price - ohlc_close, 2),
+                "pct": round((price - ohlc_close) / ohlc_close * 100, 2) if ohlc_close else 0,
+                "series": historical_series(price, 60),
+                "source": "live",
+            }
     lp = live_price(found["base"], idx)
     return {"symbol": found["symbol"], "name": found["name"], **lp,
-            "series": historical_series(found["base"], 60)}
+            "series": historical_series(found["base"], 60), "source": "mock"}
 
 
 # ============== Routes: Strategies ==============
@@ -466,55 +524,106 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
 
 
 # ============== Routes: Orders & Positions ==============
-@api.post("/orders")
-async def place_order(req: OrderReq, user=Depends(get_current_user)):
-    sym = next((s for s in SYMBOLS if s["symbol"] == req.symbol.upper()), None)
+async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
+                            order_type: str = "MARKET", price: Optional[float] = None,
+                            product: Optional[str] = None, source: str = "manual") -> dict:
+    """Shared order-placement business logic. Honours paper_mode + risk limits.
+    Used by both the /orders endpoint and the background strategy runner.
+    """
+    side = side.upper()
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
     if not sym:
         raise HTTPException(status_code=400, detail="Unknown symbol")
-    lp = live_price(sym["base"], SYMBOLS.index(sym))
-    fill_price = req.price if req.order_type == "LIMIT" and req.price else lp["price"]
+    settings = await get_user_settings(user_id)
+    qty = int(qty or settings["default_qty"] or 1)
+    product = product or settings["default_product"] or "MIS"
+    paper = settings.get("paper_mode", True)
+
+    # Risk guard: max position size
+    fill_price_hint = price or live_price(sym["base"], SYMBOLS.index(sym))["price"]
+    if qty * fill_price_hint > settings["max_position_size"]:
+        raise HTTPException(status_code=400,
+            detail=f"Order value ₹{qty * fill_price_hint:.0f} exceeds max position size ₹{settings['max_position_size']:.0f}. Adjust on Profile.")
+
+    broker_order_id = None
+    if not paper:
+        kite, _ = await get_user_kite(user_id)
+        if not kite:
+            raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected. Connect on Broker Keys or flip to Paper.")
+        try:
+            res = kite_helper.place_live_order(
+                kite,
+                tradingsymbol=symbol.upper(),
+                exchange="NSE",
+                transaction_type=side,
+                quantity=qty,
+                order_type=order_type,
+                product=product,
+                price=price,
+            )
+            broker_order_id = res.get("order_id")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
+        fill_price = fill_price_hint  # actual fill comes via Kite later
+    else:
+        fill_price = price if order_type == "LIMIT" and price else fill_price_hint
+
     doc = {
         "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "symbol": req.symbol.upper(),
-        "side": req.side.upper(),
-        "qty": req.qty,
-        "order_type": req.order_type,
+        "user_id": user_id,
+        "symbol": symbol.upper(),
+        "side": side,
+        "qty": qty,
+        "order_type": order_type,
         "price": fill_price,
-        "product": req.product,
-        "status": "COMPLETE",
+        "product": product,
+        "status": "COMPLETE" if paper else "OPEN",
+        "mode": "paper" if paper else "live",
+        "broker_order_id": broker_order_id,
+        "source": source,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(doc)
-    # Update positions
-    pos = await db.positions.find_one({"user_id": user["id"], "symbol": doc["symbol"]})
-    delta = req.qty if req.side.upper() == "BUY" else -req.qty
-    if pos:
-        new_qty = pos["qty"] + delta
-        if new_qty == 0:
-            await db.positions.delete_one({"_id": pos["_id"]})
-        else:
-            # weighted avg for buys; keep avg on sells
-            if req.side.upper() == "BUY":
-                avg = (pos["avg_price"] * pos["qty"] + fill_price * req.qty) / (pos["qty"] + req.qty) if (pos["qty"] + req.qty) else fill_price
+
+    # Update local paper positions only when paper-mode
+    if paper:
+        pos = await db.positions.find_one({"user_id": user_id, "symbol": doc["symbol"]})
+        delta = qty if side == "BUY" else -qty
+        if pos:
+            new_qty = pos["qty"] + delta
+            if new_qty == 0:
+                await db.positions.delete_one({"_id": pos["_id"]})
             else:
-                avg = pos["avg_price"]
-            await db.positions.update_one(
-                {"_id": pos["_id"]},
-                {"$set": {"qty": new_qty, "avg_price": round(avg, 2)}},
-            )
-    else:
-        await db.positions.insert_one({
-            "id": str(uuid.uuid4()),
-            "user_id": user["id"],
-            "symbol": doc["symbol"],
-            "qty": delta,
-            "avg_price": fill_price,
-            "created_at": doc["created_at"],
-        })
+                if side == "BUY":
+                    avg = (pos["avg_price"] * pos["qty"] + fill_price * qty) / (pos["qty"] + qty) if (pos["qty"] + qty) else fill_price
+                else:
+                    avg = pos["avg_price"]
+                await db.positions.update_one(
+                    {"_id": pos["_id"]},
+                    {"$set": {"qty": new_qty, "avg_price": round(avg, 2)}},
+                )
+        else:
+            await db.positions.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "symbol": doc["symbol"],
+                "qty": delta,
+                "avg_price": fill_price,
+                "created_at": doc["created_at"],
+            })
     doc.pop("_id", None)
     doc.pop("user_id", None)
     return doc
+
+
+@api.post("/orders")
+async def place_order(req: OrderReq, user=Depends(get_current_user)):
+    return await _place_order_core(
+        user_id=user["id"], symbol=req.symbol, side=req.side, qty=req.qty,
+        order_type=req.order_type, price=req.price, product=req.product, source="manual",
+    )
 
 
 @api.get("/orders")
@@ -525,14 +634,59 @@ async def list_orders(user=Depends(get_current_user)):
 
 @api.get("/positions")
 async def list_positions(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    kite, _ = await get_user_kite(user["id"])
+    # Live mode + connected: prefer real positions
+    if kite and not settings.get("paper_mode", True):
+        data = kite_helper.safe_positions(kite)
+        if data and data.get("net") is not None:
+            out = []
+            for p in data["net"]:
+                if not p.get("quantity"):
+                    continue
+                out.append({
+                    "symbol": p.get("tradingsymbol"),
+                    "qty": p.get("quantity"),
+                    "avg_price": round(float(p.get("average_price") or 0), 2),
+                    "ltp": round(float(p.get("last_price") or 0), 2),
+                    "pnl": round(float(p.get("pnl") or 0), 2),
+                    "product": p.get("product"),
+                    "mode": "live",
+                })
+            return out
+    # Paper / fallback
     rows = await db.positions.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
     out = []
     for r in rows:
         sym = next((s for s in SYMBOLS if s["symbol"] == r["symbol"]), None)
         ltp = live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else r["avg_price"]
         pnl = round((ltp - r["avg_price"]) * r["qty"], 2)
-        out.append({**r, "ltp": ltp, "pnl": pnl})
+        out.append({**r, "ltp": ltp, "pnl": pnl, "mode": "paper"})
     return out
+
+
+@api.get("/portfolio/holdings")
+async def list_holdings(user=Depends(get_current_user)):
+    kite, _ = await get_user_kite(user["id"])
+    if not kite:
+        return {"holdings": [], "source": "none",
+                "message": "Connect Zerodha to view long-term holdings."}
+    data = kite_helper.safe_holdings(kite)
+    if data is None:
+        return {"holdings": [], "source": "error", "message": "Zerodha holdings fetch failed."}
+    out = []
+    for h in data:
+        last = float(h.get("last_price") or 0)
+        avg = float(h.get("average_price") or 0)
+        qty = int(h.get("quantity") or 0)
+        out.append({
+            "symbol": h.get("tradingsymbol"),
+            "qty": qty,
+            "avg_price": round(avg, 2),
+            "ltp": round(last, 2),
+            "pnl": round((last - avg) * qty, 2),
+        })
+    return {"holdings": out, "source": "live"}
 
 
 @api.get("/portfolio")
@@ -561,6 +715,128 @@ async def portfolio(user=Depends(get_current_user)):
         "live_strategies": live_strategies,
         "equity_curve": equity,
     }
+
+
+# ============== Zerodha helpers ==============
+# Map our short symbols to NSE tradingsymbols (1:1 for equity; indices use different)
+NSE_INDEX_MAP = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK"}
+
+
+def _nse_token(sym: str) -> str:
+    """Build instrument key for Kite ltp/quote calls. Indices go to NSE, equities to NSE."""
+    if sym in NSE_INDEX_MAP:
+        return f"NSE:{NSE_INDEX_MAP[sym]}"
+    return f"NSE:{sym}"
+
+
+async def get_user_kite(user_id: str):
+    """Return (kite_instance, status_dict). kite is None if not connected/expired."""
+    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "zerodha"})
+    if not keys or not keys.get("access_token"):
+        return None, {"connected": False, "reason": "no_token"}
+    if not kite_helper.is_token_valid(keys.get("access_token_expires_at")):
+        return None, {"connected": False, "reason": "expired", "kite_user_id": keys.get("kite_user_id")}
+    kite = kite_helper.make_kite(keys["api_key"], keys["access_token"])
+    return kite, {"connected": True, "kite_user_id": keys.get("kite_user_id"),
+                  "expires_at": keys["access_token_expires_at"]}
+
+
+async def get_user_settings(user_id: str) -> dict:
+    """Profile / trading preferences with safe defaults."""
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    return {
+        "name": (user or {}).get("name", ""),
+        "default_qty": (user or {}).get("default_qty", 1),
+        "default_product": (user or {}).get("default_product", "MIS"),
+        "max_daily_loss": (user or {}).get("max_daily_loss", 10000.0),
+        "max_position_size": (user or {}).get("max_position_size", 50000.0),
+        "paper_mode": (user or {}).get("paper_mode", True),
+    }
+
+
+# ============== Routes: Zerodha OAuth ==============
+@api.get("/zerodha/login-url")
+async def zerodha_login_url(user=Depends(get_current_user)):
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
+    if not keys:
+        raise HTTPException(status_code=400, detail="Save your Zerodha api_key + api_secret on Broker Keys first")
+    return {"url": kite_helper.login_url(keys["api_key"]), "api_key": keys["api_key"][:6] + "•••"}
+
+
+@api.post("/zerodha/exchange")
+async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user)):
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
+    if not keys:
+        raise HTTPException(status_code=400, detail="Save Zerodha keys first")
+    try:
+        session = kite_helper.exchange_request_token(
+            keys["api_key"], keys["api_secret"], req.request_token
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Exchange failed: {e}")
+    expires_at = kite_helper.next_token_expiry_iso()
+    await db.broker_keys.update_one(
+        {"user_id": user["id"], "broker": "zerodha"},
+        {"$set": {
+            "access_token": session.get("access_token"),
+            "public_token": session.get("public_token"),
+            "kite_user_id": session.get("user_id"),
+            "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
+            "access_token_expires_at": expires_at,
+        }},
+    )
+    return {"connected": True, "kite_user_id": session.get("user_id"), "expires_at": expires_at}
+
+
+@api.get("/zerodha/status")
+async def zerodha_status(user=Depends(get_current_user)):
+    _, status = await get_user_kite(user["id"])
+    return status
+
+
+@api.post("/zerodha/disconnect")
+async def zerodha_disconnect(user=Depends(get_current_user)):
+    await db.broker_keys.update_one(
+        {"user_id": user["id"], "broker": "zerodha"},
+        {"$unset": {"access_token": "", "public_token": "", "access_token_expires_at": "",
+                    "access_token_obtained_at": "", "kite_user_id": ""}},
+    )
+    return {"disconnected": True}
+
+
+# ============== Routes: Profile ==============
+@api.get("/profile")
+async def get_profile(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    _, kite_status = await get_user_kite(user["id"])
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "created_at": user["created_at"],
+        **settings,
+        "zerodha": kite_status,
+    }
+
+
+@api.put("/profile")
+async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
+    update = {k: v for k, v in req.model_dump().items() if v is not None}
+    if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
+        raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")
+    if update:
+        await db.users.update_one({"id": user["id"]}, {"$set": update})
+    return await get_profile(user=user)
+
+
+@api.post("/profile/change-password")
+async def change_password(req: ChangePasswordReq, user=Depends(get_current_user)):
+    full = await db.users.find_one({"id": user["id"]})
+    if not full or not verify_password(req.current_password, full["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(req.new_password)}})
+    return {"changed": True}
 
 
 # ============== Routes: AI Bot ==============
@@ -652,9 +928,29 @@ async def startup():
     await db.orders.create_index([("user_id", 1), ("created_at", -1)])
     await db.positions.create_index([("user_id", 1), ("symbol", 1)], unique=True)
     await db.ai_messages.create_index([("user_id", 1), ("session_id", 1)])
+
+    # Background strategy runner
+    async def _price_history(user_id: str, symbol: str, days: int = 60):
+        sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
+        if not sym:
+            return []
+        # For runner we use mock historical for now (Kite historical needs instrument_token
+        # mapping which adds latency on every tick — acceptable mock for v1)
+        return historical_series(sym["base"], days)
+
+    app.state.runner_stop = asyncio.Event()
+    app.state.runner_task = asyncio.create_task(
+        strategy_runner.runner_loop(db, _price_history, _place_order_core, app.state.runner_stop)
+    )
     logger.info("QuantG API started")
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    try:
+        app.state.runner_stop.set()
+        if app.state.runner_task:
+            await asyncio.wait_for(app.state.runner_task, timeout=3.0)
+    except Exception:
+        pass
     client.close()

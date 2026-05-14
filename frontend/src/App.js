@@ -13,6 +13,7 @@ import VisualBuilder from "./pages/VisualBuilder";
 import AIBot from "./pages/AIBot";
 import Orders from "./pages/Orders";
 import Positions from "./pages/Positions";
+import Profile from "./pages/Profile";
 import { Toaster } from "sonner";
 
 const Protected = ({ children }) => {
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/orders" element={<Protected><Orders /></Protected>} />
           <Route path="/positions" element={<Protected><Positions /></Protected>} />
           <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
+          <Route path="/profile" element={<Protected><Profile /></Protected>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>
