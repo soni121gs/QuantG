@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api, formatINR, pctFmt } from "../lib/api";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, AreaChart, Area } from "recharts";
 import { TrendingUp, TrendingDown, Wallet, Activity, Layers, Target } from "lucide-react";
@@ -20,21 +20,22 @@ export default function Dashboard() {
   const [watch, setWatch] = useState([]);
   const [positions, setPositions] = useState([]);
 
+  const load = useCallback(async () => {
+    try {
+      const [p, w, ps] = await Promise.all([
+        api.get("/portfolio"),
+        api.get("/market/watchlist"),
+        api.get("/positions"),
+      ]);
+      setPf(p.data); setWatch(w.data); setPositions(ps.data);
+    } catch { /* keep stale data */ }
+  }, []);
+
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [p, w, ps] = await Promise.all([
-          api.get("/portfolio"),
-          api.get("/market/watchlist"),
-          api.get("/positions"),
-        ]);
-        setPf(p.data); setWatch(w.data); setPositions(ps.data);
-      } catch {}
-    };
     load();
     const t = setInterval(load, 4000);
     return () => clearInterval(t);
-  }, []);
+  }, [load]);
 
   const pnl = pf?.total_pnl ?? 0;
   const pnlTone = pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]";

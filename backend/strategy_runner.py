@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
-import random
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List
+from datetime import datetime, timezone
+from typing import List
+
+from safe_exec import safe_run_strategy
 
 logger = logging.getLogger("quantg.runner")
 
@@ -23,18 +23,9 @@ TICK_SECONDS = 30
 
 
 def _safe_run(code: str, data: List[dict]) -> List[dict]:
-    safe_builtins = {
-        "len": len, "range": range, "sum": sum, "min": min, "max": max,
-        "abs": abs, "round": round, "float": float, "int": int, "str": str,
-        "list": list, "dict": dict, "enumerate": enumerate, "zip": zip, "print": print,
-    }
-    env: Dict[str, Any] = {"__builtins__": safe_builtins}
-    exec(code, env, env)
-    fn = env.get("run")
-    if not callable(fn):
-        return []
+    """Run user strategy via shared AST-validated sandbox. Returns [] on error."""
     try:
-        return fn(data) or []
+        return safe_run_strategy(code, data)
     except Exception as e:
         logger.warning(f"strategy code error: {e}")
         return []

@@ -7,7 +7,7 @@ load_dotenv(ROOT_DIR / '.env')
 import os
 import uuid
 import asyncio
-import random
+import secrets as _secrets
 import math
 import logging
 from datetime import datetime, timezone, timedelta
@@ -24,6 +24,10 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 import kite_helper
 import strategy_runner
+from safe_exec import safe_run_strategy
+
+# Cryptographically strong RNG for mock data jitter — replaces _rng.random()
+_rng = _secrets.SystemRandom()
 
 # Mongo
 mongo_url = os.environ['MONGO_URL']
@@ -202,7 +206,7 @@ SYMBOLS = [
 def live_price(base: float, seed: int) -> Dict[str, Any]:
     t = datetime.now(timezone.utc).timestamp()
     drift = math.sin(t / 12.0 + seed) * (base * 0.004)
-    noise = (random.random() - 0.5) * (base * 0.002)
+    noise = (_rng.random() - 0.5) * (base * 0.002)
     price = round(base + drift + noise, 2)
     change = round(drift + noise, 2)
     pct = round((change / base) * 100, 2)
@@ -215,7 +219,7 @@ def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
     for i in range(days):
         d = datetime.now(timezone.utc) - timedelta(days=days - i)
         # random walk with slight up drift
-        price = price * (1 + (random.random() - 0.48) * 0.02)
+        price = price * (1 + (_rng.random() - 0.48) * 0.02)
         out.append({"date": d.strftime("%Y-%m-%d"), "close": round(price, 2)})
     return out
 
@@ -450,18 +454,8 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
 
 
 def _safe_run_python(code: str, data: List[dict]) -> List[dict]:
-    """Sandbox-ish exec of user's Python code with run(data)->signals."""
-    safe_builtins = {
-        "len": len, "range": range, "sum": sum, "min": min, "max": max,
-        "abs": abs, "round": round, "float": float, "int": int, "str": str,
-        "list": list, "dict": dict, "enumerate": enumerate, "zip": zip, "print": print,
-    }
-    env: Dict[str, Any] = {"__builtins__": safe_builtins}
-    exec(code, env, env)
-    fn = env.get("run")
-    if not callable(fn):
-        raise ValueError("Strategy must define a `run(data)` function")
-    return fn(data) or []
+    """Run user strategy via AST-validated sandbox (see safe_exec.py)."""
+    return safe_run_strategy(code, data)
 
 
 @api.post("/strategies/backtest")
@@ -476,9 +470,10 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
         code = DEFAULT_PYTHON
     sym = next((s for s in SYMBOLS if s["symbol"] == req.symbol.upper()), SYMBOLS[0])
     data = historical_series(sym["base"], req.days)
+    signals: List[dict] = []
     try:
         signals = _safe_run_python(code, data)
-    except Exception as e:
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=f"Strategy error: {e}")
 
     # Simulate PnL
@@ -703,7 +698,7 @@ async def portfolio(user=Depends(get_current_user)):
     base = 100000.0
     for i in range(30):
         d = datetime.now(timezone.utc) - timedelta(days=30 - i)
-        base = base * (1 + (random.random() - 0.46) * 0.01)
+        base = base * (1 + (_rng.random() - 0.46) * 0.01)
         equity.append({"date": d.strftime("%Y-%m-%d"), "equity": round(base + total_pnl * (i / 30), 2)})
 
     return {
@@ -768,6 +763,7 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
     if not keys:
         raise HTTPException(status_code=400, detail="Save Zerodha keys first")
+    session: Dict[str, Any] = {}
     try:
         session = kite_helper.exchange_request_token(
             keys["api_key"], keys["api_secret"], req.request_token
@@ -888,7 +884,7 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
             break  # we don't actually replay; rely on lib's session
 
     try:
-        reply = await chat.send_message(UserMessage(text=req.message))
+        reply: str = await chat.send_message(UserMessage(text=req.message))
     except Exception as e:
         logger.error(f"LLM error: {e}")
         raise HTTPException(status_code=500, detail=f"AI error: {e}")

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { Play, Save, Code2 } from "lucide-react";
@@ -43,6 +43,8 @@ export default function PythonEditor() {
       setName(r.data.name); setDescription(r.data.description || "");
       setCode(r.data.python_code || STARTER); setSavedId(r.data.id);
     });
+    // STARTER is module-level constant — safe to omit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const lines = useMemo(() => code.split("\n").length, [code]);

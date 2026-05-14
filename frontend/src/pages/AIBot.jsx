@@ -27,12 +27,13 @@ export default function AIBot() {
     if (!content || busy) return;
     setBusy(true);
     setText("");
-    setMessages((m) => [...m, { role: "user", content }]);
+    const cid = `c-${Date.now()}`;
+    setMessages((m) => [...m, { id: cid, role: "user", content }]);
     try {
       const r = await api.post("/ai/chat", { session_id: SESSION, message: content });
-      setMessages((m) => [...m, { role: "assistant", content: r.data.content }]);
+      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: "assistant", content: r.data.content }]);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", content: `× Error: ${e.response?.data?.detail || e.message}` }]);
+      setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `× Error: ${e.response?.data?.detail || e.message}` }]);
     } finally { setBusy(false); }
   };
 
@@ -60,9 +61,9 @@ export default function AIBot() {
             </div>
           )}
           {messages.map((m, i) => (
-            <Message key={i} m={m} />
+            <Message key={m.id || `m-${i}`} m={m} />
           ))}
-          {busy && <Message m={{ role: "assistant", content: "▊" }} />}
+          {busy && <Message key="typing" m={{ role: "assistant", content: "▊" }} />}
           <div ref={endRef} />
         </div>
 

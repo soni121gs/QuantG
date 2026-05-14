@@ -10,12 +10,12 @@ export default function VisualBuilder() {
   const [name, setName] = useState("RSI Reversal");
   const [symbol, setSymbol] = useState("NIFTY");
   const [conditions, setConditions] = useState([
-    { indicator: "RSI", op: "<", value: "30" },
+    { _id: "c0", indicator: "RSI", op: "<", value: "30" },
   ]);
   const [action, setAction] = useState({ side: "BUY", qty: 10 });
   const [msg, setMsg] = useState("");
 
-  const add = () => setConditions([...conditions, { indicator: "Price", op: ">", value: "100" }]);
+  const add = () => setConditions([...conditions, { _id: `c${Date.now()}-${Math.floor(Math.random() * 1000)}`, indicator: "Price", op: ">", value: "100" }]);
   const remove = (i) => setConditions(conditions.filter((_, idx) => idx !== i));
   const update = (i, key, v) => setConditions(conditions.map((c, idx) => (idx === i ? { ...c, [key]: v } : c)));
 
@@ -61,7 +61,7 @@ export default function VisualBuilder() {
         </div>
         <div className="space-y-2">
           {conditions.map((c, i) => (
-            <div key={i} className="flex items-center gap-2 bg-[var(--qd-bg)] border border-[var(--qd-border)] p-2 rounded-sm" data-testid={`cond-${i}`}>
+            <div key={c._id} className="flex items-center gap-2 bg-[var(--qd-bg)] border border-[var(--qd-border)] p-2 rounded-sm" data-testid={`cond-${i}`}>
               <Select value={c.indicator} options={INDICATORS} onChange={(v) => update(i, "indicator", v)} />
               <Select value={c.op} options={OPS} onChange={(v) => update(i, "op", v)} />
               <input value={c.value} onChange={(e) => update(i, "value", e.target.value)} className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-1.5 text-sm text-white font-mono w-24 rounded-sm" />

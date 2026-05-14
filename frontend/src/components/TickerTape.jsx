@@ -29,11 +29,11 @@ export default function TickerTape() {
       data-testid="ticker-tape"
     >
       <Marquee gradient={false} speed={42} pauseOnHover>
-        {data.map((s, i) => {
+        {data.map((s) => {
           const up = s.change >= 0;
           return (
             <div
-              key={i}
+              key={s.symbol}
               className="flex items-center gap-2 px-6 border-r border-[var(--qd-border)]"
               data-testid={`ticker-${s.symbol}`}
             >

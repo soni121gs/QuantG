@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api, formatINR } from "../lib/api";
 
 export default function Positions() {
   const [pos, setPos] = useState([]);
 
+  const load = useCallback(() => api.get("/positions").then((r) => setPos(r.data)), []);
   useEffect(() => {
-    const load = () => api.get("/positions").then((r) => setPos(r.data));
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [load]);
 
   const total = pos.reduce((a, p) => a + p.pnl, 0);
 

@@ -38,9 +38,12 @@ def next_token_expiry_iso() -> str:
 def is_token_valid(expires_at_iso: Optional[str]) -> bool:
     if not expires_at_iso:
         return False
+    exp: Optional[datetime] = None
     try:
         exp = datetime.fromisoformat(expires_at_iso.replace("Z", "+00:00"))
     except Exception:
+        return False
+    if exp is None:
         return False
     return datetime.now(timezone.utc) < exp
 
