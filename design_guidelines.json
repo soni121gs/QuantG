@@ -1,0 +1,147 @@
+{
+  "theme": "Dark",
+  "archetype": "Archetype 2 (Performance Pro) - Tactical Trading Terminal",
+  "core_principles": [
+    "Command-center focus: High density, extreme clarity, and tactical minimalism.",
+    "Color is strictly functional: Green for profit/buy, Red for loss/sell. No generic gradients.",
+    "Grid Borders Strategy: Use 1px sharp borders to expose the skeleton, creating a true terminal feel.",
+    "Bento grid architecture: Strict compartmentation, sizes dictate hierarchy. Dense spacing.",
+    "Monospace priority: All financial figures, tickers, and code must use monospaced typography for precision."
+  ],
+  "typography": {
+    "font_family": {
+      "headings": "Chivo",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl font-bold tracking-tight text-white",
+      "h2": "text-2xl font-semibold tracking-tight text-white",
+      "h3": "text-lg font-medium text-white",
+      "body": "text-sm text-[#A3A3A3] leading-relaxed",
+      "data_large": "font-mono text-2xl font-bold tracking-tight",
+      "data_small": "font-mono text-xs font-medium tracking-wider uppercase",
+      "code": "font-mono text-sm leading-tight text-[#E5E5E5]"
+    },
+    "guidelines": [
+      "Never use default generic fonts. Use Chivo for primary headings to give authoritative weight.",
+      "Always use JetBrains Mono for prices, PnL, API keys, code editor, and numerical data.",
+      "Use tracking-tight for all headings."
+    ]
+  },
+  "colors": {
+    "background": {
+      "default": "#050505",
+      "surface": "#121212",
+      "surface_hover": "#1C1C1E"
+    },
+    "border": {
+      "default": "#262626",
+      "focus": "#333333",
+      "active": "#007AFF"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A3A3A3",
+      "tertiary": "#666666"
+    },
+    "accent": {
+      "primary": "#007AFF",
+      "primary_hover": "#005bb5",
+      "profit": "#00E676",
+      "profit_bg": "rgba(0, 230, 118, 0.1)",
+      "loss": "#FF3B30",
+      "loss_bg": "rgba(255, 59, 48, 0.1)",
+      "warning": "#FF9F0A"
+    }
+  },
+  "spacing_and_layout": {
+    "dashboard_grid": {
+      "strategy": "MODE B: THE 'CONTROL ROOM' GRID",
+      "columns": "grid-cols-1 md:grid-cols-4 lg:grid-cols-12",
+      "gap": "gap-4",
+      "bento_span_rules": [
+        "Hero Chart: col-span-12 lg:col-span-8 row-span-2",
+        "KPI Widgets: col-span-6 lg:col-span-4",
+        "Positions Table: col-span-12 lg:col-span-8",
+        "Watchlist/Feed: col-span-12 lg:col-span-4 row-span-2"
+      ]
+    },
+    "padding": "p-4 md:p-6",
+    "radius": "rounded-sm",
+    "guidelines": [
+      "Ensure all bento cards stretch to match heights using h-full and flex flex-col.",
+      "Containers with borders must have internal padding. Use minimal padding (p-4) to maximize data density.",
+      "Use strict compartmentation so dense financial info stays scannable."
+    ]
+  },
+  "surfaces_and_micro_themes": {
+    "primary_surface": "Grid Borders (The Technical Look)",
+    "rules": [
+      "Expose the grid. Use 1px subtle borders (border-[#262626]) around cards.",
+      "No soft shadows or glows. Tactical minimalism only.",
+      "For code editors or terminal views, apply Retro-Futurism touch: Deep black background (#000000) with JetBrains Mono, maybe subtle scanlines or pure stark contrast."
+    ]
+  },
+  "components": {
+    "buttons": [
+      "Flat design, no shadow.",
+      "Primary Action: bg-[#007AFF] text-white hover:bg-[#005bb5] rounded-sm.",
+      "Buy Button: bg-[#00E676] text-black font-bold hover:opacity-80.",
+      "Sell Button: bg-[#FF3B30] text-white font-bold hover:opacity-80."
+    ],
+    "tables": [
+      "Dense. Use text-sm or text-xs.",
+      "Border-collapse style. border-b border-[#262626] for rows.",
+      "Hover state for rows: hover:bg-[#121212]."
+    ],
+    "inputs_and_forms": [
+      "bg-[#050505] border border-[#262626] rounded-sm text-white focus:border-[#007AFF] focus:ring-1 focus:ring-[#007AFF].",
+      "Use monospaced fonts for API key inputs, amounts, and tickers."
+    ],
+    "charts": [
+      "Use Recharts. Line charts for equity curves, Bar charts for volume.",
+      "No grid lines or very subtle (#1A1A1A). Tooltips must be dark (#121212) with sharp borders.",
+      "Colors must match accent profit/loss variables."
+    ],
+    "tabs": [
+      "Underline style preferred over pill style. border-b-2 border-transparent data-[state=active]:border-[#007AFF] data-[state=active]:text-white rounded-none."
+    ],
+    "navigation_and_header": [
+      "Top sticky nav: bg-[#0A0A0A] border-b border-[#262626] z-50.",
+      "Must show Market Status (Live indicator), Current time (Mono font), Total PnL."
+    ]
+  },
+  "media_and_assets": {
+    "icons": {
+      "library": "lucide-react",
+      "rules": "Use stroke-width 1.5. Clean, geometric, unstyled icons."
+    },
+    "images": {
+      "login_hero": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/6456a41d-90f7-40ab-b7a0-c10007c6cd13/images/66c3accb1236f6dde0453585ba36e9c0d7ab37b509457d605103056a618cabd8.png",
+        "description": "Abstract glowing green and red candlestick chart patterns over deep black background. Use this on the Login/Signup split screen to establish the trading vibe.",
+        "usage": "Auth page right-side background panel."
+      }
+    }
+  },
+  "animations_and_interactions": {
+    "tickers": "Use react-fast-marquee for the top live market watch ticker tape. Slow, continuous, smooth.",
+    "hover": "Explicit hover states on all interactive elements. Buttons lift slightly (-translate-y-[1px]) or change background color.",
+    "transitions": "Fast, functional transitions (150ms). No drawn-out or bouncy animations. It's a trading terminal, speed is key."
+  },
+  "testing": {
+    "attributes": "All interactive elements, buttons, and forms MUST include role-based data-testid attributes (e.g., data-testid='run-backtest-button')."
+  },
+  "instructions_to_main_agent": [
+    "Setup routing for: Login/Signup, Dashboard, API Keys, Python Editor, Visual Builder, Bot Chat.",
+    "Install required fonts from Google Fonts: Chivo, IBM Plex Sans, JetBrains Mono.",
+    "Use react-fast-marquee for the live market ticker at the top of the dashboard.",
+    "For the Visual No-Code Builder, construct a simple block-based UI using dense rectangular cards that map to 'IF' and 'THEN' logic.",
+    "For the Python Code Editor, use a syntax-highlighting library (like react-simple-code-editor or Monaco) inside a window with a true terminal aesthetic (JetBrains Mono, pure black bg).",
+    "Never use pure black or pure white unless specified. Stick to the precise hex codes provided in the colors section.",
+    "For the AI Trading Bot Chat page, present a clean dark-mode chat interface with distinctive AI vs User bubbles. Use mono fonts for trade suggestions within the chat.",
+    "DO NOT USE Placeholders. Use the provided login_hero image for the auth page.",
+    "For broker logos like Zerodha, simply render the name in a clean font or use a generic 'Building'/'Key' lucide-react icon as SVG. No broken placeholder URLs."
+  ]
+}
