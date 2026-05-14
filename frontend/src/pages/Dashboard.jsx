@@ -96,7 +96,22 @@ export default function Dashboard() {
         <div className="qd-card p-0 lg:col-span-4 flex flex-col" data-testid="watchlist-card">
           <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-4 py-3">
             <h2 className="font-head text-base text-white">Market Watch</h2>
-            <span className="qd-live-dot" />
+            <div className="flex items-center gap-2">
+              {watch[0]?.source && (
+                <span
+                  className={`font-mono text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${
+                    watch[0].source === "live"
+                      ? "bg-[rgba(0,230,118,0.12)] text-[var(--qd-profit)] border border-[var(--qd-profit)]"
+                      : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] border border-[var(--qd-border)]"
+                  }`}
+                  data-testid="watch-source"
+                  title={watch[0].source === "live" ? "Real Zerodha data" : "Simulated — connect Zerodha for live"}
+                >
+                  {watch[0].source === "live" ? "ZERODHA" : "SIM"}
+                </span>
+              )}
+              <span className="qd-live-dot" />
+            </div>
           </div>
           <div className="divide-y divide-[var(--qd-border)] max-h-[300px] overflow-auto">
             {watch.map((s) => (

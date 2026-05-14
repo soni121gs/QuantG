@@ -66,6 +66,15 @@ def exchange_request_token(api_key: str, api_secret: str, request_token: str) ->
     return session  # contains access_token, public_token, user_id, etc.
 
 
+def safe_ohlc(kite: KiteConnect, instruments: List[str]) -> Optional[Dict[str, Any]]:
+    """kite.ohlc returns {last_price, ohlc:{open,high,low,close}} — use for watchlist."""
+    try:
+        return kite.ohlc(instruments)
+    except Exception as e:
+        logger.warning(f"Kite ohlc error: {e}")
+        return None
+
+
 def safe_ltp(kite: KiteConnect, instruments: List[str]) -> Optional[Dict[str, Any]]:
     """kite.ltp wrapper. Returns None on error so caller can fall back."""
     try:

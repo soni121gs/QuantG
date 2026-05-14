@@ -320,23 +320,23 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 # ============== Routes: Market ==============
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
-    # Try live Kite first
+    # Try live Kite first — use ohlc() so we get last_price AND previous close
     kite, status = await get_user_kite(user["id"])
     if kite:
         instruments = [_nse_token(s["symbol"]) for s in SYMBOLS]
-        ltp_data = kite_helper.safe_ltp(kite, instruments)
-        if ltp_data:
+        ohlc_data = kite_helper.safe_ohlc(kite, instruments)
+        if ohlc_data:
             out = []
             for s in SYMBOLS:
                 key = _nse_token(s["symbol"])
-                node = ltp_data.get(key) or {}
-                price = node.get("last_price")
-                # Compute change vs ohlc close
-                ohlc_close = node.get("ohlc", {}).get("close") if isinstance(node, dict) else None
-                change = round((price or 0) - (ohlc_close or price or 0), 2)
-                pct = round((change / ohlc_close) * 100, 2) if ohlc_close else 0.0
+                node = ohlc_data.get(key) or {}
+                price = node.get("last_price") or s["base"]
+                ohlc = node.get("ohlc", {}) or {}
+                prev_close = ohlc.get("close") or price
+                change = round(price - prev_close, 2)
+                pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
                 out.append({"symbol": s["symbol"], "name": s["name"],
-                            "price": price or s["base"], "change": change, "pct": pct,
+                            "price": price, "change": change, "pct": pct,
                             "source": "live"})
             return out
     # Fallback: mock
