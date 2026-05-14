@@ -126,6 +126,7 @@ export default function Dashboard() {
             <p className="font-mono text-sm text-[var(--qd-text-2)]">No open positions. Place your first paper trade.</p>
           </div>
         ) : (
+          <div className="qd-table-wrap">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
@@ -150,6 +151,7 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

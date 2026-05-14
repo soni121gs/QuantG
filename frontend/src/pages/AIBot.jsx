@@ -73,9 +73,9 @@ export default function AIBot() {
             onKeyDown={(e) => e.key === "Enter" && send()}
             placeholder="Ask QuantBot about strategies, markets, code..."
             className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2.5 text-sm text-white font-mono rounded-sm"
-            data-testid="chat-input"
+            data-testid="ai-input"
           />
-          <button onClick={() => send()} disabled={busy || !text.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2.5 rounded-sm" data-testid="send-btn">
+          <button onClick={() => send()} disabled={busy || !text.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2.5 rounded-sm" data-testid="ai-send-btn">
             <Send size={16} />
           </button>
         </div>

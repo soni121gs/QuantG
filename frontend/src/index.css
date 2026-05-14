@@ -82,6 +82,16 @@ body {
 }
 .qd-card:hover { border-color: var(--qd-border-strong); }
 
+/* Mobile-first: tables scroll horizontally if needed */
+.qd-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.qd-table-wrap table { min-width: 480px; }
+
+/* Touch targets at least 44px on mobile */
+@media (max-width: 768px) {
+  button, a, input, select { min-height: 36px; }
+  input[type="number"] { font-size: 16px; } /* prevent iOS zoom */
+}
+
 .qd-grid-bg {
   background-image:
     linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),

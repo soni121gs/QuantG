@@ -40,7 +40,7 @@ export default function Orders() {
         {orders.length === 0 ? (
           <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No orders yet. Place your first trade.</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                 <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Status</th>
@@ -59,7 +59,7 @@ export default function Orders() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 
@@ -71,7 +71,7 @@ export default function Orders() {
             <div>
               <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
               <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol">
-                {watch.map((s) => <option key={s.symbol} value={s.symbol}>{s.symbol} — ₹{formatINR(s.price)}</option>)}
+                {watch.map((s) => <option key={s.symbol} value={s.symbol}>{`${s.symbol} — ₹${formatINR(s.price)}`}</option>)}
               </select>
             </div>
             <div className="grid grid-cols-2 gap-2">

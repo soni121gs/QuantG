@@ -31,7 +31,7 @@ export default function Positions() {
         {pos.length === 0 ? (
           <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No open positions.</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                 <th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Avg</th><th className="px-4 py-2">LTP</th><th className="px-4 py-2 text-right">PnL</th>
@@ -48,7 +48,7 @@ export default function Positions() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>

@@ -46,11 +46,11 @@ export default function ApiKeys() {
 
       <form onSubmit={save} className="qd-card p-5 space-y-3" data-testid="keys-form">
         <h2 className="font-head text-lg text-white flex items-center gap-2"><KeyRound size={16} /> Zerodha Kite Connect</h2>
-        <Input label="API Key" value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="input-api-key" />
-        <Input label="API Secret" value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="input-api-secret" />
+        <Input label="API Key" value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
+        <Input label="API Secret" value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
         <Input label="Client ID (optional)" value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
         {msg && <div className="font-mono text-xs text-[var(--qd-text-2)]">{msg}</div>}
-        <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-keys-btn">
+        <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
         </button>
       </form>
@@ -60,7 +60,7 @@ export default function ApiKeys() {
         {keys.length === 0 ? (
           <div className="p-8 text-center font-mono text-sm text-[var(--qd-text-2)]">No keys linked.</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                 <th className="px-4 py-2">Broker</th><th className="px-4 py-2">API Key</th><th className="px-4 py-2">Client</th><th className="px-4 py-2">Linked</th><th className="px-4 py-2 text-right">Action</th>
@@ -79,7 +79,7 @@ export default function ApiKeys() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>

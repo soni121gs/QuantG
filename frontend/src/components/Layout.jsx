@@ -11,6 +11,8 @@ import {
   LogOut,
   Activity,
   Wallet,
+  Menu,
+  X,
 } from "lucide-react";
 import TickerTape from "./TickerTape";
 import { useAuth } from "../contexts/AuthContext";
@@ -19,12 +21,21 @@ import { api, formatINR } from "../lib/api";
 const NAV = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
   { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
-  { to: "/python", icon: Code2, label: "Python Editor", id: "nav-python" },
+  { to: "/python", icon: Code2, label: "Python", id: "nav-python" },
   { to: "/visual", icon: Blocks, label: "Visual Builder", id: "nav-visual" },
   { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "nav-aibot" },
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
-  { to: "/api-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
+  { to: "/broker-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
+];
+
+// Bottom-bar items for mobile (5 most-used)
+const MOBILE_NAV = [
+  { to: "/dashboard", icon: LayoutDashboard, label: "Home", id: "mnav-dashboard" },
+  { to: "/strategies", icon: Blocks, label: "Strats", id: "mnav-strategies" },
+  { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "mnav-aibot" },
+  { to: "/orders", icon: ListOrdered, label: "Orders", id: "mnav-orders" },
+  { to: "/positions", icon: PieChart, label: "Holdings", id: "mnav-positions" },
 ];
 
 export default function Layout({ children }) {
@@ -32,6 +43,7 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(new Date());
   const [pnl, setPnl] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -60,8 +72,18 @@ export default function Layout({ children }) {
         className="sticky top-0 z-50 border-b border-[var(--qd-border)] bg-[#0a0a0b]/95 backdrop-blur"
         data-testid="top-bar"
       >
-        <div className="flex items-center justify-between px-4 h-12">
-          <div className="flex items-center gap-6">
+        <div className="flex items-center justify-between px-3 md:px-4 h-12 gap-3">
+          <div className="flex items-center gap-3 md:gap-6 min-w-0">
+            {/* Mobile hamburger */}
+            <button
+              type="button"
+              className="lg:hidden text-white p-1"
+              onClick={() => setDrawerOpen(true)}
+              data-testid="open-drawer"
+              aria-label="Open menu"
+            >
+              <Menu size={20} />
+            </button>
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 bg-[var(--qd-accent)] flex items-center justify-center">
                 <Activity size={14} className="text-white" strokeWidth={2.5} />
@@ -77,12 +99,12 @@ export default function Layout({ children }) {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-6">
-            <div className="hidden md:flex items-center gap-2">
-              <Wallet size={14} className="text-[var(--qd-text-2)]" />
-              <span className="font-mono text-xs text-[var(--qd-text-2)] uppercase tracking-wider">PnL</span>
+          <div className="flex items-center gap-3 md:gap-6">
+            <div className="flex items-center gap-1.5 md:gap-2">
+              <Wallet size={14} className="text-[var(--qd-text-2)] hidden md:block" />
+              <span className="font-mono text-[10px] md:text-xs text-[var(--qd-text-2)] uppercase tracking-wider">PnL</span>
               <span
-                className={`font-mono text-sm font-semibold ${
+                className={`font-mono text-xs md:text-sm font-semibold ${
                   (pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
                 }`}
                 data-testid="top-pnl"
@@ -94,14 +116,17 @@ export default function Layout({ children }) {
               {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
             </span>
             <button
-              className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1"
+              type="button"
+              className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1.5 px-2 py-1 border border-transparent hover:border-[var(--qd-border)] rounded-sm"
               onClick={() => {
                 logout();
                 navigate("/login");
               }}
               data-testid="logout-btn"
+              aria-label="Logout"
             >
-              <LogOut size={14} /> {user?.email}
+              <span className="hidden md:inline truncate max-w-[140px]">{user?.email}</span>
+              <LogOut size={14} />
             </button>
           </div>
         </div>
@@ -109,9 +134,9 @@ export default function Layout({ children }) {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
+        {/* Desktop Sidebar */}
         <aside
-          className="w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[80px] self-start h-[calc(100vh-80px)]"
+          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[80px] self-start h-[calc(100vh-80px)]"
           data-testid="sidebar"
         >
           <nav className="flex flex-col p-2 gap-0.5">
@@ -138,9 +163,73 @@ export default function Layout({ children }) {
           </div>
         </aside>
 
+        {/* Mobile slide-in drawer */}
+        {drawerOpen && (
+          <div
+            className="lg:hidden fixed inset-0 z-[60] bg-black/70"
+            onClick={() => setDrawerOpen(false)}
+            data-testid="drawer-overlay"
+          >
+            <aside
+              className="absolute left-0 top-0 bottom-0 w-64 bg-[#08080a] border-r border-[var(--qd-border)] p-3"
+              onClick={(e) => e.stopPropagation()}
+              data-testid="mobile-drawer"
+            >
+              <div className="flex items-center justify-between mb-4 px-1">
+                <span className="font-head font-bold text-white">Menu</span>
+                <button onClick={() => setDrawerOpen(false)} data-testid="close-drawer" className="text-white">
+                  <X size={20} />
+                </button>
+              </div>
+              <nav className="flex flex-col gap-1">
+                {NAV.map((n) => (
+                  <NavLink
+                    key={n.to}
+                    to={n.to}
+                    onClick={() => setDrawerOpen(false)}
+                    data-testid={`m-${n.id}`}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 px-3 py-2.5 text-sm rounded-sm ${
+                        isActive
+                          ? "bg-[var(--qd-surface-2)] text-white border-l-2 border-[var(--qd-accent)]"
+                          : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface)]"
+                      }`
+                    }
+                  >
+                    <n.icon size={16} strokeWidth={1.5} />
+                    <span>{n.label}</span>
+                  </NavLink>
+                ))}
+              </nav>
+            </aside>
+          </div>
+        )}
+
         {/* Main */}
-        <main className="flex-1 min-w-0 p-4 md:p-6 qd-grid-bg">{children}</main>
+        <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">{children}</main>
       </div>
+
+      {/* Mobile bottom nav */}
+      <nav
+        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-[#0a0a0b]/95 backdrop-blur border-t border-[var(--qd-border)]"
+        data-testid="mobile-bottom-nav"
+      >
+        {MOBILE_NAV.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            data-testid={n.id}
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-mono uppercase tracking-wider ${
+                isActive ? "text-[var(--qd-accent)]" : "text-[var(--qd-text-2)]"
+              }`
+            }
+          >
+            <n.icon size={18} strokeWidth={1.5} />
+            <span>{n.label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }

@@ -45,7 +45,7 @@ export default function App() {
           <Route path="/ai-bot" element={<Protected><AIBot /></Protected>} />
           <Route path="/orders" element={<Protected><Orders /></Protected>} />
           <Route path="/positions" element={<Protected><Positions /></Protected>} />
-          <Route path="/api-keys" element={<Protected><ApiKeys /></Protected>} />
+          <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>
