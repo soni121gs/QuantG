@@ -89,7 +89,7 @@ export default function Layout({ children }) {
                 <Activity size={14} className="text-white" strokeWidth={2.5} />
               </div>
               <span className="font-head font-bold tracking-tight text-white text-base">
-                QUANT<span className="text-[var(--qd-accent)]">DESK</span>
+                QUANT<span className="text-[var(--qd-accent)]">G</span>
               </span>
             </div>
             <div className="hidden md:flex items-center gap-2 text-xs">

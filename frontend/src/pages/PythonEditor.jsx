@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { Play, Save, Code2 } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-const STARTER = `# QuantDesk Python Strategy
+const STARTER = `# QuantG Python Strategy
 # Define a run(data) function. data = list of {date, close}.
 # Return a list of {date, action: 'BUY' | 'SELL'}.
 

@@ -35,7 +35,7 @@ export default function Auth({ mode = "login" }) {
             <Activity size={16} className="text-white" strokeWidth={2.5} />
           </div>
           <span className="font-head font-bold tracking-tight text-white text-lg">
-            QUANT<span className="text-[var(--qd-accent)]">DESK</span>
+            QUANT<span className="text-[var(--qd-accent)]">G</span>
           </span>
         </div>
 

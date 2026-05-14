@@ -34,7 +34,7 @@ ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
 
-app = FastAPI(title="QuantDesk Algo Trading API")
+app = FastAPI(title="QuantG Algo Trading API")
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -201,7 +201,7 @@ def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
 # ============== Routes: Auth ==============
 @api.get("/")
 async def health():
-    return {"status": "ok", "service": "QuantDesk API"}
+    return {"status": "ok", "service": "QuantG API"}
 
 
 @api.post("/auth/register", response_model=TokenOut)
@@ -565,7 +565,7 @@ async def portfolio(user=Depends(get_current_user)):
 
 # ============== Routes: AI Bot ==============
 SYSTEM_PROMPT = (
-    "You are QuantBot, an expert algorithmic trading assistant inside the QuantDesk platform. "
+    "You are QuantBot, an expert algorithmic trading assistant inside the QuantG platform. "
     "Help the trader with: strategy ideas, indicator math, Python code for backtests, "
     "risk management, market context for Indian equities (NSE/BSE), and explaining concepts. "
     "Be concise, use bullet points, and when giving code, use Python with a `run(data)` function "
@@ -652,7 +652,7 @@ async def startup():
     await db.orders.create_index([("user_id", 1), ("created_at", -1)])
     await db.positions.create_index([("user_id", 1), ("symbol", 1)], unique=True)
     await db.ai_messages.create_index([("user_id", 1), ("session_id", 1)])
-    logger.info("QuantDesk API started")
+    logger.info("QuantG API started")
 
 
 @app.on_event("shutdown")
