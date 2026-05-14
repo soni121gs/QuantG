@@ -116,7 +116,7 @@ class BacktestReq(BaseModel):
 class OrderReq(BaseModel):
     symbol: str
     side: str  # BUY | SELL
-    qty: int
+    qty: int = Field(gt=0, description="Quantity must be > 0")
     order_type: str = "MARKET"  # MARKET | LIMIT
     price: Optional[float] = None
     product: str = "MIS"
@@ -823,6 +823,11 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")
+    if "default_qty" in update and update["default_qty"] <= 0:
+        raise HTTPException(status_code=400, detail="default_qty must be > 0")
+    for f in ("max_daily_loss", "max_position_size"):
+        if f in update and update[f] < 0:
+            raise HTTPException(status_code=400, detail=f"{f} cannot be negative")
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
     return await get_profile(user=user)
