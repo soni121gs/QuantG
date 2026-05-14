@@ -1,0 +1,54 @@
+{
+  "short_name": "QuantG",
+  "name": "QuantG — Algo Trading Terminal",
+  "description": "Algorithmic trading terminal with Zerodha integration, Python strategies, and AI bot.",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    }
+  ],
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#050505",
+  "background_color": "#050505",
+  "categories": ["finance", "productivity", "business"],
+  "lang": "en",
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Home",
+      "url": "/dashboard",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI Bot",
+      "short_name": "QuantBot",
+      "url": "/ai-bot",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Orders",
+      "short_name": "Orders",
+      "url": "/orders",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

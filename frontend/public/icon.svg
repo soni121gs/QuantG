@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#050505"/>
+  <rect x="40" y="40" width="432" height="432" rx="80" fill="#007AFF"/>
+  <g stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="100,300 170,300 200,200 240,360 280,140 320,260 370,260"/>
+  </g>
+  <text x="256" y="450" font-family="'Chivo', 'Helvetica Neue', sans-serif" font-weight="900"
+        font-size="64" text-anchor="middle" fill="#FFFFFF" letter-spacing="-2">QUANT
+    <tspan fill="#00E676">G</tspan>
+  </text>
+</svg>

@@ -14,6 +14,7 @@ import AIBot from "./pages/AIBot";
 import Orders from "./pages/Orders";
 import Positions from "./pages/Positions";
 import Profile from "./pages/Profile";
+import InstallPWA from "./components/InstallPWA";
 import { Toaster } from "sonner";
 
 const Protected = ({ children }) => {
