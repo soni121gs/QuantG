@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 import kite_helper
+import options_helper
 import strategy_runner
 from safe_exec import safe_run_strategy
 
@@ -495,7 +496,8 @@ class ManualOrderReq(BaseModel):
 @api.post("/strategies/{sid}/manual-order")
 async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_current_user)):
     """Manually fire a BUY or SELL using this strategy's configured symbol & defaults.
-    Bypasses the python signal logic — useful for discretionary overrides."""
+    Bypasses the python signal logic — useful for discretionary overrides.
+    Honours `options` config if set on the strategy."""
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -503,11 +505,34 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
     if action not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
     vc = row.get("visual_config") or {}
-    symbol = (vc.get("symbol") or "RELIANCE").upper()
-    result = await _place_order_core(
-        user_id=user["id"], symbol=symbol, side=action, qty=None,
-        order_type="MARKET", product=None, source=f"manual:strategy:{sid}",
-    )
+    opt_cfg = vc.get("options") or {}
+    # Options mode: resolve contract & place option order
+    if opt_cfg.get("enabled"):
+        kite, _ = await get_user_kite(user["id"])
+        if not kite:
+            raise HTTPException(status_code=400, detail="Options trading requires a connected Zerodha session.")
+        contract = options_helper.resolve_for_signal(
+            kite,
+            underlying=opt_cfg.get("underlying", "NIFTY"),
+            signal_action=action,
+            strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
+            otm_points=int(opt_cfg.get("otm_points") or 0),
+            expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+        )
+        if not contract:
+            raise HTTPException(status_code=400, detail="Could not resolve option contract. Markets may be closed or instruments unavailable.")
+        result = await _place_order_core(
+            user_id=user["id"], symbol=opt_cfg.get("underlying", "NIFTY"),
+            side=action, qty=int(opt_cfg.get("lots") or 1),
+            order_type="MARKET", product=None, source=f"manual:strategy:{sid}",
+            option_contract=contract,
+        )
+    else:
+        symbol = (vc.get("symbol") or "RELIANCE").upper()
+        result = await _place_order_core(
+            user_id=user["id"], symbol=symbol, side=action, qty=None,
+            order_type="MARKET", product=None, source=f"manual:strategy:{sid}",
+        )
     # Update strategy telemetry so the card shows the manual fire
     await db.strategies.update_one(
         {"id": sid},
@@ -660,6 +685,48 @@ def _safe_run_python(code: str, data: List[dict]) -> List[dict]:
     return safe_run_strategy(code, data)
 
 
+# ============== Options preview (UI helper) ==============
+@api.get("/options/preview")
+async def options_preview(
+    underlying: str = "NIFTY",
+    strike_mode: str = "ATM_BUY",
+    otm_points: int = 0,
+    action: str = "BUY",
+    expiry_offset: int = 0,
+    user=Depends(get_current_user),
+):
+    """What option contract will fire RIGHT NOW for this config? Returns
+    contract details for the UI so users see the exact symbol before trading."""
+    if underlying.upper() not in options_helper.SUPPORTED:
+        raise HTTPException(status_code=400, detail=f"Underlying must be one of {options_helper.SUPPORTED}")
+    kite, status = await get_user_kite(user["id"])
+    if not kite:
+        # Show useful info even without Kite — return config + lot size + note
+        return {
+            "available": False,
+            "reason": "Zerodha not connected — preview will be live after you connect on Broker Keys",
+            "underlying": underlying.upper(),
+            "lot_size": options_helper.LOT_SIZES.get(underlying.upper()),
+            "strike_interval": options_helper.STRIKE_INTERVALS.get(underlying.upper()),
+            "exchange": options_helper.OPT_EXCHANGE.get(underlying.upper()),
+        }
+    contract = options_helper.resolve_for_signal(
+        kite,
+        underlying=underlying.upper(),
+        signal_action=action.upper(),
+        strike_mode=strike_mode.upper(),
+        otm_points=int(otm_points),
+        expiry_offset_weeks=int(expiry_offset),
+    )
+    if not contract:
+        return {
+            "available": False,
+            "reason": "Could not resolve a contract — markets may be closed or instruments unavailable.",
+            "underlying": underlying.upper(),
+        }
+    return {"available": True, **contract}
+
+
 @api.post("/strategies/backtest")
 async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     code = req.python_code
@@ -743,23 +810,140 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
 
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
-                            product: Optional[str] = None, source: str = "manual") -> dict:
+                            product: Optional[str] = None, source: str = "manual",
+                            option_contract: Optional[Dict[str, Any]] = None) -> dict:
     """Shared order-placement business logic. Honours paper_mode + risk limits.
     Used by both the /orders endpoint and the background strategy runner.
+
+    option_contract (optional): when set, the order is placed on an index option
+    instead of equity. Expected keys:
+      tradingsymbol, exchange (NFO|BFO), lot_size, instrument_token, strike,
+      expiry, underlying, option_type (CE|PE), transaction_type (BUY|SELL).
+    When option_contract is present, `symbol` is the underlying label
+    (NIFTY/BANKNIFTY/SENSEX) used only for logging, and `qty` is interpreted as
+    NUMBER OF LOTS (multiplied by contract.lot_size to get broker qty).
+    `side` is ignored for options — the contract's transaction_type is used.
     """
     side = side.upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+
+    settings = await get_user_settings(user_id)
+    paper = settings.get("paper_mode", True)
+
+    # Daily loss guard (applies to all order types)
+    await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
+
+    # ===== OPTIONS PATH =====
+    if option_contract:
+        # Lots × lot_size = total quantity sent to broker
+        lots = int(qty or 1)
+        lot_size = int(option_contract.get("lot_size") or 1)
+        broker_qty = lots * lot_size
+        opt_symbol = option_contract["tradingsymbol"]
+        opt_exchange = option_contract.get("exchange", "NFO")
+        opt_product = product or "NRML"  # options usually NRML (overnight) or MIS (intraday)
+        # Transaction type comes from the contract (BUY for long, SELL for write)
+        opt_side = (option_contract.get("transaction_type") or side).upper()
+
+        # Try to fetch live LTP for the option (live mode only — paper estimates)
+        fill_price = price or 0.0
+        if not paper:
+            kite, _ = await get_user_kite(user_id)
+            if not kite:
+                raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected.")
+            try:
+                ltp_resp = kite.ltp([f"{opt_exchange}:{opt_symbol}"])
+                fill_price = float(ltp_resp[f"{opt_exchange}:{opt_symbol}"]["last_price"])
+            except Exception as e:
+                logger.warning(f"option LTP fetch failed for {opt_symbol}: {e}")
+                fill_price = price or 0.0
+            try:
+                res = kite_helper.place_live_order(
+                    kite,
+                    tradingsymbol=opt_symbol,
+                    exchange=opt_exchange,
+                    transaction_type=opt_side,
+                    quantity=broker_qty,
+                    order_type=order_type,
+                    product=opt_product,
+                    price=price,
+                )
+                broker_order_id = res.get("order_id")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
+        else:
+            # Paper mode: estimate option premium as ~2% of spot (rough proxy)
+            spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
+            fill_price = price or round(float(spot) * 0.02, 2)
+            broker_order_id = None
+
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "symbol": opt_symbol,
+            "side": opt_side,
+            "qty": broker_qty,
+            "filled_qty": broker_qty if paper else None,
+            "pending_qty": 0 if paper else None,
+            "status_message": None,
+            "realised_pnl": 0.0,
+            "order_type": order_type,
+            "price": fill_price,
+            "product": opt_product,
+            "status": "COMPLETE" if paper else "OPEN",
+            "mode": "paper" if paper else "live",
+            "broker_order_id": broker_order_id,
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            # Option-specific metadata for reporting / UI
+            "asset_type": "option",
+            "underlying": option_contract.get("underlying"),
+            "option_type": option_contract.get("option_type"),
+            "strike": option_contract.get("strike"),
+            "expiry": option_contract.get("expiry"),
+            "lots": lots,
+            "lot_size": lot_size,
+        }
+        await db.orders.insert_one(doc)
+
+        # Paper positions tracking — keyed by option tradingsymbol
+        if paper:
+            pos = await db.positions.find_one({"user_id": user_id, "symbol": opt_symbol})
+            delta = broker_qty if opt_side == "BUY" else -broker_qty
+            if pos:
+                new_qty = pos["qty"] + delta
+                if new_qty == 0:
+                    await db.positions.delete_one({"_id": pos["_id"]})
+                else:
+                    if opt_side == "BUY":
+                        avg = (pos["avg_price"] * pos["qty"] + fill_price * broker_qty) / (pos["qty"] + broker_qty) if (pos["qty"] + broker_qty) else fill_price
+                    else:
+                        avg = pos["avg_price"]
+                    await db.positions.update_one(
+                        {"_id": pos["_id"]},
+                        {"$set": {"qty": new_qty, "avg_price": round(avg, 2)}},
+                    )
+            else:
+                await db.positions.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "symbol": opt_symbol,
+                    "qty": delta,
+                    "avg_price": fill_price,
+                    "created_at": doc["created_at"],
+                    "asset_type": "option",
+                })
+        doc.pop("_id", None)
+        doc.pop("user_id", None)
+        return doc
+
+    # ===== EQUITY PATH (existing behaviour) =====
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
     if not sym:
         raise HTTPException(status_code=400, detail="Unknown symbol")
-    settings = await get_user_settings(user_id)
     qty = int(qty or settings["default_qty"] or 1)
     product = product or settings["default_product"] or "MIS"
-    paper = settings.get("paper_mode", True)
-
-    # Daily loss guard
-    await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
 
     # Risk guard: max position size
     fill_price_hint = price or live_price(sym["base"], SYMBOLS.index(sym))["price"]
@@ -1365,9 +1549,24 @@ async def startup():
             return []
         return intraday_series(sym["base"], bars=250)
 
+    # Resolver for index option contracts — runner uses this when a strategy
+    # has visual_config.options.enabled. Requires a live Kite session.
+    async def _resolve_option(user_id: str, underlying: str, signal_action: str,
+                              strike_mode: str, otm_points: int = 0,
+                              expiry_offset: int = 0):
+        kite, _ = await get_user_kite(user_id)
+        if not kite:
+            return None
+        return options_helper.resolve_for_signal(
+            kite, underlying=underlying, signal_action=signal_action,
+            strike_mode=strike_mode, otm_points=otm_points,
+            expiry_offset_weeks=expiry_offset,
+        )
+
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
-        strategy_runner.runner_loop(db, _price_history, _place_order_core, app.state.runner_stop)
+        strategy_runner.runner_loop(db, _price_history, _place_order_core,
+                                    app.state.runner_stop, _resolve_option)
     )
     logger.info("QuantG API started")
 

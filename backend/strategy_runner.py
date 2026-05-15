@@ -82,8 +82,16 @@ async def _release_lock(db) -> None:
         pass
 
 
-async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio.Event):
-    """Main loop. Dependencies injected to avoid circular imports."""
+async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio.Event,
+                      resolve_option_fn=None):
+    """Main loop. Dependencies injected to avoid circular imports.
+
+    resolve_option_fn(user_id, underlying, signal_action, strike_mode, otm_points,
+                      expiry_offset) -> contract_dict | None
+    When provided and a strategy has visual_config.options.enabled=True, signals
+    are translated to option contracts and place_order_fn is called with
+    option_contract kwarg.
+    """
     logger.info(f"Strategy runner starting (tick={TICK_SECONDS}s, pod={POD_ID})")
     while not stop_event.is_set():
         owns_lock = await _acquire_lock(db)
@@ -164,29 +172,68 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set, "last_signals_count": signals_count},
                                                     "$inc": inc_set})
                     continue
+                # Determine if this strategy trades OPTIONS instead of equity
+                opt_cfg = (vc or {}).get("options") or {}
+                option_contract = None
+                if opt_cfg.get("enabled") and resolve_option_fn:
+                    try:
+                        option_contract = await resolve_option_fn(
+                            user_id=s["user_id"],
+                            underlying=opt_cfg.get("underlying", "NIFTY"),
+                            signal_action=action,
+                            strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
+                            otm_points=int(opt_cfg.get("otm_points") or 0),
+                            expiry_offset=int(opt_cfg.get("expiry_offset") or 0),
+                        )
+                        if not option_contract:
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_error": "Options resolution failed (markets closed / no Kite session?)",
+                                          "last_signals_count": signals_count},
+                                 "$inc": inc_set})
+                            continue
+                    except Exception as e:
+                        logger.warning(f"option resolve failed for {s['id']}: {e}")
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, "last_error": str(e)[:200],
+                                      "last_signals_count": signals_count},
+                             "$inc": inc_set})
+                        continue
+
                 # Trigger order using injected fn — it applies paper_mode + risk limits
                 try:
-                    await place_order_fn(
+                    place_kwargs: Dict[str, Any] = dict(
                         user_id=s["user_id"],
                         symbol=symbol,
                         side=action,
-                        qty=None,  # auto-uses user default_qty
+                        qty=int(opt_cfg.get("lots") or 1) if option_contract else None,
                         order_type="MARKET",
-                        product=None,  # auto-uses user default_product
+                        product=None,
                         source=f"strategy:{s['id']}",
                     )
+                    if option_contract:
+                        place_kwargs["option_contract"] = option_contract
+                    await place_order_fn(**place_kwargs)
+                    log_target = option_contract["tradingsymbol"] if option_contract else symbol
                     await db.strategies.update_one(
                         {"id": s["id"]},
                         {"$set": {**eval_set,
                                   "last_signal_at": datetime.now(timezone.utc).isoformat(),
                                   "last_signal_action": action,
                                   "last_signals_count": signals_count,
-                                  "last_fired_signal_date": last_sig_date},
+                                  "last_fired_signal_date": last_sig_date,
+                                  "last_traded_symbol": log_target},
                          "$inc": {**inc_set, "signals_fired": 1}},
                     )
-                    logger.info(f"strategy {s['id']} → {action} {symbol}")
+                    logger.info(f"strategy {s['id']} → {action} {log_target}")
                 except Exception as e:
                     logger.warning(f"order failed for strategy {s['id']}: {e}")
+                    await db.strategies.update_one(
+                        {"id": s["id"]},
+                        {"$set": {**eval_set, "last_error": str(e)[:200]},
+                         "$inc": inc_set})
             except Exception as e:
                 logger.warning(f"strategy {s.get('id','?')} eval failed: {e}")
                 try:

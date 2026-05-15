@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration-5 features (manual Buy/Sell/Exit-All buttons + options trading config in Visual Builder + equity-curve removal) tested end-to-end. ALL 15 backend pytest cases PASS. Frontend Dashboard, Strategies, and Visual Builder all render and integrate correctly. No critical issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Visual Builder options-card", "issues": ["data-testid mismatch with review spec: review asked for `options-lots` and `options-expiry`; code uses `lots-input` and `expiry-select`. Cosmetic — affects only test selectors, not user functionality. Either update review spec or rename test-ids to match for consistency."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/test_reports/pytest/iteration5_results.xml"
+  ],
+  "action_items": [
+    "Optional: align Visual Builder options test-ids (`lots-input` → `options-lots`, `expiry-select` → `options-expiry`) to match the review spec for cleaner future testing.",
+    "Re-verify carryover from iter-4: realised_pnl write on closing SELL trades — still flagged from prior iteration if not already fixed."
+  ],
+  "critical_code_review_comments": [
+    "manual_strategy_order correctly delegates equity vs options path based on visual_config.options.enabled. Good pattern.",
+    "exit-all uses regex source match `strategy:{sid}` which catches BOTH auto and manual:strategy:{sid} sources — correct and intentional.",
+    "options/preview gracefully returns config-only (lot_size, exchange, strike_interval) when Kite not connected, with available=false. Excellent UX.",
+    "options_helper.LOT_SIZES correctly reflects Jan-2026 SEBI revision: NIFTY=65, BANKNIFTY=30, SENSEX=20. SENSEX correctly mapped to BFO exchange while NIFTY/BANKNIFTY → NFO.",
+    "VisualBuilder.jsx options-card UI is clean: toggle, 3 underlying buttons, 3 strike modes (ATM_BUY/OTM_BUY/ATM_SELL), lots input, expiry select, live preview box. Preview correctly shows lot_size/strike_interval/exchange per underlying choice.",
+    "Dashboard.jsx equity-card div is fully removed; watchlist-card now spans full width as requested. Open Positions table still renders correctly.",
+    "options-order in _place_order_core requires connected Kite and returns helpful 400 error when not connected — correct safety guard."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5.py (new)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (Dashboard, Strategies, Visual Builder all working)"},
+  "test_credentials": "demo@quantdesk.io / demo1234 (verified)",
+  "seed_data_creation": "Created 2 test strategies (TEST_iter5_equity, TEST_iter5_options) — both auto-deleted by fixtures. Also created TEST_iter5_exit_empty (auto-deleted). Manual BUY+SELL placed on RELIANCE via test strategy — net qty=0 so no residual positions. No persistent test data left over.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter-5 features verified. Backend test_iteration5.py covers: manual-order BUY/SELL/invalid/unknown-sid, exit-all (open/empty/unknown), options preview (NIFTY=65/NFO, BANKNIFTY=30/NFO, SENSEX=20/BFO, invalid=400), options strategy persistence (visual_config.options round-trip), and options manual-order without Kite → graceful 400. Frontend verified: Dashboard equity-card absent + watchlist-card present, Strategies page has 3 new buttons (manual-buy-*, manual-sell-*, exit-all-*) + existing 4 (test-run, toggle, edit, delete), clicking manual-buy issues POST /api/strategies/{id}/manual-order returning 200, Visual Builder options-toggle reveals underlying/strike-mode/lots/expiry/preview controls with correct lot sizes per index. Test-id naming for lots/expiry inputs differs slightly from review spec (lots-input vs options-lots) — minor inconsistency, document only.",
+  "rca of the issue": "N/A — no bugs surfaced in this iteration."
+}
