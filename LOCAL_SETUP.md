@@ -110,5 +110,35 @@ npx serve -s build -l 3000
 
 ---
 
-## Optional: real Zerodha trading
-The app already accepts your Zerodha Kite Connect `api_key` + `api_secret` at **Broker Keys**. Today they're stored encrypted but execution stays paper-mode for safety. To enable live execution, install `kiteconnect` (`pip install kiteconnect`) and wire it into `/api/orders` — happy to do this in the next iteration.
+## Use real Zerodha trading (live orders)
+
+Already integrated. Steps:
+
+1. Go to **https://developers.kite.trade** → create / open your app
+2. Find your home/office internet's **public IP**:
+   ```bash
+   curl ifconfig.me
+   ```
+3. On Kite Developer Console → **Edit app** → **Allowed IPs** → paste the IP from step 2 → Save
+4. In QuantG (running locally) → **Broker Keys** page → enter `api_key` + `api_secret` → click "Connect to Zerodha"
+5. Complete the OAuth flow → you're connected
+6. Go to **Profile** → flip the master switch to **LIVE** → done
+
+### Why running locally is the BEST option for live trading
+- Your home IP stays stable (ISP rarely changes it). One-time whitelist on Zerodha.
+- No `IP not allowed` rejections like cloud deployments suffer from
+- No proxy / VPN subscription fees
+- Your `api_secret` and `access_token` never leave your machine
+
+### What if your home IP changes occasionally?
+- Run `curl ifconfig.me` again → update the IP on Kite Developer Console (takes 30 sec)
+- Or use a dynamic-DNS service that auto-updates → ask if you want help setting this up
+
+---
+
+## Daily routine for live trading
+1. Open QuantG in browser → **Broker Keys** → Click "Connect to Zerodha" (re-auth happens daily at 6 AM IST)
+2. Complete the OAuth (takes 10 seconds with biometric)
+3. Your strategies resume firing on the next 30s tick
+
+That's it. Keep the laptop on during market hours (09:15 – 15:30 IST) and you're set.
