@@ -138,12 +138,26 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                     "$inc": inc_set})
                     continue
                 last_sig = signals[-1]
-                # only act if the latest signal is "today's" (most recent candle)
-                if last_sig.get("date") != data[-1]["date"]:
+                last_sig_date = last_sig.get("date", "")
+                last_fired_date = s.get("last_fired_signal_date", "")
+
+                # Don't re-fire the same signal we already acted on
+                if last_sig_date and last_sig_date == last_fired_date:
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set, "last_signals_count": signals_count},
                                                     "$inc": inc_set})
                     continue
+
+                # Allow signals from the last 3 candles (~15 min on 5-min bars).
+                # Anything older is considered stale and ignored — prevents firing
+                # ancient signals on a runner restart.
+                recent_dates = {d.get("date") for d in data[-3:]}
+                if last_sig_date not in recent_dates:
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set, "last_signals_count": signals_count},
+                                                    "$inc": inc_set})
+                    continue
+
                 action = (last_sig.get("action") or "").upper()
                 if action not in ("BUY", "SELL"):
                     await db.strategies.update_one({"id": s["id"]},
@@ -166,7 +180,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         {"$set": {**eval_set,
                                   "last_signal_at": datetime.now(timezone.utc).isoformat(),
                                   "last_signal_action": action,
-                                  "last_signals_count": signals_count},
+                                  "last_signals_count": signals_count,
+                                  "last_fired_signal_date": last_sig_date},
                          "$inc": {**inc_set, "signals_fired": 1}},
                     )
                     logger.info(f"strategy {s['id']} → {action} {symbol}")
