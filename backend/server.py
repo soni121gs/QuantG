@@ -1017,13 +1017,6 @@ async def live_readiness(user=Depends(get_current_user)):
         "detail": f"Max position ₹{settings['max_position_size']:.0f} · Daily loss cap ₹{settings['max_daily_loss']:.0f}",
         "hint": "Configure on Profile" if (settings.get("max_position_size", 0) <= 0 or settings.get("max_daily_loss", 0) <= 0) else None,
     })
-    checks.append({
-        "id": "mode",
-        "label": "Trading mode",
-        "ok": not settings.get("paper_mode", True),
-        "detail": "LIVE" if not settings.get("paper_mode", True) else "PAPER (flip on Profile to go live)",
-        "hint": None,
-    })
     # NSE market hours: 9:15 AM – 3:30 PM IST, Mon–Fri
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
@@ -1036,11 +1029,15 @@ async def live_readiness(user=Depends(get_current_user)):
         "detail": ist_now.strftime("%a %H:%M IST"),
         "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not market_open else None,
     })
+    # Note: "trading mode" is intentionally NOT a check — clicking confirm in the
+    # pre-flight modal IS the action that flips paper→live. Including it as a
+    # check creates a circular dependency the user can never resolve.
     overall_ready = all(c["ok"] for c in checks if c["id"] != "market_hours")
     # Warnings (not blockers)
     return {
         "ready": overall_ready,
         "market_open": market_open,
+        "current_mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
         "checks": checks,
     }
 
