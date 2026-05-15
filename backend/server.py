@@ -488,6 +488,72 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     return {"status": new_status}
 
 
+class ManualOrderReq(BaseModel):
+    action: str  # BUY or SELL
+
+
+@api.post("/strategies/{sid}/manual-order")
+async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_current_user)):
+    """Manually fire a BUY or SELL using this strategy's configured symbol & defaults.
+    Bypasses the python signal logic — useful for discretionary overrides."""
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    action = (req.action or "").upper()
+    if action not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+    vc = row.get("visual_config") or {}
+    symbol = (vc.get("symbol") or "RELIANCE").upper()
+    result = await _place_order_core(
+        user_id=user["id"], symbol=symbol, side=action, qty=None,
+        order_type="MARKET", product=None, source=f"manual:strategy:{sid}",
+    )
+    # Update strategy telemetry so the card shows the manual fire
+    await db.strategies.update_one(
+        {"id": sid},
+        {"$set": {"last_signal_at": datetime.now(timezone.utc).isoformat(),
+                  "last_signal_action": f"MANUAL {action}"},
+         "$inc": {"signals_fired": 1}},
+    )
+    return {"ok": True, "order": result}
+
+
+@api.post("/strategies/{sid}/exit-all")
+async def exit_strategy_positions(sid: str, user=Depends(get_current_user)):
+    """Square off every open position that originated from this strategy.
+    Walks completed orders tagged with source=*strategy:{sid}*, computes net
+    qty per symbol, and places opposite MARKET orders to neutralise."""
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    # Match both auto (strategy:sid) AND manual (manual:strategy:sid) sources
+    orders = await db.orders.find({
+        "user_id": user["id"],
+        "source": {"$regex": f"strategy:{sid}"},
+        "status": "COMPLETE",
+    }, {"_id": 0}).to_list(1000)
+    net: Dict[str, int] = {}
+    for o in orders:
+        sign = 1 if o["side"] == "BUY" else -1
+        net[o["symbol"]] = net.get(o["symbol"], 0) + sign * int(o.get("filled_qty") or o.get("qty") or 0)
+    closed: List[Dict[str, Any]] = []
+    for sym, qty_net in net.items():
+        if qty_net == 0:
+            continue
+        side = "SELL" if qty_net > 0 else "BUY"
+        try:
+            result = await _place_order_core(
+                user_id=user["id"], symbol=sym, side=side, qty=abs(qty_net),
+                order_type="MARKET", product=None, source=f"exit:strategy:{sid}",
+            )
+            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "ok", "order_id": result.get("id")})
+        except HTTPException as e:
+            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": e.detail})
+        except Exception as e:
+            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": str(e)})
+    return {"closed_positions": closed, "open_positions_found": len([v for v in net.values() if v != 0])}
+
+
 @api.post("/strategies/{sid}/test-run")
 async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     """Force-evaluate a strategy NOW. Bypasses dedup. Returns diagnostics so the

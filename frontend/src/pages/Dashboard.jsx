@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api, formatINR, pctFmt } from "../lib/api";
-import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, AreaChart, Area } from "recharts";
+import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { TrendingUp, TrendingDown, Wallet, Activity, Layers, Target } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -93,36 +93,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Chart + Watchlist */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        <div className="qd-card p-4 lg:col-span-8 flex flex-col" data-testid="equity-card">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="font-head text-lg text-white">Equity Curve</h2>
-            <span className="font-mono text-xs text-[var(--qd-text-2)]">30D • Paper Capital ₹1,00,000</span>
-          </div>
-          <div className="h-72">
-            <ResponsiveContainer>
-              <AreaChart data={pf?.equity_curve || []}>
-                <defs>
-                  <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#007AFF" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="#007AFF" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" stroke="#666" tick={{ fontSize: 10, fontFamily: "JetBrains Mono" }} tickFormatter={(d) => d.slice(5)} />
-                <YAxis stroke="#666" tick={{ fontSize: 10, fontFamily: "JetBrains Mono" }} domain={["dataMin - 1000", "dataMax + 1000"]} />
-                <Tooltip
-                  contentStyle={{ background: "#121212", border: "1px solid #2a2a2e", borderRadius: 2, fontFamily: "JetBrains Mono", fontSize: 11 }}
-                  labelStyle={{ color: "#a3a3a3" }}
-                  itemStyle={{ color: "#fff" }}
-                />
-                <Area type="monotone" dataKey="equity" stroke="#007AFF" fill="url(#eq)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="qd-card p-0 lg:col-span-4 flex flex-col" data-testid="watchlist-card">
+      {/* Watchlist (full width — equity curve removed per user preference) */}
+      <div className="grid grid-cols-1 gap-4">
+        <div className="qd-card p-0 flex flex-col" data-testid="watchlist-card">
           <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-4 py-3">
             <h2 className="font-head text-base text-white">Market Watch</h2>
             <div className="flex items-center gap-2">

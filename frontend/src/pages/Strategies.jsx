@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { Code2, Blocks, Play, Pause, Trash2, Plus, RefreshCw, Activity, Zap, X } from "lucide-react";
+import { Code2, Blocks, Play, Pause, Trash2, Plus, RefreshCw, Activity, Zap, X, TrendingUp, TrendingDown, LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 const timeAgo = (iso) => {
   if (!iso) return "—";
@@ -45,6 +46,35 @@ export default function Strategies() {
     } finally {
       setTesting(null);
       load();
+    }
+  };
+  const manualOrder = async (id, action) => {
+    const verb = action === "BUY" ? "Buy" : "Sell";
+    if (!window.confirm(`${verb} now using this strategy's symbol & default qty?\n\nThis bypasses the python logic.`)) return;
+    try {
+      const r = await api.post(`/strategies/${id}/manual-order`, { action });
+      const o = r.data?.order || {};
+      toast.success(`${action} placed: ${o.qty} ${o.symbol} @ ₹${o.price}`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || `${verb} failed`);
+    }
+  };
+  const exitAll = async (id) => {
+    if (!window.confirm("Square off ALL open positions from this strategy?")) return;
+    try {
+      const r = await api.post(`/strategies/${id}/exit-all`);
+      const closed = r.data?.closed_positions || [];
+      if (closed.length === 0) {
+        toast.info("No open positions to close from this strategy");
+      } else {
+        const ok = closed.filter((c) => c.status === "ok").length;
+        const fail = closed.filter((c) => c.status !== "ok").length;
+        toast.success(`Closed ${ok} position${ok !== 1 ? "s" : ""}${fail ? ` (${fail} failed)` : ""}`);
+      }
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Exit failed");
     }
   };
 
@@ -115,15 +145,30 @@ export default function Strategies() {
                   </div>
                 )}
 
-                <div className="flex gap-2 pt-2 border-t border-[var(--qd-border)]">
-                  <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex-1 border border-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white text-[var(--qd-accent)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1 disabled:opacity-50" data-testid={`test-run-${s.id}`}>
-                    <Zap size={12} /> {testing === s.id ? "Running…" : "Test Run"}
-                  </button>
-                  <button onClick={() => toggle(s.id)} className="flex-1 border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`toggle-${s.id}`}>
-                    {live ? <><Pause size={12} /> Pause</> : <><Play size={12} /> Go Live</>}
-                  </button>
-                  <Link to={s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`} className="border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase py-1.5 px-3 rounded-sm" data-testid={`edit-${s.id}`}>Edit</Link>
-                  <button onClick={() => del(s.id)} className="border border-[var(--qd-border)] hover:border-[var(--qd-loss)] text-[var(--qd-loss)] py-1.5 px-2 rounded-sm" data-testid={`delete-${s.id}`}><Trash2 size={12} /></button>
+                <div className="pt-2 border-t border-[var(--qd-border)] space-y-2">
+                  {/* Manual controls — discretionary trading */}
+                  <div className="flex gap-2">
+                    <button onClick={() => manualOrder(s.id, "BUY")} className="flex-1 border border-[var(--qd-profit)] hover:bg-[var(--qd-profit)] hover:text-black text-[var(--qd-profit)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`manual-buy-${s.id}`} title="Place an immediate BUY order">
+                      <TrendingUp size={12} /> Buy
+                    </button>
+                    <button onClick={() => manualOrder(s.id, "SELL")} className="flex-1 border border-[var(--qd-loss)] hover:bg-[var(--qd-loss)] hover:text-white text-[var(--qd-loss)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`manual-sell-${s.id}`} title="Place an immediate SELL order">
+                      <TrendingDown size={12} /> Sell
+                    </button>
+                    <button onClick={() => exitAll(s.id)} className="flex-1 border border-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black text-[var(--qd-warn)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`exit-all-${s.id}`} title="Square off all open positions from this strategy">
+                      <LogOut size={12} /> Exit
+                    </button>
+                  </div>
+                  {/* Automation controls */}
+                  <div className="flex gap-2">
+                    <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex-1 border border-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white text-[var(--qd-accent)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1 disabled:opacity-50" data-testid={`test-run-${s.id}`}>
+                      <Zap size={12} /> {testing === s.id ? "Running…" : "Test Run"}
+                    </button>
+                    <button onClick={() => toggle(s.id)} className="flex-1 border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`toggle-${s.id}`}>
+                      {live ? <><Pause size={12} /> Pause</> : <><Play size={12} /> Go Live</>}
+                    </button>
+                    <Link to={s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`} className="border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase py-1.5 px-3 rounded-sm" data-testid={`edit-${s.id}`}>Edit</Link>
+                    <button onClick={() => del(s.id)} className="border border-[var(--qd-border)] hover:border-[var(--qd-loss)] text-[var(--qd-loss)] py-1.5 px-2 rounded-sm" data-testid={`delete-${s.id}`}><Trash2 size={12} /></button>
+                  </div>
                 </div>
               </div>
             );
