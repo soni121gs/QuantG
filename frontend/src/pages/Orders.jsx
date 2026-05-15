@@ -7,6 +7,7 @@ export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [watch, setWatch] = useState([]);
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("ALL");
   const [form, setForm] = useState({ symbol: "RELIANCE", side: "BUY", qty: 1, order_type: "MARKET", price: "" });
   const navigate = useNavigate();
 
@@ -14,7 +15,19 @@ export default function Orders() {
     api.get("/orders").then((r) => setOrders(r.data)),
     api.get("/market/watchlist").then((r) => setWatch(r.data)),
   ]);
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, []);
+
+  const filtered = orders.filter((o) => {
+    if (filter === "ALL") return true;
+    if (filter === "OPEN") return ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"].includes(o.status);
+    if (filter === "COMPLETE") return o.status === "COMPLETE";
+    if (filter === "CANCELLED") return ["CANCELLED", "REJECTED"].includes(o.status);
+    return true;
+  });
 
   const submit = async (e) => {
     e.preventDefault();
@@ -36,9 +49,33 @@ export default function Orders() {
         </button>
       </div>
 
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-1" data-testid="order-filter">
+          {["ALL", "OPEN", "COMPLETE", "CANCELLED"].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-sm ${
+                filter === f ? "bg-[var(--qd-accent)] text-white" : "border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:text-white"
+              }`}
+              data-testid={`filter-${f.toLowerCase()}`}
+            >
+              {f} {f !== "ALL" && `· ${orders.filter((o) =>
+                f === "OPEN" ? ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"].includes(o.status)
+                : f === "COMPLETE" ? o.status === "COMPLETE"
+                : ["CANCELLED", "REJECTED"].includes(o.status)
+              ).length}`}
+            </button>
+          ))}
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">
+          showing {filtered.length} of {orders.length}
+        </span>
+      </div>
+
       <div className="qd-card">
-        {orders.length === 0 ? (
-          <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No orders yet. Place your first trade.</div>
+        {filtered.length === 0 ? (
+          <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No orders match this filter.</div>
         ) : (
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
@@ -47,15 +84,19 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody className="font-mono">
-              {orders.map((o) => (
+              {filtered.map((o) => (
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
-                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false })}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "—"}</td>
                   <td className="px-4 py-2.5 text-white">{o.symbol}</td>
                   <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                   <td className="px-4 py-2.5">{o.qty}</td>
                   <td className="px-4 py-2.5">{formatINR(o.price)}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.order_type}</td>
-                  <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.status}</td>
+                  <td className={`px-4 py-2.5 ${
+                    o.status === "COMPLETE" ? "text-[var(--qd-profit)]" :
+                    ["CANCELLED", "REJECTED"].includes(o.status) ? "text-[var(--qd-loss)]" :
+                    "text-[var(--qd-warn)]"
+                  }`}>{o.status}</td>
                 </tr>
               ))}
             </tbody>

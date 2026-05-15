@@ -20,7 +20,7 @@ import os
 import socket
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Dict, Any
 
 from safe_exec import safe_run_strategy
 
@@ -98,29 +98,53 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
             strategies = await db.strategies.find({"status": "live"}).to_list(500)
             for s in strategies:
                 code = s.get("python_code") or ""
+                eval_set: Dict[str, Any] = {
+                    "last_evaluated_at": datetime.now(timezone.utc).isoformat(),
+                    "last_pod": POD_ID,
+                }
+                # increment scan counter
+                inc_set: Dict[str, Any] = {"evaluations": 1}
                 if not code:
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": eval_set, "$inc": inc_set})
                     continue
                 # default symbol
                 symbol = "RELIANCE"
-                if s.get("visual_config", {}).get("symbol"):
-                    symbol = s["visual_config"]["symbol"]
+                vc = s.get("visual_config") or {}
+                if vc.get("symbol"):
+                    symbol = vc["symbol"]
                 # last 60 daily candles for context
                 try:
                     data = await get_price_history(s["user_id"], symbol, days=60)
                 except Exception as e:
                     logger.warning(f"price history failed for {symbol}: {e}")
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set, "last_error": str(e)[:200]},
+                                                    "$inc": inc_set})
                     continue
                 if not data:
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": eval_set, "$inc": inc_set})
                     continue
                 signals = _safe_run(code, data)
+                signals_count = len(signals)
                 if not signals:
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set, "last_signals_count": 0},
+                                                    "$inc": inc_set})
                     continue
                 last_sig = signals[-1]
                 # only act if the latest signal is "today's" (most recent candle)
                 if last_sig.get("date") != data[-1]["date"]:
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set, "last_signals_count": signals_count},
+                                                    "$inc": inc_set})
                     continue
                 action = (last_sig.get("action") or "").upper()
                 if action not in ("BUY", "SELL"):
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set, "last_signals_count": signals_count},
+                                                    "$inc": inc_set})
                     continue
                 # Trigger order using injected fn — it applies paper_mode + risk limits
                 try:
@@ -135,8 +159,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     )
                     await db.strategies.update_one(
                         {"id": s["id"]},
-                        {"$set": {"last_signal_at": datetime.now(timezone.utc).isoformat(),
-                                  "last_signal_action": action}},
+                        {"$set": {**eval_set,
+                                  "last_signal_at": datetime.now(timezone.utc).isoformat(),
+                                  "last_signal_action": action,
+                                  "last_signals_count": signals_count},
+                         "$inc": {**inc_set, "signals_fired": 1}},
                     )
                     logger.info(f"strategy {s['id']} → {action} {symbol}")
                 except Exception as e:

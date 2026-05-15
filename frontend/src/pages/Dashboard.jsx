@@ -15,19 +15,28 @@ const KPI = ({ label, value, sub, icon: Icon, tone }) => (
   </div>
 );
 
+const FundCell = ({ k, v, tone }) => (
+  <div>
+    <div className="text-[var(--qd-text-3)] text-[9px] uppercase tracking-widest">{k}</div>
+    <div className={`mt-0.5 text-sm ${tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-white"}`}>{v}</div>
+  </div>
+);
+
 export default function Dashboard() {
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const [positions, setPositions] = useState([]);
+  const [funds, setFunds] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [p, w, ps] = await Promise.all([
+      const [p, w, ps, f] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/positions"),
+        api.get("/funds"),
       ]);
-      setPf(p.data); setWatch(w.data); setPositions(ps.data);
+      setPf(p.data); setWatch(w.data); setPositions(ps.data); setFunds(f.data);
     } catch { /* keep stale data */ }
   }, []);
 
@@ -59,10 +68,30 @@ export default function Dashboard() {
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KPI label="Total PnL" value={`₹${formatINR(pnl)}`} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={pnlTone} sub={pctFmt((pnl / 100000) * 100)} />
-        <KPI label="Deployed" value={`₹${formatINR(pf?.deployed ?? 0)}`} icon={Wallet} sub={`Avail ₹${formatINR(pf?.available ?? 0)}`} />
-        <KPI label="Strategies" value={pf?.strategies ?? 0} icon={Layers} sub={`${pf?.live_strategies ?? 0} live now`} />
-        <KPI label="Orders" value={pf?.orders ?? 0} icon={Activity} sub="all-time" />
+        <KPI label="Available Cash" value={`₹${formatINR(funds?.available_cash ?? 0)}`} icon={Wallet} sub={funds?.source === "live" ? "From Zerodha" : "Paper"} />
+        <KPI label="Used Margin" value={`₹${formatINR(funds?.used_margin ?? 0)}`} icon={Layers} sub={funds?.source === "live" ? "Live" : `Open: ₹${formatINR(funds?.opening_balance ?? 0)}`} />
+        <KPI label="Live Strategies" value={`${pf?.live_strategies ?? 0}/${pf?.strategies ?? 0}`} icon={Activity} sub={`${pf?.orders ?? 0} orders all-time`} />
       </div>
+
+      {/* Funds detail (live mode) */}
+      {funds?.source === "live" && (
+        <div className="qd-card p-4" data-testid="funds-detail">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-head text-base text-white flex items-center gap-2"><Wallet size={16} /> Funds & Margins</h2>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-profit)] border border-[var(--qd-profit)] px-2 py-0.5 rounded-sm">ZERODHA LIVE</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+            <FundCell k="Opening Balance" v={`₹${formatINR(funds.opening_balance)}`} />
+            <FundCell k="Available" v={`₹${formatINR(funds.available_cash)}`} tone="p" />
+            <FundCell k="Used" v={`₹${formatINR(funds.used_margin)}`} tone="l" />
+            <FundCell k="Intraday Payin" v={`₹${formatINR(funds.intraday_payin)}`} />
+            <FundCell k="M2M Realised" v={`₹${formatINR(funds.m2m_realised)}`} tone={funds.m2m_realised >= 0 ? "p" : "l"} />
+            <FundCell k="M2M Unrealised" v={`₹${formatINR(funds.m2m_unrealised)}`} tone={funds.m2m_unrealised >= 0 ? "p" : "l"} />
+            <FundCell k="SPAN" v={`₹${formatINR(funds.span)}`} />
+            <FundCell k="Delivery" v={`₹${formatINR(funds.delivery_margin)}`} />
+          </div>
+        </div>
+      )}
 
       {/* Chart + Watchlist */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

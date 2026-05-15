@@ -15,7 +15,6 @@ import {
   X,
   UserCircle,
 } from "lucide-react";
-import TickerTape from "./TickerTape";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
 
@@ -148,13 +147,12 @@ export default function Layout({ children }) {
             </button>
           </div>
         </div>
-        <TickerTape />
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Desktop Sidebar */}
         <aside
-          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[80px] self-start h-[calc(100vh-80px)]"
+          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[48px] self-start h-[calc(100vh-48px)]"
           data-testid="sidebar"
         >
           <nav className="flex flex-col p-2 gap-0.5">

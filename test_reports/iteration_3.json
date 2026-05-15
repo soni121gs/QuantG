@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration-3 features verified end-to-end. Backend pytest: 6/6 pass (test_iteration3.py) — /api/funds paper shape, /api/strategies telemetry fields, runner increments evaluations within 30s, /api/orders mode+source, /api/positions/{sym}/exit happy + 404 paths. Found & FIXED a runner-killing bug: strategy_runner.py line 113 crashed when visual_config was None (python-kind strategies) causing the entire runner tick to abort before $inc evaluations. Frontend: TickerTape successfully removed (0 marquee elements). Dashboard shows 4 KPI cards (Total PnL / Available Cash / Used Margin / Live Strategies). Strategies cards render Scans/Signals/Last scan/Last signal/Last PnL/Errors grid. Orders page renders ALL/OPEN/COMPLETE/CANCELLED filter pills with counts. Positions page renders Exit button + paper/live mode pill per row. All 5 user-requested visibility features confirmed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "strategy_runner.py L113", "issue": "FIXED in this iteration. `s.get('visual_config', {}).get('symbol')` crashed when visual_config was explicitly null in DB. Was wrapped in outer try/except so it killed the entire strategy iteration — evaluations counter never advanced. Replaced with `(s.get('visual_config') or {}).get('symbol')`."},
+      {"endpoint": "/api/positions/{symbol}/exit", "issue": "When user has only a SHORT position (qty<0), the inverse BUY exit order's qty=abs(target.qty) passes risk-guard but uses live_price as fill hint — fine in paper, but in live mode the broker could reject if qty exceeds max_position_size relative to current price. Edge case only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iteration3_results.xml"
+  ],
+  "action_items": [
+    "None required for the 5 user-requested features. All passing.",
+    "Optional cleanup carryover from iter-2: split server.py (1000+ lines), add gt=0 validator to OrderReq.qty (now done at Field level — verify), wrap exec() with asyncio.to_thread+timeout in strategy_runner."
+  ],
+  "critical_code_review_comments": [
+    "strategy_runner.py: outer try/except in runner_loop swallows per-strategy errors but the catch is around the whole for-loop, so one buggy strategy halts the tick for ALL other live strategies. Move the try INSIDE the for loop so per-strategy failures only skip that strategy.",
+    "server.py exit_position passes product=target.get('product') but the paper positions don't store product — always None. Falls back to user default_product, acceptable but document it.",
+    "exit_position calls list_positions(user) which itself can fetch live Zerodha positions; placing the exit then goes through _place_order_core which also re-checks paper/live. Two source-of-truth reads can race if the user flips paper_mode between the two. Low priority.",
+    "/api/orders merges Kite orders by prepending — `created_at` ordering is broken because Kite's order_timestamp is appended to the front regardless of time. Sort merged list by created_at desc after merge.",
+    "OrderReq.qty now has Field(gt=0) — good, iteration-2 finding resolved."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (created)",
+    "/app/backend/strategy_runner.py (visual_config null-safety fix)"
+  ],
+  "success_rate": {"backend": "100% (6/6 iter-3 tests; iter-1 and iter-2 suites untouched and still green)", "frontend": "100% (5/5 visibility features verified visually + programmatically)"},
+  "test_credentials": "demo@quantdesk.io / demo1234 (working)",
+  "seed_data_creation": "Test created/deleted strategies cleanly. Two persistent paper positions remain on demo account: INFY +7 @1,887.75 and ITC +1 @480.99 — harmless, useful for next iteration's exit-button manual testing.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Three pytest files: backend_test.py (iter-1), test_iteration2.py (Zerodha/profile/orders modes), test_iteration3.py (funds/telemetry/exit). Run all with REACT_APP_BACKEND_URL=... pytest /app/backend/tests/ -v. The strategy runner ticks every 30s and uses a Mongo lock — wait 35-60s after toggling live before checking telemetry. Strategy runner bug fixed in this iteration ensures evaluations counter advances even when visual_config is null.",
+  "rca of the issue": "Strategy runner reported 0 evaluations after toggling live. Backend log showed `runner loop error: 'NoneType' object has no attribute 'get'` at line 113. Root cause: `s.get('visual_config', {}).get('symbol')` — when MongoDB stored visual_config as null (true for kind=python strategies), .get('visual_config', {}) returned None (not the default), and chained .get('symbol') crashed. The exception was caught by the outer try around the whole for-loop, so ALL live strategies in that tick lost their $inc update. Fix: replaced with `(s.get('visual_config') or {}).get('symbol')`. After fix, evaluations increment within 30s as expected. Verified by re-running test_runner_increments_evaluations which now passes in 26s."
+}

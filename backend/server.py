@@ -108,6 +108,14 @@ class StrategyOut(BaseModel):
     status: str
     created_at: str
     last_pnl: Optional[float] = None
+    # Scan / runner telemetry
+    evaluations: Optional[int] = 0
+    signals_fired: Optional[int] = 0
+    last_evaluated_at: Optional[str] = None
+    last_signal_at: Optional[str] = None
+    last_signal_action: Optional[str] = None
+    last_signals_count: Optional[int] = None
+    last_error: Optional[str] = None
 
 
 class BacktestReq(BaseModel):
@@ -621,9 +629,51 @@ async def place_order(req: OrderReq, user=Depends(get_current_user)):
     )
 
 
+@api.post("/positions/{symbol}/exit")
+async def exit_position(symbol: str, user=Depends(get_current_user)):
+    """Close an open position with one click — places an opposite-side MARKET order."""
+    symbol = symbol.upper()
+    positions = await list_positions(user)
+    target = next((p for p in positions if p["symbol"] == symbol), None)
+    if not target or not target.get("qty"):
+        raise HTTPException(status_code=404, detail="No open position for that symbol")
+    qty = abs(int(target["qty"]))
+    side = "SELL" if target["qty"] > 0 else "BUY"
+    return await _place_order_core(
+        user_id=user["id"], symbol=symbol, side=side, qty=qty,
+        order_type="MARKET", product=target.get("product"), source="manual-exit",
+    )
+
+
 @api.get("/orders")
 async def list_orders(user=Depends(get_current_user)):
-    rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
+    """Local order log + live broker orders (merged) so users see EVERY status."""
+    rows = await db.orders.find({"user_id": user["id"]},
+                                {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
+    # Add live Kite orders too — they include open/pending/rejected statuses we don't have locally
+    kite, _ = await get_user_kite(user["id"])
+    settings = await get_user_settings(user["id"])
+    if kite and not settings.get("paper_mode", True):
+        try:
+            live_orders = kite.orders() or []
+            for o in live_orders:
+                rows.insert(0, {
+                    "id": f"kite-{o.get('order_id')}",
+                    "broker_order_id": o.get("order_id"),
+                    "symbol": o.get("tradingsymbol"),
+                    "side": o.get("transaction_type"),
+                    "qty": o.get("quantity"),
+                    "filled_qty": o.get("filled_quantity"),
+                    "price": float(o.get("average_price") or o.get("price") or 0),
+                    "order_type": o.get("order_type"),
+                    "product": o.get("product"),
+                    "status": o.get("status"),
+                    "mode": "live",
+                    "source": "broker",
+                    "created_at": str(o.get("order_timestamp")) if o.get("order_timestamp") else None,
+                })
+        except Exception as e:
+            logger.warning(f"kite orders fetch failed: {e}")
     return rows
 
 
@@ -746,6 +796,47 @@ async def get_user_settings(user_id: str) -> dict:
         "max_daily_loss": (user or {}).get("max_daily_loss", 10000.0),
         "max_position_size": (user or {}).get("max_position_size", 50000.0),
         "paper_mode": (user or {}).get("paper_mode", True),
+    }
+
+
+# ============== Routes: Funds ==============
+@api.get("/funds")
+async def funds(user=Depends(get_current_user)):
+    """Return broker funds & margins when live, otherwise a paper-money snapshot."""
+    kite, _ = await get_user_kite(user["id"])
+    if kite:
+        try:
+            margins = kite.margins(segment="equity")
+            avail = margins.get("available", {}) or {}
+            util = margins.get("utilised", {}) or {}
+            return {
+                "source": "live",
+                "available_cash": round(float(avail.get("live_balance") or avail.get("cash") or 0), 2),
+                "opening_balance": round(float(avail.get("opening_balance") or 0), 2),
+                "intraday_payin": round(float(avail.get("intraday_payin") or 0), 2),
+                "used_margin": round(float(util.get("debits") or util.get("exposure") or 0), 2),
+                "m2m_realised": round(float(util.get("m2m_realised") or 0), 2),
+                "m2m_unrealised": round(float(util.get("m2m_unrealised") or 0), 2),
+                "span": round(float(util.get("span") or 0), 2),
+                "delivery_margin": round(float(util.get("delivery") or 0), 2),
+            }
+        except Exception as e:
+            logger.warning(f"funds fetch failed: {e}")
+    # Paper / fallback
+    positions = await db.positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
+    deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
+    paper_capital = 500000.0
+    return {
+        "source": "paper",
+        "available_cash": round(paper_capital - deployed, 2),
+        "opening_balance": paper_capital,
+        "intraday_payin": 0.0,
+        "used_margin": deployed,
+        "m2m_realised": 0.0,
+        "m2m_unrealised": 0.0,
+        "span": 0.0,
+        "delivery_margin": 0.0,
+        "note": "Paper-mode estimate. Connect Zerodha and switch to LIVE for real margins.",
     }
 
 
