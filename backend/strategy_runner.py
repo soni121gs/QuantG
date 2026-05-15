@@ -120,11 +120,17 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": eval_set, "$inc": inc_set})
                     continue
-                # default symbol
-                symbol = "RELIANCE"
+                # Resolve the symbol whose PRICE HISTORY the strategy will analyse.
+                # When options mode is enabled, we MUST evaluate the strategy
+                # against the UNDERLYING's spot price (NIFTY/BANKNIFTY/SENSEX) —
+                # not against an unrelated equity symbol like RELIANCE. The
+                # equity `symbol` field is only used in equity mode.
                 vc = s.get("visual_config") or {}
-                if vc.get("symbol"):
-                    symbol = vc["symbol"]
+                opt_cfg_early = (vc or {}).get("options") or {}
+                if opt_cfg_early.get("enabled"):
+                    symbol = (opt_cfg_early.get("underlying") or "NIFTY").upper()
+                else:
+                    symbol = (vc.get("symbol") or "RELIANCE").upper()
                 # last 60 daily candles for context
                 try:
                     data = await get_price_history(s["user_id"], symbol, days=60)

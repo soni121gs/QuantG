@@ -209,6 +209,7 @@ SYMBOLS = [
     {"symbol": "MARUTI", "name": "Maruti Suzuki", "base": 12450.00},
     {"symbol": "NIFTY", "name": "Nifty 50", "base": 24850.40},
     {"symbol": "BANKNIFTY", "name": "Bank Nifty", "base": 52340.85},
+    {"symbol": "SENSEX", "name": "BSE Sensex", "base": 81460.20},
 ]
 
 # Deterministic-ish live ticks using time-based jitter
@@ -592,13 +593,37 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     if not code:
         raise HTTPException(status_code=400, detail="Strategy has no python code")
     vc = row.get("visual_config") or {}
-    symbol = (vc.get("symbol") or "RELIANCE").upper()
+    opt_cfg = vc.get("options") or {}
+    options_mode = bool(opt_cfg.get("enabled"))
+    # When options mode is on, analyse the underlying spot — NOT the equity field
+    if options_mode:
+        symbol = (opt_cfg.get("underlying") or "NIFTY").upper()
+    else:
+        symbol = (vc.get("symbol") or "RELIANCE").upper()
 
     # Fetch candles using the same path as the background runner
     kite, _ = await get_user_kite(user["id"])
     source_label = "mock-intraday-5m"
     data: List[dict] = []
-    if kite:
+    # Special path: fetch index spot history when options mode + Kite available
+    if kite and options_mode and symbol in options_helper.INDEX_SPOT_SYMBOL:
+        try:
+            spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[symbol]
+            instruments = kite.instruments(spot_exch)
+            idx_tok = None
+            for inst in instruments:
+                if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
+                    idx_tok = int(inst["instrument_token"])
+                    break
+            if idx_tok:
+                live_data = kite_helper.safe_historical(kite, idx_tok, days=30, interval="5minute")
+                if live_data and len(live_data) > 20:
+                    data = live_data
+                    source_label = f"kite-5m:{symbol}-spot"
+        except Exception as e:
+            logger.warning(f"index spot history failed in test-run for {symbol}: {e}")
+    # Equity path (or fallback)
+    if not data and kite:
         tok = kite_helper.instrument_token(kite, symbol)
         if tok:
             live_data = kite_helper.safe_historical(kite, tok, days=30, interval="5minute")
@@ -636,20 +661,42 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
 
     order_result = None
     placed_error = None
+    option_contract_used = None
     if signals:
         last_sig = signals[-1]
         action = (last_sig.get("action") or "").upper()
         if action in ("BUY", "SELL"):
             try:
-                order_result = await _place_order_core(
-                    user_id=user["id"],
-                    symbol=symbol,
-                    side=action,
-                    qty=None,
-                    order_type="MARKET",
-                    product=None,
-                    source=f"test-run:{sid}",
-                )
+                if options_mode:
+                    if not kite:
+                        raise HTTPException(status_code=400, detail="Options test-run requires a connected Zerodha session.")
+                    option_contract_used = options_helper.resolve_for_signal(
+                        kite,
+                        underlying=symbol,
+                        signal_action=action,
+                        strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
+                        otm_points=int(opt_cfg.get("otm_points") or 0),
+                        expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+                    )
+                    if not option_contract_used:
+                        raise HTTPException(status_code=400, detail="Could not resolve option contract — markets may be closed or instruments unavailable.")
+                    order_result = await _place_order_core(
+                        user_id=user["id"], symbol=symbol, side=action,
+                        qty=int(opt_cfg.get("lots") or 1),
+                        order_type="MARKET", product=None,
+                        source=f"test-run:{sid}",
+                        option_contract=option_contract_used,
+                    )
+                else:
+                    order_result = await _place_order_core(
+                        user_id=user["id"],
+                        symbol=symbol,
+                        side=action,
+                        qty=None,
+                        order_type="MARKET",
+                        product=None,
+                        source=f"test-run:{sid}",
+                    )
                 # Update strategy telemetry so UI reflects the fire
                 await db.strategies.update_one(
                     {"id": sid},
@@ -669,12 +716,14 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     return {
         "ok": True,
         "symbol": symbol,
+        "options_mode": options_mode,
         "data_source": source_label,
         "candles": len(data),
         "first_candle": data[0],
         "last_candle": data[-1],
         "last_5_closes": [d.get("close") for d in data[-5:]],
         "signals": signals,
+        "option_contract": option_contract_used,
         "order_placed": order_result,
         "order_error": placed_error,
     }
@@ -1532,8 +1581,33 @@ async def startup():
     # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
     async def _price_history(user_id: str, symbol: str, days: int = 60):
         kite, _ = await get_user_kite(user_id)
+        sym_upper = symbol.upper()
+        # Index spot history (for options strategies on NIFTY/BANKNIFTY/SENSEX).
+        # Kite stores these under instrument_type=EQ on segment INDICES with the
+        # canonical names below — we use the options_helper map for consistency.
+        if kite and sym_upper in options_helper.INDEX_SPOT_SYMBOL:
+            try:
+                spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
+                # Find the index instrument token from the exchange-specific dump
+                instruments = kite.instruments(spot_exch)
+                idx_tok = None
+                for inst in instruments:
+                    if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
+                        idx_tok = int(inst["instrument_token"])
+                        break
+                if idx_tok:
+                    live_data = kite_helper.safe_historical(kite, idx_tok, days=min(days, 30), interval="5minute")
+                    if live_data and len(live_data) > 20:
+                        return live_data
+                    daily = kite_helper.safe_historical(kite, idx_tok, days=days, interval="day")
+                    if daily:
+                        return daily
+            except Exception as e:
+                logger.warning(f"index spot history failed for {sym_upper}: {e}")
+            # Fall through to mock if index lookup fails
+
         if kite:
-            tok = kite_helper.instrument_token(kite, symbol)
+            tok = kite_helper.instrument_token(kite, sym_upper)
             if tok:
                 # Use 5-minute candles for live strategies (intraday-grade)
                 live_data = kite_helper.safe_historical(kite, tok, days=min(days, 30), interval="5minute")
@@ -1544,7 +1618,7 @@ async def startup():
                 if daily:
                     return daily
         # Final fallback: mock 5-min intraday walk (paper/backtest mode)
-        sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
+        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None)
         if not sym:
             return []
         return intraday_series(sym["base"], bars=250)
