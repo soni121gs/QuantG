@@ -192,8 +192,14 @@ def place_live_order(
     product: str,
     price: Optional[float] = None,
     variety: str = "regular",
+    market_protection: float = 5.0,
 ) -> Dict[str, Any]:
-    """Place a real order via Kite. Raises on failure."""
+    """Place a real order via Kite. Raises on failure.
+
+    market_protection: percent slippage tolerance for MARKET orders (Zerodha
+    rejects market orders without this). Default 5% — order auto-cancels if the
+    fill price deviates more than 5% from LTP. Ignored for LIMIT orders.
+    """
     params = dict(
         variety=variety,
         exchange=exchange,
@@ -205,5 +211,8 @@ def place_live_order(
     )
     if order_type == "LIMIT" and price:
         params["price"] = float(price)
+    if order_type == "MARKET":
+        # Zerodha requires this for ALL market orders placed via API.
+        params["market_protection"] = float(market_protection)
     order_id = kite.place_order(**params)
     return {"order_id": order_id}
