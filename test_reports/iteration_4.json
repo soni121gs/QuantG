@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration-4 live-safety hardening tested. Backend pytest 8/9 PASS — readiness endpoint shape (6 checks: broker_keys/kite_session/funds/risk_limits/mode/market_hours) + demo-user ready=false + each-check structure all pass; /api/orders returns list and reads filled_qty/pending_qty/status_message keys without error (paper => keys absent, that is acceptable since iter-4 said 'null for paper'); daily-loss guard wired via _check_daily_loss_guard and PUT /api/profile flips max_daily_loss; /api/positions list works; kite_helper.instrument_token / safe_historical / safe_order_history / safe_positions all present with expected signatures. 1 CRITICAL BACKEND BUG: realised_pnl is NEVER written to the SELL order document — _place_order_core inserts an order doc with no realised_pnl key, so the daily-loss guard (which sums realised_pnl on COMPLETE orders) will read 0 forever and will NEVER trip in paper mode. The iter-4 review claim 'paper BUY then SELL closing a profitable position writes realised_pnl on the SELL order' is FALSE in current code. 1 CRITICAL FRONTEND BUG (FIXED by me): Profile.jsx imported nothing for the `Zap` lucide icon used inside ReadinessModal (line 237), causing the ReferenceError that crashed the entire modal — page went blank, user could never open the readiness modal. Added `Zap` to the lucide-react import. Re-tested: modal now opens with all 6 checks rendered, green/red icons + hint text, Confirm-Live button disabled (text 'FIX THE ISSUES ABOVE') because demo user has no Zerodha session, Cancel closes modal and mode (PAPER) is preserved.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/orders (_place_order_core)", "issue": "Closing trades never write realised_pnl on the SELL order document. Required by _check_daily_loss_guard which sums realised_pnl across today's COMPLETE orders — currently sums 0 forever so the loss guard NEVER trips for paper. Fix: in the paper SELL/cover branch (when pos exists and side is closing), compute realised_pnl = (fill_price - pos.avg_price) * qty for long-close (or (pos.avg_price - fill_price) * qty for short-close) and add it to the `doc` before `db.orders.insert_one(doc)`. Optionally also compute for partial closes (qty smaller than position).", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "/api/orders", "issue": "Paper orders don't include filled_qty/pending_qty/status_message keys at all — they're simply absent in the doc. Iter-4 said these would be 'null for paper'. Either set them to None explicitly in the inserted doc so frontend can safely read them, or document that frontend must use o.filled_qty ?? null."},
+      {"endpoint": "GET /api/live/readiness", "issue": "`overall_ready` excludes market_hours from the all() (market_hours is treated as a warning, not a blocker). Acceptable design but document it — currently a user could click 'Go LIVE' at 2am if everything else passes."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ReadinessModal in Profile.jsx", "issue": "FIXED by testing agent: missing `Zap` import from lucide-react crashed the modal (React error boundary fallback turned the entire profile page blank when user clicked 'Go LIVE'). Added Zap to imports line 3.", "selector": "[data-testid=\"readiness-modal\"]", "priority": "HIGH (was)"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/iteration4_results.xml"
+  ],
+  "action_items": [
+    "FIX realised_pnl write: in _place_order_core paper branch when a position is being closed/reduced, compute realised pnl from (fill_price - avg_price) * closed_qty (sign-aware for long vs short) and set doc['realised_pnl'] before insert. Without this, the daily-loss guard is non-functional.",
+    "Optionally set filled_qty / pending_qty / status_message to None explicitly on paper order doc for shape parity with live orders.",
+    "Consider making market_hours a soft warning vs hard block — confirm whether ready=true at 2am is intended.",
+    "Sort /api/orders is already fixed in iter-3 but verify after merge."
+  ],
+  "critical_code_review_comments": [
+    "_place_order_core (server.py L599-614): missing realised_pnl computation on closing SELL — breaks daily-loss guard completely. This is the most impactful bug of the iteration.",
+    "_check_daily_loss_guard filters by status=='COMPLETE'. Paper orders are COMPLETE so once realised_pnl is written, guard will function. Live orders are inserted with status='OPEN' so realised pnl tracking for live requires a separate post-fill reconciliation hook (not present).",
+    "Profile.jsx: ReadinessModal had unimported Zap icon — basic JSX-level missed dependency. Recommend ESLint react/no-undef rule or running `yarn build` in CI to catch.",
+    "list_orders prepends kite orders then sorts by created_at desc — works, but if kite order_timestamp is naive datetime (str cast) sorting may not be stable vs local ISO strings. Convert to ISO before push for safety.",
+    "/api/live/readiness funds check requires avail>100 — magic number; pull from settings.min_funds.",
+    "GET /api/positions stale-cache fallback: cached_at returned but no max-age — could return very old cache. Add a TTL (e.g., 24h) and surface 'cached_at' age in the UI."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/Profile.jsx (added Zap to lucide-react import — fixed ReadinessModal crash)",
+    "/app/backend/tests/test_iteration4.py (new test suite)"
+  ],
+  "success_rate": {"backend": "89% (8/9 — 1 critical realised_pnl write missing)", "frontend": "100% after fix (modal opens, 6 checks render, icons/hints visible, Confirm disabled when not ready, Cancel preserves mode)"},
+  "test_credentials": "demo@quantdesk.io / demo1234 (verified)",
+  "seed_data_creation": "Test placed a small paper BUY/SELL pair on TCS and a BUY on RELIANCE for testing — closed. No persistent test positions created. Profile max_daily_loss left at original 10000.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run all four suites: backend_test.py (iter1), test_iteration2.py, test_iteration3.py, test_iteration4.py. After main agent adds realised_pnl write to _place_order_core, re-run TestRealisedPnlOnClose AND add a follow-up test that (a) sets max_daily_loss=1 (b) places BUY at price A (c) waits/moves price (d) places SELL that realises a tiny loss (e) verifies the NEXT order is rejected by guard. Currently the modal-blank bug was due to a missing `Zap` import — keep an eye on lucide icon imports going forward.",
+  "rca of the issue": "Profile page went totally blank when clicking 'Go LIVE': React error boundary kicked in because ReadinessModal referenced <Zap/> at L237 without importing the symbol. The import line only had User, Shield, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw — Zap was added later but the import was never updated. Console showed 'An error occurred in the <ReadinessModal> component'. Fix: added Zap to the import (one-liner). Re-verified end-to-end: modal opens, 6 checks render with correct icons, confirm-live disabled, cancel keeps mode. Separately: the iter-4 promise that realised_pnl is written on closing SELL is NOT implemented — _place_order_core never sets that key. The daily-loss guard reads it but it's always zero, so the guard is effectively a no-op for paper trades."
+}

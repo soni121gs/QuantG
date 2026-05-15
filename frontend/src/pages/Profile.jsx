@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { User, Shield, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { User, Shield, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Profile() {
@@ -8,6 +8,7 @@ export default function Profile() {
   const [form, setForm] = useState({});
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [busy, setBusy] = useState(false);
+  const [showReadiness, setShowReadiness] = useState(false);
 
   const load = () =>
     api.get("/profile").then((r) => {
@@ -80,7 +81,7 @@ export default function Profile() {
           </div>
         </div>
         <button
-          onClick={togglePaper}
+          onClick={() => setShowReadiness(true)}
           className={`px-5 py-2.5 font-mono text-sm uppercase tracking-wider rounded-sm ${
             form.paper_mode ? "border border-[var(--qd-border)] text-white hover:border-white" : "qd-btn-sell"
           }`}
@@ -89,6 +90,17 @@ export default function Profile() {
           {form.paper_mode ? "Go LIVE →" : "← Back to Paper"}
         </button>
       </div>
+
+      {showReadiness && (
+        <ReadinessModal
+          isPaper={form.paper_mode}
+          onClose={() => setShowReadiness(false)}
+          onConfirm={async () => {
+            await togglePaper();
+            setShowReadiness(false);
+          }}
+        />
+      )}
 
       {/* Zerodha connection */}
       <div className="qd-card p-5" data-testid="zerodha-status-card">
@@ -190,3 +202,80 @@ const Stat = ({ label, value, mono, tone }) => (
     }`}>{value}</div>
   </div>
 );
+
+function ReadinessModal({ isPaper, onClose, onConfirm }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    api.get("/live/readiness").then((r) => alive && setData(r.data)).finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, []);
+
+  if (isPaper === false) {
+    // already live → simply confirm switching back to paper
+    return (
+      <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
+        <div className="qd-card max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <h2 className="font-head text-xl text-white mb-2">Switch back to Paper?</h2>
+          <p className="text-sm text-[var(--qd-text-2)] mb-4">Live strategies will continue running but orders will be simulated locally.</p>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2 text-xs font-mono uppercase rounded-sm text-white">Cancel</button>
+            <button onClick={onConfirm} className="flex-1 bg-[var(--qd-warn)] text-black py-2 text-xs font-mono uppercase rounded-sm" data-testid="confirm-paper">Switch to Paper</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const allOk = data?.ready;
+  return (
+    <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="qd-card max-w-xl w-full p-6" onClick={(e) => e.stopPropagation()} data-testid="readiness-modal">
+        <div className="flex items-center gap-2 mb-3">
+          <Zap size={22} className="text-[var(--qd-loss)]" />
+          <h2 className="font-head text-xl text-white">Go LIVE — Pre-flight Check</h2>
+        </div>
+        <p className="text-xs text-[var(--qd-text-2)] mb-4">
+          Once enabled, orders go to your real Zerodha account at NSE. Real money at risk.
+        </p>
+        {loading ? (
+          <div className="text-center py-10 font-mono text-sm text-[var(--qd-text-2)]">Running checks...</div>
+        ) : (
+          <div className="space-y-2 mb-4">
+            {data?.checks.map((c) => (
+              <div key={c.id} className="flex items-start gap-3 p-2 bg-[var(--qd-bg)] border border-[var(--qd-border)] rounded-sm" data-testid={`check-${c.id}`}>
+                {c.ok ? <CheckCircle2 size={18} className="text-[var(--qd-profit)] mt-0.5 flex-shrink-0" />
+                      : <XCircle size={18} className="text-[var(--qd-loss)] mt-0.5 flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-white">{c.label}</div>
+                  {c.detail && <div className="text-xs font-mono text-[var(--qd-text-3)]">{c.detail}</div>}
+                  {!c.ok && c.hint && <div className="text-xs font-mono text-[var(--qd-warn)] mt-0.5">→ {c.hint}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2.5 text-xs font-mono uppercase rounded-sm text-white" data-testid="cancel-readiness">Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={!allOk}
+            className={`flex-1 py-2.5 text-xs font-mono uppercase rounded-sm ${
+              allOk ? "qd-btn-sell" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] cursor-not-allowed"
+            }`}
+            data-testid="confirm-live"
+          >
+            {allOk ? "I understand — Go LIVE" : "Fix the issues above"}
+          </button>
+        </div>
+        {!data?.market_open && allOk && (
+          <p className="mt-3 text-xs font-mono text-[var(--qd-warn)] text-center">
+            Note: market is currently closed. Orders queued now will be rejected by NSE until 09:15 IST.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

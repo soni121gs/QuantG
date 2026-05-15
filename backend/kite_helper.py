@@ -111,6 +111,76 @@ def safe_holdings(kite: KiteConnect) -> Optional[List[Dict[str, Any]]]:
         return None
 
 
+# ===== Instrument-token cache (refreshed every 12h) =====
+_INSTRUMENT_CACHE: Dict[str, Any] = {"by_symbol": {}, "cached_at": None}
+
+
+def instrument_token(kite: KiteConnect, symbol: str, segment: str = "NSE") -> Optional[int]:
+    """Resolve an NSE tradingsymbol to its instrument_token. Caches the full
+    instrument dump in-process for 12h (it's ~2 MB). Returns None on miss."""
+    sym = symbol.upper()
+    now = datetime.now(timezone.utc)
+    cached_at = _INSTRUMENT_CACHE["cached_at"]
+    stale = cached_at is None or (now - cached_at).total_seconds() > 43200
+    if stale:
+        try:
+            instruments = kite.instruments(segment)
+            _INSTRUMENT_CACHE["by_symbol"] = {
+                i["tradingsymbol"].upper(): int(i["instrument_token"])
+                for i in instruments
+                if i.get("tradingsymbol") and i.get("instrument_token")
+            }
+            _INSTRUMENT_CACHE["cached_at"] = now
+            logger.info(f"instrument cache refreshed: {len(_INSTRUMENT_CACHE['by_symbol'])} symbols")
+        except Exception as e:
+            logger.warning(f"instruments load failed: {e}")
+            if not _INSTRUMENT_CACHE["by_symbol"]:
+                return None
+    return _INSTRUMENT_CACHE["by_symbol"].get(sym)
+
+
+def safe_historical(
+    kite: KiteConnect,
+    instrument_tok: int,
+    days: int = 60,
+    interval: str = "day",
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch OHLC candles from Kite and return [{date, close, open, high, low, volume}].
+    interval: minute, 3minute, 5minute, 15minute, 30minute, 60minute, day."""
+    try:
+        from_date = datetime.now() - timedelta(days=days)
+        to_date = datetime.now()
+        candles = kite.historical_data(instrument_tok, from_date, to_date, interval)
+        out = []
+        for c in candles:
+            d = c.get("date")
+            if hasattr(d, "strftime"):
+                date_str = d.strftime("%Y-%m-%d") if interval == "day" else d.strftime("%Y-%m-%d %H:%M")
+            else:
+                date_str = str(d)
+            out.append({
+                "date": date_str,
+                "close": float(c.get("close", 0)),
+                "open": float(c.get("open", 0)),
+                "high": float(c.get("high", 0)),
+                "low": float(c.get("low", 0)),
+                "volume": int(c.get("volume", 0)),
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"historical_data failed for token {instrument_tok}: {e}")
+        return None
+
+
+def safe_order_history(kite: KiteConnect, order_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Fetch full order_history for a single broker order."""
+    try:
+        return kite.order_history(order_id)
+    except Exception as e:
+        logger.warning(f"order_history failed for {order_id}: {e}")
+        return None
+
+
 def place_live_order(
     kite: KiteConnect,
     *,

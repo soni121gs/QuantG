@@ -527,6 +527,26 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
 
 
 # ============== Routes: Orders & Positions ==============
+async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
+    """Refuse new orders if today's realised loss already exceeds max_daily_loss.
+    Computed from db.orders (paper mode) — tracks realised_pnl on closing trades."""
+    if not max_loss or max_loss <= 0:
+        return
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    orders = await db.orders.find({
+        "user_id": user_id,
+        "created_at": {"$gte": today_start},
+        "status": "COMPLETE",
+    }, {"_id": 0}).to_list(500)
+    realised = sum(float(o.get("realised_pnl") or 0) for o in orders)
+    if realised <= -abs(max_loss):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Daily loss guard tripped: today's realised loss ₹{abs(realised):.0f} "
+                   f"≥ max ₹{max_loss:.0f}. New orders blocked until tomorrow.",
+        )
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual") -> dict:
@@ -543,6 +563,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     qty = int(qty or settings["default_qty"] or 1)
     product = product or settings["default_product"] or "MIS"
     paper = settings.get("paper_mode", True)
+
+    # Daily loss guard
+    await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
 
     # Risk guard: max position size
     fill_price_hint = price or live_price(sym["base"], SYMBOLS.index(sym))["price"]
@@ -664,10 +687,12 @@ async def list_orders(user=Depends(get_current_user)):
                     "side": o.get("transaction_type"),
                     "qty": o.get("quantity"),
                     "filled_qty": o.get("filled_quantity"),
+                    "pending_qty": o.get("pending_quantity"),
                     "price": float(o.get("average_price") or o.get("price") or 0),
                     "order_type": o.get("order_type"),
                     "product": o.get("product"),
                     "status": o.get("status"),
+                    "status_message": o.get("status_message"),
                     "mode": "live",
                     "source": "broker",
                     "created_at": str(o.get("order_timestamp")) if o.get("order_timestamp") else None,
@@ -683,7 +708,7 @@ async def list_orders(user=Depends(get_current_user)):
 async def list_positions(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     kite, _ = await get_user_kite(user["id"])
-    # Live mode + connected: prefer real positions
+    # Live mode + connected: prefer real positions; cache them for fallback
     if kite and not settings.get("paper_mode", True):
         data = kite_helper.safe_positions(kite)
         if data and data.get("net") is not None:
@@ -700,7 +725,21 @@ async def list_positions(user=Depends(get_current_user)):
                     "product": p.get("product"),
                     "mode": "live",
                 })
+            # Cache for stale-fallback
+            try:
+                await db.kite_positions_cache.update_one(
+                    {"user_id": user["id"]},
+                    {"$set": {"user_id": user["id"], "positions": out,
+                              "cached_at": datetime.now(timezone.utc).isoformat()}},
+                    upsert=True,
+                )
+            except Exception:
+                pass
             return out
+        # Kite call failed — try cached snapshot
+        cached = await db.kite_positions_cache.find_one({"user_id": user["id"]}, {"_id": 0})
+        if cached:
+            return [{**p, "stale": True, "cached_at": cached.get("cached_at")} for p in cached.get("positions", [])]
     # Paper / fallback
     rows = await db.positions.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
     out = []
@@ -799,6 +838,82 @@ async def get_user_settings(user_id: str) -> dict:
         "max_position_size": (user or {}).get("max_position_size", 50000.0),
         "paper_mode": (user or {}).get("paper_mode", True),
     }
+
+
+# ============== Routes: Live Readiness ==============
+@api.get("/live/readiness")
+async def live_readiness(user=Depends(get_current_user)):
+    """Pre-flight checks before flipping to LIVE. Returns each check + an overall ready flag."""
+    checks = []
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
+    checks.append({
+        "id": "broker_keys",
+        "label": "Zerodha API key + secret saved",
+        "ok": bool(keys),
+        "hint": "Save on Broker Keys → Step 1" if not keys else None,
+    })
+    kite, status = await get_user_kite(user["id"])
+    checks.append({
+        "id": "kite_session",
+        "label": "Active Zerodha session (token valid)",
+        "ok": status.get("connected", False),
+        "detail": status.get("kite_user_id") if status.get("connected") else status.get("reason"),
+        "hint": "Click 'Connect to Zerodha' on Broker Keys" if not status.get("connected") else None,
+    })
+    funds_ok = False
+    funds_msg = None
+    if kite:
+        try:
+            margins = kite.margins(segment="equity")
+            avail = float((margins.get("available", {}) or {}).get("live_balance") or 0)
+            funds_ok = avail > 100
+            funds_msg = f"₹{avail:.2f} available"
+        except Exception as e:
+            funds_msg = f"Margins call failed: {e}"
+    checks.append({
+        "id": "funds",
+        "label": "Sufficient funds in account",
+        "ok": funds_ok,
+        "detail": funds_msg,
+        "hint": "Add funds via Zerodha Kite app" if not funds_ok else None,
+    })
+    settings = await get_user_settings(user["id"])
+    checks.append({
+        "id": "risk_limits",
+        "label": "Risk limits configured",
+        "ok": settings.get("max_position_size", 0) > 0 and settings.get("max_daily_loss", 0) > 0,
+        "detail": f"Max position ₹{settings['max_position_size']:.0f} · Daily loss cap ₹{settings['max_daily_loss']:.0f}",
+        "hint": "Configure on Profile" if (settings.get("max_position_size", 0) <= 0 or settings.get("max_daily_loss", 0) <= 0) else None,
+    })
+    checks.append({
+        "id": "mode",
+        "label": "Trading mode",
+        "ok": not settings.get("paper_mode", True),
+        "detail": "LIVE" if not settings.get("paper_mode", True) else "PAPER (flip on Profile to go live)",
+        "hint": None,
+    })
+    # NSE market hours: 9:15 AM – 3:30 PM IST, Mon–Fri
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    is_weekday = ist_now.weekday() < 5
+    minutes_now = ist_now.hour * 60 + ist_now.minute
+    market_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    checks.append({
+        "id": "market_hours",
+        "label": "NSE market open",
+        "ok": market_open,
+        "detail": ist_now.strftime("%a %H:%M IST"),
+        "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not market_open else None,
+    })
+    overall_ready = all(c["ok"] for c in checks if c["id"] != "market_hours")
+    # Warnings (not blockers)
+    return {
+        "ready": overall_ready,
+        "market_open": market_open,
+        "checks": checks,
+    }
+
+
+# ============== Routes: Live Readiness — END ==============
 
 
 # ============== Routes: Funds ==============
@@ -1033,13 +1148,25 @@ async def startup():
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
 
-    # Background strategy runner
+    # Background strategy runner — uses REAL Kite candles when user is connected,
+    # falls back to mock historical only when no broker session.
     async def _price_history(user_id: str, symbol: str, days: int = 60):
+        kite, _ = await get_user_kite(user_id)
+        if kite:
+            tok = kite_helper.instrument_token(kite, symbol)
+            if tok:
+                # Use 5-minute candles for live strategies (intraday-grade)
+                live_data = kite_helper.safe_historical(kite, tok, days=min(days, 30), interval="5minute")
+                if live_data and len(live_data) > 20:
+                    return live_data
+                # Fallback to daily candles if intraday unavailable
+                daily = kite_helper.safe_historical(kite, tok, days=days, interval="day")
+                if daily:
+                    return daily
+        # Final fallback: mock random-walk (paper/backtest mode)
         sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
         if not sym:
             return []
-        # For runner we use mock historical for now (Kite historical needs instrument_token
-        # mapping which adds latency on every tick — acceptable mock for v1)
         return historical_series(sym["base"], days)
 
     app.state.runner_stop = asyncio.Event()
