@@ -96,7 +96,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
             continue
         try:
             strategies = await db.strategies.find({"status": "live"}).to_list(500)
-            for s in strategies:
+        except Exception as e:
+            logger.exception(f"runner loop error fetching strategies: {e}")
+            strategies = []
+        for s in strategies:
+            try:
                 code = s.get("python_code") or ""
                 eval_set: Dict[str, Any] = {
                     "last_evaluated_at": datetime.now(timezone.utc).isoformat(),
@@ -168,8 +172,17 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     logger.info(f"strategy {s['id']} → {action} {symbol}")
                 except Exception as e:
                     logger.warning(f"order failed for strategy {s['id']}: {e}")
-        except Exception as e:
-            logger.exception(f"runner loop error: {e}")
+            except Exception as e:
+                logger.warning(f"strategy {s.get('id','?')} eval failed: {e}")
+                try:
+                    await db.strategies.update_one(
+                        {"id": s.get("id")},
+                        {"$set": {"last_evaluated_at": datetime.now(timezone.utc).isoformat(),
+                                  "last_error": str(e)[:200]},
+                         "$inc": {"evaluations": 1}},
+                    )
+                except Exception:
+                    pass
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
         except asyncio.TimeoutError:

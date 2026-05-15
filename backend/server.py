@@ -674,6 +674,8 @@ async def list_orders(user=Depends(get_current_user)):
                 })
         except Exception as e:
             logger.warning(f"kite orders fetch failed: {e}")
+    # Sort merged orders newest-first (Kite + local) so order timeline is correct
+    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return rows
 
 
