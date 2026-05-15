@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { Code2, Blocks, Play, Pause, Trash2, Plus, RefreshCw, Activity } from "lucide-react";
+import { Code2, Blocks, Play, Pause, Trash2, Plus, RefreshCw, Activity, Zap, X } from "lucide-react";
 
 const timeAgo = (iso) => {
   if (!iso) return "—";
@@ -15,6 +15,8 @@ const timeAgo = (iso) => {
 
 export default function Strategies() {
   const [list, setList] = useState([]);
+  const [testing, setTesting] = useState(null);   // strategy id currently testing
+  const [testResult, setTestResult] = useState(null); // diagnostic modal data
 
   const load = useCallback(() => api.get("/strategies").then((r) => setList(r.data)), []);
   useEffect(() => {
@@ -31,6 +33,19 @@ export default function Strategies() {
     if (!window.confirm("Delete strategy?")) return;
     await api.delete(`/strategies/${id}`);
     load();
+  };
+  const testRun = async (id) => {
+    setTesting(id);
+    setTestResult(null);
+    try {
+      const r = await api.post(`/strategies/${id}/test-run`);
+      setTestResult(r.data);
+    } catch (e) {
+      setTestResult({ ok: false, error: e?.response?.data?.detail || e.message });
+    } finally {
+      setTesting(null);
+      load();
+    }
   };
 
   return (
@@ -101,6 +116,9 @@ export default function Strategies() {
                 )}
 
                 <div className="flex gap-2 pt-2 border-t border-[var(--qd-border)]">
+                  <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex-1 border border-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white text-[var(--qd-accent)] text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1 disabled:opacity-50" data-testid={`test-run-${s.id}`}>
+                    <Zap size={12} /> {testing === s.id ? "Running…" : "Test Run"}
+                  </button>
                   <button onClick={() => toggle(s.id)} className="flex-1 border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase py-1.5 rounded-sm flex items-center justify-center gap-1" data-testid={`toggle-${s.id}`}>
                     {live ? <><Pause size={12} /> Pause</> : <><Play size={12} /> Go Live</>}
                   </button>
@@ -112,9 +130,74 @@ export default function Strategies() {
           })}
         </div>
       )}
+
+      {testResult && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setTestResult(null)} data-testid="test-result-modal">
+          <div className="qd-card max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// TEST RUN DIAGNOSTIC</div>
+                <h2 className="font-head text-xl text-white mt-1">{testResult.symbol || "Strategy"}</h2>
+              </div>
+              <button onClick={() => setTestResult(null)} className="text-[var(--qd-text-2)] hover:text-white" data-testid="close-test-modal"><X size={18} /></button>
+            </div>
+
+            {testResult.error && (
+              <div className="bg-[rgba(255,59,48,0.1)] border border-[var(--qd-loss)] text-[var(--qd-loss)] text-xs font-mono p-3 rounded-sm mb-3">
+                ! {testResult.error}
+              </div>
+            )}
+
+            {testResult.ok && (
+              <div className="space-y-3 text-xs font-mono">
+                <Row k="Data source" v={testResult.data_source} />
+                <Row k="Candles fetched" v={testResult.candles} />
+                <Row k="First candle" v={testResult.first_candle?.date} />
+                <Row k="Last candle" v={`${testResult.last_candle?.date} @ ₹${testResult.last_candle?.close}`} />
+                <Row k="Last 5 closes" v={(testResult.last_5_closes || []).join(" → ")} />
+                <Row k="Signals returned" v={testResult.signals?.length ?? 0} tone={testResult.signals?.length ? "p" : "l"} />
+
+                {testResult.signals?.length > 0 && (
+                  <div className="bg-[var(--qd-surface-2)] p-3 rounded-sm">
+                    <div className="text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-2">Latest signal</div>
+                    <div className="text-white">{testResult.signals[testResult.signals.length - 1].action} @ {testResult.signals[testResult.signals.length - 1].date}</div>
+                  </div>
+                )}
+
+                {testResult.order_placed && (
+                  <div className="bg-[rgba(0,230,118,0.08)] border border-[var(--qd-profit)] p-3 rounded-sm">
+                    <div className="text-[10px] uppercase tracking-widest text-[var(--qd-profit)] mb-1">✓ Order placed</div>
+                    <div className="text-white text-[11px] break-all">{testResult.order_placed.side} {testResult.order_placed.qty} {testResult.order_placed.symbol} @ ₹{testResult.order_placed.price} — {testResult.order_placed.status}</div>
+                  </div>
+                )}
+
+                {testResult.order_error && (
+                  <div className="bg-[rgba(255,59,48,0.08)] border border-[var(--qd-loss)] p-3 rounded-sm">
+                    <div className="text-[10px] uppercase tracking-widest text-[var(--qd-loss)] mb-1">Order rejected</div>
+                    <div className="text-white text-[11px]">{testResult.order_error}</div>
+                  </div>
+                )}
+
+                {testResult.signals?.length === 0 && (
+                  <div className="bg-[var(--qd-surface-2)] p-3 rounded-sm text-[var(--qd-text-2)] text-[11px]">
+                    Your <code className="text-white">run(data)</code> returned <b>0 signals</b> on this data. The strategy logic is fine — the current candles just don't match your BUY/SELL conditions. Try again in a few minutes (data refreshes every 5 min).
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const Row = ({ k, v, tone }) => (
+  <div className="flex justify-between items-center border-b border-[var(--qd-border)] pb-1">
+    <span className="text-[var(--qd-text-3)] uppercase tracking-widest text-[9px]">{k}</span>
+    <span className={`text-right ${tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-white"}`}>{v}</span>
+  </div>
+);
 
 const Cell = ({ k, v, tone }) => (
   <>

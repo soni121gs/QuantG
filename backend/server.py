@@ -222,6 +222,7 @@ def live_price(base: float, seed: int) -> Dict[str, Any]:
 
 
 def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
+    """Daily mock candles — used for /backtest UI which expects day-level data."""
     out = []
     price = base * 0.92
     for i in range(days):
@@ -229,6 +230,32 @@ def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
         # random walk with slight up drift
         price = price * (1 + (_rng.random() - 0.48) * 0.02)
         out.append({"date": d.strftime("%Y-%m-%d"), "close": round(price, 2)})
+    return out
+
+
+def intraday_series(base: float, bars: int = 250) -> List[Dict[str, Any]]:
+    """Mock 5-minute intraday candles for the strategy runner in paper mode.
+    Each bar has a UNIQUE timestamp so the runner's signal-dedup (by date)
+    allows fresh signals every 5 minutes — matching real Kite 5-min behaviour.
+    """
+    out = []
+    price = base * 0.985
+    now = datetime.now(timezone.utc)
+    # snap to nearest 5-min boundary so dates align with real Kite candles
+    minute_floor = (now.minute // 5) * 5
+    end = now.replace(minute=minute_floor, second=0, microsecond=0)
+    for i in range(bars):
+        ts = end - timedelta(minutes=5 * (bars - 1 - i))
+        # random walk with mild trend bias — produces signals ~20% of bars
+        price = price * (1 + (_rng.random() - 0.49) * 0.004)
+        out.append({
+            "date": ts.strftime("%Y-%m-%d %H:%M"),
+            "close": round(price, 2),
+            "open": round(price * (1 + (_rng.random() - 0.5) * 0.001), 2),
+            "high": round(price * (1 + _rng.random() * 0.002), 2),
+            "low": round(price * (1 - _rng.random() * 0.002), 2),
+            "volume": int(1000 + _rng.random() * 5000),
+        })
     return out
 
 
@@ -459,6 +486,107 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     new_status = "paused" if row["status"] == "live" else "live"
     await db.strategies.update_one({"id": sid}, {"$set": {"status": new_status}})
     return {"status": new_status}
+
+
+@api.post("/strategies/{sid}/test-run")
+async def test_run_strategy(sid: str, user=Depends(get_current_user)):
+    """Force-evaluate a strategy NOW. Bypasses dedup. Returns diagnostics so the
+    user can see exactly what their `run(data)` function sees and emits.
+    If a BUY/SELL signal is returned, a paper/live order is placed immediately
+    (subject to all the usual safety guards in _place_order_core)."""
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    code = row.get("python_code") or ""
+    if not code:
+        raise HTTPException(status_code=400, detail="Strategy has no python code")
+    vc = row.get("visual_config") or {}
+    symbol = (vc.get("symbol") or "RELIANCE").upper()
+
+    # Fetch candles using the same path as the background runner
+    kite, _ = await get_user_kite(user["id"])
+    source_label = "mock-intraday-5m"
+    data: List[dict] = []
+    if kite:
+        tok = kite_helper.instrument_token(kite, symbol)
+        if tok:
+            live_data = kite_helper.safe_historical(kite, tok, days=30, interval="5minute")
+            if live_data and len(live_data) > 20:
+                data = live_data
+                source_label = "kite-5m"
+            else:
+                daily = kite_helper.safe_historical(kite, tok, days=60, interval="day")
+                if daily:
+                    data = daily
+                    source_label = "kite-daily"
+    if not data:
+        sym = next((s for s in SYMBOLS if s["symbol"] == symbol), None)
+        if sym:
+            data = intraday_series(sym["base"], bars=250)
+
+    if not data:
+        raise HTTPException(status_code=400, detail=f"No price data for {symbol}")
+
+    # Run the strategy
+    try:
+        signals = safe_run_strategy(code, data)
+    except Exception as e:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "data_source": source_label,
+            "candles": len(data),
+            "first_candle": data[0],
+            "last_candle": data[-1],
+            "signals": [],
+            "error": str(e),
+            "order_placed": None,
+        }
+
+    order_result = None
+    placed_error = None
+    if signals:
+        last_sig = signals[-1]
+        action = (last_sig.get("action") or "").upper()
+        if action in ("BUY", "SELL"):
+            try:
+                order_result = await _place_order_core(
+                    user_id=user["id"],
+                    symbol=symbol,
+                    side=action,
+                    qty=None,
+                    order_type="MARKET",
+                    product=None,
+                    source=f"test-run:{sid}",
+                )
+                # Update strategy telemetry so UI reflects the fire
+                await db.strategies.update_one(
+                    {"id": sid},
+                    {"$set": {
+                        "last_signal_at": datetime.now(timezone.utc).isoformat(),
+                        "last_signal_action": action,
+                        "last_signals_count": len(signals),
+                        "last_fired_signal_date": last_sig.get("date", ""),
+                    },
+                     "$inc": {"signals_fired": 1, "evaluations": 1}},
+                )
+            except HTTPException as e:
+                placed_error = e.detail
+            except Exception as e:
+                placed_error = str(e)
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "data_source": source_label,
+        "candles": len(data),
+        "first_candle": data[0],
+        "last_candle": data[-1],
+        "last_5_closes": [d.get("close") for d in data[-5:]],
+        "signals": signals,
+        "order_placed": order_result,
+        "order_error": placed_error,
+    }
 
 
 def _safe_run_python(code: str, data: List[dict]) -> List[dict]:
@@ -1153,7 +1281,8 @@ async def startup():
             logger.warning(f"index create on {coll} skipped: {e}")
 
     # Background strategy runner — uses REAL Kite candles when user is connected,
-    # falls back to mock historical only when no broker session.
+    # falls back to MOCK 5-min intraday candles only when no broker session.
+    # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
     async def _price_history(user_id: str, symbol: str, days: int = 60):
         kite, _ = await get_user_kite(user_id)
         if kite:
@@ -1167,11 +1296,11 @@ async def startup():
                 daily = kite_helper.safe_historical(kite, tok, days=days, interval="day")
                 if daily:
                     return daily
-        # Final fallback: mock random-walk (paper/backtest mode)
+        # Final fallback: mock 5-min intraday walk (paper/backtest mode)
         sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
         if not sym:
             return []
-        return historical_series(sym["base"], days)
+        return intraday_series(sym["base"], bars=250)
 
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
