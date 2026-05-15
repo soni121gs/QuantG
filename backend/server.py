@@ -923,12 +923,22 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.broker_keys.create_index([("user_id", 1), ("broker", 1)], unique=True)
-    await db.strategies.create_index("user_id")
-    await db.orders.create_index([("user_id", 1), ("created_at", -1)])
-    await db.positions.create_index([("user_id", 1), ("symbol", 1)], unique=True)
-    await db.ai_messages.create_index([("user_id", 1), ("session_id", 1)])
+    # Index creation is best-effort — must NEVER block app startup.
+    # On Atlas, an index may already exist with different options, or there may be
+    # duplicates from a previous app version. We log and continue.
+    indexes = [
+        ("users", "email", {"unique": True}),
+        ("broker_keys", [("user_id", 1), ("broker", 1)], {"unique": True}),
+        ("strategies", "user_id", {}),
+        ("orders", [("user_id", 1), ("created_at", -1)], {}),
+        ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
+        ("ai_messages", [("user_id", 1), ("session_id", 1)], {}),
+    ]
+    for coll, key, opts in indexes:
+        try:
+            await db[coll].create_index(key, **opts)
+        except Exception as e:
+            logger.warning(f"index create on {coll} skipped: {e}")
 
     # Background strategy runner
     async def _price_history(user_id: str, symbol: str, days: int = 60):
