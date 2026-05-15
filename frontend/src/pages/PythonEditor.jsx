@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { Play, Save, Code2 } from "lucide-react";
+import { Play, Save, Code2, TrendingUp } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { toast } from "sonner";
 
 const STARTER = `# QuantG Python Strategy
 # Define a run(data) function. data = list of {date, close}.
 # Return a list of {date, action: 'BUY' | 'SELL'}.
+# When Options Mode is ON, data = underlying spot history (NIFTY/BANKNIFTY/SENSEX).
 
 def run(data):
     short, long = 5, 20
@@ -24,6 +26,21 @@ def run(data):
     return signals
 `;
 
+const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "SENSEX"];
+const STRIKE_MODES = [
+  { id: "ATM_BUY", label: "Buy ATM" },
+  { id: "OTM_BUY", label: "Buy OTM" },
+  { id: "ATM_SELL", label: "Sell ATM (Write)" },
+];
+const DEFAULT_OPTIONS = {
+  enabled: false,
+  underlying: "NIFTY",
+  strike_mode: "ATM_BUY",
+  otm_points: 100,
+  lots: 1,
+  expiry_offset: 0,
+};
+
 export default function PythonEditor() {
   const [params] = useSearchParams();
   const id = params.get("id");
@@ -32,16 +49,21 @@ export default function PythonEditor() {
   const [code, setCode] = useState(STARTER);
   const [symbol, setSymbol] = useState("RELIANCE");
   const [days, setDays] = useState(60);
+  const [options, setOptions] = useState(DEFAULT_OPTIONS);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [savedId, setSavedId] = useState(id || null);
-  const [msg, setMsg] = useState("");
 
   useEffect(() => {
     if (!id) return;
     api.get(`/strategies/${id}`).then((r) => {
-      setName(r.data.name); setDescription(r.data.description || "");
-      setCode(r.data.python_code || STARTER); setSavedId(r.data.id);
+      setName(r.data.name);
+      setDescription(r.data.description || "");
+      setCode(r.data.python_code || STARTER);
+      setSavedId(r.data.id);
+      const vc = r.data.visual_config || {};
+      if (vc.symbol) setSymbol(vc.symbol);
+      if (vc.options) setOptions({ ...DEFAULT_OPTIONS, ...vc.options });
     });
     // STARTER is module-level constant — safe to omit
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -49,27 +71,35 @@ export default function PythonEditor() {
 
   const lines = useMemo(() => code.split("\n").length, [code]);
 
-  const run = async () => {
-    setBusy(true); setMsg("");
+  const run = useCallback(async () => {
+    setBusy(true);
     try {
-      const r = await api.post("/strategies/backtest", { python_code: code, symbol, days: +days, strategy_id: savedId });
+      const r = await api.post("/strategies/backtest", {
+        python_code: code,
+        symbol: options.enabled ? options.underlying : symbol,
+        days: +days,
+        strategy_id: savedId,
+        options: options.enabled ? options : undefined,
+      });
       setResult(r.data);
     } catch (e) {
-      setMsg(e.response?.data?.detail || "Backtest failed");
+      toast.error(e.response?.data?.detail || "Backtest failed");
     } finally { setBusy(false); }
-  };
+  }, [code, symbol, days, savedId, options]);
 
   const save = async () => {
-    setMsg("");
     try {
+      const visual_config = { symbol, options };
       if (savedId) {
-        await api.put(`/strategies/${savedId}`, { name, description, kind: "python", python_code: code, status: "draft" });
+        await api.put(`/strategies/${savedId}`, { name, description, kind: "python", python_code: code, visual_config, status: "draft" });
       } else {
-        const r = await api.post("/strategies", { name, description, kind: "python", python_code: code });
+        const r = await api.post("/strategies", { name, description, kind: "python", python_code: code, visual_config });
         setSavedId(r.data.id);
       }
-      setMsg("✓ Saved");
-    } catch (e) { setMsg("× Save failed"); }
+      toast.success("Saved");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Save failed");
+    }
   };
 
   return (
@@ -102,6 +132,93 @@ export default function PythonEditor() {
         />
       </div>
 
+      {/* OPTIONS MODE — same as Visual Builder */}
+      <div className="qd-card p-4" data-testid="options-card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-head text-base text-white flex items-center gap-2">
+            <TrendingUp size={16} className="text-[var(--qd-accent)]" /> Options Mode
+            <span className="font-mono text-[10px] text-[var(--qd-text-3)] uppercase tracking-widest ml-2">// NIFTY / BANKNIFTY / SENSEX</span>
+          </h2>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={options.enabled}
+              onChange={(e) => setOptions({ ...options, enabled: e.target.checked })}
+              className="w-4 h-4 accent-[var(--qd-accent)]"
+              data-testid="options-toggle"
+            />
+            <span className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)]">
+              {options.enabled ? "Trading OPTIONS" : "Trading EQUITY"}
+            </span>
+          </label>
+        </div>
+        {options.enabled && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Underlying</label>
+              <select
+                value={options.underlying}
+                onChange={(e) => setOptions({ ...options, underlying: e.target.value })}
+                className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono rounded-sm"
+                data-testid="options-underlying"
+              >
+                {UNDERLYINGS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Strike Mode</label>
+              <select
+                value={options.strike_mode}
+                onChange={(e) => setOptions({ ...options, strike_mode: e.target.value })}
+                className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono rounded-sm"
+                data-testid="options-strike-mode"
+              >
+                {STRIKE_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Lots</label>
+              <input
+                type="number"
+                min="1"
+                value={options.lots}
+                onChange={(e) => setOptions({ ...options, lots: Math.max(1, +e.target.value) })}
+                className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono rounded-sm"
+                data-testid="options-lots"
+              />
+            </div>
+            <div>
+              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Expiry</label>
+              <select
+                value={options.expiry_offset}
+                onChange={(e) => setOptions({ ...options, expiry_offset: +e.target.value })}
+                className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono rounded-sm"
+                data-testid="options-expiry"
+              >
+                <option value="0">Nearest weekly</option>
+                <option value="1">Next weekly</option>
+                <option value="2">2 weeks out</option>
+              </select>
+            </div>
+            {options.strike_mode === "OTM_BUY" && (
+              <div className="md:col-span-4">
+                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">OTM Distance (points)</label>
+                <input
+                  type="number"
+                  value={options.otm_points}
+                  onChange={(e) => setOptions({ ...options, otm_points: +e.target.value })}
+                  className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono w-32 rounded-sm"
+                  data-testid="options-otm-points"
+                />
+              </div>
+            )}
+            <div className="md:col-span-4 bg-[rgba(255,159,10,0.06)] border border-[var(--qd-warn)] rounded-sm p-2 text-[11px] font-mono text-[var(--qd-text-2)]">
+              <span className="text-[var(--qd-warn)]">⚠</span> Backtest runs on the <span className="text-white">{options.underlying} spot</span> history. PnL simulation uses an option-premium proxy (~2% of spot move). Live trading uses real option premiums from Kite.
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 qd-card flex flex-col" data-testid="code-editor">
           <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-3 py-2">
@@ -125,16 +242,23 @@ export default function PythonEditor() {
         <div className="space-y-4">
           <div className="qd-card p-4">
             <h3 className="font-head text-base text-white mb-3">Backtest Config</h3>
-            <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} className="w-full mt-1 mb-3 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="symbol-input" />
+            {!options.enabled ? (
+              <>
+                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol (Equity)</label>
+                <input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} className="w-full mt-1 mb-3 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="symbol-input" />
+              </>
+            ) : (
+              <div className="mb-3 text-[11px] font-mono text-[var(--qd-text-2)]">
+                Underlying: <span className="text-white">{options.underlying}</span> · {options.lots} lot{options.lots > 1 ? "s" : ""} · {options.strike_mode}
+              </div>
+            )}
             <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Days</label>
             <input type="number" value={days} onChange={(e) => setDays(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="days-input" />
-            {msg && <div className="mt-3 font-mono text-xs text-[var(--qd-text-2)]" data-testid="bt-msg">{msg}</div>}
           </div>
 
           {result && (
             <div className="qd-card p-4" data-testid="backtest-summary">
-              <h3 className="font-head text-base text-white mb-3">Results</h3>
+              <h3 className="font-head text-base text-white mb-3">Results {result.mode === "options" && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// OPTIONS</span>}</h3>
               <SummaryRow label="Total PnL" value={`₹${result.summary.total_pnl.toLocaleString("en-IN")}`} tone={result.summary.total_pnl >= 0 ? "p" : "l"} />
               <SummaryRow label="Return" value={`${result.summary.return_pct}%`} tone={result.summary.return_pct >= 0 ? "p" : "l"} />
               <SummaryRow label="Trades" value={result.summary.trades} />

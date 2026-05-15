@@ -124,6 +124,7 @@ class BacktestReq(BaseModel):
     python_code: Optional[str] = None
     symbol: str = "RELIANCE"
     days: int = 60
+    options: Optional[Dict[str, Any]] = None  # {enabled, underlying, strike_mode, lots, ...}
 
 
 class OrderReq(BaseModel):
@@ -779,14 +780,23 @@ async def options_preview(
 @api.post("/strategies/backtest")
 async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     code = req.python_code
-    if not code and req.strategy_id:
+    opt_cfg = req.options or {}
+    # Pull options config from saved strategy too if not provided
+    if req.strategy_id:
         row = await db.strategies.find_one({"id": req.strategy_id, "user_id": user["id"]})
         if not row:
             raise HTTPException(status_code=404, detail="Strategy not found")
-        code = row.get("python_code")
+        if not code:
+            code = row.get("python_code")
+        if not opt_cfg:
+            opt_cfg = (row.get("visual_config") or {}).get("options") or {}
     if not code:
         code = DEFAULT_PYTHON
-    sym = next((s for s in SYMBOLS if s["symbol"] == req.symbol.upper()), SYMBOLS[0])
+
+    options_mode = bool(opt_cfg.get("enabled"))
+    # In options mode, analyse the UNDERLYING spot — not the equity field
+    target_symbol = (opt_cfg.get("underlying") or "NIFTY") if options_mode else req.symbol.upper()
+    sym = next((s for s in SYMBOLS if s["symbol"] == target_symbol.upper()), SYMBOLS[0])
     data = historical_series(sym["base"], req.days)
     signals: List[dict] = []
     try:
@@ -794,46 +804,114 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=f"Strategy error: {e}")
 
-    # Simulate PnL
-    cash, position, entry, trades = 100000.0, 0, 0.0, []
-    equity_curve = []
+    # PnL simulation: equity vs options have different P&L mechanics
+    starting_capital = 100000.0
+    cash = starting_capital
+    position = 0          # qty (equity) OR signed-lot-qty (options)
+    entry = 0.0           # entry price per unit
+    trades: List[dict] = []
+    equity_curve: List[dict] = []
     sigmap = {s["date"]: s["action"] for s in signals}
-    for d in data:
-        act = sigmap.get(d["date"])
-        if act == "BUY" and position == 0:
-            position = int(cash // d["close"])
-            entry = d["close"]
-            cash -= position * d["close"]
-            trades.append({"date": d["date"], "action": "BUY", "price": d["close"], "qty": position})
-        elif act == "SELL" and position > 0:
-            pnl = (d["close"] - entry) * position
-            cash += position * d["close"]
-            trades.append({"date": d["date"], "action": "SELL", "price": d["close"], "qty": position, "pnl": round(pnl, 2)})
-            position = 0
-        eq = cash + position * d["close"]
-        equity_curve.append({"date": d["date"], "equity": round(eq, 2)})
-    final_equity = equity_curve[-1]["equity"] if equity_curve else 100000.0
-    total_pnl = round(final_equity - 100000.0, 2)
+
+    if options_mode:
+        # Options simulation: assume long-CE on BUY signal, long-PE on SELL signal.
+        # Premium proxy = 2% of spot at entry. P&L = (spot_change × delta) × qty.
+        # Long CE has +delta≈0.5 at ATM. We use 1:1 proxy (premium moves ~= spot move)
+        # for ATM near expiry — a conservative approximation; live results vary.
+        lot_size = options_helper.LOT_SIZES.get(target_symbol.upper(), 1)
+        lots = int(opt_cfg.get("lots") or 1)
+        per_trade_qty = lot_size * lots
+        # Track option_type for the open position so closing computes the right P&L direction
+        open_option_type = None  # "CE" or "PE"
+
+        for d in data:
+            act = sigmap.get(d["date"])
+            spot = d["close"]
+            # Premium proxy: 2% of spot for ATM option; intrinsic value tracks 1:1
+            if act in ("BUY", "SELL") and position == 0:
+                premium = round(spot * 0.02, 2)
+                open_option_type = "CE" if act == "BUY" else "PE"
+                entry = premium
+                position = per_trade_qty
+                cost = premium * per_trade_qty
+                cash -= cost
+                trades.append({"date": d["date"], "action": f"BUY {open_option_type}", "price": premium, "qty": per_trade_qty})
+            elif act in ("BUY", "SELL") and position > 0 and open_option_type:
+                # Opposite signal → square off and (optionally) open new leg
+                # First close existing leg
+                exit_premium = _options_premium_at_exit(entry, spot, sym["base"], open_option_type)
+                pnl = (exit_premium - entry) * position
+                cash += exit_premium * position
+                trades.append({"date": d["date"], "action": f"SELL {open_option_type}", "price": exit_premium, "qty": position, "pnl": round(pnl, 2)})
+                position = 0
+                open_option_type = None
+                # Open opposite leg on the same bar (matches runner behaviour)
+                new_type = "CE" if act == "BUY" else "PE"
+                premium = round(spot * 0.02, 2)
+                open_option_type = new_type
+                entry = premium
+                position = per_trade_qty
+                cash -= premium * per_trade_qty
+                trades.append({"date": d["date"], "action": f"BUY {new_type}", "price": premium, "qty": per_trade_qty})
+            # Mark-to-market
+            if position > 0 and open_option_type:
+                mtm_premium = _options_premium_at_exit(entry, spot, sym["base"], open_option_type)
+                eq = cash + mtm_premium * position
+            else:
+                eq = cash
+            equity_curve.append({"date": d["date"], "equity": round(eq, 2)})
+    else:
+        # Equity simulation (original behaviour)
+        for d in data:
+            act = sigmap.get(d["date"])
+            if act == "BUY" and position == 0:
+                position = int(cash // d["close"])
+                entry = d["close"]
+                cash -= position * d["close"]
+                trades.append({"date": d["date"], "action": "BUY", "price": d["close"], "qty": position})
+            elif act == "SELL" and position > 0:
+                pnl = (d["close"] - entry) * position
+                cash += position * d["close"]
+                trades.append({"date": d["date"], "action": "SELL", "price": d["close"], "qty": position, "pnl": round(pnl, 2)})
+                position = 0
+            eq = cash + position * d["close"]
+            equity_curve.append({"date": d["date"], "equity": round(eq, 2)})
+
+    final_equity = equity_curve[-1]["equity"] if equity_curve else starting_capital
+    total_pnl = round(final_equity - starting_capital, 2)
     wins = [t for t in trades if t.get("pnl", 0) > 0]
     losses = [t for t in trades if t.get("pnl", 0) < 0]
     win_rate = round(len(wins) / max(1, len(wins) + len(losses)) * 100, 2)
     if req.strategy_id:
         await db.strategies.update_one({"id": req.strategy_id}, {"$set": {"last_pnl": total_pnl}})
     return {
+        "mode": "options" if options_mode else "equity",
+        "symbol_analysed": target_symbol,
         "equity_curve": equity_curve,
         "trades": trades,
         "signals": signals,
         "summary": {
-            "starting_capital": 100000,
+            "starting_capital": starting_capital,
             "final_equity": final_equity,
             "total_pnl": total_pnl,
-            "return_pct": round(total_pnl / 1000.0, 2),
+            "return_pct": round(total_pnl / (starting_capital / 100), 2),
             "trades": len(trades),
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": win_rate,
         },
     }
+
+
+def _options_premium_at_exit(entry_premium: float, current_spot: float, entry_spot: float, option_type: str) -> float:
+    """Rough P&L proxy for ATM options held briefly.
+    Assumes premium tracks spot change 1:1 (delta≈1) for the directional leg.
+    For Long CE: premium rises as spot rises. For Long PE: premium rises as spot falls.
+    Floor at 0 (can't be negative — premium decay handled separately, omitted here)."""
+    move = current_spot - entry_spot
+    if option_type == "CE":
+        return max(0.0, round(entry_premium + move, 2))
+    return max(0.0, round(entry_premium - move, 2))  # PE
 
 
 # ============== Routes: Orders & Positions ==============
