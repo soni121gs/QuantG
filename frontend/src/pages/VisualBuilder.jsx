@@ -183,7 +183,7 @@ export default function VisualBuilder() {
                   value={options.lots}
                   onChange={(e) => setOptions({ ...options, lots: Math.max(1, +e.target.value) })}
                   className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono w-full rounded-sm"
-                  data-testid="lots-input"
+                  data-testid="options-lots"
                 />
               </div>
               <div>
@@ -192,7 +192,7 @@ export default function VisualBuilder() {
                   value={options.expiry_offset}
                   onChange={(e) => setOptions({ ...options, expiry_offset: +e.target.value })}
                   className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono w-full rounded-sm"
-                  data-testid="expiry-select"
+                  data-testid="options-expiry"
                 >
                   <option value="0">Nearest weekly</option>
                   <option value="1">Next weekly</option>
