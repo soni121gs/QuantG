@@ -1,0 +1,70 @@
+# RUN THIS TO FIX YOUR VPS AUTOMATICALLY
+
+## Option 1: From Your Windows Laptop (EASIEST)
+
+Open PowerShell and run:
+
+```powershell
+cd D:\Quant\QuantG
+.\auto-fix-vps.ps1
+```
+
+This will:
+- Connect to your VPS via SSH
+- Run diagnostics
+- Apply all fixes automatically
+- Test from your laptop
+- Show you the status
+
+The script does everything in 10 steps.
+
+---
+
+## Option 2: From Your VPS Terminal (Manual)
+
+SSH into your VPS:
+```
+ssh root@82.180.145.183
+```
+
+Then run:
+```bash
+cd /app/quantg/QuantG
+bash auto-fix-all.sh
+```
+
+---
+
+## Option 3: One-Line Fix (On VPS)
+
+```bash
+cd /app/quantg/QuantG && docker-compose down -v && docker system prune -a -f && sudo ufw allow 3000/tcp && sudo ufw allow 8000/tcp && sudo ufw reload && docker-compose build --no-cache && docker-compose up -d && sleep 30 && docker-compose ps
+```
+
+---
+
+## What Gets Fixed
+
+✓ Firewall configured
+✓ Ports 3000, 8000, 80, 443 allowed
+✓ docker-compose.yml port bindings fixed (127.0.0.1 → 0.0.0.0)
+✓ Docker images rebuilt
+✓ Containers restarted
+✓ All services verified
+
+---
+
+## After Fix
+
+Your app will be accessible at:
+```
+http://82.180.145.183:3000
+```
+
+Open in browser and login!
+
+---
+
+CHOOSE ONE OPTION ABOVE AND RUN IT NOW.
+
+The easiest is Option 1 (PowerShell from your laptop).

@@ -33,7 +33,7 @@ export default function AIBot() {
       const r = await api.post("/ai/chat", { session_id: SESSION, message: content });
       setMessages((m) => [...m, { id: `a-${Date.now()}`, role: "assistant", content: r.data.content }]);
     } catch (e) {
-      setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `× Error: ${e.response?.data?.detail || e.message}` }]);
+      setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `Error: ${e.response?.data?.detail || e.message}` }]);
     } finally { setBusy(false); }
   };
 
@@ -63,7 +63,7 @@ export default function AIBot() {
           {messages.map((m, i) => (
             <Message key={m.id || `m-${i}`} m={m} />
           ))}
-          {busy && <Message key="typing" m={{ role: "assistant", content: "▊" }} />}
+          {busy && <Message key="typing" m={{ role: "assistant", content: "..." }} />}
           <div ref={endRef} />
         </div>
 

@@ -32,6 +32,13 @@ LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
 
+async def _sleep_or_stop(stop_event: asyncio.Event, seconds: int) -> None:
+    slept = 0
+    while not stop_event.is_set() and slept < seconds:
+        await asyncio.sleep(1)
+        slept += 1
+
+
 def _safe_run(code: str, data: List[dict]) -> List[dict]:
     """Run user strategy via shared AST-validated sandbox. Returns [] on error."""
     try:
@@ -97,10 +104,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
         owns_lock = await _acquire_lock(db)
         if not owns_lock:
             # Another pod is leader; skip this tick.
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
-            except asyncio.TimeoutError:
-                pass
+            await _sleep_or_stop(stop_event, TICK_SECONDS)
             continue
         try:
             strategies = await db.strategies.find({"status": "live"}).to_list(500)
@@ -263,10 +267,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     )
                 except Exception:
                     pass
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
-        except asyncio.TimeoutError:
-            pass
+        await _sleep_or_stop(stop_event, TICK_SECONDS)
     # Cleanup: release lock so another pod can take over immediately
     await _release_lock(db)
     logger.info("Strategy runner stopped")

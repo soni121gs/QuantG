@@ -32,9 +32,12 @@ services:
       - quantg-network
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.static
     container_name: quantg-frontend
     ports:
+      - "0.0.0.0:80:8080"
       - "0.0.0.0:3000:8080"
     depends_on:
       - backend

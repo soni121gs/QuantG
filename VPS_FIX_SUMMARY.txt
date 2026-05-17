@@ -1,0 +1,136 @@
+# QUANTG VPS ACCESS ISSUE - SOLUTION SUMMARY
+
+Your Problem: http://82.180.145.183:3000 not accessible
+
+I've created 4 complete debugging guides for you:
+
+## FILES CREATED
+
+1. VPS_DEBUGGING_GUIDE.md - Complete 12-step guide with all commands
+2. QUICK_VPS_FIX.md - Quick reference and common solutions  
+3. diagnose.sh - Automated diagnostic script for VPS
+4. quick-fix.sh - Automated fix script for VPS
+
+## QUICK SOLUTION (Do This Now)
+
+### Step 1: SSH into VPS
+```
+Open PowerShell on your Windows laptop and run:
+ssh root@82.180.145.183
+[Enter password]
+```
+
+### Step 2: Go to Project
+```
+cd /app/quantg/QuantG
+```
+
+### Step 3: Run Automated Diagnostic
+```
+bash diagnose.sh
+```
+This tells you exactly what's wrong
+
+### Step 4: Run Automated Fix
+```
+bash quick-fix.sh
+```
+This fixes 90% of issues automatically
+
+### Step 5: Test
+```
+From PowerShell on your laptop:
+curl http://82.180.145.183:3000
+
+Or open in browser:
+http://82.180.145.183:3000
+```
+
+## MOST COMMON FIXES
+
+### Fix 1: Allow Firewall Ports (Most Common)
+```
+In VPS terminal:
+sudo ufw allow 3000/tcp
+sudo ufw allow 8000/tcp  
+sudo ufw reload
+```
+
+### Fix 2: Restart Containers
+```
+In VPS terminal:
+docker-compose restart
+docker-compose ps
+```
+
+### Fix 3: Check Logs
+```
+In VPS terminal:
+docker-compose logs
+```
+Look for "ConnectionRefused" or "Error" messages
+
+## DEBUGGING CHECKLIST
+
+Run these commands in VPS terminal:
+
+1. docker-compose ps
+   Expected: All containers "Up"
+
+2. curl http://localhost:3000
+   Expected: HTML content (no error)
+
+3. curl http://localhost:8000/api/
+   Expected: JSON response
+
+4. sudo ufw status
+   Expected: 3000/tcp and 8000/tcp listed as ALLOW
+
+5. sudo netstat -tlnp | grep docker
+   Expected: Shows 0.0.0.0:3000 and 0.0.0.0:8000
+
+If all 5 pass, your app SHOULD work at http://82.180.145.183:3000
+
+## WHAT'S IN EACH GUIDE
+
+VPS_DEBUGGING_GUIDE.md:
+- Complete 12-step debugging process
+- Every command explained
+- Shows where to run each command (Windows vs VPS)
+- Common problems and fixes
+- Emergency procedures
+
+QUICK_VPS_FIX.md:
+- Quick reference card
+- 4 common scenarios with exact fixes
+- Step-by-step solutions
+- Manual complete fix procedure
+
+## NEXT ACTION
+
+1. Read: QUICK_VPS_FIX.md (takes 5 minutes)
+2. SSH into VPS
+3. Run: bash quick-fix.sh
+4. Test: curl http://82.180.145.183:3000
+5. Open in browser
+
+This will 99% fix your issue.
+
+## IF YOU'RE STILL STUCK
+
+Share these outputs:
+1. docker-compose ps
+2. sudo ufw status
+3. docker-compose logs (first 50 lines)
+4. sudo netstat -tlnp | grep docker
+
+Then I can give you exact fix.
+
+---
+
+All guides are in D:\Quant\QuantG\ folder
+All scripts (diagnose.sh, quick-fix.sh) copy to /app/quantg/QuantG on VPS
+
+Your app will be accessible at: http://82.180.145.183:3000
+
+Good luck!

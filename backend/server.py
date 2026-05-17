@@ -9,6 +9,7 @@ import re
 import uuid
 import asyncio
 import secrets as _secrets
+import hashlib
 import math
 import logging
 from datetime import datetime, timezone, timedelta
@@ -38,7 +39,9 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
+JWT_SECRET = os.environ.get("JWT_SECRET") or os.environ.get("SECRET_KEY") or "quantg-development-secret"
+if len(JWT_SECRET.encode()) < 32:
+    JWT_SECRET = hashlib.sha256(JWT_SECRET.encode()).hexdigest()
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 
@@ -159,6 +162,11 @@ class ChangePasswordReq(BaseModel):
 class KiteExchangeReq(BaseModel):
     request_token: str
     broker: str = "zerodha"
+
+
+class ChatReq(BaseModel):
+    session_id: str = "default"
+    message: str
 
 
 # ============== Auth helpers ==============
@@ -466,6 +474,84 @@ async def login(req: LoginReq):
 @api.get("/auth/me", response_model=UserOut)
 async def me(user=Depends(get_current_user)):
     return UserOut(id=user["id"], email=user["email"], name=user.get("name"), created_at=user["created_at"])
+
+
+# ============== Routes: AI Bot ==============
+def _quantbot_reply(message: str) -> str:
+    text = message.lower()
+    if "rsi" in text or "macd" in text:
+        return (
+            "RSI measures overbought/oversold momentum, while MACD measures trend momentum.\n"
+            "- RSI is bounded from 0 to 100 and is useful for mean-reversion filters.\n"
+            "- MACD compares moving averages and is useful for trend confirmation.\n"
+            "- Combine either signal with stops, sizing, and paper testing first."
+        )
+    if "bollinger" in text:
+        return (
+            "A simple Bollinger squeeze idea:\n"
+            "1. Calculate 20-period SMA and standard deviation.\n"
+            "2. Mark squeeze when band width is below its recent percentile.\n"
+            "3. Buy after price closes above the upper band with momentum confirmation.\n"
+            "4. Exit on a middle-band break or fixed risk stop."
+        )
+    if "risk" in text or "portfolio" in text:
+        return (
+            "Keep the system survivable: risk 0.5% to 1% per trade, cap daily loss, avoid oversized option lots, and stop trading after two or three consecutive losses. Paper trade the exact rules before switching live mode on."
+        )
+    if "momentum" in text or "nifty" in text:
+        return (
+            "NIFTY momentum template: trade only after the first 15 minutes, require price above VWAP and a rising 20 EMA, enter on pullback continuation, and exit on VWAP loss or a fixed R multiple."
+        )
+    if "python" in text or "code" in text or "strategy" in text:
+        return (
+            "Here is the structure QuantG expects:\n\n"
+            "def run(data):\n"
+            "    signals = []\n"
+            "    closes = [row['close'] for row in data]\n"
+            "    if len(closes) > 20 and closes[-1] > sum(closes[-20:]) / 20:\n"
+            "        signals.append({'action': 'BUY'})\n"
+            "    return signals\n\n"
+            "Keep the logic deterministic and test it in paper mode before live execution."
+        )
+    return (
+        "I can help with strategy ideas, Python strategy structure, Zerodha workflow, and risk rules. "
+        "Tell me the symbol, timeframe, entry idea, exit rule, and max risk per trade."
+    )
+
+
+@api.get("/ai/chat/{session_id}")
+async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
+    rows = await db.ai_chats.find(
+        {"user_id": user["id"], "session_id": session_id},
+        {"_id": 0, "user_id": 0, "session_id": 0},
+    ).sort("created_at", 1).to_list(100)
+    return rows
+
+
+@api.post("/ai/chat")
+async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
+    content = req.message.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    user_msg = {
+        "id": str(uuid.uuid4()),
+        "role": "user",
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "user_id": user["id"],
+        "session_id": req.session_id,
+    }
+    bot_msg = {
+        "id": str(uuid.uuid4()),
+        "role": "assistant",
+        "content": _quantbot_reply(content),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "user_id": user["id"],
+        "session_id": req.session_id,
+    }
+    await db.ai_chats.insert_many([user_msg, bot_msg])
+    return {k: v for k, v in bot_msg.items() if k not in {"_id", "user_id", "session_id"}}
 
 
 # ============== Routes: Broker keys ==============
@@ -1043,10 +1129,10 @@ async def _strategy_health_loop(stop_event: asyncio.Event):
                     logger.warning(f"strategy risk evaluation failed for {s['id']}: {e}")
         except Exception as e:
             logger.warning(f"strategy health loop error: {e}")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
-        except asyncio.TimeoutError:
-            pass
+        slept = 0
+        while not stop_event.is_set() and slept < TICK_SECONDS:
+            await asyncio.sleep(1)
+            slept += 1
     logger.info("Strategy health monitor stopped")
 
 
@@ -2237,52 +2323,6 @@ async def zerodha_disconnect(user=Depends(get_current_user)):
 
 
 # ============== Routes: Profile ==============
-@api.get("/profile/paper-trading-stats")
-async def paper_trading_stats(user=Depends(get_current_user)):
-    """Get aggregated P&L from paper trading backtests."""
-    trades = await db.paper_trading_history.find(
-        {"user_id": user["id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(1000)
-    
-    total_pnl = round(sum(float(t.get("pnl", 0)) for t in trades), 2)
-    total_trades = sum(int(t.get("trades_count", 0)) for t in trades)
-    total_wins = sum(int(t.get("wins", 0)) for t in trades)
-    total_losses = sum(int(t.get("losses", 0)) for t in trades)
-    
-    return {
-        "total_pnl": total_pnl,
-        "total_trades": total_trades,
-        "total_wins": total_wins,
-        "total_losses": total_losses,
-        "win_rate": round(total_wins / max(1, total_wins + total_losses) * 100, 2),
-        "recent_backtests": trades[:10],
-    }
-
-
-@api.get("/profile/paper-trading-stats")
-async def paper_trading_stats(user=Depends(get_current_user)):
-    """Get aggregated P&L from paper trading backtests."""
-    trades = await db.paper_trading_history.find(
-        {"user_id": user["id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(1000)
-    
-    total_pnl = round(sum(float(t.get("pnl", 0)) for t in trades), 2)
-    total_trades = sum(int(t.get("trades_count", 0)) for t in trades)
-    total_wins = sum(int(t.get("wins", 0)) for t in trades)
-    total_losses = sum(int(t.get("losses", 0)) for t in trades)
-    
-    return {
-        "total_pnl": total_pnl,
-        "total_trades": total_trades,
-        "total_wins": total_wins,
-        "total_losses": total_losses,
-        "win_rate": round(total_wins / max(1, total_wins + total_losses) * 100, 2),
-        "recent_backtests": trades[:10],
-    }
-
-
 @api.get("/profile/paper-trading-stats")
 async def paper_trading_stats(user=Depends(get_current_user)):
     """Get aggregated P&L from paper trading backtests."""

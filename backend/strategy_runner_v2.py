@@ -42,6 +42,14 @@ LOCK_TTL_SECONDS = 90
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
+
+async def _sleep_or_stop(stop_event: asyncio.Event, seconds: int) -> None:
+    slept = 0
+    while not stop_event.is_set() and slept < seconds:
+        await asyncio.sleep(1)
+        slept += 1
+
+
 # Global state for market trend (updated once per tick, used by all strategies)
 _current_trend_info = None
 
@@ -124,10 +132,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
     while not stop_event.is_set():
         owns_lock = await _acquire_lock(db)
         if not owns_lock:
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
-            except asyncio.TimeoutError:
-                pass
+            await _sleep_or_stop(stop_event, TICK_SECONDS)
             continue
         
         try:
@@ -403,10 +408,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 except Exception:
                     pass
         
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
-        except asyncio.TimeoutError:
-            pass
+        await _sleep_or_stop(stop_event, TICK_SECONDS)
     
     await _release_lock(db)
     logger.info("Strategy runner stopped")

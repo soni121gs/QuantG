@@ -31,9 +31,6 @@ export default function Auth({ mode = "login" }) {
         setBusy(false);
         return;
       }
-      
-      console.log("[AUTH PAGE] Submitting form", { mode, email: form.email });
-      
       if (mode === "login") {
         await login(form.email.toLowerCase().trim(), form.password);
       } else {
@@ -44,11 +41,8 @@ export default function Auth({ mode = "login" }) {
         }
         await register(form.email.toLowerCase().trim(), form.password, form.name.trim());
       }
-      
-      console.log("[AUTH PAGE] Auth successful, navigating to dashboard");
       navigate("/dashboard");
     } catch (e) {
-      console.error("[AUTH PAGE] Auth error:", e);
       const errMsg = e.response?.data?.detail || e.message || "Authentication failed";
       setErr(formatApiErrorDetail(errMsg));
     } finally {
@@ -118,7 +112,7 @@ export default function Auth({ mode = "login" }) {
               className="w-full bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white py-2.5 px-4 font-mono text-sm uppercase tracking-wider transition-colors rounded-sm"
               data-testid="auth-submit"
             >
-              {busy ? "..." : mode === "login" ? "Enter Terminal →" : "Create Account →"}
+              {busy ? "..." : mode === "login" ? "Enter Terminal ->" : "Create Account ->"}
             </button>
           </form>
 
@@ -142,7 +136,7 @@ export default function Auth({ mode = "login" }) {
         </div>
 
         <div className="text-[10px] font-mono text-[var(--qd-text-3)] uppercase tracking-widest">
-          © Quantdesk • Paper Trading Mode
+          Quantdesk - Paper Trading Mode
         </div>
       </div>
 
