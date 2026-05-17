@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { formatApiErrorDetail } from "../lib/api";
-import { Activity, Mail, Lock, User } from "lucide-react";
+import { Activity, Mail, Lock, User, AlertCircle } from "lucide-react";
 
 export default function Auth({ mode = "login" }) {
   const { login, register } = useAuth();
@@ -16,11 +16,41 @@ export default function Auth({ mode = "login" }) {
     setErr("");
     setBusy(true);
     try {
-      if (mode === "login") await login(form.email, form.password);
-      else await register(form.email, form.password, form.name);
+      if (!form.email || !form.password) {
+        setErr("Email and password are required");
+        setBusy(false);
+        return;
+      }
+      if (form.email.indexOf("@") === -1) {
+        setErr("Please enter a valid email");
+        setBusy(false);
+        return;
+      }
+      if (form.password.length < 6) {
+        setErr("Password must be at least 6 characters");
+        setBusy(false);
+        return;
+      }
+      
+      console.log("[AUTH PAGE] Submitting form", { mode, email: form.email });
+      
+      if (mode === "login") {
+        await login(form.email.toLowerCase().trim(), form.password);
+      } else {
+        if (!form.name || form.name.trim().length === 0) {
+          setErr("Name is required");
+          setBusy(false);
+          return;
+        }
+        await register(form.email.toLowerCase().trim(), form.password, form.name.trim());
+      }
+      
+      console.log("[AUTH PAGE] Auth successful, navigating to dashboard");
       navigate("/dashboard");
     } catch (e) {
-      setErr(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+      console.error("[AUTH PAGE] Auth error:", e);
+      const errMsg = e.response?.data?.detail || e.message || "Authentication failed";
+      setErr(formatApiErrorDetail(errMsg));
     } finally {
       setBusy(false);
     }
@@ -77,8 +107,9 @@ export default function Auth({ mode = "login" }) {
               type="password"
             />
             {err && (
-              <div className="text-xs font-mono text-[var(--qd-loss)] py-2" data-testid="auth-error">
-                ! {err}
+              <div className="text-xs font-mono text-[var(--qd-loss)] py-2 px-3 bg-[var(--qd-loss)]/10 border border-[var(--qd-loss)]/30 rounded-sm flex items-start gap-2" data-testid="auth-error">
+                <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                <span>{err}</span>
               </div>
             )}
             <button

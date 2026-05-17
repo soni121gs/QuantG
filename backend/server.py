@@ -5,6 +5,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import re
 import uuid
 import asyncio
 import secrets as _secrets
@@ -20,11 +21,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 import kite_helper
 import options_helper
+import backtrader_runner
 import strategy_runner
+from realtime_ticks import RealtimeTickManager
 from safe_exec import safe_run_strategy
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
@@ -39,8 +41,6 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
-
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
 
 app = FastAPI(title="QuantG Algo Trading API")
 api = APIRouter(prefix="/api")
@@ -116,6 +116,8 @@ class StrategyOut(BaseModel):
     last_signal_at: Optional[str] = None
     last_signal_action: Optional[str] = None
     last_signals_count: Optional[int] = None
+    last_data_source: Optional[str] = None
+    last_data_live: Optional[bool] = None
     last_error: Optional[str] = None
 
 
@@ -125,6 +127,10 @@ class BacktestReq(BaseModel):
     symbol: str = "RELIANCE"
     days: int = 60
     options: Optional[Dict[str, Any]] = None  # {enabled, underlying, strike_mode, lots, ...}
+    engine: str = "local"  # "local" or "backtrader"
+
+
+
 
 
 class OrderReq(BaseModel):
@@ -134,11 +140,6 @@ class OrderReq(BaseModel):
     order_type: str = "MARKET"  # MARKET | LIMIT
     price: Optional[float] = None
     product: str = "MIS"
-
-
-class ChatReq(BaseModel):
-    session_id: str
-    message: str
 
 
 class ProfileUpdateReq(BaseModel):
@@ -213,15 +214,46 @@ SYMBOLS = [
     {"symbol": "SENSEX", "name": "BSE Sensex", "base": 81460.20},
 ]
 
-# Deterministic-ish live ticks using time-based jitter
+# Mock ticks should move during market hours, then freeze. This keeps paper PnL
+# from changing on nights/weekends when the user is not trading.
+IST_OFFSET = timedelta(hours=5, minutes=30)
+NSE_OPEN_MINUTE = 9 * 60 + 15
+NSE_CLOSE_MINUTE = 15 * 60 + 30
+
+
+def _last_nse_session_close_utc(now_utc: Optional[datetime] = None) -> datetime:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    minutes = ist_now.hour * 60 + ist_now.minute
+    days_back = 0
+    if ist_now.weekday() >= 5:
+        days_back = ist_now.weekday() - 4
+    elif minutes < NSE_OPEN_MINUTE:
+        days_back = 3 if ist_now.weekday() == 0 else 1
+    close_day = ist_now.date() - timedelta(days=days_back)
+    close_ist = datetime(close_day.year, close_day.month, close_day.day, 15, 30, tzinfo=timezone.utc)
+    return close_ist - IST_OFFSET
+
+
+def _mock_price_bucket(now_utc: Optional[datetime] = None) -> int:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    minutes = ist_now.hour * 60 + ist_now.minute
+    is_open = ist_now.weekday() < 5 and NSE_OPEN_MINUTE <= minutes <= NSE_CLOSE_MINUTE
+    if is_open:
+        return int(now_utc.timestamp() // 60)
+    return int(_last_nse_session_close_utc(now_utc).timestamp() // 60)
+
+
 def live_price(base: float, seed: int) -> Dict[str, Any]:
-    t = datetime.now(timezone.utc).timestamp()
-    drift = math.sin(t / 12.0 + seed) * (base * 0.004)
-    noise = (_rng.random() - 0.5) * (base * 0.002)
+    bucket = _mock_price_bucket()
+    drift = math.sin(bucket / 11.0 + seed * 1.7) * (base * 0.004)
+    noise = math.sin(bucket / 5.0 + seed * 8.3) * (base * 0.001)
     price = round(base + drift + noise, 2)
     change = round(drift + noise, 2)
     pct = round((change / base) * 100, 2)
-    return {"price": price, "change": change, "pct": pct}
+    bid_ask = _mock_bid_ask(price)
+    return {"price": price, "change": change, "pct": pct, **bid_ask}
 
 
 def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
@@ -262,6 +294,134 @@ def intraday_series(base: float, bars: int = 250) -> List[Dict[str, Any]]:
     return out
 
 
+async def _index_spot_token(kite, symbol: str) -> Optional[int]:
+    sym_upper = symbol.upper()
+    if sym_upper not in options_helper.INDEX_SPOT_SYMBOL:
+        return None
+    spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
+    try:
+        instruments = kite.instruments(spot_exch)
+        for inst in instruments:
+            if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
+                return int(inst["instrument_token"])
+    except Exception as e:
+        logger.warning(f"index spot token lookup failed for {sym_upper}: {e}")
+    return None
+
+
+def _merge_tick_bars(historical: List[Dict[str, Any]], tick_bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not tick_bars:
+        return historical
+    if not historical:
+        return tick_bars
+    last_hist = historical[-1]["date"]
+    last_tick = tick_bars[-1]["date"]
+    if last_hist == last_tick:
+        return historical[:-1] + [tick_bars[-1]]
+    if last_tick > last_hist:
+        return historical + [tick_bars[-1]]
+    return historical
+
+
+async def _fetch_strategy_history(
+    user_id: str,
+    symbol: str,
+    days: int = 60,
+    interval: str = "5minute",
+    min_intraday_bars: int = 20,
+    allow_mock: bool = True,
+) -> Dict[str, Any]:
+    """Fetch strategy candles with explicit source metadata.
+
+    Zerodha Kite is the preferred source. Mock candles are only a paper/demo
+    fallback and are tagged as such so the UI can warn users.
+    """
+    sym_upper = symbol.upper()
+    kite, _ = await get_user_kite(user_id)
+    tick_manager = getattr(app.state, "tick_manager", None)
+    if kite and tick_manager:
+        try:
+            token_to_symbol: Dict[int, str] = {}
+            for s in SYMBOLS:
+                tok = kite_helper.instrument_token(kite, s["symbol"])
+                if tok:
+                    token_to_symbol[tok] = s["symbol"]
+            for opt_sym, (spot_exch, spot_sym) in options_helper.INDEX_SPOT_SYMBOL.items():
+                tok = kite_helper.instrument_token(kite, spot_sym, segment=spot_exch)
+                if tok:
+                    token_to_symbol[tok] = opt_sym
+            if token_to_symbol:
+                tick_manager.start_for_user(user_id, kite, token_to_symbol)
+        except Exception as e:
+            logger.warning(f"Realtime tick service start failed: {e}")
+
+    if kite:
+        token = None
+        source_kind = "equity"
+        if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
+            token = await _index_spot_token(kite, sym_upper)
+            source_kind = "index-spot"
+        else:
+            token = kite_helper.instrument_token(kite, sym_upper)
+
+        if token:
+            live_data = kite_helper.safe_historical(kite, token, days=days, interval=interval)
+            tick_source = None
+            if interval == "5minute" and tick_manager and tick_manager.is_running(user_id):
+                if tick_manager.has_symbol(user_id, sym_upper):
+                    tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
+                    if tick_bars and len(tick_bars) > 1:
+                        tick_source = f"tick-live"
+                        if live_data:
+                            live_data = _merge_tick_bars(live_data, tick_bars)
+                        else:
+                            live_data = tick_bars
+            if not live_data and interval == "5minute" and tick_manager and tick_manager.has_symbol(user_id, sym_upper):
+                tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
+                if tick_bars and len(tick_bars) > min_intraday_bars:
+                    live_data = tick_bars
+                    tick_source = f"tick-live"
+            enough = bool(live_data) and (interval == "day" or len(live_data) > min_intraday_bars)
+            if enough:
+                source_label = f"zerodha-kite-{interval}:{source_kind}:{sym_upper}"
+                if tick_source:
+                    source_label = f"zerodha-kite-{interval}:{tick_source}:{source_kind}:{sym_upper}"
+                return {
+                    "data": live_data,
+                    "source": source_label,
+                    "is_live": True,
+                    "interval": interval,
+                }
+            if interval != "day":
+                daily = kite_helper.safe_historical(kite, token, days=days, interval="day")
+                if daily:
+                    return {
+                        "data": daily,
+                        "source": f"zerodha-kite-day:{source_kind}:{sym_upper}",
+                        "is_live": True,
+                        "interval": "day",
+                    }
+
+    if allow_mock:
+        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None)
+        if sym:
+            if interval == "day":
+                return {
+                    "data": historical_series(sym["base"], days),
+                    "source": f"mock-day:{sym_upper}",
+                    "is_live": False,
+                    "interval": "day",
+                }
+            return {
+                "data": intraday_series(sym["base"], bars=max(250, min_intraday_bars + 1)),
+                "source": f"mock-5minute:{sym_upper}",
+                "is_live": False,
+                "interval": "5minute",
+            }
+
+    return {"data": [], "source": "none", "is_live": False, "interval": interval}
+
+
 # ============== Routes: Auth ==============
 @api.get("/")
 async def health():
@@ -282,6 +442,7 @@ async def register(req: RegisterReq):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user_doc)
+    await seed_default_strategies_for_user(user_doc["id"])
     token = create_token(user_doc["id"], email)
     return TokenOut(
         access_token=token,
@@ -431,6 +592,472 @@ def run(data):
     return signals
 """
 
+DEFAULT_STRATEGY_RISK = {
+    "stop_loss_pct": 0.20,
+    "take_profit_pct": 0.40,
+    "pause_on_issue": True,
+}
+
+DEFAULT_OPTION_STRATEGIES = [
+    {
+        "name": "NIFTY Momentum EMA",
+        "description": "Long ATM NIFTY options on strong EMA trend shifts. Good for directional momentum moves.",
+        "underlying": "NIFTY",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    fast, slow = 8, 21
+    signals = []
+    ema_fast = []
+    ema_slow = []
+    for i in range(len(closes)):
+        ema_fast.append(sum(closes[max(0, i-fast+1):i+1]) / min(fast, i+1))
+        ema_slow.append(sum(closes[max(0, i-slow+1):i+1]) / min(slow, i+1))
+        if i == 0:
+            continue
+        if ema_fast[i] > ema_slow[i] and ema_fast[i-1] <= ema_slow[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif ema_fast[i] < ema_slow[i] and ema_fast[i-1] >= ema_slow[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "NIFTY RSI Reversion",
+        "description": "Trade NIFTY options on oversold and overbought RSI levels with trend confirmation.",
+        "underlying": "NIFTY",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    period = 14
+    signals = []
+    for i in range(len(closes)):
+        if i < period: continue
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-period+1, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-period+1, i+1))
+        avg_gain = gains / period
+        avg_loss = losses / period if losses else 0.0001
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        if rsi < 30:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif rsi > 70:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "NIFTY Opening Range Breakout",
+        "description": "Capture opening range breakouts on NIFTY using the first 3 five-minute bars.",
+        "underlying": "NIFTY",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    if len(data) < 10:
+        return []
+    range_high = max(d['high'] for d in data[:3])
+    range_low = min(d['low'] for d in data[:3])
+    signals = []
+    for i in range(3, len(data)):
+        if data[i]['close'] > range_high:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+            break
+        if data[i]['close'] < range_low:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+            break
+    return signals
+""",
+    },
+    {
+        "name": "NIFTY ATR Trend",
+        "description": "Long NIFTY options when momentum expands beyond ATR-based trend thresholds.",
+        "underlying": "NIFTY",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    highs = [d['high'] for d in data]
+    lows = [d['low'] for d in data]
+    lookback = 14
+    signals = []
+    for i in range(len(data)):
+        if i < lookback: continue
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-lookback+1, i+1)]
+        atr = sum(tr) / lookback
+        body = closes[i] - closes[i-1]
+        if body > atr * 0.4:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif body < -atr * 0.4:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "NIFTY Trend Recheck",
+        "description": "Wait for pullbacks into a rising trend before taking NIFTY options exposure.",
+        "underlying": "NIFTY",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    ma20 = [sum(closes[max(0, i-19):i+1]) / min(20, i+1) for i in range(len(closes))]
+    signals = []
+    for i in range(5, len(data)):
+        if closes[i] > ma20[i] and closes[i-1] < ma20[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif closes[i] < ma20[i] and closes[i-1] > ma20[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "SENSEX Momentum EMA",
+        "description": "Buy SENSEX options on crossovers that signal trend continuation.",
+        "underlying": "SENSEX",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    fast, slow = 8, 21
+    signals = []
+    ema_fast = []
+    ema_slow = []
+    for i in range(len(closes)):
+        ema_fast.append(sum(closes[max(0, i-fast+1):i+1]) / min(fast, i+1))
+        ema_slow.append(sum(closes[max(0, i-slow+1):i+1]) / min(slow, i+1))
+        if i == 0:
+            continue
+        if ema_fast[i] > ema_slow[i] and ema_fast[i-1] <= ema_slow[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif ema_fast[i] < ema_slow[i] and ema_fast[i-1] >= ema_slow[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "SENSEX RSI Reversion",
+        "description": "Enter SENSEX option trades when RSI reaches extreme levels and momentum shifts.",
+        "underlying": "SENSEX",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    period = 14
+    signals = []
+    for i in range(len(closes)):
+        if i < period: continue
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-period+1, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-period+1, i+1))
+        avg_gain = gains / period
+        avg_loss = losses / period if losses else 0.0001
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        if rsi < 30:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif rsi > 70:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "SENSEX Opening Range",
+        "description": "Take early SENSEX option positions on opening range breakout or breakdown.",
+        "underlying": "SENSEX",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    if len(data) < 10:
+        return []
+    range_high = max(d['high'] for d in data[:3])
+    range_low = min(d['low'] for d in data[:3])
+    signals = []
+    for i in range(3, len(data)):
+        if data[i]['close'] > range_high:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+            break
+        if data[i]['close'] < range_low:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+            break
+    return signals
+""",
+    },
+    {
+        "name": "SENSEX ATR Trend",
+        "description": "Jump into SENSEX options when intraday ATR momentum expands strongly.",
+        "underlying": "SENSEX",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    highs = [d['high'] for d in data]
+    lows = [d['low'] for d in data]
+    lookback = 14
+    signals = []
+    for i in range(len(data)):
+        if i < lookback: continue
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-lookback+1, i+1)]
+        atr = sum(tr) / lookback
+        body = closes[i] - closes[i-1]
+        if body > atr * 0.4:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif body < -atr * 0.4:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+    {
+        "name": "SENSEX Trend Recheck",
+        "description": "Wait for SENSEX pullbacks into trend support before scaling into options.",
+        "underlying": "SENSEX",
+        "strike_mode": "ATM_BUY",
+        "otm_points": 0,
+        "lots": 1,
+        "python_code": """def run(data):
+    closes = [d['close'] for d in data]
+    ma20 = [sum(closes[max(0, i-19):i+1]) / min(20, i+1) for i in range(len(closes))]
+    signals = []
+    for i in range(5, len(data)):
+        if closes[i] > ma20[i] and closes[i-1] < ma20[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY'})
+        elif closes[i] < ma20[i] and closes[i-1] > ma20[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    return signals
+""",
+    },
+]
+
+
+def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "name": template["name"],
+        "description": template["description"],
+        "kind": "python",
+        "python_code": template["python_code"],
+        "visual_config": {
+            "options": {
+                "enabled": True,
+                "underlying": template["underlying"],
+                "strike_mode": template["strike_mode"],
+                "otm_points": template["otm_points"],
+                "expiry_offset": template.get("expiry_offset", 0),
+                "lots": template["lots"],
+            },
+            "risk": DEFAULT_STRATEGY_RISK,
+        },
+        "status": "draft",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_pnl": None,
+        "evaluations": 0,
+        "signals_fired": 0,
+    }
+
+
+async def seed_default_strategies_for_user(user_id: str) -> None:
+    if await db.strategies.count_documents({"user_id": user_id}) > 0:
+        return
+    docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES]
+    try:
+        await db.strategies.insert_many(docs)
+        logger.info(f"Seeded {len(docs)} default option strategies for user {user_id}")
+    except Exception as e:
+        logger.warning(f"Failed to seed default strategies for user {user_id}: {e}")
+
+
+async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
+    if not source:
+        return None
+    m = re.search(r"strategy:([0-9a-fA-F\-]+)", source)
+    return m.group(1) if m else None
+
+
+async def _get_strategy_risk(user_id: str, sid: str) -> Dict[str, Any]:
+    row = await db.strategies.find_one({"id": sid, "user_id": user_id})
+    return ((row or {}).get("visual_config") or {}).get("risk") or {}
+
+
+async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any]]:
+    return await db.orders.find({
+        "user_id": user_id,
+        "source": {"$regex": f"strategy:{sid}"},
+        "status": "COMPLETE",
+    }, {"_id": 0}).to_list(1000)
+
+
+async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit") -> Dict[str, Any]:
+    orders = await _collect_strategy_orders(user_id, sid)
+    net: Dict[str, int] = {}
+    for o in orders:
+        qty = int(o.get("filled_qty") or o.get("qty") or 0)
+        sign = 1 if o["side"] == "BUY" else -1
+        net[o["symbol"]] = net.get(o["symbol"], 0) + sign * qty
+    results = []
+    for sym, qty_net in net.items():
+        if qty_net == 0:
+            continue
+        side = "SELL" if qty_net > 0 else "BUY"
+        order = next((o for o in orders if o["symbol"] == sym), None)
+        place_kwargs: Dict[str, Any] = {
+            "user_id": user_id,
+            "side": side,
+            "order_type": "MARKET",
+            "product": None,
+            "source": f"{reason}:strategy:{sid}",
+        }
+        if order and order.get("asset_type") == "option":
+            lot_size = int(order.get("lot_size") or 1)
+            place_kwargs["symbol"] = order["symbol"]
+            place_kwargs["option_contract"] = {
+                "tradingsymbol": order["symbol"],
+                "exchange": order.get("exchange", "NFO"),
+                "instrument_token": order.get("instrument_token"),
+                "lot_size": lot_size,
+                "strike": order.get("strike"),
+                "expiry": order.get("expiry"),
+                "underlying": order.get("underlying"),
+                "option_type": order.get("option_type"),
+                "transaction_type": side,
+            }
+            place_kwargs["qty"] = max(1, math.ceil(abs(qty_net) / lot_size))
+        else:
+            place_kwargs["symbol"] = sym
+            place_kwargs["qty"] = abs(qty_net)
+        try:
+            result = await _place_order_core(**place_kwargs)
+            results.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "ok", "order_id": result.get("id")})
+        except Exception as e:
+            results.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": str(e)})
+    if reason in ("risk-trigger", "feed-stale"):
+        await db.strategies.update_one({"id": sid, "user_id": user_id}, {"$set": {
+            "status": "paused",
+            "last_error": f"Auto-paused after {reason} due to risk or data issue.",
+        }})
+    return {"closed_positions": results, "open_positions_found": len([v for v in net.values() if v != 0])}
+
+
+async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str) -> Optional[float]:
+    kite, _ = await get_user_kite(user_id)
+    if kite:
+        try:
+            key = f"{exchange}:{symbol}"
+            ltp_resp = kite.ltp([key])
+            if ltp_resp and key in ltp_resp:
+                return float(ltp_resp[key]["last_price"])
+        except Exception:
+            pass
+    sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
+    return live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else None
+
+
+async def _evaluate_strategy_risk(user_id: str, sid: str) -> bool:
+    risk = await _get_strategy_risk(user_id, sid)
+    if not risk:
+        return False
+    stop_loss_pct = float(risk.get("stop_loss_pct", 0))
+    take_profit_pct = float(risk.get("take_profit_pct", 0))
+    orders = await _collect_strategy_orders(user_id, sid)
+    if not orders:
+        return False
+    net_positions: Dict[str, int] = {}
+    entry_prices: Dict[str, float] = {}
+    for o in orders:
+        symbol = o["symbol"]
+        qty = int(o.get("filled_qty") or o.get("qty") or 0)
+        sign = 1 if o["side"] == "BUY" else -1
+        net_positions[symbol] = net_positions.get(symbol, 0) + sign * qty
+        if sign > 0:
+            total_cost = entry_prices.get(symbol, 0) * entry_prices.get(f"{symbol}_qty", 0) + qty * float(o.get("price", 0))
+            total_qty = entry_prices.get(f"{symbol}_qty", 0) + qty
+            entry_prices[symbol] = total_cost / total_qty if total_qty else float(o.get("price", 0))
+            entry_prices[f"{symbol}_qty"] = total_qty
+    for symbol, qty_net in net_positions.items():
+        if qty_net == 0:
+            continue
+        current_price = None
+        order = next((o for o in reversed(orders) if o["symbol"] == symbol), None)
+        if order and order.get("asset_type") == "option":
+            exchange = order.get("exchange") or "NFO"
+            current_price = await _current_ltp_for_symbol(user_id, symbol, exchange)
+            if current_price is None and order.get("underlying") and order.get("entry_spot"):
+                underlying_price = await _current_ltp_for_symbol(user_id, order["underlying"], "NSE")
+                if underlying_price and float(order.get("entry_spot", 0)):
+                    current_price = round(float(order.get("price", 0)) * (underlying_price / float(order.get("entry_spot", 1))), 2)
+        else:
+            current_price = await _current_ltp_for_symbol(user_id, symbol, "NSE")
+        if current_price is None:
+            continue
+        entry_price = entry_prices.get(symbol) or float(order.get("price", 0))
+        if qty_net > 0:
+            if stop_loss_pct and current_price <= entry_price * (1 - stop_loss_pct):
+                return True
+            if take_profit_pct and current_price >= entry_price * (1 + take_profit_pct):
+                return True
+        else:
+            if stop_loss_pct and current_price >= entry_price * (1 + stop_loss_pct):
+                return True
+            if take_profit_pct and current_price <= entry_price * (1 - take_profit_pct):
+                return True
+    return False
+
+
+async def _strategy_health_loop(stop_event: asyncio.Event):
+    logger.info("Strategy health monitor starting")
+    while not stop_event.is_set():
+        try:
+            strategies = await db.strategies.find({"status": "live"}).to_list(500)
+            for s in strategies:
+                if stop_event.is_set():
+                    break
+                uid = s["user_id"]
+                settings = await get_user_settings(uid)
+                if not settings.get("paper_mode", True):
+                    tick_manager = getattr(app.state, "tick_manager", None)
+                    tick_status = tick_manager.status_info(uid) if tick_manager else {"connected": False, "last_tick_at": None}
+                    last_tick = tick_status.get("last_tick_at")
+                    stale = True
+                    if last_tick:
+                        try:
+                            last_dt = datetime.fromisoformat(last_tick)
+                            stale = (datetime.now(timezone.utc) - last_dt).total_seconds() > 120
+                        except Exception:
+                            stale = True
+                    if not tick_status.get("connected") or stale:
+                        await _close_strategy_positions(uid, s["id"], reason="feed-stale")
+                        continue
+                try:
+                    if await _evaluate_strategy_risk(uid, s["id"]):
+                        await _close_strategy_positions(uid, s["id"], reason="risk-trigger")
+                except Exception as e:
+                    logger.warning(f"strategy risk evaluation failed for {s['id']}: {e}")
+        except Exception as e:
+            logger.warning(f"strategy health loop error: {e}")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=TICK_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+    logger.info("Strategy health monitor stopped")
+
+
+@api.post("/strategies/{sid}/unwind")
+async def unwind_strategy(sid: str, user=Depends(get_current_user)):
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    result = await _close_strategy_positions(user["id"], sid, reason="manual-unwind")
+    return {"ok": True, **result}
+
 
 @api.post("/strategies", response_model=StrategyOut)
 async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
@@ -455,6 +1082,12 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
 async def list_strategies(user=Depends(get_current_user)):
     rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     return [StrategyOut(**r) for r in rows]
+
+
+@api.post("/strategies/seed-defaults")
+async def seed_default_strategies(user=Depends(get_current_user)):
+    await seed_default_strategies_for_user(user["id"])
+    return {"ok": True, "message": "Default NIFTY and SENSEX option strategies seeded. Review them in the Strategies tab."}
 
 
 @api.get("/strategies/{sid}", response_model=StrategyOut)
@@ -602,44 +1235,11 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     else:
         symbol = (vc.get("symbol") or "RELIANCE").upper()
 
-    # Fetch candles using the same path as the background runner
+    # Fetch candles using the same path as the background runner.
+    history = await _fetch_strategy_history(user["id"], symbol, days=60, interval="5minute")
+    data: List[dict] = history["data"]
+    source_label = history["source"]
     kite, _ = await get_user_kite(user["id"])
-    source_label = "mock-intraday-5m"
-    data: List[dict] = []
-    # Special path: fetch index spot history when options mode + Kite available
-    if kite and options_mode and symbol in options_helper.INDEX_SPOT_SYMBOL:
-        try:
-            spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[symbol]
-            instruments = kite.instruments(spot_exch)
-            idx_tok = None
-            for inst in instruments:
-                if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
-                    idx_tok = int(inst["instrument_token"])
-                    break
-            if idx_tok:
-                live_data = kite_helper.safe_historical(kite, idx_tok, days=30, interval="5minute")
-                if live_data and len(live_data) > 20:
-                    data = live_data
-                    source_label = f"kite-5m:{symbol}-spot"
-        except Exception as e:
-            logger.warning(f"index spot history failed in test-run for {symbol}: {e}")
-    # Equity path (or fallback)
-    if not data and kite:
-        tok = kite_helper.instrument_token(kite, symbol)
-        if tok:
-            live_data = kite_helper.safe_historical(kite, tok, days=30, interval="5minute")
-            if live_data and len(live_data) > 20:
-                data = live_data
-                source_label = "kite-5m"
-            else:
-                daily = kite_helper.safe_historical(kite, tok, days=60, interval="day")
-                if daily:
-                    data = daily
-                    source_label = "kite-daily"
-    if not data:
-        sym = next((s for s in SYMBOLS if s["symbol"] == symbol), None)
-        if sym:
-            data = intraday_series(sym["base"], bars=250)
 
     if not data:
         raise HTTPException(status_code=400, detail=f"No price data for {symbol}")
@@ -667,6 +1267,12 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         last_sig = signals[-1]
         action = (last_sig.get("action") or "").upper()
         if action in ("BUY", "SELL"):
+            settings = await get_user_settings(user["id"])
+            if not history.get("is_live", False) and not settings.get("paper_mode", True):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Live execution blocked: candle source is mock. Connect Kite or switch to paper mode.",
+                )
             try:
                 if options_mode:
                     if not kite:
@@ -706,6 +1312,8 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                         "last_signal_action": action,
                         "last_signals_count": len(signals),
                         "last_fired_signal_date": last_sig.get("date", ""),
+                        "last_data_source": source_label,
+                        "last_data_live": bool(history.get("is_live")),
                     },
                      "$inc": {"signals_fired": 1, "evaluations": 1}},
                 )
@@ -719,6 +1327,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         "symbol": symbol,
         "options_mode": options_mode,
         "data_source": source_label,
+        "data_live": bool(history.get("is_live")),
         "candles": len(data),
         "first_candle": data[0],
         "last_candle": data[-1],
@@ -793,11 +1402,34 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     if not code:
         code = DEFAULT_PYTHON
 
+    # Route to Backtrader if requested
+    if req.engine == "backtrader":
+        try:
+            options_mode = bool(opt_cfg.get("enabled"))
+            target_symbol = (opt_cfg.get("underlying") or "NIFTY") if options_mode else req.symbol.upper()
+            # Backtrader doesn't support options mode yet, only equity backtesting
+            if options_mode:
+                raise ValueError("Backtrader engine does not yet support options mode. Use local simulator.")
+            result = backtrader_runner.run_backtest(
+                symbol=target_symbol,
+                python_code=code,
+                starting_capital=100000,
+                days=req.days,
+                data_source="yfinance",
+            )
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Backtrader backtest failed: {e}")
+
+    # Default: use local simulator
     options_mode = bool(opt_cfg.get("enabled"))
     # In options mode, analyse the UNDERLYING spot — not the equity field
     target_symbol = (opt_cfg.get("underlying") or "NIFTY") if options_mode else req.symbol.upper()
     sym = next((s for s in SYMBOLS if s["symbol"] == target_symbol.upper()), SYMBOLS[0])
-    data = historical_series(sym["base"], req.days)
+    history = await _fetch_strategy_history(user["id"], target_symbol, days=req.days, interval="day")
+    data = history["data"]
+    if not data:
+        raise HTTPException(status_code=400, detail=f"No price data for {target_symbol}")
     signals: List[dict] = []
     try:
         signals = _safe_run_python(code, data)
@@ -809,6 +1441,7 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     cash = starting_capital
     position = 0          # qty (equity) OR signed-lot-qty (options)
     entry = 0.0           # entry price per unit
+    entry_spot = 0.0
     trades: List[dict] = []
     equity_curve: List[dict] = []
     sigmap = {s["date"]: s["action"] for s in signals}
@@ -832,6 +1465,7 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
                 premium = round(spot * 0.02, 2)
                 open_option_type = "CE" if act == "BUY" else "PE"
                 entry = premium
+                entry_spot = spot
                 position = per_trade_qty
                 cost = premium * per_trade_qty
                 cash -= cost
@@ -839,7 +1473,7 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
             elif act in ("BUY", "SELL") and position > 0 and open_option_type:
                 # Opposite signal → square off and (optionally) open new leg
                 # First close existing leg
-                exit_premium = _options_premium_at_exit(entry, spot, sym["base"], open_option_type)
+                exit_premium = _options_premium_at_exit(entry, spot, entry_spot, open_option_type)
                 pnl = (exit_premium - entry) * position
                 cash += exit_premium * position
                 trades.append({"date": d["date"], "action": f"SELL {open_option_type}", "price": exit_premium, "qty": position, "pnl": round(pnl, 2)})
@@ -850,12 +1484,13 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
                 premium = round(spot * 0.02, 2)
                 open_option_type = new_type
                 entry = premium
+                entry_spot = spot
                 position = per_trade_qty
                 cash -= premium * per_trade_qty
                 trades.append({"date": d["date"], "action": f"BUY {new_type}", "price": premium, "qty": per_trade_qty})
             # Mark-to-market
             if position > 0 and open_option_type:
-                mtm_premium = _options_premium_at_exit(entry, spot, sym["base"], open_option_type)
+                mtm_premium = _options_premium_at_exit(entry, spot, entry_spot, open_option_type)
                 eq = cash + mtm_premium * position
             else:
                 eq = cash
@@ -883,10 +1518,38 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     losses = [t for t in trades if t.get("pnl", 0) < 0]
     win_rate = round(len(wins) / max(1, len(wins) + len(losses)) * 100, 2)
     if req.strategy_id:
-        await db.strategies.update_one({"id": req.strategy_id}, {"$set": {"last_pnl": total_pnl}})
+        await db.strategies.update_one({"id": req.strategy_id}, {"$set": {
+            "last_pnl": total_pnl,
+            "last_data_source": history.get("source"),
+            "last_data_live": bool(history.get("is_live")),
+        }})
+    
+    # Save to paper trading history for profile stats
+    paper_trade_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "strategy_id": req.strategy_id,
+        "symbol": target_symbol,
+        "mode": "options" if options_mode else "equity",
+        "pnl": total_pnl,
+        "trades_count": len(trades),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": win_rate,
+        "return_pct": round(total_pnl / (starting_capital / 100), 2),
+        "starting_capital": starting_capital,
+        "final_equity": final_equity,
+        "days_backtested": req.days,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.paper_trading_history.insert_one(paper_trade_doc)
+    
     return {
+        "engine": "local",
         "mode": "options" if options_mode else "equity",
         "symbol_analysed": target_symbol,
+        "data_source": history.get("source"),
+        "data_live": bool(history.get("is_live")),
         "equity_curve": equity_curve,
         "trades": trades,
         "signals": signals,
@@ -901,6 +1564,9 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
             "win_rate": win_rate,
         },
     }
+
+
+
 
 
 def _options_premium_at_exit(entry_premium: float, current_spot: float, entry_spot: float, option_type: str) -> float:
@@ -935,6 +1601,24 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
         )
 
 
+def _mock_bid_ask(price: float, spread_pct: float = 0.0005) -> Dict[str, float]:
+    bid = round(price * (1 - spread_pct / 2), 2)
+    ask = round(price * (1 + spread_pct / 2), 2)
+    return {"bid": bid, "ask": ask}
+
+
+def _simulate_paper_fill_price(price: float, side: str, spread_pct: float = 0.0007) -> float:
+    if side == "BUY":
+        return round(price * (1 + spread_pct / 2), 2)
+    return round(price * (1 - spread_pct / 2), 2)
+
+
+def _simulate_paper_brokerage(fill_price: float, quantity: int) -> float:
+    gross = abs(fill_price * quantity)
+    brokerage = min(20.0, gross * 0.0003)
+    return round(brokerage, 2)
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
@@ -955,6 +1639,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
 
+    strategy_id = await _strategy_source_id(source)
     settings = await get_user_settings(user_id)
     paper = settings.get("paper_mode", True)
 
@@ -1003,8 +1688,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             # Paper mode: estimate option premium as ~2% of spot (rough proxy)
             spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
             fill_price = price or round(float(spot) * 0.02, 2)
+            fill_price = _simulate_paper_fill_price(fill_price, opt_side)
             broker_order_id = None
 
+        brokerage = _simulate_paper_brokerage(fill_price, broker_qty) if paper else 0.0
         doc = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -1017,18 +1704,23 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "realised_pnl": 0.0,
             "order_type": order_type,
             "price": fill_price,
+            "brokerage": brokerage,
             "product": opt_product,
             "status": "COMPLETE" if paper else "OPEN",
             "mode": "paper" if paper else "live",
             "broker_order_id": broker_order_id,
             "source": source,
+            "strategy_id": strategy_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             # Option-specific metadata for reporting / UI
             "asset_type": "option",
+            "exchange": opt_exchange,
             "underlying": option_contract.get("underlying"),
             "option_type": option_contract.get("option_type"),
             "strike": option_contract.get("strike"),
             "expiry": option_contract.get("expiry"),
+            "instrument_token": option_contract.get("instrument_token"),
+            "entry_spot": option_contract.get("spot"),
             "lots": lots,
             "lot_size": lot_size,
         }
@@ -1060,6 +1752,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     "avg_price": fill_price,
                     "created_at": doc["created_at"],
                     "asset_type": "option",
+                    "strategy_id": strategy_id,
                 })
         doc.pop("_id", None)
         doc.pop("user_id", None)
@@ -1099,8 +1792,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
         fill_price = fill_price_hint  # actual fill comes via Kite later
     else:
-        fill_price = price if order_type == "LIMIT" and price else fill_price_hint
+        fill_price = price if order_type == "LIMIT" and price else _simulate_paper_fill_price(fill_price_hint, side)
 
+    brokerage = _simulate_paper_brokerage(fill_price, qty)
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -1113,11 +1807,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "realised_pnl": 0.0,
         "order_type": order_type,
         "price": fill_price,
+        "brokerage": brokerage,
         "product": product,
         "status": "COMPLETE" if paper else "OPEN",
         "mode": "paper" if paper else "live",
         "broker_order_id": broker_order_id,
         "source": source,
+        "strategy_id": strategy_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(doc)
@@ -1147,6 +1843,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 "qty": delta,
                 "avg_price": fill_price,
                 "created_at": doc["created_at"],
+                "strategy_id": strategy_id,
             })
     doc.pop("_id", None)
     doc.pop("user_id", None)
@@ -1292,22 +1989,34 @@ async def portfolio(user=Depends(get_current_user)):
     orders_count = await db.orders.count_documents({"user_id": user["id"]})
     strategies_count = await db.strategies.count_documents({"user_id": user["id"]})
     live_strategies = await db.strategies.count_documents({"user_id": user["id"], "status": "live"})
+    paused_strategies = await db.strategies.count_documents({"user_id": user["id"], "status": "paused"})
+    active_strategies = await db.strategies.count_documents({
+        "user_id": user["id"],
+        "status": {"$nin": ["live", "paused"]},
+    })
+    position_modes = sorted({p.get("mode", "unknown") for p in positions})
 
-    # equity curve from daily aggregated orders (simulate from PnL)
+    # Stable paper equity curve from daily aggregated orders (simulated from PnL)
     equity = []
     base = 100000.0
     for i in range(30):
         d = datetime.now(timezone.utc) - timedelta(days=30 - i)
-        base = base * (1 + (_rng.random() - 0.46) * 0.01)
-        equity.append({"date": d.strftime("%Y-%m-%d"), "equity": round(base + total_pnl * (i / 30), 2)})
+        wobble = math.sin((i + 1) * 0.63) * 450
+        trend = i * 55
+        equity.append({"date": d.strftime("%Y-%m-%d"), "equity": round(base + trend + wobble + total_pnl * (i / 30), 2)})
 
     return {
         "total_pnl": total_pnl,
+        "pnl_type": "open_unrealized",
+        "pnl_source": "none" if not position_modes else position_modes[0] if len(position_modes) == 1 else "mixed",
+        "open_positions": len(positions),
         "deployed": deployed,
         "available": round(500000.0 - deployed, 2),
         "orders": orders_count,
         "strategies": strategies_count,
         "live_strategies": live_strategies,
+        "paused_strategies": paused_strategies,
+        "active_strategies": active_strategies,
         "equity_curve": equity,
     }
 
@@ -1405,6 +2114,19 @@ async def live_readiness(user=Depends(get_current_user)):
         "ok": market_open,
         "detail": ist_now.strftime("%a %H:%M IST"),
         "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not market_open else None,
+    })
+    tick_manager = getattr(app.state, "tick_manager", None)
+    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
+    checks.append({
+        "id": "tick_feed",
+        "label": "Realtime Kite tick feed",
+        "ok": bool(tick_status.get("connected")),
+        "detail": (
+            f"connected, last tick {tick_status.get('last_tick_at')}"
+            if tick_status.get("connected")
+            else tick_status.get("last_error") or "not connected"
+        ),
+        "hint": "Fetch a strategy or watchlist with a live Kite session to start the websocket feed." if not tick_status.get("connected") else None,
     })
     # Note: "trading mode" is intentionally NOT a check — clicking confirm in the
     # pre-flight modal IS the action that flips paper→live. Including it as a
@@ -1515,16 +2237,87 @@ async def zerodha_disconnect(user=Depends(get_current_user)):
 
 
 # ============== Routes: Profile ==============
+@api.get("/profile/paper-trading-stats")
+async def paper_trading_stats(user=Depends(get_current_user)):
+    """Get aggregated P&L from paper trading backtests."""
+    trades = await db.paper_trading_history.find(
+        {"user_id": user["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    total_pnl = round(sum(float(t.get("pnl", 0)) for t in trades), 2)
+    total_trades = sum(int(t.get("trades_count", 0)) for t in trades)
+    total_wins = sum(int(t.get("wins", 0)) for t in trades)
+    total_losses = sum(int(t.get("losses", 0)) for t in trades)
+    
+    return {
+        "total_pnl": total_pnl,
+        "total_trades": total_trades,
+        "total_wins": total_wins,
+        "total_losses": total_losses,
+        "win_rate": round(total_wins / max(1, total_wins + total_losses) * 100, 2),
+        "recent_backtests": trades[:10],
+    }
+
+
+@api.get("/profile/paper-trading-stats")
+async def paper_trading_stats(user=Depends(get_current_user)):
+    """Get aggregated P&L from paper trading backtests."""
+    trades = await db.paper_trading_history.find(
+        {"user_id": user["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    total_pnl = round(sum(float(t.get("pnl", 0)) for t in trades), 2)
+    total_trades = sum(int(t.get("trades_count", 0)) for t in trades)
+    total_wins = sum(int(t.get("wins", 0)) for t in trades)
+    total_losses = sum(int(t.get("losses", 0)) for t in trades)
+    
+    return {
+        "total_pnl": total_pnl,
+        "total_trades": total_trades,
+        "total_wins": total_wins,
+        "total_losses": total_losses,
+        "win_rate": round(total_wins / max(1, total_wins + total_losses) * 100, 2),
+        "recent_backtests": trades[:10],
+    }
+
+
+@api.get("/profile/paper-trading-stats")
+async def paper_trading_stats(user=Depends(get_current_user)):
+    """Get aggregated P&L from paper trading backtests."""
+    trades = await db.paper_trading_history.find(
+        {"user_id": user["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    total_pnl = round(sum(float(t.get("pnl", 0)) for t in trades), 2)
+    total_trades = sum(int(t.get("trades_count", 0)) for t in trades)
+    total_wins = sum(int(t.get("wins", 0)) for t in trades)
+    total_losses = sum(int(t.get("losses", 0)) for t in trades)
+    
+    return {
+        "total_pnl": total_pnl,
+        "total_trades": total_trades,
+        "total_wins": total_wins,
+        "total_losses": total_losses,
+        "win_rate": round(total_wins / max(1, total_wins + total_losses) * 100, 2),
+        "recent_backtests": trades[:10],
+    }
+
+
 @api.get("/profile")
 async def get_profile(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     _, kite_status = await get_user_kite(user["id"])
+    paper_stats = await paper_trading_stats(user=user)
     return {
         "id": user["id"],
         "email": user["email"],
         "created_at": user["created_at"],
         **settings,
         "zerodha": kite_status,
+        "paper_trading_stats": paper_stats,
     }
 
 
@@ -1554,84 +2347,21 @@ async def change_password(req: ChangePasswordReq, user=Depends(get_current_user)
     return {"changed": True}
 
 
-# ============== Routes: AI Bot ==============
-SYSTEM_PROMPT = (
-    "You are QuantBot, an expert algorithmic trading assistant inside the QuantG platform. "
-    "Help the trader with: strategy ideas, indicator math, Python code for backtests, "
-    "risk management, market context for Indian equities (NSE/BSE), and explaining concepts. "
-    "Be concise, use bullet points, and when giving code, use Python with a `run(data)` function "
-    "where data is a list of {date, close}. NEVER give financial advice as guaranteed; always "
-    "remind the user that backtests don't guarantee future returns."
-)
-
-
-@api.post("/ai/chat")
-async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
-    # persist user msg
-    await db.ai_messages.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "session_id": req.session_id,
-        "role": "user",
-        "content": req.message,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    # load prior session for context
-    prior = await db.ai_messages.find(
-        {"user_id": user["id"], "session_id": req.session_id},
-        {"_id": 0},
-    ).sort("created_at", 1).to_list(50)
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"{user['id']}-{req.session_id}",
-        system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
-    # Re-feed history except the just-inserted message (we'll send that now)
-    for m in prior[:-1]:
-        if m["role"] == "user":
-            await chat.send_message(UserMessage(text=m["content"]))
-            # NOTE: this would double cost; instead we just send the latest message
-            break  # we don't actually replay; rely on lib's session
-
-    try:
-        reply: str = await chat.send_message(UserMessage(text=req.message))
-    except Exception as e:
-        logger.error(f"LLM error: {e}")
-        raise HTTPException(status_code=500, detail=f"AI error: {e}")
-
-    await db.ai_messages.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "session_id": req.session_id,
-        "role": "assistant",
-        "content": reply,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    return {"role": "assistant", "content": reply}
-
-
-@api.get("/ai/chat/{session_id}")
-async def ai_chat_history(session_id: str, user=Depends(get_current_user)):
-    rows = await db.ai_messages.find(
-        {"user_id": user["id"], "session_id": session_id},
-        {"_id": 0},
-    ).sort("created_at", 1).to_list(200)
-    return rows
-
-
 # ============== Boot ==============
 app.include_router(api)
+
+# Parse CORS origins properly - strip whitespace from comma-separated list
+cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()]
+if not cors_origins:
+    cors_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=False,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -1646,7 +2376,7 @@ async def startup():
         ("strategies", "user_id", {}),
         ("orders", [("user_id", 1), ("created_at", -1)], {}),
         ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
-        ("ai_messages", [("user_id", 1), ("session_id", 1)], {}),
+        ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
     ]
     for coll, key, opts in indexes:
         try:
@@ -1654,52 +2384,19 @@ async def startup():
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
 
+    # Seed default option strategies for any user with no strategies yet.
+    try:
+        async for user_row in db.users.find({}, {"id": 1}):
+            if await db.strategies.count_documents({"user_id": user_row["id"]}) == 0:
+                await seed_default_strategies_for_user(user_row["id"])
+    except Exception as e:
+        logger.warning(f"default strategy seeding skipped: {e}")
+
     # Background strategy runner — uses REAL Kite candles when user is connected,
     # falls back to MOCK 5-min intraday candles only when no broker session.
     # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
     async def _price_history(user_id: str, symbol: str, days: int = 60):
-        kite, _ = await get_user_kite(user_id)
-        sym_upper = symbol.upper()
-        # Index spot history (for options strategies on NIFTY/BANKNIFTY/SENSEX).
-        # Kite stores these under instrument_type=EQ on segment INDICES with the
-        # canonical names below — we use the options_helper map for consistency.
-        if kite and sym_upper in options_helper.INDEX_SPOT_SYMBOL:
-            try:
-                spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
-                # Find the index instrument token from the exchange-specific dump
-                instruments = kite.instruments(spot_exch)
-                idx_tok = None
-                for inst in instruments:
-                    if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
-                        idx_tok = int(inst["instrument_token"])
-                        break
-                if idx_tok:
-                    live_data = kite_helper.safe_historical(kite, idx_tok, days=min(days, 30), interval="5minute")
-                    if live_data and len(live_data) > 20:
-                        return live_data
-                    daily = kite_helper.safe_historical(kite, idx_tok, days=days, interval="day")
-                    if daily:
-                        return daily
-            except Exception as e:
-                logger.warning(f"index spot history failed for {sym_upper}: {e}")
-            # Fall through to mock if index lookup fails
-
-        if kite:
-            tok = kite_helper.instrument_token(kite, sym_upper)
-            if tok:
-                # Use 5-minute candles for live strategies (intraday-grade)
-                live_data = kite_helper.safe_historical(kite, tok, days=min(days, 30), interval="5minute")
-                if live_data and len(live_data) > 20:
-                    return live_data
-                # Fallback to daily candles if intraday unavailable
-                daily = kite_helper.safe_historical(kite, tok, days=days, interval="day")
-                if daily:
-                    return daily
-        # Final fallback: mock 5-min intraday walk (paper/backtest mode)
-        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None)
-        if not sym:
-            return []
-        return intraday_series(sym["base"], bars=250)
+        return await _fetch_strategy_history(user_id, symbol, days=days, interval="5minute")
 
     # Resolver for index option contracts — runner uses this when a strategy
     # has visual_config.options.enabled. Requires a live Kite session.
@@ -1715,20 +2412,34 @@ async def startup():
             expiry_offset_weeks=expiry_offset,
         )
 
+    app.state.tick_manager = RealtimeTickManager()
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
                                     app.state.runner_stop, _resolve_option)
     )
+    app.state.health_stop = asyncio.Event()
+    app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
     logger.info("QuantG API started")
 
 
 @app.on_event("shutdown")
 async def shutdown():
     try:
+        if getattr(app.state, "tick_manager", None):
+            app.state.tick_manager.stop()
+    except Exception:
+        pass
+    try:
         app.state.runner_stop.set()
         if app.state.runner_task:
             await asyncio.wait_for(app.state.runner_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.health_stop.set()
+        if app.state.health_task:
+            await asyncio.wait_for(app.state.health_task, timeout=3.0)
     except Exception:
         pass
     client.close()

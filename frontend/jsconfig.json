@@ -3,7 +3,11 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
+    },
+    "ignoreDeprecations": "6.0",
+    "allowJs": true,
+    "checkJs": false,
+    "jsx": "react-jsx"
   },
   "include": ["src"]
 }

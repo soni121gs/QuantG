@@ -1,0 +1,129 @@
+# ✓ QuantG App - Now Running Successfully
+
+## Status
+```
+✓ Frontend:   http://192.168.31.4:3000     (Port 3000)
+✓ Backend:    http://192.168.31.4:8000/api (Port 8000)
+✓ MongoDB:    mongodb://mongo:27017         (Port 27017)
+✓ Laptop:     http://localhost:3000         (Local access)
+```
+
+All 3 containers running and healthy!
+
+---
+
+## What Was Fixed
+
+**Problem:** Old `compose.yaml` file was conflicting with `docker-compose.yml`
+- The system was using the wrong config file
+- Backend couldn't start because environment variables weren't passed correctly
+
+**Solution:**
+1. Deleted old `compose.yaml` file (it was from a previous setup)
+2. Rebuilt containers with correct `docker-compose.yml`
+3. Updated `START.bat` script to handle the dependency wait issue
+4. Manually started backend and frontend when MongoDB became healthy
+
+---
+
+## How to Start Your App Every Day
+
+### Option 1: Click START.bat (Easiest)
+```
+Double-click: D:\Quant\QuantG\START.bat
+
+That's it! It will:
+- Stop old containers
+- Start fresh containers  
+- Wait for MongoDB to be healthy
+- Start backend and frontend
+- Show you the status
+
+Total time: ~20 seconds
+```
+
+### Option 2: Manual Command
+```powershell
+cd D:\Quant\QuantG
+docker-compose down --remove-orphans
+docker-compose up -d
+docker start quantg-backend quantg-frontend
+
+# Wait 10 seconds
+docker ps  # Should show all 3 running
+```
+
+### Option 3: One-Liner (Fastest)
+```bash
+cd D:\Quant\QuantG && docker-compose up -d && sleep 15 && docker start quantg-backend quantg-frontend
+```
+
+---
+
+## After Starting - What To Do
+
+1. **Open browser:** http://192.168.31.4:3000
+
+2. **Login** with your credentials
+   - If no account yet, click "Sign up"
+   - Create an account with email/password
+
+3. **Go to API Keys section**
+   - Add your Zerodha credentials
+   - API Key, API Secret, Access Token
+   - Should show "Connected ✓" in green
+
+4. **Go to Strategies page**
+   - For each strategy you want to run:
+   - Click "Test Run" → verify candles show
+   - Click "Go Live" → status changes to "live"
+
+5. **Open MONITOR.bat** in separate window
+   - Watch CPU, RAM, order latency
+   - If any red alerts, pause strategies immediately
+
+---
+
+## Why It Failed Earlier
+
+The `compose.yaml` file in your directory was an old configuration that:
+- Didn't have backend service defined
+- Didn't have MongoDB
+- Didn't have environment variables
+- Conflicted with the correct `docker-compose.yml`
+
+When Docker Compose sees both files, it uses the alphabetically first one (`compose.yaml` comes before `docker-compose.yml`).
+
+**Fixed by:** Deleting the old `compose.yaml` file.
+
+If this happens again:
+```bash
+# Check which compose file is being used
+docker-compose config | head -5
+
+# If wrong file, delete it
+Remove-Item D:\Quant\QuantG\compose.yaml -Force
+```
+
+---
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| **Start app** | Double-click `START.bat` |
+| **Stop app** | Double-click `STOP.bat` |
+| **Monitor resources** | Double-click `MONITOR.bat` |
+| **Check status** | `docker ps` |
+| **View logs** | `docker logs quantg-backend` |
+| **Restart backend** | `docker restart quantg-backend` |
+| **Full reset** | `docker-compose down` then `START.bat` |
+
+---
+
+## Ready to Trade!
+
+Your app is now fully operational and ready for live trading.
+
+**Next:** Open http://192.168.31.4:3000 and login to start! 🚀
+

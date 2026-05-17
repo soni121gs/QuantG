@@ -50,6 +50,8 @@ Run backend:
 uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 ```
 
+In the Python Editor, choose between the free local simulator and the new Backtrader engine for more advanced backtests.
+
 ### 2. Frontend
 ```bash
 cd ../frontend

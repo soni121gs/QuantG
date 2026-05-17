@@ -14,6 +14,8 @@ import {
   Menu,
   X,
   UserCircle,
+  TrendingUp,
+  AlertCircle,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -44,8 +46,10 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(new Date());
   const [pnl, setPnl] = useState(null);
+  const [portfolio, setPortfolio] = useState(null);
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [marketTrend, setMarketTrend] = useState(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -54,7 +58,10 @@ export default function Layout({ children }) {
 
   useEffect(() => {
     const fetch = () => {
-      api.get("/portfolio").then((r) => setPnl(r.data.total_pnl)).catch(() => {});
+      api.get("/portfolio").then((r) => {
+        setPnl(r.data.total_pnl);
+        setPortfolio(r.data);
+      }).catch(() => {});
       api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
     };
     fetch();
@@ -89,17 +96,17 @@ export default function Layout({ children }) {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 bg-[var(--qd-accent)] flex items-center justify-center">
-                <Activity size={14} className="text-white" strokeWidth={2.5} />
+              <div className="w-6 h-6 bg-gradient-to-br from-[var(--qd-accent)] to-[#00d9ff] flex items-center justify-center rounded-sm">
+                <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
               <span className="font-head font-bold tracking-tight text-white text-base">
-                QUANT<span className="text-[var(--qd-accent)]">G</span>
+                QUANT<span className="text-[var(--qd-accent)]">G</span> v2.0
               </span>
             </div>
             <div className="hidden md:flex items-center gap-2 text-xs">
               <span className="qd-live-dot" />
               <span className="font-mono uppercase tracking-wider text-[var(--qd-text-2)]">
-                {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
+                {isMarketOpen ? "🟢 MARKET OPEN" : "🔴 MARKET CLOSED"}
               </span>
             </div>
             {profile && (
@@ -107,19 +114,24 @@ export default function Layout({ children }) {
                 className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm ${
                   profile.paper_mode
                     ? "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)] border border-[var(--qd-warn)]"
-                    : "bg-[rgba(255,59,48,0.12)] text-[var(--qd-loss)] border border-[var(--qd-loss)]"
+                    : "bg-[rgba(76,255,0,0.12)] text-[#4cff00] border border-[#4cff00]"
                 }`}
                 data-testid="mode-badge"
                 title={profile.paper_mode ? "Paper mode — orders are simulated" : "LIVE — real money at risk"}
               >
-                {profile.paper_mode ? "PAPER" : "LIVE ●"}
+                {profile.paper_mode ? "📊 PAPER" : "🔴 LIVE"}
               </span>
             )}
           </div>
           <div className="flex items-center gap-3 md:gap-6">
             <div className="flex items-center gap-1.5 md:gap-2">
               <Wallet size={14} className="text-[var(--qd-text-2)] hidden md:block" />
-              <span className="font-mono text-[10px] md:text-xs text-[var(--qd-text-2)] uppercase tracking-wider">PnL</span>
+              <span
+                className="font-mono text-[10px] md:text-xs text-[var(--qd-text-2)] uppercase tracking-wider"
+                title={`${portfolio?.open_positions ?? 0} open positions`}
+              >
+                P&L
+              </span>
               <span
                 className={`font-mono text-xs md:text-sm font-semibold ${
                   (pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
@@ -152,7 +164,7 @@ export default function Layout({ children }) {
       <div className="flex flex-1 min-h-0">
         {/* Desktop Sidebar */}
         <aside
-          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[48px] self-start h-[calc(100vh-48px)]"
+          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[48px] self-start h-[calc(100vh-48px)] overflow-y-auto"
           data-testid="sidebar"
         >
           <nav className="flex flex-col p-2 gap-0.5">
@@ -174,8 +186,14 @@ export default function Layout({ children }) {
               </NavLink>
             ))}
           </nav>
-          <div className="mt-auto p-3 text-[10px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider absolute bottom-2">
-            v1.0 • Paper Trading
+          <div className="mt-auto p-3 text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)]">
+            <div className="flex items-center gap-1 mb-2">
+              <span className="w-2 h-2 bg-[var(--qd-accent)] rounded-full animate-pulse" />
+              Advanced Trading
+            </div>
+            <div className="text-[8px] text-[var(--qd-text-2)]">
+              v2.0 • Real-time • Live
+            </div>
           </div>
         </aside>
 
@@ -187,17 +205,17 @@ export default function Layout({ children }) {
             data-testid="drawer-overlay"
           >
             <aside
-              className="absolute left-0 top-0 bottom-0 w-64 bg-[#08080a] border-r border-[var(--qd-border)] p-3"
+              className="absolute left-0 top-0 bottom-0 w-64 bg-[#08080a] border-r border-[var(--qd-border)] p-3 flex flex-col"
               onClick={(e) => e.stopPropagation()}
               data-testid="mobile-drawer"
             >
               <div className="flex items-center justify-between mb-4 px-1">
-                <span className="font-head font-bold text-white">Menu</span>
+                <span className="font-head font-bold text-white">QuantG v2.0</span>
                 <button onClick={() => setDrawerOpen(false)} data-testid="close-drawer" className="text-white">
                   <X size={20} />
                 </button>
               </div>
-              <nav className="flex flex-col gap-1">
+              <nav className="flex flex-col gap-1 flex-1">
                 {NAV.map((n) => (
                   <NavLink
                     key={n.to}
@@ -217,6 +235,9 @@ export default function Layout({ children }) {
                   </NavLink>
                 ))}
               </nav>
+              <div className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
+                Advanced Trading Platform v2.0
+              </div>
             </aside>
           </div>
         )}
@@ -225,10 +246,13 @@ export default function Layout({ children }) {
         <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">
           {profile?.zerodha?.reason === "expired" && (
             <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 mb-4 flex items-center justify-between gap-3" data-testid="token-expired-banner">
-              <div className="text-sm text-[var(--qd-text-2)]">
-                <span className="text-[var(--qd-warn)] font-semibold">⚠ Zerodha session expired.</span> Re-connect on Broker Keys to resume live trading. Tokens expire at 6 AM IST.
+              <div className="flex items-center gap-2">
+                <AlertCircle size={16} className="text-[var(--qd-warn)]" />
+                <span className="text-sm text-[var(--qd-text-2)]">
+                  <span className="text-[var(--qd-warn)] font-semibold">⚠ Zerodha session expired.</span> Re-connect to resume live trading.
+                </span>
               </div>
-              <button onClick={() => navigate("/broker-keys")} className="bg-[var(--qd-warn)] text-black px-3 py-1.5 text-xs font-mono uppercase rounded-sm">Re-connect</button>
+              <button onClick={() => navigate("/broker-keys")} className="bg-[var(--qd-warn)] text-black px-3 py-1.5 text-xs font-mono uppercase rounded-sm whitespace-nowrap">Re-connect</button>
             </div>
           )}
           {children}
@@ -246,8 +270,8 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-mono uppercase tracking-wider ${
-                isActive ? "text-[var(--qd-accent)]" : "text-[var(--qd-text-2)]"
+              `flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+                isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }
           >

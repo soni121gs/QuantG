@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+tests
+.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

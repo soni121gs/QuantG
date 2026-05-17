@@ -1,0 +1,119 @@
+# QuantG Live Trading - 5-Minute Quick Start
+
+## Day 1: First Time Setup
+```bash
+# 1. Run this once to verify everything works
+cd D:\Quant\QuantG
+docker-compose down
+docker-compose up -d
+
+# Wait 10 seconds
+docker ps
+
+# 2. Open in browser
+http://192.168.31.4:3000
+
+# 3. Sign up or login
+# 4. Go to API Keys section
+# 5. Add Zerodha credentials
+# 6. Go to Strategies
+# 7. Create 1 test strategy
+# 8. Click "Test Run" - should show candles
+# 9. Click "Go Live" - should show "live" status
+# 10. Watch "Last scan" column - updates every 30 seconds
+```
+
+## Every Trading Day Morning
+```bash
+# Simply double-click this:
+D:\Quant\QuantG\START.bat
+
+# Opens browser to:
+http://192.168.31.4:3000
+
+# Then:
+# 1. Go to Strategies
+# 2. For each strategy, click "Test Run"
+# 3. Once test passes, click "Go Live"
+# 4. Open MONITOR.bat in new window to watch resources
+```
+
+## Every Day After Market Closes
+```bash
+# 1. Go to Strategies page
+# 2. Click "Pause" on all live strategies
+# 3. Double-click:
+D:\Quant\QuantG\STOP.bat
+```
+
+## During Trading Day - Watch These
+```
+Browser (http://192.168.31.4:3000/strategies):
+  ✓ "Last scan" updates every 30 seconds
+  ✓ Status shows "SCANNING" (green pulsing indicator)
+  ✓ "Signals fired" counter increases when trades happen
+
+MONITOR.bat:
+  ✓ Backend CPU < 50%
+  ✓ Backend RAM < 150 MB
+  ✓ MongoDB RAM < 150 MB
+```
+
+## Red Alerts - STOP IMMEDIATELY
+```
+❌ Backend CPU > 70%
+❌ Backend RAM > 150 MB
+❌ MongoDB RAM > 150 MB
+❌ Laptop free RAM < 400 MB
+❌ Order latency > 10 seconds
+
+ACTION: 
+  1. Go to browser
+  2. Click "Pause" on all strategies
+  3. Wait for resources to normalize
+  4. Restart backend: docker restart quantg-backend
+  5. Reduce number of strategies to 1-2
+```
+
+## Troubleshoot
+```
+Q: "Can't login"
+A: Check docker logs
+   docker logs quantg-backend | tail -20
+
+Q: "Zerodha disconnected"
+A: Go to API Keys, disconnect, re-enter credentials
+
+Q: "Orders failing"
+A: Check Zerodha connection, reduce strategies to 1
+
+Q: "Backend keeps crashing"
+A: You have too many strategies or laptop RAM full
+   Reduce to 1 strategy
+   Restart: docker-compose down && docker-compose up -d
+
+Q: "Laptop freezing"
+A: IMMEDIATELY: Pause all strategies
+   Then: Reduce number of strategies
+   Or: Upgrade laptop to 8GB RAM
+```
+
+## Your Limits
+```
+Hardware: 4GB RAM, 4 CPU cores
+Maximum strategies: 3 (recommended: 2)
+Tick interval: 30 seconds (don't reduce below 15s)
+Safe API calls: <100/minute (Zerodha limit)
+```
+
+## Files
+```
+START.bat      - Click every morning
+STOP.bat       - Click every evening  
+MONITOR.bat    - Click during trading to watch resources
+
+Full docs: README_LIVE_TRADING.md
+Tech docs: LIVE_TRADING_GUIDE.md
+```
+
+That's it! 🚀

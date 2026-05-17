@@ -1,0 +1,5 @@
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=quantg
+CORS_ORIGINS=*
+JWT_SECRET=sk-emergent-c9f7fFc3707322110B
+EMERGENT_LLM_KEY=sk-emergent-b6a9f3c8e1d7a25f48c93b6e8d1a7f5c2e9b4d8a6f3c1e7b9d2a5c8f4e1b6d9a

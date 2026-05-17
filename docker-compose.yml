@@ -1,0 +1,50 @@
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: quantg-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - quantg-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: quantg-backend
+    env_file: ./backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: quantg
+    ports:
+      - "0.0.0.0:8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - quantg-network
+
+  frontend:
+    build: ./frontend
+    container_name: quantg-frontend
+    ports:
+      - "0.0.0.0:3000:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - quantg-network
+
+volumes:
+  mongo-data:
+
+networks:
+  quantg-network:
+    driver: bridge

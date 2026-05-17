@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { Play, Save, Code2, TrendingUp } from "lucide-react";
+import { Play, Save, Code2, TrendingUp, SlidersHorizontal } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
@@ -41,6 +41,88 @@ const DEFAULT_OPTIONS = {
   expiry_offset: 0,
 };
 
+const SMA_ASSIGN_RE = /(short\s*,\s*long(?:\s*,\s*signals)?\s*=\s*)(\d+)\s*,\s*(\d+)(\s*,\s*\[\])?/;
+
+function analyzeStrategyCode(code, options, symbol) {
+  const sma = code.match(SMA_ASSIGN_RE);
+  const hasCrossAbove = /prev_s\s*<=\s*prev_l[\s\S]{0,160}s_avg\s*>\s*l_avg/.test(code);
+  const hasCrossBelow = /prev_s\s*>=\s*prev_l[\s\S]{0,160}s_avg\s*<\s*l_avg/.test(code);
+  const hasRsi = /\brsi\b/i.test(code);
+
+  const execution = options.enabled
+    ? optionExecutionText(options)
+    : `Trade ${symbol || "selected equity"} directly with the strategy signal.`;
+
+  if (sma && hasCrossAbove && hasCrossBelow) {
+    const shortWindow = Number(sma[2]);
+    const longWindow = Number(sma[3]);
+    return {
+      type: "sma",
+      title: "Moving-average crossover",
+      editable: true,
+      shortWindow,
+      longWindow,
+      signal: `Track ${shortWindow}-period SMA versus ${longWindow}-period SMA on closing price.`,
+      buyRule: `BUY when the ${shortWindow}-period SMA crosses above the ${longWindow}-period SMA.`,
+      sellRule: `SELL when the ${shortWindow}-period SMA crosses below the ${longWindow}-period SMA.`,
+      execution,
+    };
+  }
+
+  if (hasRsi) {
+    return {
+      type: "rsi",
+      title: "RSI-based custom strategy",
+      editable: false,
+      signal: "Uses RSI logic from the pasted Python code.",
+      buyRule: "BUY/SELL thresholds were found in custom code. Edit the Python for exact values.",
+      sellRule: "This translator can summarize RSI code now; editable RSI controls can be added next.",
+      execution,
+    };
+  }
+
+  return {
+    type: "custom",
+    title: "Custom Python strategy",
+    editable: false,
+    signal: "Runs your custom run(data) function on candle history.",
+    buyRule: "The app acts on signals returned as {'action': 'BUY'} from Python.",
+    sellRule: "The app acts on signals returned as {'action': 'SELL'} from Python.",
+    execution,
+  };
+}
+
+function optionExecutionText(options) {
+  const lotText = `${options.lots || 1} lot${Number(options.lots) === 1 ? "" : "s"}`;
+  if (options.strike_mode === "OTM_BUY") {
+    return `For ${options.underlying}, BUY signal buys an OTM Call and SELL signal buys an OTM Put, ${options.otm_points || 0} points from ATM, using ${lotText}.`;
+  }
+  if (options.strike_mode === "ATM_SELL") {
+    return `For ${options.underlying}, BUY signal writes an ATM Put and SELL signal writes an ATM Call, using ${lotText}.`;
+  }
+  return `For ${options.underlying}, BUY signal buys an ATM Call and SELL signal buys an ATM Put, using ${lotText}.`;
+}
+
+function updateSmaWindowInCode(code, key, value) {
+  const safe = Math.max(1, Number(value) || 1);
+  const match = code.match(SMA_ASSIGN_RE);
+  if (!match) return code;
+  const currentShort = Number(match[2]);
+  const currentLong = Number(match[3]);
+  const nextShort = key === "short" ? safe : currentShort;
+  const nextLong = key === "long" ? safe : currentLong;
+  return code.replace(SMA_ASSIGN_RE, (_full, prefix, _short, _long, suffix = "") => `${prefix}${nextShort}, ${nextLong}${suffix}`);
+}
+
+function formatDataSource(source) {
+  if (!source) return "—";
+  if (source.startsWith("zerodha-kite-5minute")) return "Zerodha 5m";
+  if (source.startsWith("zerodha-kite-day")) return "Zerodha day";
+  if (source.startsWith("mock-5minute")) return "Mock 5m";
+  if (source.startsWith("mock-day")) return "Mock day";
+  return source;
+}
+
 export default function PythonEditor() {
   const [params] = useSearchParams();
   const id = params.get("id");
@@ -53,6 +135,7 @@ export default function PythonEditor() {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [savedId, setSavedId] = useState(id || null);
+  const [engine, setEngine] = useState("local");
 
   useEffect(() => {
     if (!id) return;
@@ -70,6 +153,7 @@ export default function PythonEditor() {
   }, [id]);
 
   const lines = useMemo(() => code.split("\n").length, [code]);
+  const tradePlan = useMemo(() => analyzeStrategyCode(code, options, symbol), [code, options, symbol]);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -80,12 +164,13 @@ export default function PythonEditor() {
         days: +days,
         strategy_id: savedId,
         options: options.enabled ? options : undefined,
+        engine,
       });
       setResult(r.data);
     } catch (e) {
       toast.error(e.response?.data?.detail || "Backtest failed");
     } finally { setBusy(false); }
-  }, [code, symbol, days, savedId, options]);
+  }, [code, symbol, days, savedId, options, engine]);
 
   const save = async () => {
     try {
@@ -240,6 +325,11 @@ export default function PythonEditor() {
         </div>
 
         <div className="space-y-4">
+          <TradePlanCard
+            plan={tradePlan}
+            onSmaChange={(key, value) => setCode((current) => updateSmaWindowInCode(current, key, value))}
+          />
+
           <div className="qd-card p-4">
             <h3 className="font-head text-base text-white mb-3">Backtest Config</h3>
             {!options.enabled ? (
@@ -253,17 +343,25 @@ export default function PythonEditor() {
               </div>
             )}
             <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Days</label>
-            <input type="number" value={days} onChange={(e) => setDays(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="days-input" />
+            <input type="number" value={days} onChange={(e) => setDays(e.target.value)} className="w-full mt-1 mb-3 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="days-input" />
+            <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Engine</label>
+            <select value={engine} onChange={(e) => setEngine(e.target.value)} className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="engine-select">
+              <option value="local">Local Simulator (Fast)</option>
+              <option value="backtrader">Backtrader (Advanced)</option>
+            </select>
           </div>
 
           {result && (
             <div className="qd-card p-4" data-testid="backtest-summary">
-              <h3 className="font-head text-base text-white mb-3">Results {result.mode === "options" && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// OPTIONS</span>}</h3>
+              <h3 className="font-head text-base text-white mb-3">
+                Results {result.engine && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// {result.engine.toUpperCase()}</span>} {result.mode === "options" && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// OPTIONS</span>}
+              </h3>
               <SummaryRow label="Total PnL" value={`₹${result.summary.total_pnl.toLocaleString("en-IN")}`} tone={result.summary.total_pnl >= 0 ? "p" : "l"} />
               <SummaryRow label="Return" value={`${result.summary.return_pct}%`} tone={result.summary.return_pct >= 0 ? "p" : "l"} />
               <SummaryRow label="Trades" value={result.summary.trades} />
               <SummaryRow label="Win Rate" value={`${result.summary.win_rate}%`} />
               <SummaryRow label="Wins / Losses" value={`${result.summary.wins} / ${result.summary.losses}`} />
+              <SummaryRow label="Data" value={formatDataSource(result.data_source)} tone={result.data_live ? "p" : "l"} />
             </div>
           )}
         </div>
@@ -292,5 +390,60 @@ const SummaryRow = ({ label, value, tone }) => (
   <div className="flex justify-between py-1.5 border-b border-[var(--qd-border)] last:border-b-0">
     <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
     <span className={`font-mono text-sm ${tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-white"}`}>{value}</span>
+  </div>
+);
+
+const TradePlanCard = ({ plan, onSmaChange }) => (
+  <div className="qd-card p-4" data-testid="market-language-card">
+    <div className="flex items-center justify-between gap-2 mb-3">
+      <h3 className="font-head text-base text-white flex items-center gap-2">
+        <SlidersHorizontal size={16} className="text-[var(--qd-accent)]" />
+        Market Language
+      </h3>
+      <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{plan.title}</span>
+    </div>
+
+    {plan.editable && (
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <PlainInput label="Fast SMA" value={plan.shortWindow} onChange={(v) => onSmaChange("short", v)} testid="plain-fast-sma" />
+        <PlainInput label="Slow SMA" value={plan.longWindow} onChange={(v) => onSmaChange("long", v)} testid="plain-slow-sma" />
+      </div>
+    )}
+
+    <div className="space-y-2">
+      <PlanLine label="Signal" value={plan.signal} />
+      <PlanLine label="Entry" value={plan.buyRule} tone="p" />
+      <PlanLine label="Exit" value={plan.sellRule} tone="l" />
+      <PlanLine label="Execution" value={plan.execution} />
+    </div>
+
+    {!plan.editable && (
+      <div className="mt-3 border border-dashed border-[var(--qd-border)] p-2 text-[11px] font-mono text-[var(--qd-text-2)]">
+        Editable plain-language controls are available for recognized templates. This code still runs normally.
+      </div>
+    )}
+  </div>
+);
+
+const PlainInput = ({ label, value, onChange, testid }) => (
+  <label>
+    <span className="block font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">{label}</span>
+    <input
+      type="number"
+      min="1"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-2 py-2 text-sm text-white font-mono rounded-sm"
+      data-testid={testid}
+    />
+  </label>
+);
+
+const PlanLine = ({ label, value, tone }) => (
+  <div className="border-b border-[var(--qd-border)] last:border-b-0 pb-2 last:pb-0">
+    <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className={`mt-0.5 text-xs leading-relaxed ${
+      tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"
+    }`}>{value}</div>
   </div>
 );

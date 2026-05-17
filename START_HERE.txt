@@ -1,0 +1,91 @@
+╔════════════════════════════════════════════════════════╗
+║                                                        ║
+║         QuantG Live Trading Platform                  ║
+║         ✓ App is Now Running!                         ║
+║                                                        ║
+╚════════════════════════════════════════════════════════╝
+
+OPEN IN BROWSER NOW:
+  
+  http://192.168.31.4:3000
+  
+  (Or on laptop: http://localhost:3000)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EVERY MORNING - DO THIS:
+
+  1. Double-click: START.bat
+  2. Wait 20 seconds for startup
+  3. Open: http://192.168.31.4:3000
+  4. Login and go to API Keys
+  5. Add Zerodha credentials
+  6. Go to Strategies → Test Run → Go Live
+
+EVERY EVENING - DO THIS:
+
+  1. Go to Strategies
+  2. Click "Pause" on all live strategies
+  3. Double-click: STOP.bat
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DURING TRADING - WATCH:
+
+  • Browser (Strategies page):
+    ✓ "Last scan" updates every 30s
+    ✓ "Signals fired" counter increases
+    ✓ Status shows "SCANNING" (green pulse)
+
+  • MONITOR.bat window:
+    ✓ Backend CPU < 50%
+    ✓ Backend RAM < 150 MB
+    ✓ MongoDB RAM < 150 MB
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LIMITS (DO NOT EXCEED):
+
+  ❌ Maximum 3 strategies
+  ❌ CPU > 70% = PAUSE IMMEDIATELY
+  ❌ Backend RAM > 150 MB = PAUSE IMMEDIATELY
+  ❌ Never run while laptop is sleeping
+  ❌ Never leave market hours without monitoring
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TROUBLESHOOTING:
+
+  Q: App won't start?
+  A: Click START.bat again, wait 30 seconds
+
+  Q: Can't login?
+  A: Check API Keys → verify Zerodha connected
+
+  Q: Orders not executing?
+  A: Reduce strategies to 1, check internet
+
+  Q: Laptop freezing?
+  A: Pause all strategies immediately!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STATUS:
+
+  ✓ Frontend:   Running on port 3000
+  ✓ Backend:    Running on port 8000
+  ✓ Database:   MongoDB running on port 27017
+  ✓ Ready for LIVE TRADING
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GET HELP:
+  - Read: README_LIVE_TRADING.md (detailed guide)
+  - Read: QUICK_START.txt (quick reference)
+  - Read: LIVE_TRADING_GUIDE.md (technical details)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Happy Trading! 📈
+
+Your app is ready. Go to http://192.168.31.4:3000 now!
