@@ -194,6 +194,19 @@ class OrderReq(BaseModel):
     product: str = "MIS"
 
 
+class StrategyRuntimeSettingsReq(BaseModel):
+    max_lot: Optional[int] = 1
+    target_pct: Optional[float] = None
+    stoploss_pct: Optional[float] = None
+    trailing_sl_enabled: Optional[bool] = None
+    trail_trigger_pct: Optional[float] = None
+    trail_step_pct: Optional[float] = None
+    cooldown_minutes: Optional[int] = None
+    max_trades_day: Optional[int] = None
+    daily_loss_limit: Optional[float] = None
+    required_capital: Optional[float] = None
+
+
 class ProfileUpdateReq(BaseModel):
     name: Optional[str] = None
     default_qty: Optional[int] = None
@@ -1084,7 +1097,7 @@ async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any
     return await db.orders.find({
         "user_id": user_id,
         "source": {"$regex": f"strategy:{sid}"},
-        "status": "COMPLETE",
+        "status": {"$nin": ["CANCELLED", "REJECTED"]},
     }, {"_id": 0}).to_list(1000)
 
 
@@ -1139,7 +1152,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
     return {"closed_positions": results, "open_positions_found": len([v for v in net.values() if v != 0])}
 
 
-async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str) -> Optional[float]:
+async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True) -> Optional[float]:
     kite, _ = await get_user_kite(user_id)
     if kite:
         try:
@@ -1149,6 +1162,8 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str) -> O
                 return float(ltp_resp[key]["last_price"])
         except Exception:
             pass
+    if not allow_mock:
+        return None
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
     return live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else None
 
@@ -1388,19 +1403,6 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
 
 class ManualOrderReq(BaseModel):
     action: str  # BUY or SELL
-
-
-class StrategyRuntimeSettingsReq(BaseModel):
-    max_lot: Optional[int] = 1
-    target_pct: Optional[float] = None
-    stoploss_pct: Optional[float] = None
-    trailing_sl_enabled: Optional[bool] = None
-    trail_trigger_pct: Optional[float] = None
-    trail_step_pct: Optional[float] = None
-    cooldown_minutes: Optional[int] = None
-    max_trades_day: Optional[int] = None
-    daily_loss_limit: Optional[float] = None
-    required_capital: Optional[float] = None
 
 
 @api.post("/strategies/{sid}/manual-order")
@@ -1990,6 +1992,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             except Exception as e:
                 logger.warning(f"option LTP fetch failed for {opt_symbol}: {e}")
                 fill_price = price or 0.0
+            if fill_price <= 0:
+                raise HTTPException(status_code=400, detail=f"Live option LTP unavailable for {opt_symbol}; order blocked.")
             if strategy_id and opt_side == "BUY":
                 decision = option_ledger.try_open_position(
                     strategy_id=strategy_id,
@@ -2125,16 +2129,33 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     product = product or settings["default_product"] or "MIS"
 
     # Risk guard: max position size
-    live_ltp = await _current_ltp_for_symbol(user_id, symbol.upper(), "NSE") if not paper else None
+    live_ltp = await _current_ltp_for_symbol(user_id, symbol.upper(), "NSE", allow_mock=False) if not paper else None
+    if not paper and live_ltp is None:
+        raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {symbol.upper()}; order blocked.")
     fill_price_hint = price or live_ltp or live_price(sym["base"], SYMBOLS.index(sym))["price"]
     if qty * fill_price_hint > settings["max_position_size"]:
         raise HTTPException(status_code=400,
             detail=f"Order value INR {qty * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.")
 
     broker_order_id = None
+    ledger_opened = False
+    if strategy_id and side == "BUY":
+        decision = option_ledger.try_open_position(
+            strategy_id=strategy_id,
+            symbol=symbol.upper(),
+            option_type="EQ",
+            entry_price=float(fill_price_hint or 0),
+            quantity=1,
+        )
+        if not decision.accepted:
+            logger.info("strategy BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
+            raise HTTPException(status_code=409, detail=f"Strategy entry blocked: {decision.reason}")
+        ledger_opened = True
     if not paper:
         kite, _ = await get_user_kite(user_id)
         if not kite:
+            if ledger_opened:
+                option_ledger.release_failed_open(strategy_id)
             raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected. Connect on Broker Keys or flip to Paper.")
         try:
             res = kite_helper.place_live_order(
@@ -2149,6 +2170,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             )
             broker_order_id = res.get("order_id")
         except Exception as e:
+            if ledger_opened:
+                option_ledger.release_failed_open(strategy_id)
             raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
         fill_price = fill_price_hint  # actual fill comes via Kite later
     else:
@@ -2205,6 +2228,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 "created_at": doc["created_at"],
                 "strategy_id": strategy_id,
             })
+    if strategy_id and side == "SELL":
+        option_ledger.close_position(
+            strategy_id=strategy_id,
+            exit_price=float(fill_price or 0),
+            exit_reason=source,
+        )
     doc.pop("_id", None)
     doc.pop("user_id", None)
     return doc

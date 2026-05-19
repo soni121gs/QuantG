@@ -1,7 +1,7 @@
 # QuantG Version 6 Personal VPS Runbook
 
-Domain: `www.Quantgtrading.com`
-Root domain: `Quantgtrading.com`
+Domain: `www.quantgtrade.com`
+Root domain: `quantgtrade.com`
 VPS: Contabo `82.180.145.183`, 12 GB RAM, 100 GB NVMe
 
 This setup runs from anywhere through HTTPS. Your laptop/home WiFi is not part of the runtime path.
@@ -18,8 +18,8 @@ A  www  82.180.145.183
 Wait until both resolve:
 
 ```bash
-dig +short Quantgtrading.com
-dig +short www.Quantgtrading.com
+dig +short quantgtrade.com
+dig +short www.quantgtrade.com
 ```
 
 Both should show `82.180.145.183`.
@@ -47,7 +47,7 @@ MONGO_URL=mongodb://mongo:27017
 DB_NAME=quantg
 JWT_SECRET=replace-with-a-long-random-secret-and-never-change-it
 CREDENTIAL_ENCRYPTION_KEY=replace-with-a-second-long-random-secret-and-never-change-it
-CORS_ORIGINS=https://www.Quantgtrading.com,https://Quantgtrading.com,http://82.180.145.183
+CORS_ORIGINS=https://www.quantgtrade.com,https://quantgtrade.com,http://82.180.145.183
 SIGNAL_CONFIDENCE_MIN=45
 OPTION_LEDGER_PATH=/data/runtime_state.sqlite3
 ```
@@ -74,7 +74,7 @@ Do not delete this volume during normal updates.
 Open:
 
 ```text
-https://www.Quantgtrading.com
+https://www.quantgtrade.com
 ```
 
 Caddy will issue the SSL certificate automatically once DNS points to the VPS and ports `80/443` are open.
@@ -84,7 +84,7 @@ Caddy will issue the SSL certificate automatically once DNS points to the VPS an
 In Kite Developer Console, set redirect URL to:
 
 ```text
-https://www.Quantgtrading.com/broker-keys?status=success
+https://www.quantgtrade.com/broker-keys?status=success
 ```
 
 Zerodha access tokens expire daily. Reconnect each trading morning before live trading.
@@ -140,7 +140,7 @@ docker exec quantg-mongo mongorestore --archive=/tmp/quantg.archive --drop
 Inside the app, open:
 
 ```text
-https://www.Quantgtrading.com/ops
+https://www.quantgtrade.com/ops
 ```
 
 It can:

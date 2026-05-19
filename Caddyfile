@@ -1,4 +1,4 @@
-www.quantgtrading.com, quantgtrading.com {
+www.quantgtrade.com, quantgtrade.com {
     encode gzip zstd
 
     header {
