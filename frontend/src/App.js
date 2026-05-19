@@ -14,14 +14,17 @@ import AIBot from "./pages/AIBot";
 import Orders from "./pages/Orders";
 import Positions from "./pages/Positions";
 import Profile from "./pages/Profile";
+import OpsConsole from "./pages/OpsConsole";
+import ZerodhaCallback from "./pages/ZerodhaCallback";
 import InstallPWA from "./components/InstallPWA";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { Toaster } from "sonner";
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen bg-[var(--qd-bg)] flex items-center justify-center text-[var(--qd-text-2)] font-mono text-xs">Loading...</div>;
   if (!user) return <Navigate to="/login" replace />;
-  return <Layout>{children}</Layout>;
+  return <Layout><ErrorBoundary>{children}</ErrorBoundary></Layout>;
 };
 
 const PublicOnly = ({ children }) => {
@@ -40,6 +43,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/login" element={<PublicOnly><Auth mode="login" /></PublicOnly>} />
           <Route path="/signup" element={<PublicOnly><Auth mode="register" /></PublicOnly>} />
+          <Route path="/zerodha-callback" element={<ZerodhaCallback />} />
           <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
           <Route path="/strategies" element={<Protected><Strategies /></Protected>} />
           <Route path="/python" element={<Protected><PythonEditor /></Protected>} />
@@ -49,6 +53,7 @@ export default function App() {
           <Route path="/positions" element={<Protected><Positions /></Protected>} />
           <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
           <Route path="/profile" element={<Protected><Profile /></Protected>} />
+          <Route path="/ops" element={<Protected><OpsConsole /></Protected>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>

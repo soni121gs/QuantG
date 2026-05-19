@@ -11,7 +11,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 DEMO = {"email": "demo@quantdesk.io", "password": "demo1234"}
 
 

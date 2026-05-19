@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 
 from safe_exec import safe_run_strategy
+from market_protection import MarketTrendAnalyzer, FakeSignalFilter
 
 logger = logging.getLogger("quantg.runner")
 
@@ -30,6 +31,7 @@ TICK_SECONDS = 30
 LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
 
 
 async def _sleep_or_stop(stop_event: asyncio.Event, seconds: int) -> None:
@@ -46,6 +48,26 @@ def _safe_run(code: str, data: List[dict]) -> List[dict]:
     except Exception as e:
         logger.warning(f"strategy code error: {e}")
         return []
+
+
+def _validate_signal(signal: Dict[str, Any], data: List[dict]) -> Dict[str, Any]:
+    try:
+        trend = MarketTrendAnalyzer.analyze(data, lookback=min(50, max(20, len(data))))
+        validation = FakeSignalFilter.validate(signal, data, trend)
+        validation["threshold"] = SIGNAL_CONFIDENCE_MIN
+        validation["trend"] = trend
+        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= SIGNAL_CONFIDENCE_MIN
+        return validation
+    except Exception as e:
+        logger.warning(f"signal validation failed: {e}")
+        return {
+            "is_valid": False,
+            "confidence": 0,
+            "threshold": SIGNAL_CONFIDENCE_MIN,
+            "reasons": [f"Validation failed: {e}"],
+            "filtered": True,
+            "trend": {},
+        }
 
 
 async def _acquire_lock(db) -> bool:
@@ -193,6 +215,22 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set, "last_signals_count": signals_count},
                                                     "$inc": inc_set})
+                    continue
+                signal_validation = _validate_signal(last_sig, data)
+                if not signal_validation.get("is_valid"):
+                    reason = "; ".join(signal_validation.get("reasons") or [])
+                    await db.strategies.update_one(
+                        {"id": s["id"]},
+                        {"$set": {**eval_set,
+                                  "last_signals_count": signals_count,
+                                  "last_signal_action": action,
+                                  "last_error": (
+                                      f"Signal filtered: confidence {signal_validation.get('confidence')} "
+                                      f"< {signal_validation.get('threshold')}. {reason}"
+                                  ),
+                                  "last_signal_validation": signal_validation},
+                         "$inc": inc_set},
+                    )
                     continue
                 # Determine if this strategy trades OPTIONS instead of equity
                 opt_cfg = (vc or {}).get("options") or {}

@@ -1,8 +1,16 @@
 import axios from "axios";
 
+const normalizeApiBase = (value) => {
+  if (!value) return null;
+  const trimmed = value.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+};
+
 export const API =
   process.env.REACT_APP_API_BASE ||
-  `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`;
+  normalizeApiBase(process.env.REACT_APP_API_URL) ||
+  normalizeApiBase(process.env.REACT_APP_BACKEND_URL) ||
+  "http://localhost:8000/api";
 
 export const api = axios.create({ baseURL: API });
 

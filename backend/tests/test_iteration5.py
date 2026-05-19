@@ -3,7 +3,7 @@ import os
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://bottrader-pro-4.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 DEMO = {"email": "demo@quantdesk.io", "password": "demo1234"}
 
@@ -11,7 +11,10 @@ DEMO = {"email": "demo@quantdesk.io", "password": "demo1234"}
 @pytest.fixture(scope="module")
 def token():
     r = requests.post(f"{API}/auth/login", json=DEMO, timeout=15)
-    assert r.status_code == 200, r.text
+    if r.status_code != 200:
+        rr = requests.post(f"{API}/auth/register", json={**DEMO, "name": "Demo"}, timeout=15)
+        assert rr.status_code in (200, 201), rr.text
+        return rr.json()["access_token"]
     return r.json()["access_token"]
 
 

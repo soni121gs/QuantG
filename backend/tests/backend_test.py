@@ -5,7 +5,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://bottrader-pro-4.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 
 DEMO_EMAIL = "demo@quantdesk.io"
@@ -69,24 +69,24 @@ def test_broker_keys_crud(auth_headers):
 
 
 # ---- Market ----
-def test_watchlist():
-    r = requests.get(f"{API}/market/watchlist", timeout=10)
+def test_watchlist(auth_headers):
+    r = requests.get(f"{API}/market/watchlist", headers=auth_headers, timeout=10)
     assert r.status_code == 200
     data = r.json()
-    assert len(data) == 12
+    assert len(data) >= 12
     assert all("price" in d for d in data)
 
 
-def test_quote():
-    r = requests.get(f"{API}/market/quote/RELIANCE", timeout=10)
+def test_quote(auth_headers):
+    r = requests.get(f"{API}/market/quote/RELIANCE", headers=auth_headers, timeout=10)
     assert r.status_code == 200
     data = r.json()
     assert data["symbol"] == "RELIANCE"
     assert len(data["series"]) > 0
 
 
-def test_quote_404():
-    r = requests.get(f"{API}/market/quote/UNKNOWN", timeout=10)
+def test_quote_404(auth_headers):
+    r = requests.get(f"{API}/market/quote/UNKNOWN", headers=auth_headers, timeout=10)
     assert r.status_code == 404
 
 

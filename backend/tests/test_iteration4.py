@@ -13,7 +13,7 @@ import inspect
 import requests
 import pytest
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 EMAIL = "demo@quantdesk.io"
 PASSWORD = "demo1234"
 
@@ -23,7 +23,14 @@ PASSWORD = "demo1234"
 def token() -> str:
     r = requests.post(f"{BASE_URL}/api/auth/login",
                       json={"email": EMAIL, "password": PASSWORD}, timeout=15)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
+    if r.status_code != 200:
+        rr = requests.post(
+            f"{BASE_URL}/api/auth/register",
+            json={"email": EMAIL, "password": PASSWORD, "name": "Demo"},
+            timeout=15,
+        )
+        assert rr.status_code in (200, 201), rr.text
+        return rr.json()["access_token"]
     return r.json()["access_token"]
 
 
@@ -44,7 +51,7 @@ class TestReadiness:
         assert "market_open" in data and isinstance(data["market_open"], bool)
         assert "checks" in data and isinstance(data["checks"], list)
         ids = [c["id"] for c in data["checks"]]
-        expected = {"broker_keys", "kite_session", "funds", "risk_limits", "mode", "market_hours"}
+        expected = {"broker_keys", "kite_session", "funds", "risk_limits", "market_hours", "tick_feed"}
         assert expected.issubset(set(ids)), f"missing checks: {expected - set(ids)}"
 
     def test_readiness_each_check_has_required_fields(self, auth):

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { User, Shield, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
@@ -258,7 +259,16 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
           </div>
         )}
         <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2.5 text-xs font-mono uppercase rounded-sm text-white" data-testid="cancel-readiness">Cancel</button>
+          <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2.5 text-xs font-mono uppercase rounded-sm text-white" data-testid="cancel-readiness">Stay Paper</button>
+          {!allOk && (
+            <Link
+              to="/broker-keys"
+              onClick={onClose}
+              className="flex-1 border border-[var(--qd-warn)] text-[var(--qd-warn)] py-2.5 text-xs font-mono uppercase rounded-sm text-center"
+            >
+              Broker Keys
+            </Link>
+          )}
           <button
             onClick={onConfirm}
             disabled={!allOk}

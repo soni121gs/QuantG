@@ -10,6 +10,7 @@ import uuid
 import asyncio
 import secrets as _secrets
 import hashlib
+import base64
 import math
 import logging
 from datetime import datetime, timezone, timedelta
@@ -17,6 +18,7 @@ from typing import List, Optional, Dict, Any
 
 import bcrypt
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -27,6 +29,9 @@ import kite_helper
 import options_helper
 import backtrader_runner
 import strategy_runner
+from option_state_ledger import OptionStateLedger
+from market_protection import MarketTrendAnalyzer, FakeSignalFilter
+from daily_strategy_reporter import DailyStrategyReporter
 from realtime_ticks import RealtimeTickManager
 from safe_exec import safe_run_strategy
 
@@ -44,6 +49,7 @@ if len(JWT_SECRET.encode()) < 32:
     JWT_SECRET = hashlib.sha256(JWT_SECRET.encode()).hexdigest()
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
+SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
 
 app = FastAPI(title="QuantG Algo Trading API")
 api = APIRouter(prefix="/api")
@@ -51,6 +57,47 @@ bearer = HTTPBearer(auto_error=False)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("quantdesk")
+
+OPTION_LEDGER_PATH = os.environ.get("OPTION_LEDGER_PATH") or str(ROOT_DIR / "runtime_state.sqlite3")
+option_ledger = OptionStateLedger(
+    OPTION_LEDGER_PATH,
+    pool_size=int(os.environ.get("OPTION_LEDGER_POOL_SIZE", "4")),
+)
+
+
+def _fernet() -> Fernet:
+    raw_key = os.environ.get("CREDENTIAL_ENCRYPTION_KEY") or JWT_SECRET
+    if raw_key.startswith("gAAAA"):
+        raw_key = JWT_SECRET
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw_key.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_secret(value: Optional[str]) -> Optional[str]:
+    if value in (None, ""):
+        return value
+    return "enc:" + _fernet().encrypt(value.encode()).decode()
+
+
+def decrypt_secret(value: Optional[str]) -> Optional[str]:
+    if value in (None, ""):
+        return value
+    if not isinstance(value, str) or not value.startswith("enc:"):
+        return value
+    try:
+        return _fernet().decrypt(value[4:].encode()).decode()
+    except InvalidToken:
+        logger.warning("Unable to decrypt stored credential; encryption key may have changed.")
+        return None
+
+
+def _mask_secret(value: Optional[str], head: int = 4, tail: int = 4) -> str:
+    if not value:
+        return "not saved"
+    if len(value) <= head + tail:
+        return "*" * len(value)
+    suffix = value[-tail:] if tail else ""
+    return value[:head] + "*" * max(0, len(value) - head - tail) + suffix
 
 
 # ============== Models ==============
@@ -99,6 +146,7 @@ class StrategyReq(BaseModel):
     kind: str  # "python" | "visual"
     python_code: Optional[str] = None
     visual_config: Optional[Dict[str, Any]] = None
+    asset_class: Optional[str] = None
     status: str = "draft"  # draft | live | paused
 
 
@@ -109,6 +157,7 @@ class StrategyOut(BaseModel):
     kind: str
     python_code: Optional[str] = None
     visual_config: Optional[Dict[str, Any]] = None
+    asset_class: str = "equity"
     status: str
     created_at: str
     last_pnl: Optional[float] = None
@@ -162,6 +211,10 @@ class ChangePasswordReq(BaseModel):
 class KiteExchangeReq(BaseModel):
     request_token: str
     broker: str = "zerodha"
+
+
+class OpsActionReq(BaseModel):
+    note: Optional[str] = None
 
 
 class ChatReq(BaseModel):
@@ -558,14 +611,16 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
 @api.post("/broker/keys", response_model=BrokerKeyOut)
 async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
     # upsert per user+broker
+    existing = await db.broker_keys.find_one({"user_id": user["id"], "broker": req.broker})
     doc = {
-        "id": str(uuid.uuid4()),
+        "id": (existing or {}).get("id", str(uuid.uuid4())),
         "user_id": user["id"],
         "broker": req.broker,
-        "api_key": req.api_key,
-        "api_secret": req.api_secret,
+        "api_key": encrypt_secret(req.api_key),
+        "api_secret": encrypt_secret(req.api_secret),
         "user_id_at_broker": req.user_id_at_broker,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": (existing or {}).get("created_at", datetime.now(timezone.utc).isoformat()),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": req.broker},
@@ -575,7 +630,7 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
     return BrokerKeyOut(
         id=doc["id"],
         broker=doc["broker"],
-        api_key_masked=req.api_key[:4] + "•" * max(0, len(req.api_key) - 8) + req.api_key[-4:],
+        api_key_masked=_mask_secret(req.api_key),
         user_id_at_broker=req.user_id_at_broker,
         created_at=doc["created_at"],
     )
@@ -586,10 +641,10 @@ async def list_broker_keys(user=Depends(get_current_user)):
     rows = await db.broker_keys.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     out = []
     for r in rows:
-        k = r["api_key"]
+        k = decrypt_secret(r.get("api_key"))
         out.append(BrokerKeyOut(
             id=r["id"], broker=r["broker"],
-            api_key_masked=k[:4] + "•" * max(0, len(k) - 8) + k[-4:],
+            api_key_masked=_mask_secret(k),
             user_id_at_broker=r.get("user_id_at_broker"),
             created_at=r["created_at"],
         ))
@@ -932,6 +987,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "description": template["description"],
         "kind": "python",
         "python_code": template["python_code"],
+        "asset_class": "options",
         "visual_config": {
             "options": {
                 "enabled": True,
@@ -951,6 +1007,25 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
     }
 
 
+def _strategy_asset_class(row: Dict[str, Any]) -> str:
+    explicit = (row.get("asset_class") or "").lower()
+    if explicit in ("equity", "options", "futures"):
+        return explicit
+    visual_config = row.get("visual_config") or {}
+    options_config = visual_config.get("options") or {}
+    if options_config.get("enabled"):
+        return "options"
+    return "equity"
+
+
+def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
+    clean = dict(row)
+    clean.pop("_id", None)
+    clean.pop("user_id", None)
+    clean["asset_class"] = _strategy_asset_class(clean)
+    return StrategyOut(**clean)
+
+
 async def seed_default_strategies_for_user(user_id: str) -> None:
     if await db.strategies.count_documents({"user_id": user_id}) > 0:
         return
@@ -967,6 +1042,37 @@ async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
         return None
     m = re.search(r"strategy:([0-9a-fA-F\-]+)", source)
     return m.group(1) if m else None
+
+
+def _ledger_pct(value: Any, default: float) -> float:
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return default
+    return pct / 100.0 if pct > 1 else pct
+
+
+def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
+    visual_config = row.get("visual_config") or {}
+    risk = visual_config.get("risk") or {}
+    options_config = visual_config.get("options") or {}
+    required_capital = risk.get("required_capital")
+    if required_capital is None:
+        lots = max(1, int(options_config.get("lots") or 1))
+        required_capital = float(options_config.get("required_capital") or 0) * lots
+    option_ledger.upsert_strategy_state(
+        row["id"],
+        max_lots=1,
+        target_pct=_ledger_pct(risk.get("target_pct", risk.get("take_profit_pct")), DEFAULT_STRATEGY_RISK["take_profit_pct"]),
+        stoploss_pct=_ledger_pct(risk.get("stoploss_pct", risk.get("stop_loss_pct")), DEFAULT_STRATEGY_RISK["stop_loss_pct"]),
+        trailing_sl_enabled=bool(risk.get("trailing_sl_enabled", True)),
+        trail_trigger_pct=_ledger_pct(risk.get("trail_trigger_pct"), 0.20),
+        trail_step_pct=_ledger_pct(risk.get("trail_step_pct"), 0.10),
+        cooldown_minutes=int(risk.get("cooldown_minutes") or 5),
+        max_trades_day=int(risk.get("max_trades_day") or 3),
+        required_capital=float(required_capital or 0),
+        daily_loss_limit=float(risk.get("daily_loss_limit") or 0),
+    )
 
 
 async def _get_strategy_risk(user_id: str, sid: str) -> Dict[str, Any]:
@@ -1155,19 +1261,20 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
         "kind": req.kind,
         "python_code": req.python_code or (DEFAULT_PYTHON if req.kind == "python" else None),
         "visual_config": req.visual_config,
+        "asset_class": req.asset_class or ("options" if ((req.visual_config or {}).get("options") or {}).get("enabled") else "equity"),
         "status": req.status,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_pnl": None,
     }
     await db.strategies.insert_one(doc)
-    doc.pop("user_id", None)
-    return StrategyOut(**doc)
+    _sync_option_ledger_strategy(doc)
+    return _strategy_out(doc)
 
 
 @api.get("/strategies", response_model=List[StrategyOut])
 async def list_strategies(user=Depends(get_current_user)):
     rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    return [StrategyOut(**r) for r in rows]
+    return [_strategy_out(r) for r in rows]
 
 
 @api.post("/strategies/seed-defaults")
@@ -1181,17 +1288,54 @@ async def get_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return StrategyOut(**row)
+    _sync_option_ledger_strategy(row)
+    return _strategy_out(row)
+
+
+@api.get("/strategies/{sid}/daily-report")
+async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    orders = await db.orders.find(
+        {"user_id": user["id"], "source": {"$regex": f"strategy:{sid}"}},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(100)
+    visual_config = row.get("visual_config") or {}
+    options_config = visual_config.get("options") or {}
+    underlying = options_config.get("underlying") or visual_config.get("symbol") or "NIFTY"
+    market = await _fetch_strategy_history(user["id"], underlying, days=20, interval="day")
+    candles = market.get("data") or []
+    closes = [float(c.get("close", 0)) for c in candles if c.get("close") is not None]
+    if len(closes) >= 2:
+        change = closes[-1] - closes[0]
+        trend = "BULLISH" if change > 0 else "BEARISH" if change < 0 else "NEUTRAL"
+        atr = sum(abs(closes[i] - closes[i - 1]) for i in range(1, len(closes))) / max(1, len(closes) - 1)
+    else:
+        trend = "NEUTRAL"
+        atr = 0
+    report = DailyStrategyReporter.generate_daily_report(
+        strategy_id=sid,
+        strategy_name=row.get("name", "Strategy"),
+        underlying=underlying,
+        recent_trades=orders,
+        market_trend_analysis={"trend": trend, "rsi": 50, "atr": atr, "reversal_risk": 0.35},
+    )
+    report["data_source"] = market.get("source")
+    return report
 
 
 @api.put("/strategies/{sid}", response_model=StrategyOut)
 async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
+    if "asset_class" not in update and "visual_config" in update:
+        update["asset_class"] = "options" if ((update["visual_config"] or {}).get("options") or {}).get("enabled") else "equity"
     await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update})
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return StrategyOut(**row)
+    _sync_option_ledger_strategy(row)
+    return _strategy_out(row)
 
 
 @api.delete("/strategies/{sid}")
@@ -1210,8 +1354,53 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     return {"status": new_status}
 
 
+@api.put("/strategies/{sid}/runtime-settings")
+async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSettingsReq, user=Depends(get_current_user)):
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    visual_config = row.get("visual_config") or {}
+    risk = visual_config.get("risk") or {}
+    mapping = {
+        "target_pct": req.target_pct,
+        "stoploss_pct": req.stoploss_pct,
+        "trailing_sl_enabled": req.trailing_sl_enabled,
+        "trail_trigger_pct": req.trail_trigger_pct,
+        "trail_step_pct": req.trail_step_pct,
+        "cooldown_minutes": req.cooldown_minutes,
+        "max_trades_day": req.max_trades_day,
+        "daily_loss_limit": req.daily_loss_limit,
+        "required_capital": req.required_capital,
+    }
+    for key, value in mapping.items():
+        if value is not None:
+            risk[key] = value
+    risk["max_lot"] = 1
+    visual_config["risk"] = risk
+    await db.strategies.update_one(
+        {"id": sid, "user_id": user["id"]},
+        {"$set": {"visual_config": visual_config}},
+    )
+    row["visual_config"] = visual_config
+    _sync_option_ledger_strategy(row)
+    return {"ok": True, "max_lot": 1, "risk": risk}
+
+
 class ManualOrderReq(BaseModel):
     action: str  # BUY or SELL
+
+
+class StrategyRuntimeSettingsReq(BaseModel):
+    max_lot: Optional[int] = 1
+    target_pct: Optional[float] = None
+    stoploss_pct: Optional[float] = None
+    trailing_sl_enabled: Optional[bool] = None
+    trail_trigger_pct: Optional[float] = None
+    trail_step_pct: Optional[float] = None
+    cooldown_minutes: Optional[int] = None
+    max_trades_day: Optional[int] = None
+    daily_loss_limit: Optional[float] = None
+    required_capital: Optional[float] = None
 
 
 @api.post("/strategies/{sid}/manual-order")
@@ -1349,64 +1538,72 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     order_result = None
     placed_error = None
     option_contract_used = None
+    signal_validation = None
     if signals:
         last_sig = signals[-1]
         action = (last_sig.get("action") or "").upper()
         if action in ("BUY", "SELL"):
-            settings = await get_user_settings(user["id"])
-            if not history.get("is_live", False) and not settings.get("paper_mode", True):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Live execution blocked: candle source is mock. Connect Kite or switch to paper mode.",
+            signal_validation = _validate_trade_signal(last_sig, data)
+            if not signal_validation.get("is_valid"):
+                placed_error = (
+                    f"Signal filtered: confidence {signal_validation.get('confidence')} "
+                    f"< {signal_validation.get('threshold')}. "
+                    f"{'; '.join(signal_validation.get('reasons') or [])}"
                 )
-            try:
-                if options_mode:
-                    if not kite:
-                        raise HTTPException(status_code=400, detail="Options test-run requires a connected Zerodha session.")
-                    option_contract_used = options_helper.resolve_for_signal(
-                        kite,
-                        underlying=symbol,
-                        signal_action=action,
-                        strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
-                        otm_points=int(opt_cfg.get("otm_points") or 0),
-                        expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+            else:
+                settings = await get_user_settings(user["id"])
+                if not history.get("is_live", False) and not settings.get("paper_mode", True):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Live execution blocked: candle source is mock. Connect Kite or switch to paper mode.",
                     )
-                    if not option_contract_used:
-                        raise HTTPException(status_code=400, detail="Could not resolve option contract — markets may be closed or instruments unavailable.")
-                    order_result = await _place_order_core(
-                        user_id=user["id"], symbol=symbol, side=action,
-                        qty=int(opt_cfg.get("lots") or 1),
-                        order_type="MARKET", product=None,
-                        source=f"test-run:{sid}",
-                        option_contract=option_contract_used,
+                try:
+                    if options_mode:
+                        if not kite:
+                            raise HTTPException(status_code=400, detail="Options test-run requires a connected Zerodha session.")
+                        option_contract_used = options_helper.resolve_for_signal(
+                            kite,
+                            underlying=symbol,
+                            signal_action=action,
+                            strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
+                            otm_points=int(opt_cfg.get("otm_points") or 0),
+                            expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+                        )
+                        if not option_contract_used:
+                            raise HTTPException(status_code=400, detail="Could not resolve option contract - markets may be closed or instruments unavailable.")
+                        order_result = await _place_order_core(
+                            user_id=user["id"], symbol=symbol, side=action,
+                            qty=int(opt_cfg.get("lots") or 1),
+                            order_type="MARKET", product=None,
+                            source=f"test-run:{sid}",
+                            option_contract=option_contract_used,
+                        )
+                    else:
+                        order_result = await _place_order_core(
+                            user_id=user["id"],
+                            symbol=symbol,
+                            side=action,
+                            qty=None,
+                            order_type="MARKET",
+                            product=None,
+                            source=f"test-run:{sid}",
+                        )
+                    await db.strategies.update_one(
+                        {"id": sid},
+                        {"$set": {
+                            "last_signal_at": datetime.now(timezone.utc).isoformat(),
+                            "last_signal_action": action,
+                            "last_signals_count": len(signals),
+                            "last_fired_signal_date": last_sig.get("date", ""),
+                            "last_data_source": source_label,
+                            "last_data_live": bool(history.get("is_live")),
+                        },
+                         "$inc": {"signals_fired": 1, "evaluations": 1}},
                     )
-                else:
-                    order_result = await _place_order_core(
-                        user_id=user["id"],
-                        symbol=symbol,
-                        side=action,
-                        qty=None,
-                        order_type="MARKET",
-                        product=None,
-                        source=f"test-run:{sid}",
-                    )
-                # Update strategy telemetry so UI reflects the fire
-                await db.strategies.update_one(
-                    {"id": sid},
-                    {"$set": {
-                        "last_signal_at": datetime.now(timezone.utc).isoformat(),
-                        "last_signal_action": action,
-                        "last_signals_count": len(signals),
-                        "last_fired_signal_date": last_sig.get("date", ""),
-                        "last_data_source": source_label,
-                        "last_data_live": bool(history.get("is_live")),
-                    },
-                     "$inc": {"signals_fired": 1, "evaluations": 1}},
-                )
-            except HTTPException as e:
-                placed_error = e.detail
-            except Exception as e:
-                placed_error = str(e)
+                except HTTPException as e:
+                    placed_error = e.detail
+                except Exception as e:
+                    placed_error = str(e)
 
     return {
         "ok": True,
@@ -1419,6 +1616,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         "last_candle": data[-1],
         "last_5_closes": [d.get("close") for d in data[-5:]],
         "signals": signals,
+        "signal_validation": signal_validation,
         "option_contract": option_contract_used,
         "order_placed": order_result,
         "order_error": placed_error,
@@ -1428,6 +1626,27 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
 def _safe_run_python(code: str, data: List[dict]) -> List[dict]:
     """Run user strategy via AST-validated sandbox (see safe_exec.py)."""
     return safe_run_strategy(code, data)
+
+
+def _validate_trade_signal(signal: Dict[str, Any], data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Score the latest signal against trend, candle confirmation, and whipsaw risk."""
+    try:
+        trend = MarketTrendAnalyzer.analyze(data, lookback=min(50, max(20, len(data))))
+        validation = FakeSignalFilter.validate(signal, data, trend)
+        validation["threshold"] = SIGNAL_CONFIDENCE_MIN
+        validation["trend"] = trend
+        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= SIGNAL_CONFIDENCE_MIN
+        return validation
+    except Exception as e:
+        logger.warning(f"signal validation failed: {e}")
+        return {
+            "is_valid": False,
+            "confidence": 0,
+            "threshold": SIGNAL_CONFIDENCE_MIN,
+            "reasons": [f"Validation failed: {e}"],
+            "filtered": True,
+            "trend": {},
+        }
 
 
 # ============== Options preview (UI helper) ==============
@@ -1705,6 +1924,13 @@ def _simulate_paper_brokerage(fill_price: float, quantity: int) -> float:
     return round(brokerage, 2)
 
 
+def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    minutes = ist_now.hour * 60 + ist_now.minute
+    return ist_now.weekday() < 5 and NSE_OPEN_MINUTE <= minutes <= NSE_CLOSE_MINUTE
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
@@ -1724,10 +1950,17 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     side = side.upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    order_type = order_type.upper()
+    if order_type not in ("MARKET", "LIMIT"):
+        raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
+    if order_type == "LIMIT" and not price:
+        raise HTTPException(status_code=400, detail="LIMIT orders require a price")
 
     strategy_id = await _strategy_source_id(source)
     settings = await get_user_settings(user_id)
     paper = settings.get("paper_mode", True)
+    if not paper and order_type == "MARKET" and not _is_nse_market_open():
+        raise HTTPException(status_code=400, detail="Live MARKET orders are blocked outside NSE market hours.")
 
     # Daily loss guard (applies to all order types)
     await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
@@ -1743,6 +1976,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         opt_product = product or "NRML"  # options usually NRML (overnight) or MIS (intraday)
         # Transaction type comes from the contract (BUY for long, SELL for write)
         opt_side = (option_contract.get("transaction_type") or side).upper()
+        ledger_opened = False
 
         # Try to fetch live LTP for the option (live mode only — paper estimates)
         fill_price = price or 0.0
@@ -1756,6 +1990,18 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             except Exception as e:
                 logger.warning(f"option LTP fetch failed for {opt_symbol}: {e}")
                 fill_price = price or 0.0
+            if strategy_id and opt_side == "BUY":
+                decision = option_ledger.try_open_position(
+                    strategy_id=strategy_id,
+                    symbol=opt_symbol,
+                    option_type=option_contract.get("option_type") or "",
+                    entry_price=float(fill_price or 0),
+                    quantity=lots,
+                )
+                if not decision.accepted:
+                    logger.info("option BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
+                    raise HTTPException(status_code=409, detail=f"Option entry blocked: {decision.reason}")
+                ledger_opened = True
             try:
                 res = kite_helper.place_live_order(
                     kite,
@@ -1769,15 +2015,36 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 )
                 broker_order_id = res.get("order_id")
             except Exception as e:
+                if ledger_opened:
+                    option_ledger.release_failed_open(strategy_id)
                 raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
         else:
             # Paper mode: estimate option premium as ~2% of spot (rough proxy)
             spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
             fill_price = price or round(float(spot) * 0.02, 2)
             fill_price = _simulate_paper_fill_price(fill_price, opt_side)
+            if strategy_id and opt_side == "BUY":
+                decision = option_ledger.try_open_position(
+                    strategy_id=strategy_id,
+                    symbol=opt_symbol,
+                    option_type=option_contract.get("option_type") or "",
+                    entry_price=float(fill_price or 0),
+                    quantity=lots,
+                )
+                if not decision.accepted:
+                    logger.info("option BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
+                    raise HTTPException(status_code=409, detail=f"Option entry blocked: {decision.reason}")
+                ledger_opened = True
             broker_order_id = None
 
         brokerage = _simulate_paper_brokerage(fill_price, broker_qty) if paper else 0.0
+        if fill_price and broker_qty * fill_price > settings["max_position_size"]:
+            if ledger_opened and strategy_id:
+                option_ledger.release_failed_open(strategy_id)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Order value INR {broker_qty * fill_price:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
+            )
         doc = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -1840,6 +2107,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     "asset_type": "option",
                     "strategy_id": strategy_id,
                 })
+        if strategy_id and opt_side == "SELL":
+            option_ledger.close_position(
+                strategy_id=strategy_id,
+                exit_price=float(fill_price or 0),
+                exit_reason=source,
+            )
         doc.pop("_id", None)
         doc.pop("user_id", None)
         return doc
@@ -1852,10 +2125,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     product = product or settings["default_product"] or "MIS"
 
     # Risk guard: max position size
-    fill_price_hint = price or live_price(sym["base"], SYMBOLS.index(sym))["price"]
+    live_ltp = await _current_ltp_for_symbol(user_id, symbol.upper(), "NSE") if not paper else None
+    fill_price_hint = price or live_ltp or live_price(sym["base"], SYMBOLS.index(sym))["price"]
     if qty * fill_price_hint > settings["max_position_size"]:
         raise HTTPException(status_code=400,
-            detail=f"Order value ₹{qty * fill_price_hint:.0f} exceeds max position size ₹{settings['max_position_size']:.0f}. Adjust on Profile.")
+            detail=f"Order value INR {qty * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.")
 
     broker_order_id = None
     if not paper:
@@ -2107,6 +2381,79 @@ async def portfolio(user=Depends(get_current_user)):
     }
 
 
+@api.get("/v1/dashboard/telemetry")
+async def dashboard_telemetry(user=Depends(get_current_user)):
+    """Per-strategy dashboard payload backed by the SQLite runtime ledger."""
+    rows = await db.strategies.find(
+        {"user_id": user["id"]},
+        {"_id": 0, "user_id": 0},
+    ).sort("created_at", -1).to_list(500)
+    ledger_snapshot = option_ledger.snapshot()
+    strategies_page_data = []
+    for row in rows:
+        ledger_row = ledger_snapshot.get(row["id"])
+        if ledger_row is None:
+            _sync_option_ledger_strategy(row)
+            ledger_row = option_ledger.snapshot().get(row["id"], {})
+        active_position = ledger_row.get("active_position")
+        strategies_page_data.append({
+            "strategy_id": row["id"],
+            "name": row.get("name"),
+            "status": row.get("status"),
+            "asset_class": row.get("asset_class", "equity"),
+            "state": ledger_row.get("state", "IDLE"),
+            "cooldown_until": ledger_row.get("cooldown_until"),
+            "required_capital": ledger_row.get("required_capital", 0),
+            "max_lots": 1,
+            "target_pct": ledger_row.get("target_pct"),
+            "stoploss_pct": ledger_row.get("stoploss_pct"),
+            "trailing_sl_enabled": ledger_row.get("trailing_sl_enabled"),
+            "trail_trigger_pct": ledger_row.get("trail_trigger_pct"),
+            "trail_step_pct": ledger_row.get("trail_step_pct"),
+            "cooldown_minutes": ledger_row.get("cooldown_minutes"),
+            "max_trades_day": ledger_row.get("max_trades_day"),
+            "risk_settings": ledger_row.get("risk_settings", {}),
+            "daily_pnl": ledger_row.get("daily_pnl", {}),
+            "re_entry_allowed": ledger_row.get("state", "IDLE") == "IDLE",
+            "active_position": active_position,
+            "telemetry": {
+                "evaluations": row.get("evaluations", 0),
+                "signals_fired": row.get("signals_fired", 0),
+                "last_evaluated_at": row.get("last_evaluated_at"),
+                "last_signal_at": row.get("last_signal_at"),
+                "last_signal_action": row.get("last_signal_action"),
+                "last_error": row.get("last_error"),
+            },
+        })
+    latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX"])
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ledger": "sqlite",
+        "market_status": {
+            "is_open": _is_nse_market_open(),
+            "nifty": latest_ticks.get("NIFTY"),
+            "sensex": latest_ticks.get("SENSEX"),
+            "last_tick_time": max([t["tick_time"] for t in latest_ticks.values()], default=None),
+            "data_source": next((t["data_source"] for t in latest_ticks.values() if t.get("data_source")), None),
+        },
+        "strategies_page_data": strategies_page_data,
+    }
+
+
+@api.post("/risk/kill-switch")
+async def risk_kill_switch(user=Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "id": 1}).to_list(500)
+    for row in strategies:
+        option_ledger.set_kill_switch(True, strategy_id=row["id"])
+    await db.users.update_one({"id": user["id"]}, {"$set": {"paper_mode": True, "ops_last_emergency_stop_at": now}})
+    res = await db.strategies.update_many(
+        {"user_id": user["id"], "status": "live"},
+        {"$set": {"status": "paused", "last_error": f"Kill switch at {now}: automation paused and ledger entries disabled."}},
+    )
+    return {"ok": True, "paper_mode": True, "paused_strategies": res.modified_count, "disabled_strategies": len(strategies), "at": now}
+
+
 # ============== Zerodha helpers ==============
 # Map our short symbols to NSE tradingsymbols (1:1 for equity; indices use different)
 NSE_INDEX_MAP = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK"}
@@ -2122,11 +2469,15 @@ def _nse_token(sym: str) -> str:
 async def get_user_kite(user_id: str):
     """Return (kite_instance, status_dict). kite is None if not connected/expired."""
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "zerodha"})
-    if not keys or not keys.get("access_token"):
+    access_token = decrypt_secret(keys.get("access_token")) if keys else None
+    api_key = decrypt_secret(keys.get("api_key")) if keys else None
+    if not keys or not access_token:
         return None, {"connected": False, "reason": "no_token"}
     if not kite_helper.is_token_valid(keys.get("access_token_expires_at")):
         return None, {"connected": False, "reason": "expired", "kite_user_id": keys.get("kite_user_id")}
-    kite = kite_helper.make_kite(keys["api_key"], keys["access_token"])
+    if not api_key:
+        return None, {"connected": False, "reason": "credential_decrypt_failed"}
+    kite = kite_helper.make_kite(api_key, access_token)
     return kite, {"connected": True, "kite_user_id": keys.get("kite_user_id"),
                   "expires_at": keys["access_token_expires_at"]}
 
@@ -2206,10 +2557,12 @@ async def live_readiness(user=Depends(get_current_user)):
     checks.append({
         "id": "tick_feed",
         "label": "Realtime Kite tick feed",
-        "ok": bool(tick_status.get("connected")),
+        "ok": bool(tick_status.get("connected") or tick_status.get("connecting")),
         "detail": (
             f"connected, last tick {tick_status.get('last_tick_at')}"
             if tick_status.get("connected")
+            else "connecting"
+            if tick_status.get("connecting")
             else tick_status.get("last_error") or "not connected"
         ),
         "hint": "Fetch a strategy or watchlist with a live Kite session to start the websocket feed." if not tick_status.get("connected") else None,
@@ -2217,7 +2570,7 @@ async def live_readiness(user=Depends(get_current_user)):
     # Note: "trading mode" is intentionally NOT a check — clicking confirm in the
     # pre-flight modal IS the action that flips paper→live. Including it as a
     # check creates a circular dependency the user can never resolve.
-    overall_ready = all(c["ok"] for c in checks if c["id"] != "market_hours")
+    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "tick_feed"})
     # Warnings (not blockers)
     return {
         "ready": overall_ready,
@@ -2229,6 +2582,118 @@ async def live_readiness(user=Depends(get_current_user)):
 
 # ============== Routes: Live Readiness — END ==============
 
+
+
+# ============== Routes: Ops Console ==============
+async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
+    kite, status = await get_user_kite(user_id)
+    if not kite:
+        return {"started": False, "reason": status.get("reason", "not_connected"), "status": status}
+    tick_manager = getattr(app.state, "tick_manager", None)
+    if not tick_manager:
+        return {"started": False, "reason": "tick_manager_missing", "status": status}
+    token_to_symbol: Dict[int, str] = {}
+    for s in SYMBOLS:
+        tok = kite_helper.instrument_token(kite, s["symbol"])
+        if tok:
+            token_to_symbol[tok] = s["symbol"]
+    for opt_sym, (spot_exch, spot_sym) in options_helper.INDEX_SPOT_SYMBOL.items():
+        tok = kite_helper.instrument_token(kite, spot_sym, segment=spot_exch)
+        if tok:
+            token_to_symbol[tok] = opt_sym
+    if not token_to_symbol:
+        return {"started": False, "reason": "no_tokens_resolved", "status": status}
+    tick_manager.start_for_user(user_id, kite, token_to_symbol)
+    return {"started": True, "tokens": len(token_to_symbol), "status": tick_manager.status_info(user_id)}
+
+
+@api.get("/ops/diagnostics")
+async def ops_diagnostics(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    _, kite_status = await get_user_kite(user["id"])
+    tick_manager = getattr(app.state, "tick_manager", None)
+    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    errored = [
+        {
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "status": s.get("status"),
+            "last_error": s.get("last_error"),
+            "last_data_source": s.get("last_data_source"),
+            "last_evaluated_at": s.get("last_evaluated_at"),
+        }
+        for s in strategies
+        if s.get("last_error")
+    ][:20]
+    orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": ["OPEN", "PENDING"]}})
+    positions_count = await db.positions.count_documents({"user_id": user["id"]})
+    readiness = await live_readiness(user=user)
+    return {
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+        "server_time_ist": (datetime.now(timezone.utc) + IST_OFFSET).isoformat(),
+        "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
+        "readiness": readiness,
+        "zerodha": kite_status,
+        "ticker": tick_status,
+        "counts": {
+            "strategies": len(strategies),
+            "live_strategies": len([s for s in strategies if s.get("status") == "live"]),
+            "paused_strategies": len([s for s in strategies if s.get("status") == "paused"]),
+            "errored_strategies": len(errored),
+            "open_orders": orders_open,
+            "paper_positions": positions_count,
+        },
+        "errored_strategies": errored,
+    }
+
+
+@api.post("/ops/ticker/restart")
+async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user)):
+    tick_manager = getattr(app.state, "tick_manager", None)
+    if tick_manager:
+        try:
+            ticker = tick_manager._tickers.get(user["id"])
+            if ticker:
+                ticker.stop()
+        except Exception as e:
+            logger.warning(f"ticker stop from ops failed: {e}")
+    return await _start_user_ticker(user["id"])
+
+
+@api.post("/ops/emergency-stop")
+async def ops_emergency_stop(req: OpsActionReq = None, user=Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "id": 1}).to_list(500)
+    for row in strategies:
+        option_ledger.set_kill_switch(True, strategy_id=row["id"])
+    await db.users.update_one({"id": user["id"]}, {"$set": {"paper_mode": True, "ops_last_emergency_stop_at": now}})
+    res = await db.strategies.update_many(
+        {"user_id": user["id"], "status": "live"},
+        {"$set": {"status": "paused", "last_error": f"Emergency stop at {now}: switched to PAPER and paused automation."}},
+    )
+    return {"ok": True, "paper_mode": True, "paused_strategies": res.modified_count, "disabled_strategies": len(strategies), "at": now}
+
+
+@api.post("/ops/strategies/pause-all")
+async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)):
+    res = await db.strategies.update_many(
+        {"user_id": user["id"], "status": "live"},
+        {"$set": {"status": "paused", "last_error": None}},
+    )
+    return {"ok": True, "paused_strategies": res.modified_count}
+
+
+@api.post("/ops/strategies/clear-errors")
+async def ops_clear_strategy_errors(req: OpsActionReq = None, user=Depends(get_current_user)):
+    res = await db.strategies.update_many(
+        {"user_id": user["id"]},
+        {"$unset": {"last_error": "", "last_signal_validation": ""}},
+    )
+    return {"ok": True, "updated_strategies": res.modified_count}
+
+
+# ============== Routes: Ops Console - END ==============
 
 # ============== Routes: Funds ==============
 @api.get("/funds")
@@ -2277,7 +2742,10 @@ async def zerodha_login_url(user=Depends(get_current_user)):
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
     if not keys:
         raise HTTPException(status_code=400, detail="Save your Zerodha api_key + api_secret on Broker Keys first")
-    return {"url": kite_helper.login_url(keys["api_key"]), "api_key": keys["api_key"][:6] + "•••"}
+    api_key = decrypt_secret(keys.get("api_key"))
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Could not decrypt saved Zerodha API key. Save the key again.")
+    return {"url": kite_helper.login_url(api_key), "api_key": _mask_secret(api_key, 6, 0)}
 
 
 @api.post("/zerodha/exchange")
@@ -2285,10 +2753,14 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
     if not keys:
         raise HTTPException(status_code=400, detail="Save Zerodha keys first")
+    api_key = decrypt_secret(keys.get("api_key"))
+    api_secret = decrypt_secret(keys.get("api_secret"))
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=400, detail="Could not decrypt saved Zerodha credentials. Save the keys again.")
     session: Dict[str, Any] = {}
     try:
         session = kite_helper.exchange_request_token(
-            keys["api_key"], keys["api_secret"], req.request_token
+            api_key, api_secret, req.request_token
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Exchange failed: {e}")
@@ -2296,8 +2768,8 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": "zerodha"},
         {"$set": {
-            "access_token": session.get("access_token"),
-            "public_token": session.get("public_token"),
+            "access_token": encrypt_secret(session.get("access_token")),
+            "public_token": encrypt_secret(session.get("public_token")),
             "kite_user_id": session.get("user_id"),
             "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
             "access_token_expires_at": expires_at,
@@ -2387,6 +2859,76 @@ async def change_password(req: ChangePasswordReq, user=Depends(get_current_user)
     return {"changed": True}
 
 
+async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
+    logger.info("SQLite option engine monitor started")
+    while not stop_event.is_set():
+        try:
+            option_ledger.advance_cooldowns()
+            positions = option_ledger.open_positions()
+            strategy_rows = await db.strategies.find(
+                {"id": {"$in": [p["strategy_id"] for p in positions]}} if positions else {},
+                {"_id": 0},
+            ).to_list(1000)
+            strategies_by_id = {row["id"]: row for row in strategy_rows}
+
+            # Broker position sync and live tick capture.
+            users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+            broker_symbols_by_user: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for user_row in users:
+                user_id = user_row["id"]
+                kite, _ = await get_user_kite(user_id)
+                if not kite:
+                    continue
+                broker_data = kite_helper.safe_positions(kite)
+                net_positions = (broker_data or {}).get("net") or []
+                broker_symbols_by_user[user_id] = {
+                    p.get("tradingsymbol"): p for p in net_positions if p.get("tradingsymbol") and int(p.get("quantity") or 0) != 0
+                }
+                for idx_symbol, kite_symbol in (("NIFTY", "NIFTY 50"), ("SENSEX", "SENSEX")):
+                    ltp_resp = kite_helper.safe_ltp(kite, [f"NSE:{kite_symbol}"]) or {}
+                    node = ltp_resp.get(f"NSE:{kite_symbol}") or {}
+                    if node.get("last_price"):
+                        option_ledger.record_market_tick(idx_symbol, float(node["last_price"]), "zerodha")
+
+            now_ist = datetime.now(timezone.utc) + IST_OFFSET
+            squareoff_due = now_ist.weekday() < 5 and (now_ist.hour, now_ist.minute) >= (15, 15)
+            for pos in positions:
+                sid = pos["strategy_id"]
+                strategy = strategies_by_id.get(sid)
+                if not strategy:
+                    logger.warning("ledger orphan strategy=%s missing Mongo strategy; closing ledger row", sid)
+                    option_ledger.close_position(sid, float(pos.get("ltp") or pos.get("entry_price") or 0), "orphan-strategy")
+                    continue
+                user_id = strategy["user_id"]
+                ltp = await _current_ltp_for_symbol(user_id, pos["symbol"], "NFO")
+                if ltp is None:
+                    broker_pos = broker_symbols_by_user.get(user_id, {}).get(pos["symbol"])
+                    ltp = float(broker_pos.get("last_price") or pos["ltp"]) if broker_pos else float(pos["ltp"])
+                updated = option_ledger.update_ltp(sid, float(ltp))
+                if updated:
+                    option_ledger.record_market_tick(pos["symbol"], float(ltp), "broker-sync" if user_id in broker_symbols_by_user else "ledger")
+
+                if user_id in broker_symbols_by_user and pos["symbol"] not in broker_symbols_by_user[user_id]:
+                    logger.warning("broker sync orphan close strategy=%s symbol=%s", sid, pos["symbol"])
+                    option_ledger.close_position(sid, float(ltp), "broker-position-missing")
+                    continue
+
+                exit_reason = "intraday-squareoff-1515" if squareoff_due else option_ledger.exit_signal_for_position(updated or pos)
+                if not exit_reason:
+                    continue
+                logger.info("option engine exit strategy=%s symbol=%s reason=%s", sid, pos["symbol"], exit_reason)
+                result = await _close_strategy_positions(user_id, sid, reason=exit_reason)
+                if not result.get("closed_positions"):
+                    option_ledger.close_position(sid, float(ltp), exit_reason)
+        except Exception as e:
+            logger.warning(f"option engine monitor error: {e}")
+        slept = 0
+        while not stop_event.is_set() and slept < 30:
+            await asyncio.sleep(1)
+            slept += 1
+    logger.info("SQLite option engine monitor stopped")
+
+
 # ============== Boot ==============
 app.include_router(api)
 
@@ -2407,6 +2949,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    option_ledger.initialize()
+    app.state.option_ledger = option_ledger
     # Index creation is best-effort — must NEVER block app startup.
     # On Atlas, an index may already exist with different options, or there may be
     # duplicates from a previous app version. We log and continue.
@@ -2431,6 +2975,12 @@ async def startup():
                 await seed_default_strategies_for_user(user_row["id"])
     except Exception as e:
         logger.warning(f"default strategy seeding skipped: {e}")
+
+    try:
+        async for strategy_row in db.strategies.find({}, {"_id": 0}):
+            _sync_option_ledger_strategy(strategy_row)
+    except Exception as e:
+        logger.warning(f"option ledger strategy sync skipped: {e}")
 
     # Background strategy runner — uses REAL Kite candles when user is connected,
     # falls back to MOCK 5-min intraday candles only when no broker session.
@@ -2460,6 +3010,8 @@ async def startup():
     )
     app.state.health_stop = asyncio.Event()
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
+    app.state.option_engine_stop = asyncio.Event()
+    app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     logger.info("QuantG API started")
 
 
@@ -2480,6 +3032,16 @@ async def shutdown():
         app.state.health_stop.set()
         if app.state.health_task:
             await asyncio.wait_for(app.state.health_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.option_engine_stop.set()
+        if app.state.option_engine_task:
+            await asyncio.wait_for(app.state.option_engine_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        option_ledger.close()
     except Exception:
         pass
     client.close()

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api, formatINR, pctFmt } from "../lib/api";
 import { 
   TrendingUp, TrendingDown, Wallet, Activity, Layers, Target, 
-  Settings, AlertTriangle, Zap, BarChart3, Eye, EyeOff, RefreshCw 
+  Zap, BarChart3, Eye, RefreshCw, PieChart, AlertTriangle, Shield, Power, Settings, Save
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -63,6 +63,93 @@ const MarketIndicator = ({ symbol, price, change, pct, trend, strength, riskLeve
       </span>
     </div>
   </div>
+);
+
+const EngineStrategyCard = ({ row, onSave }) => {
+  const pos = row.active_position || {};
+  const risk = row.risk_settings || {};
+  const [form, setForm] = useState({
+    target_pct: row.target_pct ?? 0.4,
+    stoploss_pct: row.stoploss_pct ?? 0.2,
+    trailing_sl_enabled: row.trailing_sl_enabled ?? true,
+    trail_trigger_pct: row.trail_trigger_pct ?? 0.2,
+    trail_step_pct: row.trail_step_pct ?? 0.1,
+    cooldown_minutes: row.cooldown_minutes ?? 5,
+    max_trades_day: row.max_trades_day ?? 3,
+    daily_loss_limit: risk.daily_loss_limit ?? 0,
+    required_capital: row.required_capital ?? 0,
+  });
+  const update = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
+  const pnl = pos.unrealized_pnl ?? 0;
+
+  return (
+    <div className="qd-card p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{row.strategy_id}</div>
+          <h3 className="font-head text-base text-white mt-0.5">{row.name}</h3>
+        </div>
+        <span className={`font-mono text-[10px] px-2 py-1 rounded-sm border ${
+          row.state === "OPEN" ? "border-[var(--qd-profit)] text-[var(--qd-profit)] bg-[rgba(0,230,118,0.08)]" :
+          row.state === "COOLDOWN" ? "border-[var(--qd-warn)] text-[var(--qd-warn)] bg-[rgba(255,159,10,0.08)]" :
+          row.state === "DISABLED" ? "border-[var(--qd-loss)] text-[var(--qd-loss)] bg-[rgba(255,59,48,0.08)]" :
+          "border-[var(--qd-border)] text-[var(--qd-text-2)]"
+        }`}>{row.state}</span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+        <FundCell k="Re-entry" v={row.re_entry_allowed ? "Yes" : "No"} tone={row.re_entry_allowed ? "p" : "l"} />
+        <FundCell k="Position" v={pos.symbol || "-"} />
+        <FundCell k="Entry" v={pos.entry_price ? `₹${formatINR(pos.entry_price)}` : "-"} />
+        <FundCell k="LTP" v={pos.ltp ? `₹${formatINR(pos.ltp)}` : "-"} />
+        <FundCell k="P&L" v={`₹${formatINR(pnl)}`} tone={pnl >= 0 ? "p" : "l"} />
+        <FundCell k="Target" v={pos.target_price ? `₹${formatINR(pos.target_price)}` : "-"} />
+        <FundCell k="Stoploss" v={pos.stoploss_price ? `₹${formatINR(pos.stoploss_price)}` : "-"} />
+        <FundCell k="Trailing SL" v={pos.trailing_sl ? `₹${formatINR(pos.trailing_sl)}` : "-"} />
+        <FundCell k="Cooldown" v={row.cooldown_until ? new Date(row.cooldown_until).toLocaleTimeString() : "-"} />
+        <FundCell k="Daily P&L" v={`₹${formatINR(row.daily_pnl?.realised_pnl || 0)}`} tone={(row.daily_pnl?.realised_pnl || 0) >= 0 ? "p" : "l"} />
+        <FundCell k="Trades" v={`${row.daily_pnl?.trades || 0}/${row.max_trades_day || 0}`} />
+        <FundCell k="Kill" v={risk.kill_switch_enabled ? "On" : "Off"} tone={risk.kill_switch_enabled ? "l" : "p"} />
+      </div>
+
+      <details className="border-t border-[var(--qd-border)] pt-3">
+        <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-2)] flex items-center gap-2">
+          <Settings size={12} /> Runtime Settings
+        </summary>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+          <RuntimeInput label="Max lot" value={1} disabled />
+          <RuntimeInput label="Target %" value={form.target_pct} onChange={(v) => update("target_pct", v)} />
+          <RuntimeInput label="Stoploss %" value={form.stoploss_pct} onChange={(v) => update("stoploss_pct", v)} />
+          <RuntimeInput label="Trail trigger %" value={form.trail_trigger_pct} onChange={(v) => update("trail_trigger_pct", v)} />
+          <RuntimeInput label="Trail step %" value={form.trail_step_pct} onChange={(v) => update("trail_step_pct", v)} />
+          <RuntimeInput label="Cooldown min" value={form.cooldown_minutes} onChange={(v) => update("cooldown_minutes", v)} />
+          <RuntimeInput label="Max trades/day" value={form.max_trades_day} onChange={(v) => update("max_trades_day", v)} />
+          <RuntimeInput label="Daily loss" value={form.daily_loss_limit} onChange={(v) => update("daily_loss_limit", v)} />
+          <label className="flex items-center gap-2 text-xs font-mono text-[var(--qd-text-2)]">
+            <input type="checkbox" checked={form.trailing_sl_enabled} onChange={(e) => update("trailing_sl_enabled", e.target.checked)} />
+            Trailing SL
+          </label>
+          <button onClick={() => onSave(row.strategy_id, form)} className="border border-[var(--qd-accent)] text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white rounded-sm px-3 py-2 text-xs font-mono uppercase flex items-center justify-center gap-2">
+            <Save size={12} /> Save
+          </button>
+        </div>
+      </details>
+    </div>
+  );
+};
+
+const RuntimeInput = ({ label, value, onChange, disabled }) => (
+  <label className="space-y-1">
+    <span className="block font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
+    <input
+      type="number"
+      step="0.01"
+      disabled={disabled}
+      value={value}
+      onChange={(e) => onChange?.(Number(e.target.value))}
+      className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-sm px-2 py-1.5 text-xs text-white font-mono disabled:opacity-60"
+    />
+  </label>
 );
 
 // Advanced Features Panel
@@ -240,20 +327,27 @@ export default function Dashboard() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [marketTrend, setMarketTrend] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [telemetry, setTelemetry] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [p, w, ps, f] = await Promise.all([
+      const [p, w, ps, f, t] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/positions"),
         api.get("/funds"),
+        api.get("/v1/dashboard/telemetry"),
       ]);
       setPf(p.data); 
       setWatch(w.data); 
       setPositions(ps.data); 
       setFunds(f.data);
-    } catch { /* keep stale data */ }
+      setTelemetry(t.data);
+      setLoadError("");
+    } catch (e) {
+      setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
+    }
   }, []);
 
   useEffect(() => {
@@ -277,6 +371,17 @@ export default function Dashboard() {
     setRefreshing(true);
     await load();
     setTimeout(() => setRefreshing(false), 500);
+  };
+
+  const killSwitch = async () => {
+    if (!window.confirm("Trigger emergency kill switch? This pauses live strategies, switches to paper mode, and disables ledger re-entry.")) return;
+    await api.post("/risk/kill-switch");
+    await load();
+  };
+
+  const saveRuntimeSettings = async (strategyId, form) => {
+    await api.put(`/strategies/${strategyId}/runtime-settings`, form);
+    await load();
   };
 
   return (
@@ -308,6 +413,63 @@ export default function Dashboard() {
           >
             + Strategy
           </Link>
+        </div>
+      </div>
+
+      {loadError && (
+        <div className="qd-card p-4 border-l-2 border-l-[var(--qd-warn)] flex items-start gap-3" data-testid="dashboard-load-error">
+          <AlertTriangle size={18} className="text-[var(--qd-warn)] mt-0.5" />
+          <div>
+            <div className="font-mono text-xs text-[var(--qd-warn)] uppercase tracking-wider">Data refresh issue</div>
+            <div className="text-sm text-[var(--qd-text-2)] mt-1">{loadError}</div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="qd-card p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-head text-base text-white flex items-center gap-2">
+              <Activity size={16} /> Live Market Status
+            </h2>
+            <span className={`font-mono text-[10px] uppercase px-2 py-1 rounded-sm ${
+              telemetry?.market_status?.is_open ? "text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)]" : "text-[var(--qd-warn)] bg-[rgba(255,159,10,0.1)]"
+            }`}>
+              {telemetry?.market_status?.is_open ? "Market Open" : "Market Closed"}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 font-mono text-xs">
+            <FundCell k="NIFTY live" v={telemetry?.market_status?.nifty?.ltp ? `₹${formatINR(telemetry.market_status.nifty.ltp)}` : "Waiting"} />
+            <FundCell k="SENSEX live" v={telemetry?.market_status?.sensex?.ltp ? `₹${formatINR(telemetry.market_status.sensex.ltp)}` : "Waiting"} />
+            <FundCell k="Last tick" v={telemetry?.market_status?.last_tick_time ? new Date(telemetry.market_status.last_tick_time).toLocaleTimeString() : "-"} />
+            <FundCell k="Data source" v={telemetry?.market_status?.data_source || watch[0]?.source || "-"} />
+          </div>
+        </div>
+
+        <div className="qd-card p-4 space-y-3">
+          <h2 className="font-head text-base text-white flex items-center gap-2">
+            <Shield size={16} /> Risk Control
+          </h2>
+          <div className="grid grid-cols-2 gap-3 font-mono text-xs">
+            <FundCell k="Max lot" v="1 locked" />
+            <FundCell k="Cooldown" v={`${telemetry?.strategies_page_data?.[0]?.cooldown_minutes ?? 5} min`} />
+            <FundCell k="Max trades/day" v={telemetry?.strategies_page_data?.[0]?.max_trades_day ?? 3} />
+            <FundCell k="Daily loss" v={`₹${formatINR(telemetry?.strategies_page_data?.[0]?.risk_settings?.daily_loss_limit || 0)}`} />
+          </div>
+        </div>
+
+        <div className="qd-card p-4 flex flex-col justify-between gap-4 border-l-2 border-l-[var(--qd-loss)]">
+          <div>
+            <h2 className="font-head text-base text-white flex items-center gap-2">
+              <Power size={16} className="text-[var(--qd-loss)]" /> Kill Switch
+            </h2>
+            <p className="text-xs text-[var(--qd-text-2)] mt-2 font-mono">
+              Pauses live strategies, switches to paper, and disables SQLite re-entry gates.
+            </p>
+          </div>
+          <button onClick={killSwitch} className="bg-[var(--qd-loss)] hover:opacity-90 text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center justify-center gap-2">
+            <Power size={14} /> Emergency Stop
+          </button>
         </div>
       </div>
 
@@ -344,6 +506,27 @@ export default function Dashboard() {
         <KPI label="Used Margin" value={`₹${formatINR(funds?.used_margin ?? 0)}`} icon={Layers} sub={funds?.source === "live" ? "Live" : `Open: ₹${formatINR(funds?.opening_balance ?? 0)}`} />
         <KPI label="Live Strategies" value={`${pf?.live_strategies ?? 0}/${pf?.strategies ?? 0}`} icon={Activity} sub={`${pf?.active_strategies ?? 0} active / ${pf?.paused_strategies ?? 0} paused`} />
       </div>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-2">
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">// SQLITE OPTION ENGINE</div>
+            <h2 className="font-head text-xl text-white mt-0.5">Strategy State</h2>
+          </div>
+          <span className="font-mono text-xs text-[var(--qd-text-2)]">{telemetry?.strategies_page_data?.length || 0} tracked</span>
+        </div>
+        {telemetry?.strategies_page_data?.length ? (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {telemetry.strategies_page_data.map((row) => (
+              <EngineStrategyCard key={row.strategy_id} row={row} onSave={saveRuntimeSettings} />
+            ))}
+          </div>
+        ) : (
+          <div className="qd-card p-8 text-center font-mono text-sm text-[var(--qd-text-2)]">
+            No strategies are registered in the SQLite runtime ledger yet.
+          </div>
+        )}
+      </section>
 
       {/* Funds detail (live mode) */}
       {funds?.source === "live" && (

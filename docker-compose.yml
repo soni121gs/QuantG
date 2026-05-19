@@ -5,8 +5,6 @@ services:
     restart: unless-stopped
     volumes:
       - mongo-data:/data/db
-    ports:
-      - "27017:27017"
     networks:
       - quantg-network
     healthcheck:
@@ -22,31 +20,60 @@ services:
     environment:
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: quantg
-    ports:
-      - "0.0.0.0:8000:8000"
+      OPTION_LEDGER_PATH: /data/runtime_state.sqlite3
+    volumes:
+      - backend-state:/data
     depends_on:
       mongo:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - quantg-network
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.static
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_BASE: /api
     container_name: quantg-frontend
-    ports:
-      - "0.0.0.0:80:8080"
-      - "0.0.0.0:3000:8080"
+    environment:
+      REACT_APP_API_BASE: /api
+      NODE_ENV: production
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - quantg-network
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: quantg-caddy
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend:
+        condition: service_started
     networks:
       - quantg-network
 
 volumes:
   mongo-data:
+  backend-state:
+  caddy-data:
+  caddy-config:
 
 networks:
   quantg-network:

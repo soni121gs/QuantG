@@ -114,6 +114,7 @@ class KiteRealtimeTicker:
         self._last_connect_at: Optional[datetime] = None
         self._last_disconnect_at: Optional[datetime] = None
         self._last_error: Optional[str] = None
+        self._connecting = False
 
     def _parse_tick(self, tick: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         token = int(tick.get("instrument_token") or 0)
@@ -151,6 +152,7 @@ class KiteRealtimeTicker:
         self._last_connect_at = datetime.now(timezone.utc)
         self._last_error = None
         self._started = True
+        self._connecting = False
         with self._lock:
             if not self._subscribed_tokens:
                 return
@@ -165,10 +167,13 @@ class KiteRealtimeTicker:
     def _on_close(self, ws, code, reason) -> None:
         self._last_disconnect_at = datetime.now(timezone.utc)
         self._started = False
+        self._connecting = False
         logger.info(f"Kite realtime websocket closed: {code} {reason}")
 
     def _on_error(self, ws, code, reason) -> None:
         self._last_error = f"{code}: {reason}"
+        self._started = False
+        self._connecting = False
         logger.warning(f"Kite realtime websocket error: {code} {reason}")
 
     def start(self, api_key: str, access_token: str, token_to_symbol: Dict[int, str]) -> None:
@@ -181,7 +186,7 @@ class KiteRealtimeTicker:
                 return
             self._token_to_symbol.update(token_to_symbol)
             new_tokens = [t for t in token_to_symbol if t not in self._subscribed_tokens]
-            self._subscribed_tokens = list({*self._subscribed_tokens, *token_to_symbol})
+            self._subscribed_tokens = sorted({*self._subscribed_tokens, *token_to_symbol.keys()})
 
             if self._started and self._ticker is not None:
                 try:
@@ -194,18 +199,22 @@ class KiteRealtimeTicker:
                     self._last_error = str(e)
                 return
 
+            if self._connecting and self._ticker is not None:
+                return
+
             try:
                 self._ticker = KiteTicker(api_key, access_token)
                 self._ticker.on_ticks = self._on_ticks
                 self._ticker.on_connect = self._on_connect
                 self._ticker.on_close = self._on_close
                 self._ticker.on_error = self._on_error
+                self._connecting = True
                 self._ticker.connect(threaded=True)
-                self._started = True
                 logger.info("Kite realtime ticker started")
             except Exception as e:
                 self._ticker = None
                 self._started = False
+                self._connecting = False
                 self._last_error = str(e)
                 logger.warning(f"Failed to start Kite realtime ticker: {e}")
 
@@ -228,6 +237,7 @@ class KiteRealtimeTicker:
                     logger.warning(f"Error closing Kite realtime ticker: {e}")
                 self._ticker = None
             self._started = False
+            self._connecting = False
 
     def is_running(self) -> bool:
         return self._started
@@ -241,6 +251,7 @@ class KiteRealtimeTicker:
     def status_info(self) -> Dict[str, Any]:
         return {
             "connected": self._started,
+            "connecting": self._connecting,
             "subscribed_tokens": len(self._subscribed_tokens),
             "last_connect_at": self._last_connect_at.isoformat() if self._last_connect_at else None,
             "last_disconnect_at": self._last_disconnect_at.isoformat() if self._last_disconnect_at else None,

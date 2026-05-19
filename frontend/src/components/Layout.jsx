@@ -16,6 +16,7 @@ import {
   UserCircle,
   TrendingUp,
   AlertCircle,
+  ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -29,6 +30,7 @@ const NAV = [
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
   { to: "/broker-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
+  { to: "/ops", icon: ShieldAlert, label: "Ops Console", id: "nav-ops" },
   { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
 ];
 

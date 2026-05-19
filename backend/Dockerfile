@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
 # Create a non-root user and give ownership of the app directory
-RUN groupadd -r app && useradd -r -g app -d /home/app -s /usr/sbin/nologin -m app \
-    && chown -R app:app /app
+RUN mkdir -p /data \
+    && groupadd -r app && useradd -r -g app -d /home/app -s /usr/sbin/nologin -m app \
+    && chown -R app:app /app /data
 
 # Use non-root user for running the app
 USER app

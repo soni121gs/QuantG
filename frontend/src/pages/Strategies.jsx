@@ -45,6 +45,12 @@ const ASSET_CLASSES = [
   { id: "futures", label: "Futures", icon: "🎯" },
 ];
 
+const getAssetClass = (strategy) => {
+  if (strategy.asset_class) return strategy.asset_class;
+  if (strategy.visual_config?.options?.enabled) return "options";
+  return "equity";
+};
+
 export default function Strategies() {
   const [list, setList] = useState([]);
   const [testing, setTesting] = useState(null);
@@ -116,7 +122,7 @@ export default function Strategies() {
   };
 
   // Filter strategies by asset class
-  const filteredList = selectedAsset === "all" ? list : list.filter((s) => (s.asset_class || "equity") === selectedAsset);
+  const filteredList = selectedAsset === "all" ? list : list.filter((s) => getAssetClass(s) === selectedAsset);
 
   // Group by status
   const groups = [
@@ -148,9 +154,9 @@ export default function Strategies() {
 
   const assetCounts = {
     all: list.length,
-    equity: list.filter((s) => (s.asset_class || "equity") === "equity").length,
-    options: list.filter((s) => s.asset_class === "options").length,
-    futures: list.filter((s) => s.asset_class === "futures").length,
+    equity: list.filter((s) => getAssetClass(s) === "equity").length,
+    options: list.filter((s) => getAssetClass(s) === "options").length,
+    futures: list.filter((s) => getAssetClass(s) === "futures").length,
   };
 
   return (
@@ -306,6 +312,33 @@ export default function Strategies() {
                   </div>
                 )}
 
+                {testResult.signal_validation && (
+                  <div className="border-t border-[var(--qd-border)] pt-3">
+                    <div className="text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-2">SIGNAL QUALITY</div>
+                    <div className={`p-3 rounded-sm border ${
+                      testResult.signal_validation.is_valid
+                        ? "border-[var(--qd-profit)] bg-[rgba(0,230,118,0.08)]"
+                        : "border-[var(--qd-warn)] bg-[rgba(255,159,10,0.08)]"
+                    }`}>
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <Row k="Confidence" v={`${testResult.signal_validation.confidence}%`} />
+                        <Row k="Threshold" v={`${testResult.signal_validation.threshold}%`} />
+                        <Row k="Trend" v={testResult.signal_validation.trend?.trend || "-"} />
+                        <Row k="RSI" v={testResult.signal_validation.trend?.rsi ?? "-"} />
+                      </div>
+                      {(testResult.signal_validation.reasons || []).map((reason, i) => (
+                        <div key={i} className="text-[11px] text-[var(--qd-text-2)]">- {reason}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {testResult.order_error && (
+                  <div className="bg-[rgba(255,159,10,0.08)] border border-[var(--qd-warn)] text-[var(--qd-warn)] text-[11px] p-3 rounded-sm">
+                    {testResult.order_error}
+                  </div>
+                )}
+
                 {/* No Signals Warning */}
                 {testResult.signals?.length === 0 && (
                   <div className="bg-[var(--qd-surface-2)] p-3 rounded-sm text-[var(--qd-text-2)] text-[11px] border-l-2 border-[var(--qd-warn)]">
@@ -329,7 +362,7 @@ function StrategyCard({ s, testing, toggle, del, testRun, manualOrder, exitAll }
     equity: "📈 EQUITY",
     options: "⚡ OPTIONS",
     futures: "🎯 FUTURES",
-  }[s.asset_class || "equity"];
+  }[getAssetClass(s)];
   const lastEvalSec = s.last_evaluated_at ? Math.floor((Date.now() - new Date(s.last_evaluated_at).getTime()) / 1000) : null;
   const scanningHot = live && lastEvalSec !== null && lastEvalSec < 60;
 
@@ -442,4 +475,3 @@ const Cell = ({ k, v, tone }) => (
     }`}>{v}</span>
   </>
 );
-
