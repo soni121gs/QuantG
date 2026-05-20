@@ -62,7 +62,7 @@ export default function OpsConsole() {
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <Metric label="Mode" value={data?.mode || "-"} tone={data?.mode === "LIVE" ? "loss" : "warn"} />
         <Metric label="Zerodha" value={zerodha.connected ? "Connected" : zerodha.reason || "-"} tone={zerodha.connected ? "profit" : "warn"} />
-        <Metric label="Ticker" value={ticker.connected ? "Live" : ticker.connecting ? "Connecting" : "Down"} tone={ticker.connected ? "profit" : "warn"} />
+        <Metric label="Ticker" value={ticker.connected ? "CONNECTED" : ticker.connecting ? "CONNECTING" : "DOWN"} tone={ticker.connected ? "profit" : "warn"} />
         <Metric label="Live Strats" value={counts.live_strategies ?? 0} />
         <Metric label="Open Orders" value={counts.open_orders ?? 0} />
         <Metric label="Errors" value={counts.errored_strategies ?? 0} tone={counts.errored_strategies ? "loss" : "profit"} />
@@ -107,6 +107,8 @@ export default function OpsConsole() {
           <Row k="Server IST" v={fmt(data?.server_time_ist)} />
           <Row k="Ticker last connect" v={fmt(ticker.last_connect_at)} />
           <Row k="Ticker last tick" v={fmt(ticker.last_tick_at)} />
+          <Row k="Subscribed tokens" v={ticker.subscribed_tokens ?? 0} />
+          <Row k="Websocket URL" v={ticker.websocket_url || "-"} />
           <Row k="Ticker error" v={ticker.last_error || "-"} />
           <Row k="Zerodha expiry" v={fmt(zerodha.expires_at)} />
           <Row k="Readiness" v={data?.readiness?.ready ? "Ready" : "Needs attention"} />

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
 from threading import Lock
@@ -15,6 +16,36 @@ logger = logging.getLogger("quantg.realtime")
 
 _TICK_INTERVAL_MINUTES = 5
 _MAX_BARS = 400
+_KITE_WS_ROOT = "wss://ws.kite.trade"
+
+
+def _mask_secret(value: str, visible: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= visible:
+        return "*" * len(value)
+    return f"{value[:visible]}...{len(value)} chars"
+
+
+def _auth_failure_text(value: Any) -> bool:
+    text = str(value or "").lower()
+    return any(part in text for part in ("403", "forbidden", "unauthor", "invalid token", "token"))
+
+
+def _safe_ws_response(response: Any) -> Dict[str, Any]:
+    if response is None:
+        return {}
+    out: Dict[str, Any] = {}
+    for attr in ("peer", "protocol", "version", "headers"):
+        try:
+            val = getattr(response, attr, None)
+            if val:
+                out[attr] = val
+        except Exception:
+            pass
+    if not out:
+        out["repr"] = re.sub(r"access_token=[^&\s]+", "access_token=***", repr(response))
+    return out
 
 
 def _parse_timestamp(ts: Any) -> datetime:
@@ -115,6 +146,9 @@ class KiteRealtimeTicker:
         self._last_disconnect_at: Optional[datetime] = None
         self._last_error: Optional[str] = None
         self._connecting = False
+        self._auth_failed = False
+        self._reconnect_attempts = 0
+        self._last_auth_response: Optional[Dict[str, Any]] = None
 
     def _parse_tick(self, tick: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         token = int(tick.get("instrument_token") or 0)
@@ -137,29 +171,50 @@ class KiteRealtimeTicker:
         }
 
     def _on_ticks(self, ws, ticks: List[Dict[str, Any]]) -> None:
+        parsed_count = 0
         for tick in ticks:
             parsed = self._parse_tick(tick)
             if not parsed:
                 continue
+            parsed_count += 1
             self._builder.add_tick(
                 parsed["symbol"],
                 parsed["price"],
                 parsed["volume"],
                 parsed["timestamp"],
             )
+        if parsed_count:
+            sample = [
+                {
+                    "token": t.get("instrument_token"),
+                    "symbol": self._token_to_symbol.get(int(t.get("instrument_token") or 0)),
+                    "last_price": t.get("last_price") or t.get("last_traded_price"),
+                }
+                for t in ticks[:3]
+            ]
+            logger.info("Kite realtime incoming ticks count=%s sample=%s", parsed_count, sample)
 
     def _on_connect(self, ws, response: Any) -> None:
         self._last_connect_at = datetime.now(timezone.utc)
         self._last_error = None
         self._started = True
         self._connecting = False
+        self._auth_failed = False
+        self._reconnect_attempts = 0
+        self._last_auth_response = _safe_ws_response(response)
+        logger.info("Kite realtime websocket auth response: %s", self._last_auth_response)
         with self._lock:
             if not self._subscribed_tokens:
                 return
             try:
                 ws.subscribe(self._subscribed_tokens)
                 ws.set_mode(ws.MODE_FULL, self._subscribed_tokens)
-                logger.info(f"Kite realtime websocket connected, subscribed to {len(self._subscribed_tokens)} tokens")
+                logger.info(
+                    "Kite realtime websocket connected root=%s subscribed_tokens=%s token_map=%s",
+                    _KITE_WS_ROOT,
+                    self._subscribed_tokens,
+                    {t: self._token_to_symbol.get(t) for t in self._subscribed_tokens},
+                )
             except Exception as e:
                 logger.warning(f"Kite realtime subscribe failed: {e}")
                 self._last_error = str(e)
@@ -168,13 +223,30 @@ class KiteRealtimeTicker:
         self._last_disconnect_at = datetime.now(timezone.utc)
         self._started = False
         self._connecting = False
+        self._auth_failed = _auth_failure_text(code) or _auth_failure_text(reason)
+        if self._auth_failed:
+            self._last_error = f"auth_failed: {code}: {reason}; reconnect Zerodha on Broker Keys"
         logger.info(f"Kite realtime websocket closed: {code} {reason}")
 
     def _on_error(self, ws, code, reason) -> None:
         self._last_error = f"{code}: {reason}"
         self._started = False
         self._connecting = False
+        self._auth_failed = _auth_failure_text(code) or _auth_failure_text(reason)
+        if self._auth_failed:
+            self._last_error = f"auth_failed: {self._last_error}; reconnect Zerodha on Broker Keys"
         logger.warning(f"Kite realtime websocket error: {code} {reason}")
+
+    def _on_reconnect(self, ws, attempts_count: int) -> None:
+        self._reconnect_attempts = attempts_count
+        self._connecting = True
+        logger.info("Kite realtime websocket reconnect attempt=%s", attempts_count)
+
+    def _on_noreconnect(self, ws) -> None:
+        self._connecting = False
+        self._started = False
+        self._last_error = self._last_error or "websocket reconnect attempts exhausted"
+        logger.warning("Kite realtime websocket reconnect attempts exhausted")
 
     def start(self, api_key: str, access_token: str, token_to_symbol: Dict[int, str]) -> None:
         if KiteTicker is None:
@@ -203,14 +275,31 @@ class KiteRealtimeTicker:
                 return
 
             try:
-                self._ticker = KiteTicker(api_key, access_token)
+                self._auth_failed = False
+                self._reconnect_attempts = 0
+                self._ticker = KiteTicker(
+                    api_key,
+                    access_token,
+                    root=_KITE_WS_ROOT,
+                    reconnect=True,
+                    reconnect_max_tries=300,
+                    reconnect_max_delay=10,
+                )
                 self._ticker.on_ticks = self._on_ticks
                 self._ticker.on_connect = self._on_connect
                 self._ticker.on_close = self._on_close
                 self._ticker.on_error = self._on_error
+                self._ticker.on_reconnect = self._on_reconnect
+                self._ticker.on_noreconnect = self._on_noreconnect
                 self._connecting = True
                 self._ticker.connect(threaded=True)
-                logger.info("Kite realtime ticker started")
+                logger.info(
+                    "Kite realtime ticker started root=%s api_key=%s access_token=%s subscribed_tokens=%s",
+                    _KITE_WS_ROOT,
+                    _mask_secret(api_key),
+                    _mask_secret(access_token),
+                    self._subscribed_tokens,
+                )
             except Exception as e:
                 self._ticker = None
                 self._started = False
@@ -242,6 +331,9 @@ class KiteRealtimeTicker:
     def is_running(self) -> bool:
         return self._started
 
+    def has_live_ticks(self) -> bool:
+        return self._builder.last_tick_at() is not None
+
     def get_candles(self, symbol: str, bars: int = 250) -> List[Dict[str, Any]]:
         return self._builder.get_candles(symbol, bars)
 
@@ -257,6 +349,10 @@ class KiteRealtimeTicker:
             "last_disconnect_at": self._last_disconnect_at.isoformat() if self._last_disconnect_at else None,
             "last_error": self._last_error,
             "last_tick_at": self._builder.last_tick_at().isoformat() if self._builder.last_tick_at() else None,
+            "auth_failed": self._auth_failed,
+            "reconnect_attempts": self._reconnect_attempts,
+            "websocket_url": _KITE_WS_ROOT,
+            "last_auth_response": self._last_auth_response,
         }
 
 
@@ -282,6 +378,10 @@ class RealtimeTickManager:
         ticker = self._tickers.get(user_id)
         return ticker.is_running() if ticker else False
 
+    def has_live_ticks(self, user_id: str) -> bool:
+        ticker = self._tickers.get(user_id)
+        return ticker.has_live_ticks() if ticker else False
+
     def has_symbol(self, user_id: str, symbol: str) -> bool:
         ticker = self._tickers.get(user_id)
         return ticker.has_symbol(symbol) if ticker else False
@@ -292,4 +392,4 @@ class RealtimeTickManager:
 
     def status_info(self, user_id: str) -> Dict[str, Any]:
         ticker = self._tickers.get(user_id)
-        return ticker.status_info() if ticker else {"connected": False, "subscribed_tokens": 0, "last_connect_at": None, "last_disconnect_at": None, "last_error": None, "last_tick_at": None}
+        return ticker.status_info() if ticker else {"connected": False, "subscribed_tokens": 0, "last_connect_at": None, "last_disconnect_at": None, "last_error": None, "last_tick_at": None, "auth_failed": False, "reconnect_attempts": 0, "websocket_url": _KITE_WS_ROOT}

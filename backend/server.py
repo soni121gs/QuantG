@@ -444,7 +444,7 @@ async def _fetch_strategy_history(
             if interval == "5minute" and tick_manager and tick_manager.is_running(user_id):
                 if tick_manager.has_symbol(user_id, sym_upper):
                     tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
-                    if tick_bars and len(tick_bars) > 1:
+                    if tick_bars:
                         tick_source = f"tick-live"
                         if live_data:
                             live_data = _merge_tick_bars(live_data, tick_bars)
@@ -452,10 +452,10 @@ async def _fetch_strategy_history(
                             live_data = tick_bars
             if not live_data and interval == "5minute" and tick_manager and tick_manager.has_symbol(user_id, sym_upper):
                 tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
-                if tick_bars and len(tick_bars) > min_intraday_bars:
+                if tick_bars:
                     live_data = tick_bars
                     tick_source = f"tick-live"
-            enough = bool(live_data) and (interval == "day" or len(live_data) > min_intraday_bars)
+            enough = bool(live_data) and (interval == "day" or tick_source or len(live_data) > min_intraday_bars)
             if enough:
                 source_label = f"zerodha-kite-{interval}:{source_kind}:{sym_upper}"
                 if tick_source:
@@ -676,6 +676,8 @@ async def watchlist(user=Depends(get_current_user)):
     # Try live Kite first — use ohlc() so we get last_price AND previous close
     kite, status = await get_user_kite(user["id"])
     if kite:
+        tick_manager = getattr(app.state, "tick_manager", None)
+        has_ticks = bool(tick_manager and tick_manager.has_live_ticks(user["id"]))
         instruments = [_nse_token(s["symbol"]) for s in SYMBOLS]
         ohlc_data = kite_helper.safe_ohlc(kite, instruments)
         if ohlc_data:
@@ -690,7 +692,8 @@ async def watchlist(user=Depends(get_current_user)):
                 pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
                 out.append({"symbol": s["symbol"], "name": s["name"],
                             "price": price, "change": change, "pct": pct,
-                            "source": "live"})
+                            "source": "real" if has_ticks else "live",
+                            "feed": "kite-ticker" if has_ticks else "kite-rest"})
             return out
     # Fallback: mock
     out = []
@@ -2583,18 +2586,28 @@ async def live_readiness(user=Depends(get_current_user)):
     })
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
+    tick_auth_failed = bool(tick_status.get("auth_failed"))
     checks.append({
         "id": "tick_feed",
         "label": "Realtime Kite tick feed",
-        "ok": bool(tick_status.get("connected") or tick_status.get("connecting")),
+        "ok": bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed),
         "detail": (
+            "auth failed; reconnect Zerodha"
+            if tick_auth_failed
+            else
             f"connected, last tick {tick_status.get('last_tick_at')}"
             if tick_status.get("connected")
             else "connecting"
             if tick_status.get("connecting")
             else tick_status.get("last_error") or "not connected"
         ),
-        "hint": "Fetch a strategy or watchlist with a live Kite session to start the websocket feed." if not tick_status.get("connected") else None,
+        "hint": (
+            "Click Connect to Zerodha on Broker Keys to create a fresh Kite session."
+            if tick_auth_failed
+            else "Fetch a strategy or watchlist with a live Kite session to start the websocket feed."
+            if not tick_status.get("connected")
+            else None
+        ),
     })
     # Note: "trading mode" is intentionally NOT a check — clicking confirm in the
     # pre-flight modal IS the action that flips paper→live. Including it as a
@@ -3015,7 +3028,14 @@ async def startup():
     # falls back to MOCK 5-min intraday candles only when no broker session.
     # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
     async def _price_history(user_id: str, symbol: str, days: int = 60):
-        return await _fetch_strategy_history(user_id, symbol, days=days, interval="5minute")
+        settings = await get_user_settings(user_id)
+        return await _fetch_strategy_history(
+            user_id,
+            symbol,
+            days=days,
+            interval="5minute",
+            allow_mock=bool(settings.get("paper_mode", True)),
+        )
 
     # Resolver for index option contracts — runner uses this when a strategy
     # has visual_config.options.enabled. Requires a live Kite session.

@@ -563,14 +563,14 @@ export default function Dashboard() {
               {watch[0]?.source && (
                 <span
                   className={`font-mono text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${
-                    watch[0].source === "live"
+                    ["real", "live"].includes(watch[0].source)
                       ? "bg-[rgba(0,230,118,0.12)] text-[var(--qd-profit)] border border-[var(--qd-profit)]"
                       : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] border border-[var(--qd-border)]"
                   }`}
                   data-testid="watch-source"
-                  title={watch[0].source === "live" ? "Real Zerodha data" : "Simulated"}
+                  title={["real", "live"].includes(watch[0].source) ? "Real Zerodha data" : "Simulated"}
                 >
-                  {watch[0].source === "live" ? "🟢 ZERODHA" : "🔵 SIM"}
+                  {watch[0].source === "real" ? "REAL" : watch[0].source === "live" ? "REAL REST" : "MOCK"}
                 </span>
               )}
               <span className="qd-live-dot" />
