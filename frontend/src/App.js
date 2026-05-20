@@ -15,6 +15,7 @@ import Orders from "./pages/Orders";
 import Positions from "./pages/Positions";
 import Profile from "./pages/Profile";
 import OpsConsole from "./pages/OpsConsole";
+import MarketHub from "./pages/MarketHub";
 import ZerodhaCallback from "./pages/ZerodhaCallback";
 import InstallPWA from "./components/InstallPWA";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -51,6 +52,7 @@ export default function App() {
           <Route path="/ai-bot" element={<Protected><AIBot /></Protected>} />
           <Route path="/orders" element={<Protected><Orders /></Protected>} />
           <Route path="/positions" element={<Protected><Positions /></Protected>} />
+          <Route path="/market-hub" element={<Protected><MarketHub /></Protected>} />
           <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
           <Route path="/profile" element={<Protected><Profile /></Protected>} />
           <Route path="/ops" element={<Protected><OpsConsole /></Protected>} />

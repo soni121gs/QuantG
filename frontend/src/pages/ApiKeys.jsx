@@ -10,6 +10,7 @@ export default function ApiKeys() {
   const [saving, setSaving] = useState(false);
   const [zStatus, setZStatus] = useState({ connected: false });
   const [kotakStatus, setKotakStatus] = useState({ connected: false });
+  const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -18,6 +19,7 @@ export default function ApiKeys() {
       api.get("/broker/keys").then((r) => setKeys(r.data)),
       api.get("/zerodha/status").then((r) => setZStatus(r.data)).catch(() => {}),
       api.get("/kotak/status").then((r) => setKotakStatus(r.data)).catch(() => {}),
+      api.get("/upstox/status").then((r) => setUpstoxStatus(r.data)).catch(() => {}),
     ]);
   useEffect(() => { load(); }, []);
 
@@ -97,10 +99,11 @@ export default function ApiKeys() {
           >
             <option value="zerodha">Zerodha Kite</option>
             <option value="kotak_neo">Kotak Neo</option>
+            <option value="upstox">Upstox</option>
           </select>
         </div>
-        <Input label={form.broker === "kotak_neo" ? "Consumer Key" : "API Key"} value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
-        <Input label={form.broker === "kotak_neo" ? "Consumer Secret / Neo Fin Key" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
+        <Input label={form.broker === "kotak_neo" ? "Consumer Key" : form.broker === "upstox" ? "API Key / Client ID" : "API Key"} value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
+        <Input label={form.broker === "kotak_neo" ? "Consumer Secret / Neo Fin Key" : form.broker === "upstox" ? "API Secret" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
         <Input label="Client ID (optional)" value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
         <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
@@ -162,6 +165,20 @@ export default function ApiKeys() {
           )}
           <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
             SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Live order routing remains disabled until the Kotak session flow is verified.
+          </div>
+        </div>
+      </div>
+
+      <div className="qd-card p-5" data-testid="upstox-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Upstox</h2>
+        <div className="text-sm">
+          {upstoxStatus.keys_saved ? (
+            <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Credentials saved for <span className="font-mono">{upstoxStatus.client_id || "Upstox"}</span></div>
+          ) : (
+            <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Upstox credentials above to prepare the broker connection.</div>
+          )}
+          <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
+            SDK: {upstoxStatus.sdk_available ? "available" : "not installed"} · OAuth, market data, and live routing remain disabled until verified.
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, Wifi, Power, Play } from "lucide-react";
+import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, Wifi, Power, Play, SquareArrowOutUpRight } from "lucide-react";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 
@@ -45,7 +45,9 @@ export default function OpsConsole() {
   const ticker = data?.ticker || {};
   const zerodha = data?.zerodha || {};
   const kotak = data?.kotak_neo || {};
+  const upstox = data?.upstox || {};
   const rateLimits = data?.rate_limits || {};
+  const prefs = data?.broker_preferences || {};
 
   return (
     <div className="space-y-4 max-w-6xl" data-testid="ops-console">
@@ -61,13 +63,14 @@ export default function OpsConsole() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-8 gap-3">
         <Metric label="Mode" value={data?.mode || "-"} tone={data?.mode === "LIVE" ? "loss" : "warn"} />
+        <Metric label="Market" value={data?.market?.status || "-"} tone={data?.market?.open ? "profit" : "warn"} />
         <Metric label="Zerodha" value={zerodha.connected ? "Connected" : zerodha.reason || "-"} tone={zerodha.connected ? "profit" : "warn"} />
         <Metric label="Kotak" value={kotak.connected ? "Ready" : kotak.keys_saved ? "Saved" : "Setup"} tone={kotak.connected ? "profit" : "warn"} />
+        <Metric label="Upstox" value={upstox.connected ? "Ready" : upstox.keys_saved ? "Saved" : "Setup"} tone={upstox.connected ? "profit" : "warn"} />
         <Metric label="Ticker" value={ticker.connected ? "CONNECTED" : ticker.connecting ? "CONNECTING" : "DOWN"} tone={ticker.connected ? "profit" : "warn"} />
         <Metric label="Live Strats" value={counts.live_strategies ?? 0} />
-        <Metric label="Open Orders" value={counts.open_orders ?? 0} />
         <Metric label="Errors" value={counts.errored_strategies ?? 0} tone={counts.errored_strategies ? "loss" : "profit"} />
       </div>
 
@@ -81,6 +84,14 @@ export default function OpsConsole() {
             danger
             busy={busy === "stop"}
             onClick={() => run("stop", "/ops/emergency-stop", "Emergency stop now? This pauses all live strategies and switches to PAPER.")}
+          />
+          <Action
+            icon={SquareArrowOutUpRight}
+            title="Square Off All"
+            text="Close all open positions using the current mode and broker."
+            danger
+            busy={busy === "squareoff"}
+            onClick={() => run("squareoff", "/ops/squareoff-all", "Square off every open position now?")}
           />
           <Action
             icon={Pause}
@@ -129,6 +140,8 @@ export default function OpsConsole() {
           <Row k="Ticker error" v={ticker.last_error || "-"} />
           <Row k="Zerodha expiry" v={fmt(zerodha.expires_at)} />
           <Row k="Kotak Neo" v={kotak.keys_saved ? `Configured${kotak.sdk_available ? "" : " / SDK missing"}` : "Not configured"} />
+          <Row k="Upstox" v={upstox.keys_saved ? `Configured${upstox.sdk_available ? "" : " / SDK missing"}` : "Not configured"} />
+          <Row k="Brokers" v={`data ${prefs.data_broker || "-"} / exec ${prefs.execution_broker || "-"} / fallback ${prefs.fallback_broker || "-"}`} />
           <Row k="History cache" v={`${rateLimits.kite_history_cache_entries ?? 0} entries`} />
           <Row k="Readiness" v={data?.readiness?.ready ? "Ready" : "Needs attention"} />
         </div>
@@ -176,6 +189,7 @@ function actionMessage(key, data) {
   if (key === "ticker") return data.started ? `Ticker restart requested for ${data.tokens || 0} symbols.` : `Ticker not started: ${data.reason || "unknown"}`;
   if (key === "clear") return `Cleared errors on ${data.updated_strategies || 0} strategies.`;
   if (key === "orders") return data.ok ? `Synced ${data.sync?.checked || 0} broker orders, fixed ${data.stale?.fixed || 0}.` : `Order sync skipped: ${data.reason || "unknown"}`;
+  if (key === "squareoff") return `Square-off sent: ${data.closed?.length || 0} closed, ${data.failed?.length || 0} failed.`;
   return "Done";
 }
 

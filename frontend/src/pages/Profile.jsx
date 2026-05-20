@@ -20,6 +20,11 @@ export default function Profile() {
         default_product: r.data.default_product,
         max_daily_loss: r.data.max_daily_loss,
         max_position_size: r.data.max_position_size,
+        per_strategy_capital: r.data.per_strategy_capital,
+        max_trades_per_day: r.data.max_trades_per_day,
+        data_broker: r.data.data_broker,
+        execution_broker: r.data.execution_broker,
+        fallback_broker: r.data.fallback_broker,
         paper_mode: r.data.paper_mode,
       });
     });
@@ -143,6 +148,11 @@ export default function Profile() {
           <SelectIn label="Default Product" value={form.default_product} onChange={(v) => setForm({ ...form, default_product: v })} options={["MIS", "CNC", "NRML"]} testid="input-product" />
           <Input label="Max Daily Loss (₹)" type="number" value={form.max_daily_loss} onChange={(v) => setForm({ ...form, max_daily_loss: +v })} testid="input-max-loss" />
           <Input label="Max Position Size (₹)" type="number" value={form.max_position_size} onChange={(v) => setForm({ ...form, max_position_size: +v })} testid="input-max-size" />
+          <Input label="Per-Strategy Capital (₹)" type="number" value={form.per_strategy_capital} onChange={(v) => setForm({ ...form, per_strategy_capital: +v })} testid="input-strategy-capital" />
+          <Input label="Max Trades Per Day" type="number" value={form.max_trades_per_day} onChange={(v) => setForm({ ...form, max_trades_per_day: +v })} testid="input-max-trades" />
+          <SelectIn label="Data Broker" value={form.data_broker} onChange={(v) => setForm({ ...form, data_broker: v })} options={["zerodha", "kotak_neo", "upstox"]} testid="input-data-broker" />
+          <SelectIn label="Execution Broker" value={form.execution_broker} onChange={(v) => setForm({ ...form, execution_broker: v })} options={["zerodha", "kotak_neo", "upstox"]} testid="input-execution-broker" />
+          <SelectIn label="Fallback Broker" value={form.fallback_broker} onChange={(v) => setForm({ ...form, fallback_broker: v })} options={["none", "zerodha", "kotak_neo", "upstox"]} testid="input-fallback-broker" />
         </div>
         <button onClick={save} disabled={busy} className="mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="save-profile-btn">
           Save Preferences

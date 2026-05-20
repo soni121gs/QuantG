@@ -1,7 +1,7 @@
 {
   "short_name": "QuantG",
   "name": "QuantG — Algo Trading Terminal",
-  "description": "Algorithmic trading terminal with Zerodha integration, Python strategies, and AI bot.",
+  "description": "QuantG v8.0 algorithmic trading terminal with multi-broker controls, Python strategies, and AI bot.",
   "icons": [
     {
       "src": "/icon-192.png",

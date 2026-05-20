@@ -388,7 +388,7 @@ export default function Dashboard() {
     <div className="space-y-4" data-testid="dashboard-page">
       <div className="flex items-center justify-between">
         <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// ADVANCED TRADING PLATFORM v2.0</div>
+          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// ADVANCED TRADING PLATFORM v8.0</div>
           <h1 className="font-head text-3xl font-bold tracking-tight text-white mt-1">Dashboard</h1>
         </div>
         <div className="flex items-center gap-2">

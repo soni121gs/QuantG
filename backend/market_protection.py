@@ -38,6 +38,7 @@ class MarketTrendAnalyzer:
         closes = [d['close'] for d in data[-lookback:]]
         highs = [d['high'] for d in data[-lookback:]]
         lows = [d['low'] for d in data[-lookback:]]
+        volumes = [float(d.get('volume') or 0) for d in data[-lookback:]]
         
         # EMA for trend
         ema_fast = MarketTrendAnalyzer._ema(closes, 8)
@@ -52,6 +53,9 @@ class MarketTrendAnalyzer:
         
         # Trend strength (momentum)
         atr = MarketTrendAnalyzer._atr(highs, lows, closes, 14)
+        vwap = MarketTrendAnalyzer._vwap(data[-lookback:])
+        higher_tf = MarketTrendAnalyzer._higher_timeframe_bias(data[-lookback:])
+        volume_ratio = MarketTrendAnalyzer._volume_ratio(volumes)
         current_price = closes[-1]
         prev_price = closes[-5] if len(closes) > 5 else closes[0]
         price_change = ((current_price - prev_price) / prev_price) * 100 if prev_price else 0
@@ -86,6 +90,11 @@ class MarketTrendAnalyzer:
             "resistance": round(resistance, 2),
             "rsi": round(rsi, 2),
             "atr": round(atr, 2),
+            "atr_pct": round((atr / current_price * 100) if current_price else 0, 2),
+            "vwap": round(vwap, 2) if vwap else None,
+            "vwap_distance_pct": round(((current_price - vwap) / vwap * 100), 2) if vwap else None,
+            "higher_timeframe": higher_tf,
+            "volume_ratio": round(volume_ratio, 2),
             "reversal_risk": round(reversal_risk, 2),  # 0=low risk, 1=high risk
             "current_price": round(current_price, 2),
             "price_change_pct": round(price_change, 2),
@@ -129,6 +138,55 @@ class MarketTrendAnalyzer:
                 )
             trs.append(tr)
         return sum(trs[-period:]) / period if trs else 0.0
+
+    @staticmethod
+    def _vwap(data: List[Dict[str, Any]]) -> float:
+        weighted = 0.0
+        total_volume = 0.0
+        for row in data:
+            volume = float(row.get("volume") or 0)
+            if volume <= 0:
+                continue
+            typical = (float(row.get("high", 0)) + float(row.get("low", 0)) + float(row.get("close", 0))) / 3
+            weighted += typical * volume
+            total_volume += volume
+        return weighted / total_volume if total_volume else 0.0
+
+    @staticmethod
+    def _volume_ratio(volumes: List[float], period: int = 20) -> float:
+        non_zero = [v for v in volumes if v > 0]
+        if len(non_zero) < 2:
+            return 1.0
+        recent = non_zero[-1]
+        base = sum(non_zero[-period:]) / min(period, len(non_zero))
+        return recent / base if base else 1.0
+
+    @staticmethod
+    def _higher_timeframe_bias(data: List[Dict[str, Any]], group_size: int = 3) -> Dict[str, Any]:
+        if len(data) < group_size * 8:
+            return {"trend": "UNKNOWN", "direction": 0, "strength": 0}
+        grouped = []
+        for i in range(0, len(data), group_size):
+            chunk = data[i:i + group_size]
+            if len(chunk) < group_size:
+                continue
+            grouped.append({
+                "open": float(chunk[0].get("open", chunk[0].get("close", 0))),
+                "high": max(float(c.get("high", c.get("close", 0))) for c in chunk),
+                "low": min(float(c.get("low", c.get("close", 0))) for c in chunk),
+                "close": float(chunk[-1].get("close", 0)),
+            })
+        closes = [g["close"] for g in grouped]
+        if len(closes) < 8:
+            return {"trend": "UNKNOWN", "direction": 0, "strength": 0}
+        ema_fast = MarketTrendAnalyzer._ema(closes, 5)
+        ema_slow = MarketTrendAnalyzer._ema(closes, 13)
+        direction = 1 if ema_fast[-1] > ema_slow[-1] else -1 if ema_fast[-1] < ema_slow[-1] else 0
+        return {
+            "trend": "BULLISH" if direction > 0 else "BEARISH" if direction < 0 else "NEUTRAL",
+            "direction": direction,
+            "strength": round(abs((ema_fast[-1] - ema_slow[-1]) / ema_slow[-1] * 100), 2) if ema_slow[-1] else 0,
+        }
 
 
 class FakeSignalFilter:
@@ -208,8 +266,58 @@ class FakeSignalFilter:
             elif action == "SELL" and uptrend >= 2:
                 confidence -= 15
                 reasons.append("Recent uptrend candles")
+
+        # Check 5: Multi-timeframe confirmation
+        higher_tf = trend_info.get("higher_timeframe") or {}
+        htf_direction = higher_tf.get("direction", 0)
+        if htf_direction:
+            if (action == "BUY" and htf_direction > 0) or (action == "SELL" and htf_direction < 0):
+                confidence += 12
+                reasons.append(f"Higher timeframe confirms {higher_tf.get('trend')}")
+            else:
+                confidence -= 18
+                reasons.append(f"Higher timeframe disagrees ({higher_tf.get('trend')})")
+
+        # Check 6: VWAP confirmation
+        vwap_distance = trend_info.get("vwap_distance_pct")
+        if vwap_distance is not None:
+            if action == "BUY" and vwap_distance >= -0.15:
+                confidence += 8
+                reasons.append("Price holding near/above VWAP")
+            elif action == "SELL" and vwap_distance <= 0.15:
+                confidence += 8
+                reasons.append("Price holding near/below VWAP")
+            else:
+                confidence -= 10
+                reasons.append("VWAP confirmation missing")
+
+        # Check 7: ATR/volume regime
+        atr_pct = float(trend_info.get("atr_pct") or 0)
+        volume_ratio = float(trend_info.get("volume_ratio") or 1)
+        if atr_pct > 0 and atr_pct < 0.08:
+            confidence -= 12
+            reasons.append("ATR too low; range may be flat")
+        elif atr_pct > 1.8:
+            confidence -= 10
+            reasons.append("ATR very high; whipsaw risk")
+        if volume_ratio >= 1.2:
+            confidence += 8
+            reasons.append("Volume expansion confirms move")
+        elif volume_ratio < 0.65:
+            confidence -= 8
+            reasons.append("Low volume signal")
+
+        # Check 8: Option-chain participation if supplied by data provider
+        option_oi_bias = signal.get("option_oi_bias") or trend_info.get("option_oi_bias")
+        if option_oi_bias:
+            if option_oi_bias == action:
+                confidence += 10
+                reasons.append("Option OI bias confirms signal")
+            else:
+                confidence -= 12
+                reasons.append("Option OI bias disagrees")
         
-        # Check 5: Support/Resistance bounce
+        # Check 9: Support/Resistance bounce
         current_price = data[-1].get('close', 0) if data else 0
         support = trend_info.get("support", 0)
         resistance = trend_info.get("resistance", 0)
@@ -597,4 +705,3 @@ class AutoExitManager:
             "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
             "triggers": triggers,
         }
-

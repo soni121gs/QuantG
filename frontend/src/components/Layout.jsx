@@ -17,9 +17,11 @@ import {
   TrendingUp,
   AlertCircle,
   ShieldAlert,
+  HeartPulse,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
+import { APP_VERSION_LABEL } from "../lib/version";
 
 const NAV = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
@@ -29,6 +31,7 @@ const NAV = [
   { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "nav-aibot" },
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
+  { to: "/market-hub", icon: HeartPulse, label: "Market Hub", id: "nav-market-hub" },
   { to: "/broker-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
   { to: "/ops", icon: ShieldAlert, label: "Ops Console", id: "nav-ops" },
   { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
@@ -102,7 +105,7 @@ export default function Layout({ children }) {
                 <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
               <span className="font-head font-bold tracking-tight text-white text-base">
-                QUANT<span className="text-[var(--qd-accent)]">G</span> v2.0
+                QUANT<span className="text-[var(--qd-accent)]">G</span> {APP_VERSION_LABEL}
               </span>
             </div>
             <div className="hidden md:flex items-center gap-2 text-xs">
@@ -194,7 +197,7 @@ export default function Layout({ children }) {
               Advanced Trading
             </div>
             <div className="text-[8px] text-[var(--qd-text-2)]">
-              v2.0 • Real-time • Live
+              {APP_VERSION_LABEL} • Real-time • Live
             </div>
           </div>
         </aside>
@@ -212,7 +215,7 @@ export default function Layout({ children }) {
               data-testid="mobile-drawer"
             >
               <div className="flex items-center justify-between mb-4 px-1">
-                <span className="font-head font-bold text-white">QuantG v2.0</span>
+                <span className="font-head font-bold text-white">QuantG {APP_VERSION_LABEL}</span>
                 <button onClick={() => setDrawerOpen(false)} data-testid="close-drawer" className="text-white">
                   <X size={20} />
                 </button>
@@ -238,7 +241,7 @@ export default function Layout({ children }) {
                 ))}
               </nav>
               <div className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
-                Advanced Trading Platform v2.0
+                Advanced Trading Platform {APP_VERSION_LABEL}
               </div>
             </aside>
           </div>

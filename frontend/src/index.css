@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,25 +6,28 @@
 
 :root {
   --qd-bg: #050505;
-  --qd-surface: #0c0c0d;
-  --qd-surface-2: #141416;
-  --qd-border: #1f1f22;
-  --qd-border-strong: #2a2a2e;
+  --qd-surface: #0d0e10;
+  --qd-surface-2: #15171a;
+  --qd-surface-3: #1b1e22;
+  --qd-border: #23262b;
+  --qd-border-strong: #353943;
   --qd-text: #ffffff;
-  --qd-text-2: #a3a3a3;
-  --qd-text-3: #666;
+  --qd-text-2: #b3b8c2;
+  --qd-text-3: #737987;
   --qd-accent: #007AFF;
   --qd-accent-hover: #2e8bff;
   --qd-profit: #00E676;
   --qd-loss: #FF3B30;
   --qd-warn: #FF9F0A;
+  --qd-radius: 6px;
 }
 
 html, body, #root {
   background: var(--qd-bg);
   color: var(--qd-text);
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
 }
 
 body {
@@ -36,7 +39,7 @@ body {
 }
 
 .font-mono { font-family: 'JetBrains Mono', monospace; }
-.font-head { font-family: 'Chivo', sans-serif; letter-spacing: -0.01em; }
+.font-head { font-family: 'Chivo', sans-serif; letter-spacing: 0; }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -76,9 +79,10 @@ body {
 
 /* Custom utility */
 .qd-card {
-  background: var(--qd-surface);
+  background: linear-gradient(180deg, rgba(255,255,255,0.018), rgba(255,255,255,0)) var(--qd-surface);
   border: 1px solid var(--qd-border);
-  border-radius: 2px;
+  border-radius: var(--qd-radius);
+  box-shadow: 0 16px 50px rgba(0,0,0,0.18);
 }
 .qd-card:hover { border-color: var(--qd-border-strong); }
 
@@ -94,8 +98,8 @@ body {
 
 .qd-grid-bg {
   background-image:
-    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -116,8 +120,16 @@ body {
 @keyframes qd-flash-dn { 0% { background: rgba(255,59,48,0.18);} 100% {background: transparent;} }
 
 .qd-btn-buy { background: var(--qd-profit); color: #001a08; font-weight: 700; }
-.qd-btn-buy:hover { opacity: 0.85; }
+.qd-btn-buy:hover { filter: brightness(0.94); }
 .qd-btn-sell { background: var(--qd-loss); color: #fff; font-weight: 700; }
-.qd-btn-sell:hover { opacity: 0.85; }
+.qd-btn-sell:hover { filter: brightness(0.94); }
+
+button, a, input, select, textarea {
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, filter 160ms ease;
+}
+
+input, select, textarea {
+  border-radius: 4px;
+}
 
 .qd-tab-active { color: #fff; border-bottom-color: var(--qd-accent) !important; }
