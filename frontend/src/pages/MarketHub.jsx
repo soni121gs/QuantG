@@ -12,22 +12,25 @@ export default function MarketHub() {
   const [journal, setJournal] = useState(null);
   const [chain, setChain] = useState(null);
   const [comparison, setComparison] = useState(null);
+  const [feed, setFeed] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, c, cmp] = await Promise.all([
+    const [h, r, j, c, cmp, f] = await Promise.all([
       api.get("/broker/health"),
       api.get("/risk/dashboard"),
       api.get("/trade-journal"),
       api.get(`/option-chain/${underlying}`),
       api.get("/strategies/live-backtest-comparison"),
+      api.get("/market/feed-comparison"),
     ]);
     setHealth(h.data);
     setRisk(r.data);
     setJournal(j.data);
     setChain(c.data);
     setComparison(cmp.data);
+    setFeed(f.data);
   }, [underlying]);
 
   useEffect(() => {
@@ -45,6 +48,20 @@ export default function MarketHub() {
       await load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Square-off failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const autoPickFeed = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post("/market/auto-data-broker");
+      setFeed(r.data);
+      await load();
+      toast.success(`Data broker set to ${BROKER_LABELS[r.data.recommended_data_broker] || r.data.recommended_data_broker}`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "No healthy feed to auto-pick yet");
     } finally {
       setBusy(false);
     }
@@ -93,6 +110,23 @@ export default function MarketHub() {
             <Small label="Data" value={health?.preferences?.data_broker || "-"} />
             <Small label="Execution" value={health?.preferences?.execution_broker || "-"} />
             <Small label="Fallback" value={health?.preferences?.fallback_broker || "-"} />
+          </div>
+        </section>
+
+        <section className="qd-card p-4 xl:col-span-2">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Ticker Quality</h2>
+            <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
+              Auto-pick
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <FeedCard name="Zerodha" data={feed?.zerodha} />
+            <FeedCard name="Kotak Neo" data={feed?.kotak_neo} />
+          </div>
+          <div className="mt-3 text-xs font-mono text-[var(--qd-text-2)]">
+            Recommended: <span className="text-white">{BROKER_LABELS[feed?.recommended_data_broker] || feed?.recommended_data_broker || "-"}</span>
+            <span className="text-[var(--qd-text-3)]"> · {feed?.reason || "Waiting for live ticks."}</span>
           </div>
         </section>
 
@@ -208,6 +242,25 @@ const BrokerRow = ({ name, data, active }) => (
       </span>
     </div>
     <div className="text-[10px] font-mono text-[var(--qd-text-3)] mt-1">{active ? "execution broker" : data.reason || "-"}</div>
+  </div>
+);
+
+const FeedCard = ({ name, data }) => (
+  <div className={`border rounded-sm p-3 ${data?.healthy ? "border-[var(--qd-profit)]" : "border-[var(--qd-border)]"}`}>
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-white font-semibold">{name}</span>
+      <span className={`font-mono text-[10px] uppercase ${data?.healthy ? "text-[var(--qd-profit)]" : data?.connected ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
+        {data?.healthy ? "fresh" : data?.connected ? "connected" : "offline"}
+      </span>
+    </div>
+    <div className="grid grid-cols-3 gap-2 mt-3">
+      <Small label="Age" value={data?.age_ms == null ? "-" : `${data.age_ms} ms`} />
+      <Small label="Tokens" value={data?.subscribed_tokens ?? 0} />
+      <Small label="Ticks" value={data?.ticks ?? (data?.last_tick_at ? "live" : 0)} />
+    </div>
+    <div className="text-[10px] font-mono text-[var(--qd-text-3)] mt-2 break-all">
+      {data?.last_error || data?.last_tick_at || "-"}
+    </div>
   </div>
 );
 

@@ -76,6 +76,36 @@ export default function ApiKeys() {
     load();
   };
 
+  const kotakLogin = async () => {
+    try {
+      await api.post("/kotak/login");
+      toast.success("Kotak Neo session connected");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Kotak login failed");
+    }
+  };
+
+  const kotakLogout = async () => {
+    try {
+      await api.post("/kotak/logout");
+      toast.success("Kotak Neo session closed");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Kotak logout failed");
+    }
+  };
+
+  const kotakOrderFeed = async () => {
+    try {
+      await api.post("/kotak/order-feed/start");
+      toast.success("Kotak order feed started");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Kotak order feed failed");
+    }
+  };
+
   const redirectUrl = `${window.location.origin}/broker-keys?status=success`;
 
   return (
@@ -157,14 +187,29 @@ export default function ApiKeys() {
 
       <div className="qd-card p-5" data-testid="kotak-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Kotak Neo</h2>
-        <div className="text-sm">
-          {kotakStatus.keys_saved ? (
-            <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Credentials saved for <span className="font-mono">{kotakStatus.client_id || "Kotak Neo"}</span></div>
-          ) : (
-            <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Kotak Neo credentials above to prepare the broker connection.</div>
-          )}
-          <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
-            SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Live order routing remains disabled until the Kotak session flow is verified.
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm">
+            {kotakStatus.connected ? (
+              <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Kotak Neo session connected</div>
+            ) : kotakStatus.keys_saved ? (
+              <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Credentials saved for <span className="font-mono">{kotakStatus.client_id || "Kotak Neo"}</span></div>
+            ) : (
+              <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Kotak Neo credentials above to prepare the broker connection.</div>
+            )}
+            <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
+              SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Env: {kotakStatus.env_ready ? "ready" : "missing TOTP/MPIN/mobile"} · {kotakStatus.reason || "ready"}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {kotakStatus.connected && (
+              <>
+                <button onClick={kotakOrderFeed} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">Order Feed</button>
+                <button onClick={kotakLogout} className="border border-[var(--qd-border)] hover:border-[var(--qd-loss)] text-[var(--qd-loss)] px-3 py-2 text-xs font-mono uppercase rounded-sm">Disconnect</button>
+              </>
+            )}
+            <button onClick={kotakLogin} disabled={!kotakStatus.keys_saved || !kotakStatus.sdk_available || !kotakStatus.env_ready} className="bg-[var(--qd-profit)] disabled:opacity-40 text-black hover:opacity-85 px-5 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2">
+              <ExternalLink size={14} /> Connect Kotak
+            </button>
           </div>
         </div>
       </div>

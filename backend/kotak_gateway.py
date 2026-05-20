@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 try:  # pragma: no cover - depends on production dependency install
@@ -54,6 +55,8 @@ class QuantGNeoGateway:
         self._authenticated = False
         self._subscribed_tokens: List[Dict[str, str]] = []
         self._ticks_by_token: Dict[str, Dict[str, Any]] = {}
+        self._ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
+        self._orders_by_id: Dict[str, Dict[str, Any]] = {}
         self._last_error: Optional[str] = None
         self._lock = threading.RLock()
 
@@ -184,24 +187,61 @@ class QuantGNeoGateway:
         except Exception as exc:
             return self._failure(f"WebSocket subscribe failed: {exc}")
 
+    def subscribe_order_feed(self) -> Dict[str, Any]:
+        """Subscribe to Kotak's real-time order update feed."""
+        if self._client is None:
+            return self._failure("NeoAPI client is not initialized")
+        if not self._authenticated:
+            return self._failure("Kotak Neo session is not authenticated")
+        try:
+            self._install_callbacks()
+            if hasattr(self._client, "subscribe_to_orderfeed"):
+                response = self._client.subscribe_to_orderfeed()
+            elif hasattr(self._client, "subscribeorderfeed"):
+                response = self._client.subscribeorderfeed()
+            else:
+                return self._failure("NeoAPI order-feed subscribe method not found")
+            logger.info("Kotak Neo order feed subscribed")
+            return {"ok": True, "response": response}
+        except Exception as exc:
+            return self._failure(f"Order feed subscribe failed: {exc}")
+
     def on_message(self, message: Any) -> None:
         """SDK callback for market ticks; stores latest tick by token."""
         try:
             ticks = message if isinstance(message, list) else [message]
+            received_at = datetime.now(timezone.utc).isoformat()
             with self._lock:
                 for tick in ticks:
                     if not isinstance(tick, dict):
                         continue
                     token = str(tick.get("tk") or tick.get("instrument_token") or "")
+                    ltp = tick.get("ltp") or tick.get("last_price") or tick.get("last_traded_price")
+                    if token:
+                        symbol = self._symbol_for_token(token)
+                        normalized = {
+                            "token": token,
+                            "symbol": symbol,
+                            "ltp": float(ltp) if ltp not in (None, "") else None,
+                            "received_at": received_at,
+                            "raw": tick,
+                        }
+                        self._ticks_by_token[token] = normalized
+                        if symbol:
+                            self._ticks_by_symbol[symbol.upper()] = normalized
+                    order_id = str(tick.get("nOrdNo") or tick.get("order_id") or tick.get("orderNo") or "")
+                    if order_id:
+                        self._orders_by_id[order_id] = {
+                            "order_id": order_id,
+                            "status": tick.get("ordSt") or tick.get("status"),
+                            "filled_qty": tick.get("fldQty") or tick.get("filled_quantity"),
+                            "received_at": received_at,
+                            "raw": tick,
+                        }
                     if not token:
                         continue
-                    ltp = tick.get("ltp") or tick.get("last_price") or tick.get("last_traded_price")
-                    normalized = {
-                        "token": token,
-                        "ltp": float(ltp) if ltp not in (None, "") else None,
-                        "raw": tick,
-                    }
-                    self._ticks_by_token[token] = normalized
+                    if ltp not in (None, ""):
+                        logger.debug("Kotak Neo tick token=%s ltp=%s", token, ltp)
         except Exception as exc:
             self._set_error(f"WebSocket message handling failed: {exc}")
 
@@ -215,19 +255,39 @@ class QuantGNeoGateway:
             tick = self._ticks_by_token.get(str(instrument_token))
             return dict(tick) if tick else None
 
+    def latest_tick_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Return the latest normalized tick for one subscribed symbol label."""
+        with self._lock:
+            tick = self._ticks_by_symbol.get(str(symbol).upper())
+            return dict(tick) if tick else None
+
     def latest_ticks(self) -> Dict[str, Dict[str, Any]]:
         """Return a snapshot of all latest ticks keyed by token."""
         with self._lock:
             return {token: dict(tick) for token, tick in self._ticks_by_token.items()}
 
+    def latest_orders(self) -> Dict[str, Dict[str, Any]]:
+        """Return a snapshot of order-feed updates keyed by order id."""
+        with self._lock:
+            return {order_id: dict(order) for order_id, order in self._orders_by_id.items()}
+
     def status(self) -> Dict[str, Any]:
         """Return current gateway health and session metadata."""
         with self._lock:
+            last_tick_at = None
+            if self._ticks_by_token:
+                last_tick_at = max(
+                    (tick.get("received_at") for tick in self._ticks_by_token.values() if tick.get("received_at")),
+                    default=None,
+                )
             return {
                 "initialized": self._client is not None,
                 "authenticated": self._authenticated,
                 "subscribed_tokens": len(self._subscribed_tokens),
                 "ticks": len(self._ticks_by_token),
+                "symbols": len(self._ticks_by_symbol),
+                "order_updates": len(self._orders_by_id),
+                "last_tick_at": last_tick_at,
                 "last_error": self._last_error,
             }
 
@@ -283,8 +343,18 @@ class QuantGNeoGateway:
             token = item.get("instrument_token") if isinstance(item, dict) else None
             segment = item.get("exchange_segment") if isinstance(item, dict) else None
             if token and segment:
-                out.append({"instrument_token": str(token), "exchange_segment": str(segment)})
+                normalized = {"instrument_token": str(token), "exchange_segment": str(segment)}
+                symbol = item.get("symbol") if isinstance(item, dict) else None
+                if symbol:
+                    normalized["symbol"] = str(symbol).upper()
+                out.append(normalized)
         return out
+
+    def _symbol_for_token(self, token: str) -> Optional[str]:
+        for item in self._subscribed_tokens:
+            if str(item.get("instrument_token")) == str(token) and item.get("symbol"):
+                return str(item["symbol"]).upper()
+        return None
 
     def _get(self, key: str, default: Optional[str] = None, env: Optional[str] = None) -> Optional[str]:
         value = self._config.get(key)

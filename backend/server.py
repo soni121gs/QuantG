@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, EmailStr
 import kite_helper
 import kotak_helper
 import upstox_helper
+from kotak_gateway import QuantGNeoGateway
 import options_helper
 import backtrader_runner
 import strategy_runner
@@ -75,6 +76,7 @@ _RATE_LIMIT_LOCK = asyncio.Lock()
 _RATE_LIMIT_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
+_KOTAK_GATEWAYS: Dict[str, QuantGNeoGateway] = {}
 
 
 def _fernet() -> Fernet:
@@ -245,6 +247,10 @@ class KiteExchangeReq(BaseModel):
 
 class OpsActionReq(BaseModel):
     note: Optional[str] = None
+
+
+class KotakSubscribeReq(BaseModel):
+    instruments: List[Dict[str, str]]
 
 
 class ChatReq(BaseModel):
@@ -752,6 +758,7 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
     # Try live Kite first — use ohlc() so we get last_price AND previous close
+    checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
     kite, status = await get_user_kite(user["id"])
     if kite:
         tick_manager = getattr(app.state, "tick_manager", None)
@@ -1234,6 +1241,14 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
 
 
 async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True) -> Optional[float]:
+    settings = await get_user_settings(user_id)
+    data_broker = settings.get("data_broker", "zerodha")
+    if data_broker == "kotak_neo":
+        gateway = _KOTAK_GATEWAYS.get(user_id)
+        if gateway:
+            tick = gateway.latest_tick_by_symbol(symbol.upper())
+            if tick and tick.get("ltp"):
+                return float(tick["ltp"])
     kite, _ = await get_user_kite(user_id)
     if kite:
         try:
@@ -1243,10 +1258,110 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
                 return float(ltp_resp[key]["last_price"])
         except Exception:
             pass
+    if data_broker != "kotak_neo" and settings.get("fallback_broker") == "kotak_neo":
+        gateway = _KOTAK_GATEWAYS.get(user_id)
+        if gateway:
+            tick = gateway.latest_tick_by_symbol(symbol.upper())
+            if tick and tick.get("ltp"):
+                return float(tick["ltp"])
     if not allow_mock:
         return None
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
     return live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else None
+
+
+def _kotak_exchange_segment(exchange: str) -> str:
+    return {
+        "NSE": "nse_cm",
+        "BSE": "bse_cm",
+        "NFO": "nse_fo",
+        "BFO": "bse_fo",
+        "MCX": "mcx_fo",
+    }.get((exchange or "NSE").upper(), "nse_cm")
+
+
+def _kotak_order_type(order_type: str) -> str:
+    return {
+        "MARKET": "MKT",
+        "LIMIT": "L",
+        "SL": "SL",
+        "SL-M": "SL-M",
+    }.get((order_type or "MARKET").upper(), "MKT")
+
+
+def _kotak_transaction_type(side: str) -> str:
+    return "B" if (side or "BUY").upper() == "BUY" else "S"
+
+
+def _extract_kotak_order_id(payload: Any) -> Optional[str]:
+    if isinstance(payload, dict):
+        for key in ("nOrdNo", "order_id", "orderId", "OrderNo", "NOrdNo", "nestOrderNumber"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return str(value)
+        for value in payload.values():
+            found = _extract_kotak_order_id(value)
+            if found:
+                return found
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_kotak_order_id(item)
+            if found:
+                return found
+    return None
+
+
+async def _place_kotak_order(
+    user_id: str,
+    *,
+    trading_symbol: str,
+    exchange: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    product: str,
+    price: Optional[float] = None,
+) -> Dict[str, Any]:
+    gateway = await get_user_kotak_gateway(user_id)
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Kotak Neo is not configured. Save Consumer Key and env credentials first.")
+    status = gateway.status()
+    if not status.get("authenticated"):
+        raise HTTPException(status_code=400, detail="Kotak Neo is not connected. Open Broker Keys and click Connect Kotak.")
+    result = await asyncio.to_thread(
+        gateway.place_order,
+        exchange_segment=_kotak_exchange_segment(exchange),
+        product=(product or "MIS").upper(),
+        price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
+        quantity=int(quantity),
+        trading_symbol=trading_symbol,
+        transaction_type=_kotak_transaction_type(side),
+        order_type=_kotak_order_type(order_type),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Kotak rejected order: {result.get('error')}")
+    return {
+        "broker_order_id": _extract_kotak_order_id(result.get("response")),
+        "raw": result.get("response"),
+    }
+
+
+def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _age_ms(value: Optional[str]) -> Optional[int]:
+    parsed = _parse_iso_dt(value)
+    if not parsed:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - parsed).total_seconds() * 1000))
 
 
 async def _evaluate_strategy_risk(user_id: str, sid: str) -> bool:
@@ -2046,10 +2161,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     settings = await get_user_settings(user_id)
     paper = settings.get("paper_mode", True)
     execution_broker = settings.get("execution_broker", "zerodha")
-    if not paper and execution_broker != "zerodha":
+    if not paper and execution_broker not in {"zerodha", "kotak_neo"}:
         raise HTTPException(
             status_code=400,
-            detail=f"Live execution through {execution_broker} is not enabled yet. Switch execution broker to zerodha or use PAPER.",
+            detail=f"Live execution through {execution_broker} is not enabled yet. Switch execution broker to zerodha/kotak_neo or use PAPER.",
         )
     if not paper and order_type == "MARKET" and not _is_nse_market_open():
         raise HTTPException(status_code=400, detail="Live MARKET orders are blocked outside NSE market hours.")
@@ -2103,17 +2218,30 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     raise HTTPException(status_code=409, detail=f"Option entry blocked: {decision.reason}")
                 ledger_opened = True
             try:
-                res = kite_helper.place_live_order(
-                    kite,
-                    tradingsymbol=opt_symbol,
-                    exchange=opt_exchange,
-                    transaction_type=opt_side,
-                    quantity=broker_qty,
-                    order_type=order_type,
-                    product=opt_product,
-                    price=price,
-                )
-                broker_order_id = res.get("order_id")
+                if execution_broker == "kotak_neo":
+                    res = await _place_kotak_order(
+                        user_id,
+                        trading_symbol=opt_symbol,
+                        exchange=opt_exchange,
+                        side=opt_side,
+                        quantity=broker_qty,
+                        order_type=order_type,
+                        product=opt_product,
+                        price=price,
+                    )
+                    broker_order_id = res.get("broker_order_id")
+                else:
+                    res = kite_helper.place_live_order(
+                        kite,
+                        tradingsymbol=opt_symbol,
+                        exchange=opt_exchange,
+                        transaction_type=opt_side,
+                        quantity=broker_qty,
+                        order_type=order_type,
+                        product=opt_product,
+                        price=price,
+                    )
+                    broker_order_id = res.get("order_id")
             except Exception as e:
                 if ledger_opened:
                     option_ledger.release_failed_open(strategy_id)
@@ -2161,6 +2289,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "product": opt_product,
             "status": "COMPLETE" if paper else "OPEN",
             "mode": "paper" if paper else "live",
+            "broker": "paper" if paper else execution_broker,
             "broker_order_id": broker_order_id,
             "source": source,
             "strategy_id": strategy_id,
@@ -2252,22 +2381,35 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         ledger_opened = True
     if not paper:
         kite, _ = await get_user_kite(user_id)
-        if not kite:
+        if execution_broker == "zerodha" and not kite:
             if ledger_opened:
                 option_ledger.release_failed_open(strategy_id)
             raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected. Connect on Broker Keys or flip to Paper.")
         try:
-            res = kite_helper.place_live_order(
-                kite,
-                tradingsymbol=symbol.upper(),
-                exchange="NSE",
-                transaction_type=side,
-                quantity=qty,
-                order_type=order_type,
-                product=product,
-                price=price,
-            )
-            broker_order_id = res.get("order_id")
+            if execution_broker == "kotak_neo":
+                res = await _place_kotak_order(
+                    user_id,
+                    trading_symbol=symbol.upper(),
+                    exchange="NSE",
+                    side=side,
+                    quantity=qty,
+                    order_type=order_type,
+                    product=product,
+                    price=price,
+                )
+                broker_order_id = res.get("broker_order_id")
+            else:
+                res = kite_helper.place_live_order(
+                    kite,
+                    tradingsymbol=symbol.upper(),
+                    exchange="NSE",
+                    transaction_type=side,
+                    quantity=qty,
+                    order_type=order_type,
+                    product=product,
+                    price=price,
+                )
+                broker_order_id = res.get("order_id")
         except Exception as e:
             if ledger_opened:
                 option_ledger.release_failed_open(strategy_id)
@@ -2293,6 +2435,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "product": product,
         "status": "COMPLETE" if paper else "OPEN",
         "mode": "paper" if paper else "live",
+        "broker": "paper" if paper else execution_broker,
         "broker_order_id": broker_order_id,
         "source": source,
         "strategy_id": strategy_id,
@@ -2513,12 +2656,41 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
     return {"fixed": fixed, "checked": len(rows)}
 
 
+async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
+    gateway = _KOTAK_GATEWAYS.get(user_id)
+    if not gateway:
+        return {"checked": 0, "updated": 0}
+    updates = gateway.latest_orders()
+    updated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for order_id, row in updates.items():
+        status = row.get("status")
+        set_doc = {
+            "updated_at": now,
+            "status_message": status,
+        }
+        if status:
+            set_doc["status"] = str(status).upper()
+        if row.get("filled_qty") not in (None, ""):
+            try:
+                set_doc["filled_qty"] = int(float(row.get("filled_qty")))
+            except Exception:
+                set_doc["filled_qty"] = row.get("filled_qty")
+        res = await db.orders.update_many(
+            {"user_id": user_id, "broker": "kotak_neo", "broker_order_id": str(order_id)},
+            {"$set": set_doc},
+        )
+        updated += res.modified_count
+    return {"checked": len(updates), "updated": updated}
+
+
 @api.get("/orders")
 async def list_orders(user=Depends(get_current_user)):
     """Local order log + live broker orders (merged) so users see EVERY status."""
     kite, _ = await get_user_kite(user["id"])
     if kite:
         await _sync_kite_order_statuses(user["id"], kite)
+    await _sync_kotak_order_statuses(user["id"])
     rows = await db.orders.find({"user_id": user["id"]},
                                 {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     # Add live Kite orders not already represented locally.
@@ -2766,6 +2938,7 @@ async def orders_ws(websocket: WebSocket):
             kite, _ = await get_user_kite(user["id"])
             if kite:
                 await _sync_kite_order_statuses(user["id"], kite)
+            await _sync_kotak_order_statuses(user["id"])
             rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
             await websocket.send_json({
                 "type": "orders",
@@ -2881,7 +3054,36 @@ async def get_user_kite(user_id: str):
 async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
-    return kotak_helper.status_from_keys(keys, consumer_key)
+    status = kotak_helper.status_from_keys(keys, consumer_key)
+    gateway = _KOTAK_GATEWAYS.get(user_id)
+    if gateway:
+        gw_status = gateway.status()
+        status.update({
+            "connected": bool(gw_status.get("authenticated")),
+            "gateway": gw_status,
+            "reason": None if gw_status.get("authenticated") else status.get("reason"),
+        })
+    status["env_ready"] = all(os.environ.get(k) for k in ("KOTAK_MOBILE_NUMBER", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET_KEY"))
+    return status
+
+
+async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[QuantGNeoGateway]:
+    if not fresh and user_id in _KOTAK_GATEWAYS:
+        return _KOTAK_GATEWAYS[user_id]
+    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
+    consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
+    if not consumer_key:
+        return None
+    config = {
+        "consumer_key": consumer_key,
+        "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER"),
+        "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
+        "mpin": os.environ.get("KOTAK_MPIN"),
+        "totp_secret_key": os.environ.get("KOTAK_TOTP_SECRET_KEY"),
+    }
+    gateway = QuantGNeoGateway(config=config)
+    _KOTAK_GATEWAYS[user_id] = gateway
+    return gateway
 
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
@@ -2913,20 +3115,29 @@ async def get_user_settings(user_id: str) -> dict:
 async def live_readiness(user=Depends(get_current_user)):
     """Pre-flight checks before flipping to LIVE. Returns each check + an overall ready flag."""
     checks = []
+    settings = await get_user_settings(user["id"])
+    data_broker = settings.get("data_broker", "zerodha")
+    execution_broker = settings.get("execution_broker", "zerodha")
+    required_brokers = {b for b in (data_broker, execution_broker) if b in {"zerodha", "kotak_neo"}}
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
+    kotak_status = await get_user_kotak_status(user["id"])
+    zerodha_required = "zerodha" in required_brokers
+    kotak_required = "kotak_neo" in required_brokers
+    required_keys_ok = (not zerodha_required or bool(keys)) and (not kotak_required or bool(kotak_status.get("keys_saved")))
     checks.append({
         "id": "broker_keys",
-        "label": "Zerodha API key + secret saved",
-        "ok": bool(keys),
+        "label": "Required broker credentials saved",
+        "ok": required_keys_ok,
         "hint": "Save on Broker Keys → Step 1" if not keys else None,
     })
     kite, status = await get_user_kite(user["id"])
+    required_sessions_ok = (not zerodha_required or bool(status.get("connected"))) and (not kotak_required or bool(kotak_status.get("connected")))
     checks.append({
         "id": "kite_session",
-        "label": "Active Zerodha session (token valid)",
-        "ok": status.get("connected", False),
-        "detail": status.get("kite_user_id") if status.get("connected") else status.get("reason"),
-        "hint": "Click 'Connect to Zerodha' on Broker Keys" if not status.get("connected") else None,
+        "label": "Active selected broker session",
+        "ok": required_sessions_ok,
+        "detail": f"data={data_broker}, execution={execution_broker}",
+        "hint": "Connect the selected data/execution broker on Broker Keys" if not required_sessions_ok else None,
     })
     funds_ok = False
     funds_msg = None
@@ -2968,10 +3179,16 @@ async def live_readiness(user=Depends(get_current_user)):
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
     tick_auth_failed = bool(tick_status.get("auth_failed"))
+    kotak_gateway_status = kotak_status.get("gateway") or {}
+    selected_tick_ok = (
+        bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed)
+        if data_broker == "zerodha"
+        else bool(kotak_gateway_status.get("authenticated") and kotak_gateway_status.get("ticks", 0) > 0)
+    )
     checks.append({
         "id": "tick_feed",
-        "label": "Realtime Kite tick feed",
-        "ok": bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed),
+        "label": "Realtime selected tick feed",
+        "ok": selected_tick_ok,
         "detail": (
             "auth failed; reconnect Zerodha"
             if tick_auth_failed
@@ -3041,6 +3258,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     kite, kite_status = await get_user_kite(user["id"])
     order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
+    kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
@@ -3083,7 +3301,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "open_orders": orders_open,
             "paper_positions": positions_count,
         },
-        "order_sync": order_sync,
+        "order_sync": {**order_sync, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0)},
         "rate_limits": {
             "kite_history_cache_entries": len(_HISTORY_CACHE),
             "kite_history_cache_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
@@ -3258,6 +3476,47 @@ async def kotak_status(user=Depends(get_current_user)):
     return await get_user_kotak_status(user["id"])
 
 
+@api.post("/kotak/login")
+async def kotak_login(user=Depends(get_current_user)):
+    gateway = await get_user_kotak_gateway(user["id"], fresh=True)
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key on Broker Keys and set Kotak env vars first.")
+    result = await asyncio.to_thread(gateway.authenticate)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Kotak login failed"))
+    return {"ok": True, "status": gateway.status()}
+
+
+@api.post("/kotak/logout")
+async def kotak_logout(user=Depends(get_current_user)):
+    gateway = _KOTAK_GATEWAYS.pop(user["id"], None)
+    if not gateway:
+        return {"ok": True, "message": "no_active_kotak_gateway"}
+    return await asyncio.to_thread(gateway.logout)
+
+
+@api.post("/kotak/subscribe")
+async def kotak_subscribe(req: KotakSubscribeReq, user=Depends(get_current_user)):
+    gateway = await get_user_kotak_gateway(user["id"])
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
+    result = await asyncio.to_thread(gateway.subscribe_symbols, req.instruments)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Kotak subscribe failed"))
+    return {"ok": True, "status": gateway.status(), "tokens": result.get("tokens", [])}
+
+
+@api.post("/kotak/order-feed/start")
+async def kotak_start_order_feed(user=Depends(get_current_user)):
+    gateway = await get_user_kotak_gateway(user["id"])
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
+    result = await asyncio.to_thread(gateway.subscribe_order_feed)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Kotak order feed failed"))
+    return {"ok": True, "status": gateway.status()}
+
+
 @api.get("/upstox/status")
 async def upstox_status(user=Depends(get_current_user)):
     return await get_user_upstox_status(user["id"])
@@ -3307,6 +3566,71 @@ async def broker_health(user=Depends(get_current_user)):
             "history_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
         },
     }
+
+
+@api.get("/market/feed-comparison")
+async def market_feed_comparison(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    tick_manager = getattr(app.state, "tick_manager", None)
+    zerodha_tick = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
+    kotak = await get_user_kotak_status(user["id"])
+    kotak_gateway = kotak.get("gateway") or {}
+
+    zerodha_last = zerodha_tick.get("last_tick_at")
+    kotak_last = kotak_gateway.get("last_tick_at")
+    zerodha_age = _age_ms(zerodha_last)
+    kotak_age = _age_ms(kotak_last)
+    zerodha_healthy = bool(zerodha_tick.get("connected") and zerodha_last and (zerodha_age is None or zerodha_age < 15000))
+    kotak_healthy = bool(kotak_gateway.get("authenticated") and kotak_gateway.get("ticks", 0) > 0 and kotak_last and (kotak_age is None or kotak_age < 15000))
+
+    recommended = settings.get("data_broker", "zerodha")
+    reason = "Keep configured data broker until a healthier live feed is observed."
+    if zerodha_healthy and kotak_healthy:
+        if kotak_age is not None and zerodha_age is not None and kotak_age + 250 < zerodha_age:
+            recommended, reason = "kotak_neo", "Kotak ticks are fresher right now."
+        else:
+            recommended, reason = "zerodha", "Zerodha ticks are as fresh or fresher right now."
+    elif kotak_healthy:
+        recommended, reason = "kotak_neo", "Kotak has fresh ticks and Zerodha is stale/unavailable."
+    elif zerodha_healthy:
+        recommended, reason = "zerodha", "Zerodha has fresh ticks and Kotak is stale/unavailable."
+
+    return {
+        "configured_data_broker": settings.get("data_broker", "zerodha"),
+        "recommended_data_broker": recommended,
+        "reason": reason,
+        "zerodha": {
+            "connected": bool(zerodha_tick.get("connected")),
+            "last_tick_at": zerodha_last,
+            "age_ms": zerodha_age,
+            "subscribed_tokens": zerodha_tick.get("subscribed_tokens"),
+            "last_error": zerodha_tick.get("last_error"),
+            "healthy": zerodha_healthy,
+        },
+        "kotak_neo": {
+            "connected": bool(kotak.get("connected")),
+            "authenticated": bool(kotak_gateway.get("authenticated")),
+            "last_tick_at": kotak_last,
+            "age_ms": kotak_age,
+            "subscribed_tokens": kotak_gateway.get("subscribed_tokens", 0),
+            "ticks": kotak_gateway.get("ticks", 0),
+            "order_updates": kotak_gateway.get("order_updates", 0),
+            "last_error": kotak_gateway.get("last_error") or kotak.get("reason"),
+            "healthy": kotak_healthy,
+        },
+    }
+
+
+@api.post("/market/auto-data-broker")
+async def market_auto_data_broker(user=Depends(get_current_user)):
+    comparison = await market_feed_comparison(user=user)
+    broker = comparison.get("recommended_data_broker")
+    if broker not in {"zerodha", "kotak_neo"}:
+        raise HTTPException(status_code=400, detail="No healthy live data broker is available yet.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"data_broker": broker}})
+    comparison["updated"] = True
+    comparison["configured_data_broker"] = broker
+    return comparison
 
 
 @api.get("/market/session")
