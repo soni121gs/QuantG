@@ -3,7 +3,12 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install runtime dependencies only. The build uses standard wheels, so no system toolchain is required.
+# git is required for Kotak Neo's official SDK dependency:
+# git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
