@@ -13,6 +13,7 @@ import hashlib
 import base64
 import math
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -26,6 +27,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 
 import kite_helper
+import kotak_helper
 import options_helper
 import backtrader_runner
 import strategy_runner
@@ -63,6 +65,14 @@ option_ledger = OptionStateLedger(
     OPTION_LEDGER_PATH,
     pool_size=int(os.environ.get("OPTION_LEDGER_POOL_SIZE", "4")),
 )
+
+KITE_HISTORICAL_MIN_INTERVAL_SEC = float(os.environ.get("KITE_HISTORICAL_MIN_INTERVAL_SEC", "0.40"))
+KITE_HISTORY_CACHE_TTL_SEC = int(os.environ.get("KITE_HISTORY_CACHE_TTL_SEC", "55"))
+KITE_ORDER_SYNC_TTL_SEC = int(os.environ.get("KITE_ORDER_SYNC_TTL_SEC", "10"))
+_RATE_LIMIT_LOCK = asyncio.Lock()
+_RATE_LIMIT_LAST: Dict[str, float] = {}
+_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+_ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _fernet() -> Fernet:
@@ -406,6 +416,47 @@ def _merge_tick_bars(historical: List[Dict[str, Any]], tick_bars: List[Dict[str,
     return historical
 
 
+async def _rate_limit(bucket: str, min_interval_sec: float) -> None:
+    async with _RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        last = _RATE_LIMIT_LAST.get(bucket, 0.0)
+        wait = max(0.0, min_interval_sec - (now - last))
+        if wait:
+            await asyncio.sleep(wait)
+        _RATE_LIMIT_LAST[bucket] = time.monotonic()
+
+
+def _history_cache_key(user_id: str, token: int, days: int, interval: str) -> str:
+    return f"{user_id}:{token}:{days}:{interval}"
+
+
+def _history_cache_get(user_id: str, token: int, days: int, interval: str) -> Optional[List[Dict[str, Any]]]:
+    item = _HISTORY_CACHE.get(_history_cache_key(user_id, token, days, interval))
+    if not item:
+        return None
+    if time.monotonic() - item["cached_at"] > KITE_HISTORY_CACHE_TTL_SEC:
+        return None
+    return item["data"]
+
+
+def _history_cache_set(user_id: str, token: int, days: int, interval: str, data: Optional[List[Dict[str, Any]]]) -> None:
+    if data:
+        _HISTORY_CACHE[_history_cache_key(user_id, token, days, interval)] = {
+            "cached_at": time.monotonic(),
+            "data": data,
+        }
+
+
+async def _cached_safe_historical(kite, user_id: str, token: int, days: int, interval: str) -> Optional[List[Dict[str, Any]]]:
+    cached = _history_cache_get(user_id, token, days, interval)
+    if cached is not None:
+        return cached
+    await _rate_limit("kite:historical", KITE_HISTORICAL_MIN_INTERVAL_SEC)
+    data = kite_helper.safe_historical(kite, token, days=days, interval=interval)
+    _history_cache_set(user_id, token, days, interval, data)
+    return data
+
+
 async def _fetch_strategy_history(
     user_id: str,
     symbol: str,
@@ -448,7 +499,7 @@ async def _fetch_strategy_history(
             token = kite_helper.instrument_token(kite, sym_upper)
 
         if token:
-            live_data = kite_helper.safe_historical(kite, token, days=days, interval=interval)
+            live_data = await _cached_safe_historical(kite, user_id, token, days, interval)
             tick_source = None
             if interval == "5minute" and tick_manager and tick_manager.is_running(user_id):
                 if tick_manager.has_symbol(user_id, sym_upper):
@@ -476,7 +527,7 @@ async def _fetch_strategy_history(
                     "interval": interval,
                 }
             if interval != "day":
-                daily = kite_helper.safe_historical(kite, token, days=days, interval="day")
+                daily = await _cached_safe_historical(kite, user_id, token, days, "day")
                 if daily:
                     return {
                         "data": daily,
@@ -632,12 +683,15 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
 # ============== Routes: Broker keys ==============
 @api.post("/broker/keys", response_model=BrokerKeyOut)
 async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
+    broker = (req.broker or "zerodha").strip().lower()
+    if broker not in {"zerodha", "kotak_neo"}:
+        raise HTTPException(400, "Unsupported broker")
     # upsert per user+broker
-    existing = await db.broker_keys.find_one({"user_id": user["id"], "broker": req.broker})
+    existing = await db.broker_keys.find_one({"user_id": user["id"], "broker": broker})
     doc = {
         "id": (existing or {}).get("id", str(uuid.uuid4())),
         "user_id": user["id"],
-        "broker": req.broker,
+        "broker": broker,
         "api_key": encrypt_secret(req.api_key),
         "api_secret": encrypt_secret(req.api_secret),
         "user_id_at_broker": req.user_id_at_broker,
@@ -645,7 +699,7 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.broker_keys.update_one(
-        {"user_id": user["id"], "broker": req.broker},
+        {"user_id": user["id"], "broker": broker},
         {"$set": doc},
         upsert=True,
     )
@@ -2302,11 +2356,16 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
     """Mirror Kite order statuses into local rows with broker_order_id."""
     if not kite:
         return {"checked": 0, "updated": 0}
+    cached = _ORDER_SYNC_CACHE.get(user_id)
+    if cached and time.monotonic() - cached["cached_at"] < KITE_ORDER_SYNC_TTL_SEC:
+        return cached["result"]
     try:
         live_orders = kite.orders() or []
     except Exception as e:
         logger.warning(f"kite orders fetch failed: {e}")
-        return {"checked": 0, "updated": 0}
+        result = {"checked": 0, "updated": 0}
+        _ORDER_SYNC_CACHE[user_id] = {"cached_at": time.monotonic(), "result": result}
+        return result
 
     updated = 0
     now = datetime.now(timezone.utc).isoformat()
@@ -2330,7 +2389,40 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
             {"$set": set_doc},
         )
         updated += res.modified_count
-    return {"checked": len(live_orders), "updated": updated}
+    result = {"checked": len(live_orders), "updated": updated}
+    _ORDER_SYNC_CACHE[user_id] = {"cached_at": time.monotonic(), "result": result}
+    return result
+
+
+async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
+    if not kite:
+        return {"fixed": 0, "reason": "zerodha_not_connected"}
+    try:
+        live_orders = kite.orders() or []
+    except Exception as e:
+        logger.warning(f"kite orders fetch failed: {e}")
+        return {"fixed": 0, "reason": str(e)}
+    broker_status = {
+        o.get("order_id"): o.get("status")
+        for o in live_orders
+        if o.get("order_id") and o.get("status")
+    }
+    fixed = 0
+    rows = await db.orders.find({
+        "user_id": user_id,
+        "status": {"$in": ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"]},
+        "broker_order_id": {"$exists": True, "$ne": None},
+    }, {"_id": 0, "id": 1, "broker_order_id": 1}).to_list(500)
+    for row in rows:
+        status = broker_status.get(row.get("broker_order_id"))
+        if status in {"COMPLETE", "CANCELLED", "REJECTED"}:
+            res = await db.orders.update_one(
+                {"user_id": user_id, "id": row["id"]},
+                {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            fixed += res.modified_count
+    _ORDER_SYNC_CACHE.pop(user_id, None)
+    return {"fixed": fixed, "checked": len(rows)}
 
 
 @api.get("/orders")
@@ -2568,6 +2660,12 @@ async def get_user_kite(user_id: str):
                   "expires_at": keys["access_token_expires_at"]}
 
 
+async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
+    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
+    consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
+    return kotak_helper.status_from_keys(keys, consumer_key)
+
+
 async def get_user_settings(user_id: str) -> dict:
     """Profile / trading preferences with safe defaults."""
     user = await db.users.find_one({"id": user_id}, {"_id": 0})
@@ -2681,6 +2779,12 @@ async def live_readiness(user=Depends(get_current_user)):
 
 
 # ============== Routes: Ops Console ==============
+def _is_strategy_blocking_error(message: Optional[str]) -> bool:
+    if not message:
+        return False
+    return not str(message).startswith("Signal filtered:")
+
+
 async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
     kite, status = await get_user_kite(user_id)
     if not kite:
@@ -2721,7 +2825,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "last_evaluated_at": s.get("last_evaluated_at"),
         }
         for s in strategies
-        if s.get("last_error")
+        if _is_strategy_blocking_error(s.get("last_error"))
     ][:20]
     orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": ["OPEN", "PENDING"]}})
     positions_count = await db.positions.count_documents({"user_id": user["id"]})
@@ -2732,6 +2836,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
         "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
         "readiness": readiness,
         "zerodha": kite_status,
+        "kotak_neo": await get_user_kotak_status(user["id"]),
         "ticker": tick_status,
         "counts": {
             "strategies": len(strategies),
@@ -2742,6 +2847,11 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "paper_positions": positions_count,
         },
         "order_sync": order_sync,
+        "rate_limits": {
+            "kite_history_cache_entries": len(_HISTORY_CACHE),
+            "kite_history_cache_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
+            "kite_historical_min_interval_sec": KITE_HISTORICAL_MIN_INTERVAL_SEC,
+        },
         "errored_strategies": errored,
     }
 
@@ -2757,6 +2867,17 @@ async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_
         except Exception as e:
             logger.warning(f"ticker stop from ops failed: {e}")
     return await _start_user_ticker(user["id"])
+
+
+@api.post("/ops/orders/sync")
+async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
+    kite, status = await get_user_kite(user["id"])
+    if not kite:
+        return {"ok": False, "reason": status.get("reason", "zerodha_not_connected"), "status": status}
+    _ORDER_SYNC_CACHE.pop(user["id"], None)
+    sync = await _sync_kite_order_statuses(user["id"], kite)
+    stale = await _stale_local_open_orders(user["id"], kite)
+    return {"ok": True, "sync": sync, "stale": stale}
 
 
 @api.post("/ops/emergency-stop")
@@ -2893,6 +3014,30 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
 async def zerodha_status(user=Depends(get_current_user)):
     _, status = await get_user_kite(user["id"])
     return status
+
+
+@api.get("/kotak/status")
+async def kotak_status(user=Depends(get_current_user)):
+    return await get_user_kotak_status(user["id"])
+
+
+@api.get("/broker/health")
+async def broker_health(user=Depends(get_current_user)):
+    _, kite_status = await get_user_kite(user["id"])
+    tick_manager = getattr(app.state, "tick_manager", None)
+    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
+    return {
+        "zerodha": {
+            **kite_status,
+            "ticker": tick_status,
+            "healthy": bool(kite_status.get("connected") and tick_status.get("connected") and tick_status.get("last_tick_at")),
+        },
+        "kotak_neo": await get_user_kotak_status(user["id"]),
+        "cache": {
+            "kite_history_entries": len(_HISTORY_CACHE),
+            "history_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
+        },
+    }
 
 
 @api.post("/zerodha/disconnect")

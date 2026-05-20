@@ -38,6 +38,13 @@ const formatDataSource = (source) => {
   return source;
 };
 
+const strategyNotice = (s) => {
+  if (s.last_filter_reason) return { text: s.last_filter_reason, kind: "filter" };
+  if (s.last_error?.startsWith("Signal filtered:")) return { text: s.last_error, kind: "filter" };
+  if (s.last_error) return { text: s.last_error, kind: "error" };
+  return null;
+};
+
 const ASSET_CLASSES = [
   { id: "all", label: "All Strategies", icon: "📊" },
   { id: "equity", label: "Equity", icon: "📈" },
@@ -398,9 +405,13 @@ function StrategyCard({ s, testing, toggle, del, testRun, manualOrder, exitAll }
         <Cell k="Data" v={formatDataSource(s.last_data_source)} tone={s.last_data_live ? "p" : s.last_data_source ? "l" : ""} />
       </div>
 
-      {s.last_error && (
-        <div className="text-[10px] font-mono text-[var(--qd-loss)] bg-[rgba(255,59,48,0.08)] px-2 py-1 rounded-sm break-all">
-          ! {s.last_error}
+      {strategyNotice(s) && (
+        <div className={`text-[10px] font-mono px-2 py-1 rounded-sm break-all ${
+          strategyNotice(s).kind === "filter"
+            ? "text-[var(--qd-warn)] bg-[rgba(255,176,32,0.08)]"
+            : "text-[var(--qd-loss)] bg-[rgba(255,59,48,0.08)]"
+        }`}>
+          {strategyNotice(s).kind === "filter" ? "FILTER" : "ERROR"} {strategyNotice(s).text}
         </div>
       )}
 

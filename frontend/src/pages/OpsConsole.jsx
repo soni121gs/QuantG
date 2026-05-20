@@ -44,6 +44,8 @@ export default function OpsConsole() {
   const counts = data?.counts || {};
   const ticker = data?.ticker || {};
   const zerodha = data?.zerodha || {};
+  const kotak = data?.kotak_neo || {};
+  const rateLimits = data?.rate_limits || {};
 
   return (
     <div className="space-y-4 max-w-6xl" data-testid="ops-console">
@@ -59,9 +61,10 @@ export default function OpsConsole() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
         <Metric label="Mode" value={data?.mode || "-"} tone={data?.mode === "LIVE" ? "loss" : "warn"} />
         <Metric label="Zerodha" value={zerodha.connected ? "Connected" : zerodha.reason || "-"} tone={zerodha.connected ? "profit" : "warn"} />
+        <Metric label="Kotak" value={kotak.connected ? "Ready" : kotak.keys_saved ? "Saved" : "Setup"} tone={kotak.connected ? "profit" : "warn"} />
         <Metric label="Ticker" value={ticker.connected ? "CONNECTED" : ticker.connecting ? "CONNECTING" : "DOWN"} tone={ticker.connected ? "profit" : "warn"} />
         <Metric label="Live Strats" value={counts.live_strategies ?? 0} />
         <Metric label="Open Orders" value={counts.open_orders ?? 0} />
@@ -107,6 +110,13 @@ export default function OpsConsole() {
             busy={busy === "clear"}
             onClick={() => run("clear", "/ops/strategies/clear-errors")}
           />
+          <Action
+            icon={RefreshCw}
+            title="Sync Broker Orders"
+            text="Refresh Zerodha order statuses and repair completed local rows."
+            busy={busy === "orders"}
+            onClick={() => run("orders", "/ops/orders/sync")}
+          />
         </div>
 
         <div className="qd-card p-4 space-y-3">
@@ -118,6 +128,8 @@ export default function OpsConsole() {
           <Row k="Websocket URL" v={ticker.websocket_url || "-"} />
           <Row k="Ticker error" v={ticker.last_error || "-"} />
           <Row k="Zerodha expiry" v={fmt(zerodha.expires_at)} />
+          <Row k="Kotak Neo" v={kotak.keys_saved ? `Configured${kotak.sdk_available ? "" : " / SDK missing"}` : "Not configured"} />
+          <Row k="History cache" v={`${rateLimits.kite_history_cache_entries ?? 0} entries`} />
           <Row k="Readiness" v={data?.readiness?.ready ? "Ready" : "Needs attention"} />
         </div>
       </div>
@@ -163,6 +175,7 @@ function actionMessage(key, data) {
   if (key === "enable") return `Enabled ${data.enabled_strategies || 0} strategies.`;
   if (key === "ticker") return data.started ? `Ticker restart requested for ${data.tokens || 0} symbols.` : `Ticker not started: ${data.reason || "unknown"}`;
   if (key === "clear") return `Cleared errors on ${data.updated_strategies || 0} strategies.`;
+  if (key === "orders") return data.ok ? `Synced ${data.sync?.checked || 0} broker orders, fixed ${data.stale?.fixed || 0}.` : `Order sync skipped: ${data.reason || "unknown"}`;
   return "Done";
 }
 

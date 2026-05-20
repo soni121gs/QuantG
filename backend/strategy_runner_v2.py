@@ -288,10 +288,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                       f"reasons={validation['reasons']}")
                             await db.strategies.update_one({"id": s["id"]},
                                                            {"$set": {**eval_set,
-                                                                     "last_error": f"Signal filtered: "
-                                                                                 f"confidence={validation['confidence']:.0f}%",
-                                                                     "last_signals_count": signals_count},
-                                                            "$inc": inc_set})
+                                                                      "last_filter_reason": f"Signal filtered: "
+                                                                                           f"confidence={validation['confidence']:.0f}%",
+                                                                      "last_signal_validation": validation,
+                                                                      "last_signals_count": signals_count},
+                                                            "$unset": {"last_error": ""},
+                                                             "$inc": inc_set})
                             continue
                         
                         eval_set["last_signal_confidence"] = validation["confidence"]

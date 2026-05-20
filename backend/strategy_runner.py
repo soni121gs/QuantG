@@ -229,11 +229,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         {"$set": {**eval_set,
                                   "last_signals_count": signals_count,
                                   "last_signal_action": action,
-                                  "last_error": (
+                                  "last_filter_reason": (
                                       f"Signal filtered: confidence {signal_validation.get('confidence')} "
                                       f"< {signal_validation.get('threshold')}. {reason}"
                                   ),
                                   "last_signal_validation": signal_validation},
+                         "$unset": {"last_error": ""},
                          "$inc": inc_set},
                     )
                     continue

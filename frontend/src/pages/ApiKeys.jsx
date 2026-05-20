@@ -9,6 +9,7 @@ export default function ApiKeys() {
   const [form, setForm] = useState({ broker: "zerodha", api_key: "", api_secret: "", user_id_at_broker: "" });
   const [saving, setSaving] = useState(false);
   const [zStatus, setZStatus] = useState({ connected: false });
+  const [kotakStatus, setKotakStatus] = useState({ connected: false });
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -16,6 +17,7 @@ export default function ApiKeys() {
     Promise.all([
       api.get("/broker/keys").then((r) => setKeys(r.data)),
       api.get("/zerodha/status").then((r) => setZStatus(r.data)).catch(() => {}),
+      api.get("/kotak/status").then((r) => setKotakStatus(r.data)).catch(() => {}),
     ]);
   useEffect(() => { load(); }, []);
 
@@ -79,14 +81,26 @@ export default function ApiKeys() {
       <div>
         <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// CREDENTIALS</div>
         <h1 className="font-head text-3xl font-bold text-white mt-1">Broker Keys</h1>
-        <p className="text-sm text-[var(--qd-text-2)] mt-1">Connect your Zerodha Kite Connect app to enable real market data and live execution.</p>
+        <p className="text-sm text-[var(--qd-text-2)] mt-1">Connect broker APIs for real market data, order sync, and controlled live execution.</p>
       </div>
 
       {/* Step 1: save keys */}
       <form onSubmit={save} className="qd-card p-5 space-y-3" data-testid="keys-form">
-        <h2 className="font-head text-lg text-white flex items-center gap-2"><KeyRound size={16} /> Step 1 · Save your Kite app credentials</h2>
-        <Input label="API Key" value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
-        <Input label="API Secret" value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
+        <h2 className="font-head text-lg text-white flex items-center gap-2"><KeyRound size={16} /> Step 1 · Save broker API credentials</h2>
+        <div>
+          <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Broker</label>
+          <select
+            value={form.broker}
+            onChange={(e) => setForm({ ...form, broker: e.target.value })}
+            className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-sm text-white font-mono rounded-sm"
+            data-testid="broker-select"
+          >
+            <option value="zerodha">Zerodha Kite</option>
+            <option value="kotak_neo">Kotak Neo</option>
+          </select>
+        </div>
+        <Input label={form.broker === "kotak_neo" ? "Consumer Key" : "API Key"} value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
+        <Input label={form.broker === "kotak_neo" ? "Consumer Secret / Neo Fin Key" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
         <Input label="Client ID (optional)" value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
         <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
@@ -135,6 +149,20 @@ export default function ApiKeys() {
         </div>
         <div className="mt-3 text-xs font-mono text-[var(--qd-text-3)]">
           Note: Zerodha tokens expire daily at 6 AM IST. You'll need to re-connect each trading morning.
+        </div>
+      </div>
+
+      <div className="qd-card p-5" data-testid="kotak-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Kotak Neo</h2>
+        <div className="text-sm">
+          {kotakStatus.keys_saved ? (
+            <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Credentials saved for <span className="font-mono">{kotakStatus.client_id || "Kotak Neo"}</span></div>
+          ) : (
+            <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Kotak Neo credentials above to prepare the broker connection.</div>
+          )}
+          <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
+            SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Live order routing remains disabled until the Kotak session flow is verified.
+          </div>
         </div>
       </div>
 
