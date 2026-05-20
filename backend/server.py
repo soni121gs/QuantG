@@ -1378,6 +1378,9 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Strategy not found")
     new_status = "paused" if row["status"] == "live" else "live"
     await db.strategies.update_one({"id": sid}, {"$set": {"status": new_status}})
+    if new_status == "live":
+        _sync_option_ledger_strategy(row)
+        option_ledger.set_kill_switch(False, strategy_id=sid)
     return {"status": new_status}
 
 
@@ -2777,6 +2780,19 @@ async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)
         {"$set": {"status": "paused", "last_error": None}},
     )
     return {"ok": True, "paused_strategies": res.modified_count}
+
+
+@api.post("/ops/strategies/enable-all")
+async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_current_user)):
+    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    for row in rows:
+        _sync_option_ledger_strategy(row)
+        option_ledger.set_kill_switch(False, strategy_id=row["id"])
+    res = await db.strategies.update_many(
+        {"user_id": user["id"]},
+        {"$set": {"status": "live"}, "$unset": {"last_error": "", "last_signal_validation": ""}},
+    )
+    return {"ok": True, "enabled_strategies": res.modified_count, "ledger_enabled": len(rows)}
 
 
 @api.post("/ops/strategies/clear-errors")

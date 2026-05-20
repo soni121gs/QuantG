@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, Wifi, Power } from "lucide-react";
+import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, Wifi, Power, Play } from "lucide-react";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 
@@ -87,6 +87,13 @@ export default function OpsConsole() {
             onClick={() => run("pause", "/ops/strategies/pause-all", "Pause all live strategies?")}
           />
           <Action
+            icon={Play}
+            title="Enable All Strategies"
+            text="Set strategies live and re-enable option-engine gates."
+            busy={busy === "enable"}
+            onClick={() => run("enable", "/ops/strategies/enable-all", "Enable all strategies and clear disabled gates?")}
+          />
+          <Action
             icon={Wifi}
             title="Restart Zerodha Ticker"
             text="Reconnect the Kite websocket and resubscribe symbols."
@@ -153,6 +160,7 @@ export default function OpsConsole() {
 function actionMessage(key, data) {
   if (key === "stop") return `Emergency stop done. Paused ${data.paused_strategies || 0} strategies.`;
   if (key === "pause") return `Paused ${data.paused_strategies || 0} strategies.`;
+  if (key === "enable") return `Enabled ${data.enabled_strategies || 0} strategies.`;
   if (key === "ticker") return data.started ? `Ticker restart requested for ${data.tokens || 0} symbols.` : `Ticker not started: ${data.reason || "unknown"}`;
   if (key === "clear") return `Cleared errors on ${data.updated_strategies || 0} strategies.`;
   return "Done";

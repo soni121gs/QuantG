@@ -264,9 +264,16 @@ class OptionStateLedger:
                 )
                 if enabled:
                     conn.execute("UPDATE strategy_states SET state='DISABLED' WHERE strategy_id=?", (strategy_id,))
+                else:
+                    conn.execute(
+                        "UPDATE strategy_states SET state='IDLE', cooldown_until=NULL WHERE strategy_id=? AND state='DISABLED'",
+                        (strategy_id,),
+                    )
                 return 1
             if enabled:
                 conn.execute("UPDATE strategy_states SET state='DISABLED'")
+            else:
+                conn.execute("UPDATE strategy_states SET state='IDLE', cooldown_until=NULL WHERE state='DISABLED'")
             rows = conn.execute("SELECT strategy_id FROM strategy_states").fetchall()
             for row in rows:
                 conn.execute(
