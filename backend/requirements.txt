@@ -17,6 +17,6 @@ pandas>=2.2.0
 numpy>=1.26.0
 python-multipart>=0.0.9
 kiteconnect>=5.2.0
-git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1
+git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1#egg=neo_api_client
 backtrader>=1.9.76.123
 yfinance>=0.2.28
