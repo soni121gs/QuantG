@@ -79,7 +79,7 @@ class QuantGNeoGateway:
         Flow:
         1. Generate TOTP from the configured secret.
         2. Call ``totp_login(mobile_number, ucc, totp)``.
-        3. Call ``password_login(password=mpin)`` to unlock trade token.
+        3. Call the SDK's MPIN validation method to unlock the trade token.
         """
         if self._client is None:
             return self._failure("NeoAPI client is not initialized")
@@ -105,7 +105,7 @@ class QuantGNeoGateway:
                 ucc=str(self._ucc),
                 totp=totp_code,
             )
-            level_two = self._client.password_login(password=str(self._mpin))
+            level_two = self._unlock_trade_session(str(self._mpin))
             with self._lock:
                 self._authenticated = True
                 self._last_error = None
@@ -113,6 +113,28 @@ class QuantGNeoGateway:
             return {"ok": True, "level_one": level_one, "level_two": level_two}
         except Exception as exc:
             return self._failure(f"Authentication failed: {exc}")
+
+    def _unlock_trade_session(self, mpin: str) -> Any:
+        """Complete Kotak's second-factor MPIN step across SDK variants."""
+        if self._client is None:
+            raise RuntimeError("NeoAPI client is not initialized")
+
+        if hasattr(self._client, "totp_validate"):
+            try:
+                return self._client.totp_validate(mpin=mpin)
+            except TypeError:
+                return self._client.totp_validate(mpin)
+
+        if hasattr(self._client, "password_login"):
+            return self._client.password_login(password=mpin)
+
+        login_methods = sorted(
+            name for name in dir(self._client) if "login" in name.lower() or "validate" in name.lower()
+        )
+        raise RuntimeError(
+            "Kotak Neo SDK MPIN validation method not found; available auth methods: "
+            + ", ".join(login_methods or ["none"])
+        )
 
     def place_order(
         self,

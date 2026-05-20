@@ -47,7 +47,7 @@ def status_from_keys(keys: Optional[Dict[str, Any]], consumer_key: Optional[str]
         "connected": False,
         "keys_saved": True,
         "sdk_available": True,
-        "reason": "session_login_not_configured",
+        "reason": "ready_to_connect",
         "client_id": keys.get("user_id_at_broker"),
     }
 
