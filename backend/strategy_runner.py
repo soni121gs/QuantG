@@ -172,8 +172,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     eval_set["last_data_source"] = history.get("source", "unknown")
                     eval_set["last_data_live"] = bool(history.get("is_live"))
                 if not data:
+                    error = None
+                    if isinstance(history, dict) and not history.get("paper_mode", True):
+                        source = history.get("source", "none")
+                        error = f"No real Kite price history available yet (source={source}). Reconnect Zerodha and restart the ticker."
                     await db.strategies.update_one({"id": s["id"]},
-                                                   {"$set": eval_set, "$inc": inc_set})
+                                                   {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
                 signals = _safe_run(code, data)
                 signals_count = len(signals)
@@ -183,7 +187,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                     "$inc": inc_set})
                     continue
                 last_sig = signals[-1]
-                if not bool(history.get("is_live") if isinstance(history, dict) else False):
+                is_paper_mode = bool(history.get("paper_mode", True)) if isinstance(history, dict) else False
+                if not is_paper_mode and not bool(history.get("is_live") if isinstance(history, dict) else False):
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
                                                              "last_error": "Mock price history; live strategy execution blocked until real Kite data is available.",

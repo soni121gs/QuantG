@@ -3035,7 +3035,7 @@ async def startup():
             days=days,
             interval="5minute",
             allow_mock=bool(settings.get("paper_mode", True)),
-        )
+        ) | {"paper_mode": bool(settings.get("paper_mode", True))}
 
     # Resolver for index option contracts — runner uses this when a strategy
     # has visual_config.options.enabled. Requires a live Kite session.
