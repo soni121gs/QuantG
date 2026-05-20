@@ -123,6 +123,13 @@ export default function OpsConsole() {
           />
           <Action
             icon={RefreshCw}
+            title="Auto Recover"
+            text="Run safe fixes: order sync, ticker restart, and connected order feeds."
+            busy={busy === "recover"}
+            onClick={() => run("recover", "/ops/auto-recover")}
+          />
+          <Action
+            icon={RefreshCw}
             title="Sync Broker Orders"
             text="Refresh Zerodha order statuses and repair completed local rows."
             busy={busy === "orders"}
@@ -145,6 +152,36 @@ export default function OpsConsole() {
           <Row k="History cache" v={`${rateLimits.kite_history_cache_entries ?? 0} entries`} />
           <Row k="Readiness" v={data?.readiness?.ready ? "Ready" : "Needs attention"} />
         </div>
+      </div>
+
+      <div className="qd-card">
+        <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between gap-3">
+          <h2 className="font-head text-base text-white">Live Recovery Plan</h2>
+          <span className={`font-mono text-xs ${data?.recovery_plan?.status === "READY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}`}>
+            {data?.recovery_plan?.status || "-"} · {data?.recovery_plan?.score ?? 0}/100
+          </span>
+        </div>
+        {!data?.recovery_plan?.issues?.length ? (
+          <div className="p-5 text-sm text-[var(--qd-profit)] font-mono">No blocking live issues detected.</div>
+        ) : (
+          <div className="divide-y divide-[var(--qd-border)]">
+            {data.recovery_plan.issues.map((item, idx) => (
+              <div key={`${item.title}-${idx}`} className="p-4 grid grid-cols-1 md:grid-cols-[110px_1fr_auto] gap-3 items-start">
+                <span className={`font-mono text-[10px] uppercase ${item.severity === "critical" ? "text-[var(--qd-loss)]" : item.severity === "warning" ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>{item.severity}</span>
+                <div>
+                  <div className="text-white font-semibold">{item.title}</div>
+                  <div className="text-xs text-[var(--qd-text-2)] mt-1">{item.detail}</div>
+                  <div className="text-xs font-mono text-[var(--qd-accent)] mt-2">{item.action}</div>
+                </div>
+                {item.endpoint && (
+                  <button onClick={() => run(`plan-${idx}`, item.endpoint)} className="border border-[var(--qd-border)] hover:border-white px-3 py-2 rounded-sm text-xs font-mono uppercase text-white">
+                    Fix
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="qd-card">
@@ -189,6 +226,8 @@ function actionMessage(key, data) {
   if (key === "ticker") return data.started ? `Ticker restart requested for ${data.tokens || 0} symbols.` : `Ticker not started: ${data.reason || "unknown"}`;
   if (key === "clear") return `Cleared errors on ${data.updated_strategies || 0} strategies.`;
   if (key === "orders") return data.ok ? `Synced ${data.sync?.checked || 0} broker orders, fixed ${data.stale?.fixed || 0}.` : `Order sync skipped: ${data.reason || "unknown"}`;
+  if (key === "recover") return `Recovery ran ${data.actions?.length || 0} safe checks.`;
+  if (String(key).startsWith("plan-")) return "Recovery action complete.";
   if (key === "squareoff") return `Square-off sent: ${data.closed?.length || 0} closed, ${data.failed?.length || 0} failed.`;
   return "Done";
 }

@@ -13,17 +13,19 @@ export default function MarketHub() {
   const [chain, setChain] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [feed, setFeed] = useState(null);
+  const [indicators, setIndicators] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, c, cmp, f] = await Promise.all([
+    const [h, r, j, c, cmp, f, ind] = await Promise.all([
       api.get("/broker/health"),
       api.get("/risk/dashboard"),
       api.get("/trade-journal"),
       api.get(`/option-chain/${underlying}`),
       api.get("/strategies/live-backtest-comparison"),
       api.get("/market/feed-comparison"),
+      api.get(`/market/indicators/${underlying}`),
     ]);
     setHealth(h.data);
     setRisk(r.data);
@@ -31,6 +33,7 @@ export default function MarketHub() {
     setChain(c.data);
     setComparison(cmp.data);
     setFeed(f.data);
+    setIndicators(ind.data);
   }, [underlying]);
 
   useEffect(() => {
@@ -138,6 +141,23 @@ export default function MarketHub() {
             <Row k="Realised P&L" v={`₹${formatINR(risk?.realised_pnl || 0)}`} />
             <Row k="Per-strategy capital" v={`₹${formatINR(risk?.per_strategy_capital || 0)}`} />
             <Row k="Max position size" v={`₹${formatINR(risk?.max_position_size || 0)}`} />
+          </div>
+        </section>
+
+        <section className="qd-card p-4 xl:col-span-2">
+          <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Activity size={16} /> Signal Stack</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <Small label="Trend" value={indicators?.indicators?.trend || "-"} />
+            <Small label="RSI" value={indicators?.indicators?.rsi ?? "-"} />
+            <Small label="ATR %" value={indicators?.indicators?.atr_pct == null ? "-" : `${indicators.indicators.atr_pct}%`} />
+            <Small label="VWAP Dist" value={indicators?.indicators?.vwap_distance_pct == null ? "-" : `${indicators.indicators.vwap_distance_pct}%`} />
+            <Small label="HTF" value={indicators?.indicators?.higher_timeframe?.trend || "-"} />
+            <Small label="Volume" value={indicators?.indicators?.volume_ratio == null ? "-" : `${indicators.indicators.volume_ratio}x`} />
+            <Small label="Support" value={indicators?.indicators?.support ?? "-"} />
+            <Small label="Resistance" value={indicators?.indicators?.resistance ?? "-"} />
+          </div>
+          <div className="mt-3 text-[10px] font-mono text-[var(--qd-text-3)]">
+            {indicators?.available ? `${indicators.candles} candles · ${indicators.source} · ${indicators.is_live ? "REAL" : "not live"}` : indicators?.reason || "Loading indicators"}
           </div>
         </section>
 

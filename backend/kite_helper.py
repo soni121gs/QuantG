@@ -193,6 +193,7 @@ def place_live_order(
     price: Optional[float] = None,
     variety: str = "regular",
     market_protection: float = 5.0,
+    tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Place a real order via Kite. Raises on failure.
 
@@ -214,5 +215,7 @@ def place_live_order(
     if order_type == "MARKET":
         # Zerodha requires this for ALL market orders placed via API.
         params["market_protection"] = float(market_protection)
+    if tag:
+        params["tag"] = str(tag)[:20]
     order_id = kite.place_order(**params)
-    return {"order_id": order_id}
+    return {"order_id": order_id, "tag": params.get("tag")}

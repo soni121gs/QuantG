@@ -1,4 +1,4 @@
-# QuantG Version 6 Personal VPS Runbook
+# QuantG Version 8 Personal VPS Runbook
 
 Domain: `www.quantgtrade.com`
 Root domain: `quantgtrade.com`
@@ -50,19 +50,28 @@ CREDENTIAL_ENCRYPTION_KEY=replace-with-a-second-long-random-secret-and-never-cha
 CORS_ORIGINS=https://www.quantgtrade.com,https://quantgtrade.com,http://82.180.145.183
 SIGNAL_CONFIDENCE_MIN=45
 OPTION_LEDGER_PATH=/data/runtime_state.sqlite3
+LIVE_ORDER_MAX_ATTEMPTS=2
+KOTAK_ORDER_MAX_ATTEMPTS=1
+
+# Kotak Neo V2 session unlock
+KOTAK_MOBILE_NUMBER=your_registered_mobile
+KOTAK_UCC=your_kotak_client_code
+KOTAK_MPIN=your_mpin
+KOTAK_TOTP_SECRET_KEY=your_totp_secret
 ```
 
 Never change `JWT_SECRET` unless you accept logging in again.
 Never change `CREDENTIAL_ENCRYPTION_KEY` unless you accept saving Zerodha keys again.
 
-## 4. Deploy Version 6
+## 4. Deploy Version 8
 
 From your repo folder on the VPS:
 
 ```bash
 git pull
-docker compose pull
-docker compose up -d --build
+docker compose down
+docker compose build --no-cache backend frontend
+docker compose up -d
 docker compose ps
 docker compose logs -f caddy
 docker compose logs -f backend
@@ -101,7 +110,8 @@ Update after code changes:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose build --no-cache backend frontend
+docker compose up -d
 ```
 
 Stop without deleting data:
@@ -145,37 +155,68 @@ https://www.quantgtrade.com/ops
 
 It can:
 
-- show Zerodha, ticker, readiness, strategy, order, and error health
+- show Zerodha/Kotak, ticker, readiness, strategy, order, and error health
 - restart the Zerodha ticker websocket
+- run Auto Recover for safe order sync, ticker restart, and connected order feeds
 - pause all live strategies
 - switch to PAPER and pause automation with Emergency Stop
 - clear old visible strategy errors after fixing the cause
 
 It cannot fix broker-side rejected orders, expired Zerodha login, wrong Kite redirect URL, blocked DNS/firewall, or invalid strategy logic. Those still need manual correction.
 
+## 9. Tomorrow Morning Checklist
+
+Before live market use:
+
+```bash
+cd /root/QuantG
+git pull
+docker compose build --no-cache backend frontend
+docker compose up -d
+docker compose ps
+docker compose exec backend python -c "from neo_api_client import NeoAPI; print('Kotak SDK OK')"
+docker compose logs --tail=80 backend
+```
+
+Then in the app:
+
+1. Hard refresh browser with `Ctrl + Shift + R`.
+2. Open Broker Keys.
+3. Reconnect Zerodha if you use Zerodha data or execution.
+4. Click Connect Kotak if you use Kotak execution/order feed.
+5. Open Ops Console and run Auto Recover.
+6. Confirm Live Recovery Plan is READY or only has non-blocking market-closed info.
+7. Open Market Hub and check Ticker Quality plus Signal Stack.
+8. Keep PAPER until real ticks are visible and readiness is clean.
+
 ## Current App Features
 
 - Email/password login
 - Zerodha Kite Connect keys and daily OAuth connection
+- Kotak Neo V2 credential storage, TOTP/MPIN session unlock, order feed start, and live order routing scaffold
 - Paper/live mode switch
 - Watchlist and ticker tape
 - Strategy builder and Python strategy editor
 - Background strategy runner
 - Paper orders and positions
-- Live order placement through Zerodha
-- Strategy signal confidence filter
+- Live order placement through Zerodha or Kotak Neo depending on execution broker
+- Tagged live orders with recovery lookup and retry guard
+- Strategy signal confidence filter with trend, RSI, VWAP, ATR, volume, and higher-timeframe checks
+- Market Hub ticker comparison and Signal Stack
+- Visual Builder indicators: RSI, SMA, EMA, MACD, VWAP, ATR, ATR%, Volume Ratio
 - Daily readiness checks
 - Ops Console for recovery during market hours
 
 ## Limitations And Drawbacks
 
 - Zerodha requires daily reconnect; this is a broker limitation.
+- Kotak data needs subscribed Kotak instrument tokens before it can be measured as a live ticker feed.
 - Current market analysis is rule-based, not a guaranteed prediction system.
 - Strategy code is sandboxed but still meant for personal use, not hostile multi-user SaaS.
 - No guaranteed order fill price; live fills depend on broker/exchange conditions.
 - No automatic VPS database backup scheduler yet.
 - No mobile push/WhatsApp/Telegram alerting yet.
-- No multi-broker failover yet.
+- Multi-broker failover is health-based, but you must verify broker sessions and symbol-token subscriptions before live use.
 
 ## Future Scope
 

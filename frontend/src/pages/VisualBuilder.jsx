@@ -3,7 +3,23 @@ import { api } from "../lib/api";
 import { Plus, X, Save, Blocks, ArrowRight, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 
-const INDICATORS = ["RSI", "SMA(5)", "SMA(20)", "EMA(50)", "MACD", "Price"];
+const INDICATORS = [
+  "Price",
+  "RSI",
+  "SMA(5)",
+  "SMA(20)",
+  "SMA(50)",
+  "EMA(8)",
+  "EMA(21)",
+  "EMA(50)",
+  "EMA(200)",
+  "MACD",
+  "MACD Signal",
+  "VWAP",
+  "ATR(14)",
+  "ATR%",
+  "Volume Ratio",
+];
 const OPS = [">", "<", "==", "Crosses Above", "Crosses Below"];
 const ACTIONS = ["BUY", "SELL", "EXIT"];
 
@@ -295,15 +311,106 @@ const Select = ({ value, options, onChange }) => (
 );
 
 function generatePython(conds, action) {
-  const checks = conds.map((c) => `  # ${c.indicator} ${c.op} ${c.value}`).join("\n");
+  const checks = conds.map((c) => buildCondition(c)).filter(Boolean);
+  const condition = checks.length ? checks.join(" and\n           ") : "True";
+  const comments = conds.map((c) => `    # ${c.indicator} ${c.op} ${c.value}`).join("\n");
   return `# Auto-generated from Visual Builder
 def run(data):
     closes = [d['close'] for d in data]
+    highs = [d.get('high', d['close']) for d in data]
+    lows = [d.get('low', d['close']) for d in data]
+    volumes = [float(d.get('volume') or 0) for d in data]
+
+    def sma(values, n):
+        return [sum(values[max(0, i-n+1):i+1]) / min(n, i+1) for i in range(len(values))]
+
+    def ema(values, n):
+        out, k = [], 2 / (n + 1)
+        for i, value in enumerate(values):
+            out.append(value if i == 0 else value * k + out[-1] * (1 - k))
+        return out
+
+    def rsi(values, n=14):
+        out = [50.0] * len(values)
+        for i in range(n, len(values)):
+            gains = sum(max(values[j] - values[j-1], 0) for j in range(i-n+1, i+1))
+            losses = sum(max(values[j-1] - values[j], 0) for j in range(i-n+1, i+1)) or 0.0001
+            rs = (gains / n) / (losses / n)
+            out[i] = 100 - (100 / (1 + rs))
+        return out
+
+    def atr(highs, lows, closes, n=14):
+        trs = []
+        for i in range(len(closes)):
+            prev_close = closes[i-1] if i else closes[i]
+            trs.append(max(highs[i] - lows[i], abs(highs[i] - prev_close), abs(lows[i] - prev_close)))
+        return sma(trs, n)
+
+    def vwap(highs, lows, closes, volumes):
+        out, weighted, total = [], 0.0, 0.0
+        for h, l, c, v in zip(highs, lows, closes, volumes):
+            typical = (h + l + c) / 3
+            weighted += typical * v
+            total += v
+            out.append(weighted / total if total else c)
+        return out
+
+    sma5, sma20, sma50 = sma(closes, 5), sma(closes, 20), sma(closes, 50)
+    ema8, ema21, ema50, ema200 = ema(closes, 8), ema(closes, 21), ema(closes, 50), ema(closes, 200)
+    rsi14 = rsi(closes, 14)
+    macd = [a - b for a, b in zip(ema(closes, 12), ema(closes, 26))]
+    macd_signal = ema(macd, 9)
+    atr14 = atr(highs, lows, closes, 14)
+    atr_pct = [(a / c * 100) if c else 0 for a, c in zip(atr14, closes)]
+    vwap_line = vwap(highs, lows, closes, volumes)
+    vol20 = sma(volumes, 20)
+    volume_ratio = [(v / base) if base else 1 for v, base in zip(volumes, vol20)]
+
     signals = []
-    for i in range(20, len(closes)):
-${checks}
-        if closes[i] > closes[i-1]:  # demo trigger
+    for i in range(30, len(closes)):
+${comments}
+        if (${condition}):
             signals.append({'date': data[i]['date'], 'action': '${action.side}'})
     return signals
 `;
+}
+
+function buildCondition(c) {
+  const left = expr(c.indicator, "i");
+  const leftPrev = expr(c.indicator, "i-1");
+  const right = rhs(c.value, "i");
+  const rightPrev = rhs(c.value, "i-1");
+  if (!left || !right) return "";
+  if (c.op === "Crosses Above") return `(${leftPrev} <= ${rightPrev} and ${left} > ${right})`;
+  if (c.op === "Crosses Below") return `(${leftPrev} >= ${rightPrev} and ${left} < ${right})`;
+  return `(${left} ${c.op} ${right})`;
+}
+
+function rhs(value, index) {
+  const asIndicator = expr(String(value || "").trim(), index);
+  if (asIndicator) return asIndicator;
+  const num = Number(value);
+  return Number.isFinite(num) ? String(num) : "0";
+}
+
+function expr(indicator, index) {
+  const key = String(indicator || "").trim();
+  const map = {
+    Price: `closes[${index}]`,
+    RSI: `rsi14[${index}]`,
+    "SMA(5)": `sma5[${index}]`,
+    "SMA(20)": `sma20[${index}]`,
+    "SMA(50)": `sma50[${index}]`,
+    "EMA(8)": `ema8[${index}]`,
+    "EMA(21)": `ema21[${index}]`,
+    "EMA(50)": `ema50[${index}]`,
+    "EMA(200)": `ema200[${index}]`,
+    MACD: `macd[${index}]`,
+    "MACD Signal": `macd_signal[${index}]`,
+    VWAP: `vwap_line[${index}]`,
+    "ATR(14)": `atr14[${index}]`,
+    "ATR%": `atr_pct[${index}]`,
+    "Volume Ratio": `volume_ratio[${index}]`,
+  };
+  return map[key] || "";
 }

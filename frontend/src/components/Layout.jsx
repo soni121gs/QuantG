@@ -111,7 +111,7 @@ export default function Layout({ children }) {
             <div className="hidden md:flex items-center gap-2 text-xs">
               <span className="qd-live-dot" />
               <span className="font-mono uppercase tracking-wider text-[var(--qd-text-2)]">
-                {isMarketOpen ? "🟢 MARKET OPEN" : "🔴 MARKET CLOSED"}
+                {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
               </span>
             </div>
             {profile && (
@@ -122,9 +122,9 @@ export default function Layout({ children }) {
                     : "bg-[rgba(76,255,0,0.12)] text-[#4cff00] border border-[#4cff00]"
                 }`}
                 data-testid="mode-badge"
-                title={profile.paper_mode ? "Paper mode — orders are simulated" : "LIVE — real money at risk"}
+                title={profile.paper_mode ? "Paper mode - orders are simulated" : "LIVE - real money at risk"}
               >
-                {profile.paper_mode ? "📊 PAPER" : "🔴 LIVE"}
+                {profile.paper_mode ? "PAPER" : "LIVE"}
               </span>
             )}
           </div>
@@ -197,7 +197,7 @@ export default function Layout({ children }) {
               Advanced Trading
             </div>
             <div className="text-[8px] text-[var(--qd-text-2)]">
-              {APP_VERSION_LABEL} • Real-time • Live
+              {APP_VERSION_LABEL} / Real-time / Live
             </div>
           </div>
         </aside>
@@ -254,7 +254,7 @@ export default function Layout({ children }) {
               <div className="flex items-center gap-2">
                 <AlertCircle size={16} className="text-[var(--qd-warn)]" />
                 <span className="text-sm text-[var(--qd-text-2)]">
-                  <span className="text-[var(--qd-warn)] font-semibold">⚠ Zerodha session expired.</span> Re-connect to resume live trading.
+                  <span className="text-[var(--qd-warn)] font-semibold">Zerodha session expired.</span> Re-connect to resume live trading.
                 </span>
               </div>
               <button onClick={() => navigate("/broker-keys")} className="bg-[var(--qd-warn)] text-black px-3 py-1.5 text-xs font-mono uppercase rounded-sm whitespace-nowrap">Re-connect</button>

@@ -34,7 +34,7 @@ import options_helper
 import backtrader_runner
 import strategy_runner
 from option_state_ledger import OptionStateLedger
-from market_protection import MarketTrendAnalyzer, FakeSignalFilter
+from market_protection import MarketTrendAnalyzer, FakeSignalFilter, OrderExecutionRetry
 from daily_strategy_reporter import DailyStrategyReporter
 from realtime_ticks import RealtimeTickManager
 from safe_exec import safe_run_strategy
@@ -758,7 +758,6 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
     # Try live Kite first — use ohlc() so we get last_price AND previous close
-    checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
     kite, status = await get_user_kite(user["id"])
     if kite:
         tick_manager = getattr(app.state, "tick_manager", None)
@@ -1321,6 +1320,7 @@ async def _place_kotak_order(
     order_type: str,
     product: str,
     price: Optional[float] = None,
+    tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     gateway = await get_user_kotak_gateway(user_id)
     if not gateway:
@@ -1328,21 +1328,37 @@ async def _place_kotak_order(
     status = gateway.status()
     if not status.get("authenticated"):
         raise HTTPException(status_code=400, detail="Kotak Neo is not connected. Open Broker Keys and click Connect Kotak.")
-    result = await asyncio.to_thread(
-        gateway.place_order,
-        exchange_segment=_kotak_exchange_segment(exchange),
-        product=(product or "MIS").upper(),
-        price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
-        quantity=int(quantity),
-        trading_symbol=trading_symbol,
-        transaction_type=_kotak_transaction_type(side),
-        order_type=_kotak_order_type(order_type),
-    )
+    execution_tag = tag or _new_execution_tag()
+    attempts = 0
+    result: Dict[str, Any] = {}
+    max_attempts = int(os.environ.get("KOTAK_ORDER_MAX_ATTEMPTS", "1"))
+    for attempt in range(1, max(1, max_attempts) + 1):
+        attempts = attempt
+        result = await asyncio.to_thread(
+            gateway.place_order,
+            exchange_segment=_kotak_exchange_segment(exchange),
+            product=(product or "MIS").upper(),
+            price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
+            quantity=int(quantity),
+            trading_symbol=trading_symbol,
+            transaction_type=_kotak_transaction_type(side),
+            order_type=_kotak_order_type(order_type),
+            tag=execution_tag,
+        )
+        if result.get("ok"):
+            break
+        error = str(result.get("error") or "")
+        if not OrderExecutionRetry.is_retryable_error(error) or attempt >= max_attempts:
+            break
+        retry_cfg = OrderExecutionRetry.retry_config(attempt)
+        await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=f"Kotak rejected order: {result.get('error')}")
     return {
         "broker_order_id": _extract_kotak_order_id(result.get("response")),
         "raw": result.get("response"),
+        "tag": execution_tag,
+        "attempts": attempts,
     }
 
 
@@ -2107,6 +2123,22 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
         )
 
 
+async def _check_trade_count_guard(user_id: str, max_trades: int) -> None:
+    if not max_trades or max_trades <= 0:
+        return
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    trades = await db.orders.count_documents({
+        "user_id": user_id,
+        "created_at": {"$gte": today_start},
+        "status": {"$nin": ["REJECTED", "CANCELLED"]},
+    })
+    if trades >= int(max_trades):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Daily trade guard tripped: {trades}/{max_trades} trades used today. New orders blocked until tomorrow.",
+        )
+
+
 def _mock_bid_ask(price: float, spread_pct: float = 0.0005) -> Dict[str, float]:
     bid = round(price * (1 - spread_pct / 2), 2)
     ask = round(price * (1 + spread_pct / 2), 2)
@@ -2123,6 +2155,84 @@ def _simulate_paper_brokerage(fill_price: float, quantity: int) -> float:
     gross = abs(fill_price * quantity)
     brokerage = min(20.0, gross * 0.0003)
     return round(brokerage, 2)
+
+
+def _new_execution_tag() -> str:
+    return f"QG{uuid.uuid4().hex[:14]}".upper()
+
+
+def _open_order_statuses() -> set:
+    return {"OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"}
+
+
+def _closed_order_statuses() -> set:
+    return {"COMPLETE", "CANCELLED", "REJECTED"}
+
+
+async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
+    if not kite or not tag:
+        return None
+    for _ in range(2):
+        try:
+            for order in kite.orders() or []:
+                if str(order.get("tag") or "") == tag:
+                    return order
+        except Exception as e:
+            logger.warning(f"kite tagged order lookup failed: {e}")
+        await asyncio.sleep(0.8)
+    return None
+
+
+async def _place_kite_order_with_recovery(
+    kite,
+    *,
+    tradingsymbol: str,
+    exchange: str,
+    transaction_type: str,
+    quantity: int,
+    order_type: str,
+    product: str,
+    price: Optional[float] = None,
+    tag: Optional[str] = None,
+) -> Dict[str, Any]:
+    execution_tag = tag or _new_execution_tag()
+    attempts = 0
+    last_error = None
+    max_attempts = int(os.environ.get("LIVE_ORDER_MAX_ATTEMPTS", "2"))
+    for attempt in range(1, max(1, max_attempts) + 1):
+        attempts = attempt
+        try:
+            res = kite_helper.place_live_order(
+                kite,
+                tradingsymbol=tradingsymbol,
+                exchange=exchange,
+                transaction_type=transaction_type,
+                quantity=quantity,
+                order_type=order_type,
+                product=product,
+                price=price,
+                tag=execution_tag,
+            )
+            return {"ok": True, **res, "tag": execution_tag, "attempts": attempts, "recovered": False}
+        except Exception as exc:
+            last_error = str(exc)
+            recovered = await _find_kite_order_by_tag(kite, execution_tag)
+            if recovered:
+                return {
+                    "ok": True,
+                    "order_id": recovered.get("order_id"),
+                    "tag": execution_tag,
+                    "attempts": attempts,
+                    "recovered": True,
+                    "broker_status": recovered.get("status"),
+                    "broker_order": recovered,
+                }
+            retryable = OrderExecutionRetry.is_retryable_error(last_error)
+            if not retryable or attempt >= max_attempts:
+                break
+            retry_cfg = OrderExecutionRetry.retry_config(attempt)
+            await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
+    return {"ok": False, "error": last_error or "unknown broker error", "tag": execution_tag, "attempts": attempts}
 
 
 def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
@@ -2169,8 +2279,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     if not paper and order_type == "MARKET" and not _is_nse_market_open():
         raise HTTPException(status_code=400, detail="Live MARKET orders are blocked outside NSE market hours.")
 
-    # Daily loss guard (applies to all order types)
-    await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
+    exit_source = any(str(source).startswith(prefix) for prefix in ("exit", "manual-exit", "risk-trigger", "feed-stale", "squareoff"))
+    if not exit_source:
+        await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
+    if not exit_source:
+        await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
 
     # ===== OPTIONS PATH =====
     if option_contract:
@@ -2190,6 +2303,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # Transaction type comes from the contract (BUY for long, SELL for write)
         opt_side = (option_contract.get("transaction_type") or side).upper()
         ledger_opened = False
+        execution_tag = _new_execution_tag()
+        execution_attempts = 0
+        execution_recovered = False
 
         # Try to fetch live LTP for the option (live mode only — paper estimates)
         fill_price = price or 0.0
@@ -2228,10 +2344,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                         order_type=order_type,
                         product=opt_product,
                         price=price,
+                        tag=execution_tag,
                     )
                     broker_order_id = res.get("broker_order_id")
+                    execution_attempts = int(res.get("attempts") or 1)
                 else:
-                    res = kite_helper.place_live_order(
+                    res = await _place_kite_order_with_recovery(
                         kite,
                         tradingsymbol=opt_symbol,
                         exchange=opt_exchange,
@@ -2240,8 +2358,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                         order_type=order_type,
                         product=opt_product,
                         price=price,
+                        tag=execution_tag,
                     )
+                    if not res.get("ok"):
+                        raise RuntimeError(res.get("error") or "Kite order failed")
                     broker_order_id = res.get("order_id")
+                    execution_attempts = int(res.get("attempts") or 1)
+                    execution_recovered = bool(res.get("recovered"))
             except Exception as e:
                 if ledger_opened:
                     option_ledger.release_failed_open(strategy_id)
@@ -2291,6 +2414,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "mode": "paper" if paper else "live",
             "broker": "paper" if paper else execution_broker,
             "broker_order_id": broker_order_id,
+            "execution_tag": execution_tag if not paper else None,
+            "execution_attempts": execution_attempts,
+            "execution_recovered": execution_recovered,
             "source": source,
             "strategy_id": strategy_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2367,6 +2493,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     broker_order_id = None
     ledger_opened = False
+    execution_tag = _new_execution_tag()
+    execution_attempts = 0
+    execution_recovered = False
     if strategy_id and side == "BUY":
         decision = option_ledger.try_open_position(
             strategy_id=strategy_id,
@@ -2396,10 +2525,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     order_type=order_type,
                     product=product,
                     price=price,
+                    tag=execution_tag,
                 )
                 broker_order_id = res.get("broker_order_id")
+                execution_attempts = int(res.get("attempts") or 1)
             else:
-                res = kite_helper.place_live_order(
+                res = await _place_kite_order_with_recovery(
                     kite,
                     tradingsymbol=symbol.upper(),
                     exchange="NSE",
@@ -2408,8 +2539,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     order_type=order_type,
                     product=product,
                     price=price,
+                    tag=execution_tag,
                 )
+                if not res.get("ok"):
+                    raise RuntimeError(res.get("error") or "Kite order failed")
                 broker_order_id = res.get("order_id")
+                execution_attempts = int(res.get("attempts") or 1)
+                execution_recovered = bool(res.get("recovered"))
         except Exception as e:
             if ledger_opened:
                 option_ledger.release_failed_open(strategy_id)
@@ -2437,6 +2573,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "mode": "paper" if paper else "live",
         "broker": "paper" if paper else execution_broker,
         "broker_order_id": broker_order_id,
+        "execution_tag": execution_tag if not paper else None,
+        "execution_attempts": execution_attempts,
+        "execution_recovered": execution_recovered,
         "source": source,
         "strategy_id": strategy_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2516,7 +2655,8 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
     kite, kite_status = await get_user_kite(user["id"])
     paper = settings.get("paper_mode", True)
-    if not paper and not kite:
+    execution_broker = settings.get("execution_broker", "zerodha")
+    if not paper and execution_broker == "zerodha" and not kite:
         raise HTTPException(status_code=400, detail=kite_status.get("reason", "broker_not_connected"))
 
     for p in positions:
@@ -2548,16 +2688,43 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
                 await db.positions.delete_one({"user_id": user["id"], "symbol": symbol})
                 closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper"})
             else:
-                res = kite_helper.place_live_order(
-                    kite,
-                    tradingsymbol=symbol,
-                    exchange=p.get("exchange") or "NSE",
-                    transaction_type=side,
-                    quantity=abs_qty,
-                    order_type="MARKET",
-                    product=p.get("product") or settings.get("default_product", "MIS"),
-                )
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("order_id")})
+                if any(s["symbol"] == str(symbol).upper() for s in SYMBOLS):
+                    res = await _place_order_core(
+                        user_id=user["id"],
+                        symbol=str(symbol).upper(),
+                        side=side,
+                        qty=abs_qty,
+                        order_type="MARKET",
+                        product=p.get("product") or settings.get("default_product", "MIS"),
+                        source="squareoff",
+                    )
+                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
+                elif execution_broker == "kotak_neo":
+                    res = await _place_kotak_order(
+                        user["id"],
+                        trading_symbol=symbol,
+                        exchange=p.get("exchange") or "NSE",
+                        side=side,
+                        quantity=abs_qty,
+                        order_type="MARKET",
+                        product=p.get("product") or settings.get("default_product", "MIS"),
+                        tag=_new_execution_tag(),
+                    )
+                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
+                else:
+                    res = await _place_kite_order_with_recovery(
+                        kite,
+                        tradingsymbol=symbol,
+                        exchange=p.get("exchange") or "NSE",
+                        transaction_type=side,
+                        quantity=abs_qty,
+                        order_type="MARKET",
+                        product=p.get("product") or settings.get("default_product", "MIS"),
+                        tag=_new_execution_tag(),
+                    )
+                    if not res.get("ok"):
+                        raise RuntimeError(res.get("error") or "Square-off order failed")
+                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("order_id")})
         except Exception as e:
             failed.append({"symbol": symbol, "error": str(e)})
     return {"ok": not failed, "closed": closed, "failed": failed}
@@ -3131,6 +3298,7 @@ async def live_readiness(user=Depends(get_current_user)):
         "hint": "Save on Broker Keys → Step 1" if not keys else None,
     })
     kite, status = await get_user_kite(user["id"])
+    checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
     required_sessions_ok = (not zerodha_required or bool(status.get("connected"))) and (not kotak_required or bool(kotak_status.get("connected")))
     checks.append({
         "id": "kite_session",
@@ -3141,7 +3309,10 @@ async def live_readiness(user=Depends(get_current_user)):
     })
     funds_ok = False
     funds_msg = None
-    if kite:
+    if execution_broker == "kotak_neo":
+        funds_ok = bool(kotak_status.get("connected"))
+        funds_msg = "Kotak connected; live margin check not exposed yet."
+    elif kite:
         try:
             margins = kite.margins(segment="equity")
             avail = float((margins.get("available", {}) or {}).get("live_balance") or 0)
@@ -3154,7 +3325,7 @@ async def live_readiness(user=Depends(get_current_user)):
         "label": "Sufficient funds in account",
         "ok": funds_ok,
         "detail": funds_msg,
-        "hint": "Add funds via Zerodha Kite app" if not funds_ok else None,
+        "hint": "Add funds or connect the selected execution broker" if not funds_ok else None,
     })
     settings = await get_user_settings(user["id"])
     checks.append({
@@ -3231,6 +3402,64 @@ def _is_strategy_blocking_error(message: Optional[str]) -> bool:
     return not str(message).startswith("Signal filtered:")
 
 
+def _build_recovery_plan(
+    *,
+    settings: Dict[str, Any],
+    market_open: bool,
+    kite_status: Dict[str, Any],
+    kotak_status: Dict[str, Any],
+    tick_status: Dict[str, Any],
+    errored: List[Dict[str, Any]],
+    orders_open: int,
+    readiness: Dict[str, Any],
+) -> Dict[str, Any]:
+    issues: List[Dict[str, Any]] = []
+    mode_live = not bool(settings.get("paper_mode", True))
+    data_broker = settings.get("data_broker", "zerodha")
+    execution_broker = settings.get("execution_broker", "zerodha")
+
+    def add(severity: str, title: str, detail: str, action: str, endpoint: Optional[str] = None) -> None:
+        issues.append({
+            "severity": severity,
+            "title": title,
+            "detail": detail,
+            "action": action,
+            "endpoint": endpoint,
+        })
+
+    if mode_live and not market_open:
+        add("info", "Market is closed", "Live MARKET orders are blocked outside NSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
+    if execution_broker == "zerodha" and not kite_status.get("connected"):
+        add("critical", "Execution broker disconnected", kite_status.get("reason") or "Zerodha session is not active.", "Reconnect Zerodha on Broker Keys.")
+    if execution_broker == "kotak_neo" and not kotak_status.get("connected"):
+        add("critical", "Kotak execution disconnected", kotak_status.get("reason") or "Kotak session is not active.", "Connect Kotak on Broker Keys.")
+    if data_broker == "zerodha" and market_open and not tick_status.get("connected"):
+        add("warning", "Realtime Kite ticker is down", tick_status.get("last_error") or "No connected Kite websocket.", "Restart ticker.", "/ops/ticker/restart")
+    if data_broker == "kotak_neo":
+        gateway = kotak_status.get("gateway") or {}
+        if not gateway.get("authenticated"):
+            add("warning", "Kotak data session is not authenticated", kotak_status.get("reason") or "Kotak gateway is not connected.", "Connect Kotak on Broker Keys.")
+        elif not gateway.get("ticks"):
+            add("warning", "Kotak data has no ticks yet", "Subscribe Kotak instrument tokens before using Kotak as data broker.", "Use Kotak subscribe endpoint or keep Zerodha as data broker.")
+    if orders_open:
+        add("info", "Open orders need reconciliation", f"{orders_open} local order(s) are open/pending.", "Sync broker orders.", "/ops/orders/sync")
+    if errored:
+        add("warning", "Strategies have blocking errors", f"{len(errored)} strategy error(s) need attention.", "Open Strategy Errors below; clear only after fixing.", "/ops/strategies/clear-errors")
+    for check in readiness.get("checks") or []:
+        if check.get("id") in {"market_hours", "tick_feed"}:
+            continue
+        if not check.get("ok"):
+            add("critical", check.get("label") or "Readiness failed", check.get("detail") or check.get("hint") or "A required live check failed.", check.get("hint") or "Fix readiness check.")
+
+    weights = {"critical": 30, "warning": 15, "info": 5}
+    score = max(0, 100 - sum(weights.get(item["severity"], 5) for item in issues))
+    return {
+        "score": score,
+        "status": "READY" if score >= 85 and not any(i["severity"] == "critical" for i in issues) else "ATTENTION",
+        "issues": issues[:12],
+    }
+
+
 async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
     kite, status = await get_user_kite(user_id)
     if not kite:
@@ -3257,6 +3486,7 @@ async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
 async def ops_diagnostics(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     kite, kite_status = await get_user_kite(user["id"])
+    kotak_status = await get_user_kotak_status(user["id"])
     order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
     kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
     tick_manager = getattr(app.state, "tick_manager", None)
@@ -3277,6 +3507,16 @@ async def ops_diagnostics(user=Depends(get_current_user)):
     orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": ["OPEN", "PENDING"]}})
     positions_count = await db.positions.count_documents({"user_id": user["id"]})
     readiness = await live_readiness(user=user)
+    recovery_plan = _build_recovery_plan(
+        settings=settings,
+        market_open=_is_nse_market_open(),
+        kite_status=kite_status,
+        kotak_status=kotak_status,
+        tick_status=tick_status,
+        errored=errored,
+        orders_open=orders_open,
+        readiness=readiness,
+    )
     return {
         "version": APP_VERSION,
         "server_time_utc": datetime.now(timezone.utc).isoformat(),
@@ -3290,7 +3530,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
         },
         "readiness": readiness,
         "zerodha": kite_status,
-        "kotak_neo": await get_user_kotak_status(user["id"]),
+        "kotak_neo": kotak_status,
         "upstox": await get_user_upstox_status(user["id"]),
         "ticker": tick_status,
         "counts": {
@@ -3302,6 +3542,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "paper_positions": positions_count,
         },
         "order_sync": {**order_sync, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0)},
+        "recovery_plan": recovery_plan,
         "rate_limits": {
             "kite_history_cache_entries": len(_HISTORY_CACHE),
             "kite_history_cache_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
@@ -3333,6 +3574,31 @@ async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_use
     sync = await _sync_kite_order_statuses(user["id"], kite)
     stale = await _stale_local_open_orders(user["id"], kite)
     return {"ok": True, "sync": sync, "stale": stale}
+
+
+@api.post("/ops/auto-recover")
+async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_user)):
+    actions: List[Dict[str, Any]] = []
+    kite, kite_status = await get_user_kite(user["id"])
+    if kite:
+        _ORDER_SYNC_CACHE.pop(user["id"], None)
+        actions.append({"name": "zerodha_order_sync", "result": await _sync_kite_order_statuses(user["id"], kite)})
+        actions.append({"name": "stale_order_repair", "result": await _stale_local_open_orders(user["id"], kite)})
+        ticker_result = await _start_user_ticker(user["id"])
+        actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
+    else:
+        actions.append({"name": "zerodha_session", "skipped": True, "reason": kite_status.get("reason", "not_connected")})
+
+    kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
+    if kotak_gateway and kotak_gateway.status().get("authenticated"):
+        actions.append({"name": "kotak_order_sync", "result": await _sync_kotak_order_statuses(user["id"])})
+        order_feed = await asyncio.to_thread(kotak_gateway.subscribe_order_feed)
+        actions.append({"name": "kotak_order_feed", "result": order_feed})
+    else:
+        actions.append({"name": "kotak_order_feed", "skipped": True, "reason": "not_connected"})
+
+    diagnostics = await ops_diagnostics(user=user)
+    return {"ok": True, "actions": actions, "recovery_plan": diagnostics.get("recovery_plan")}
 
 
 @api.post("/ops/emergency-stop")
@@ -3631,6 +3897,43 @@ async def market_auto_data_broker(user=Depends(get_current_user)):
     comparison["updated"] = True
     comparison["configured_data_broker"] = broker
     return comparison
+
+
+@api.get("/market/indicators/{symbol}")
+async def market_indicators(symbol: str, user=Depends(get_current_user)):
+    symbol = symbol.upper()
+    history = await _fetch_strategy_history(user["id"], symbol, days=60, interval="5minute")
+    data = history.get("data") or []
+    if len(data) < 20:
+        return {
+            "symbol": symbol,
+            "source": history.get("source", "none"),
+            "is_live": bool(history.get("is_live")),
+            "available": False,
+            "reason": "Not enough candles yet for indicator stack.",
+        }
+    trend = MarketTrendAnalyzer.analyze(data, lookback=min(80, max(20, len(data))))
+    validation_context = {
+        "trend": trend.get("trend"),
+        "strength": trend.get("strength"),
+        "rsi": trend.get("rsi"),
+        "atr_pct": trend.get("atr_pct"),
+        "vwap_distance_pct": trend.get("vwap_distance_pct"),
+        "higher_timeframe": trend.get("higher_timeframe"),
+        "volume_ratio": trend.get("volume_ratio"),
+        "support": trend.get("support"),
+        "resistance": trend.get("resistance"),
+    }
+    return {
+        "symbol": symbol,
+        "source": history.get("source", "unknown"),
+        "is_live": bool(history.get("is_live")),
+        "paper_mode": bool(history.get("paper_mode")),
+        "available": True,
+        "candles": len(data),
+        "last_candle": data[-1],
+        "indicators": validation_context,
+    }
 
 
 @api.get("/market/session")
