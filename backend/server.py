@@ -372,6 +372,15 @@ async def _index_spot_token(kite, symbol: str) -> Optional[int]:
     sym_upper = symbol.upper()
     if sym_upper not in options_helper.INDEX_SPOT_SYMBOL:
         return None
+    static_tokens = {
+        # Kite's documented index tokens; avoids repeatedly downloading the
+        # instruments dump during live strategy scans.
+        "NIFTY": 256265,
+        "BANKNIFTY": 260105,
+        "SENSEX": 265,
+    }
+    if sym_upper in static_tokens:
+        return static_tokens[sym_upper]
     spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
     try:
         instruments = kite.instruments(spot_exch)
