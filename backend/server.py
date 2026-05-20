@@ -2275,35 +2275,77 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
     )
 
 
+def _broker_order_row(o: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": f"kite-{o.get('order_id')}",
+        "broker_order_id": o.get("order_id"),
+        "symbol": o.get("tradingsymbol"),
+        "side": o.get("transaction_type"),
+        "qty": o.get("quantity"),
+        "filled_qty": o.get("filled_quantity"),
+        "pending_qty": o.get("pending_quantity"),
+        "price": float(o.get("average_price") or o.get("price") or 0),
+        "order_type": o.get("order_type"),
+        "product": o.get("product"),
+        "status": o.get("status"),
+        "status_message": o.get("status_message"),
+        "mode": "live",
+        "source": "broker",
+        "created_at": str(o.get("order_timestamp")) if o.get("order_timestamp") else None,
+    }
+
+
+async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
+    """Mirror Kite order statuses into local rows with broker_order_id."""
+    if not kite:
+        return {"checked": 0, "updated": 0}
+    try:
+        live_orders = kite.orders() or []
+    except Exception as e:
+        logger.warning(f"kite orders fetch failed: {e}")
+        return {"checked": 0, "updated": 0}
+
+    updated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for o in live_orders:
+        broker_order_id = o.get("order_id")
+        status = o.get("status")
+        if not broker_order_id or not status:
+            continue
+        set_doc = {
+            "status": status,
+            "filled_qty": o.get("filled_quantity"),
+            "pending_qty": o.get("pending_quantity"),
+            "status_message": o.get("status_message"),
+            "updated_at": now,
+        }
+        avg_price = float(o.get("average_price") or 0)
+        if avg_price > 0:
+            set_doc["price"] = avg_price
+        res = await db.orders.update_many(
+            {"user_id": user_id, "broker_order_id": broker_order_id},
+            {"$set": set_doc},
+        )
+        updated += res.modified_count
+    return {"checked": len(live_orders), "updated": updated}
+
+
 @api.get("/orders")
 async def list_orders(user=Depends(get_current_user)):
     """Local order log + live broker orders (merged) so users see EVERY status."""
+    kite, _ = await get_user_kite(user["id"])
+    if kite:
+        await _sync_kite_order_statuses(user["id"], kite)
     rows = await db.orders.find({"user_id": user["id"]},
                                 {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    # Add live Kite orders too — they include open/pending/rejected statuses we don't have locally
-    kite, _ = await get_user_kite(user["id"])
-    settings = await get_user_settings(user["id"])
-    if kite and not settings.get("paper_mode", True):
+    # Add live Kite orders not already represented locally.
+    if kite:
         try:
+            local_broker_ids = {r.get("broker_order_id") for r in rows if r.get("broker_order_id")}
             live_orders = kite.orders() or []
             for o in live_orders:
-                rows.insert(0, {
-                    "id": f"kite-{o.get('order_id')}",
-                    "broker_order_id": o.get("order_id"),
-                    "symbol": o.get("tradingsymbol"),
-                    "side": o.get("transaction_type"),
-                    "qty": o.get("quantity"),
-                    "filled_qty": o.get("filled_quantity"),
-                    "pending_qty": o.get("pending_quantity"),
-                    "price": float(o.get("average_price") or o.get("price") or 0),
-                    "order_type": o.get("order_type"),
-                    "product": o.get("product"),
-                    "status": o.get("status"),
-                    "status_message": o.get("status_message"),
-                    "mode": "live",
-                    "source": "broker",
-                    "created_at": str(o.get("order_timestamp")) if o.get("order_timestamp") else None,
-                })
+                if o.get("order_id") not in local_broker_ids:
+                    rows.insert(0, _broker_order_row(o))
         except Exception as e:
             logger.warning(f"kite orders fetch failed: {e}")
     # Sort merged orders newest-first (Kite + local) so order timeline is correct
@@ -2661,7 +2703,8 @@ async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
 @api.get("/ops/diagnostics")
 async def ops_diagnostics(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
-    _, kite_status = await get_user_kite(user["id"])
+    kite, kite_status = await get_user_kite(user["id"])
+    order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
@@ -2695,6 +2738,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "open_orders": orders_open,
             "paper_positions": positions_count,
         },
+        "order_sync": order_sync,
         "errored_strategies": errored,
     }
 
