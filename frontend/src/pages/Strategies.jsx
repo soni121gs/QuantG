@@ -41,6 +41,8 @@ const sourceLabel = (source) => {
 
 const filters = [
   { id: "all", label: "All" },
+  { id: "options", label: "Options" },
+  { id: "futures", label: "Futures" },
   { id: "buying", label: "Option Buying" },
   { id: "selling", label: "Option Selling" },
   { id: "commodity", label: "Oil and Gas" },
@@ -87,6 +89,8 @@ export default function Strategies() {
 
   const filtered = useMemo(() => {
     if (selectedFilter === "all") return list;
+    if (selectedFilter === "options") return list.filter((s) => s.asset_class === "options");
+    if (selectedFilter === "futures") return list.filter((s) => s.asset_class === "futures");
     if (selectedFilter === "buying") return list.filter((s) => s.strategy_type === "Option Buying");
     if (selectedFilter === "selling") return list.filter((s) => s.strategy_type === "Option Selling");
     if (selectedFilter === "commodity") return list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX");
@@ -96,6 +100,8 @@ export default function Strategies() {
 
   const counts = useMemo(() => ({
     all: list.length,
+    options: list.filter((s) => s.asset_class === "options").length,
+    futures: list.filter((s) => s.asset_class === "futures").length,
     buying: list.filter((s) => s.strategy_type === "Option Buying").length,
     selling: list.filter((s) => s.strategy_type === "Option Selling").length,
     commodity: list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX").length,

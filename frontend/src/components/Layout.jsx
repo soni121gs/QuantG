@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   KeyRound,
+  Code2,
   Blocks,
   Bot,
   ListOrdered,
@@ -23,7 +24,9 @@ import { APP_VERSION_LABEL } from "../lib/version";
 
 const NAV = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
-  { to: "/strategies", icon: Blocks, label: "Strategy Catalog", id: "nav-strategies" },
+  { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
+  { to: "/python", icon: Code2, label: "Python", id: "nav-python" },
+  { to: "/visual", icon: Blocks, label: "Visual Builder", id: "nav-visual" },
   { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "nav-aibot" },
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },

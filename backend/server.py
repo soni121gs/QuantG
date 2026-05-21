@@ -1468,6 +1468,8 @@ DEFAULT_OPTION_STRATEGIES = [
     },
 ]
 
+LEGACY_OPTION_STRATEGIES = DEFAULT_OPTION_STRATEGIES
+
 
 TREND_CONTINUATION_CODE = """def run(data):
     if len(data) < 80:
@@ -1777,7 +1779,11 @@ STANDARD_STRATEGY_CATALOG = [
     },
 ]
 
-DEFAULT_OPTION_STRATEGIES = STANDARD_STRATEGY_CATALOG
+_seed_templates_by_name = {
+    template["name"]: template
+    for template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]
+}
+DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
 LEGACY_DEFAULT_STRATEGY_NAMES = {
     "NIFTY Momentum EMA",
@@ -1801,7 +1807,10 @@ LEGACY_DEFAULT_STRATEGY_NAMES = {
 
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     underlying = str(template["underlying"]).upper()
-    is_commodity = template.get("instrument_group") == "MCX" or underlying in {"CRUDEOIL", "NATURALGAS"}
+    instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "MCX" if underlying in {"CRUDEOIL", "NATURALGAS"} else "NFO")).upper()
+    strategy_type = template.get("strategy_type") or ("Option Selling" if str(template.get("strike_mode") or "").upper().endswith("SELL") else "Option Buying")
+    required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else 65000.0 if underlying == "CRUDEOIL" else 55000.0 if underlying == "NATURALGAS" else 35000.0))
+    is_commodity = instrument_group == "MCX" or underlying in {"CRUDEOIL", "NATURALGAS"}
     options_block = {
         "enabled": not is_commodity,
         "underlying": underlying,
@@ -1809,7 +1818,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "otm_points": template["otm_points"],
         "expiry_offset": template.get("expiry_offset", 0),
         "lots": template["lots"],
-        "required_capital": template["required_capital"],
+        "required_capital": required_capital,
     }
     return {
         "id": str(uuid.uuid4()),
@@ -1819,15 +1828,15 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "kind": "python",
         "python_code": template["python_code"],
         "asset_class": "commodity" if is_commodity else "options",
-        "strategy_type": template["strategy_type"],
-        "required_capital": template["required_capital"],
-        "instrument_group": template["instrument_group"],
+        "strategy_type": strategy_type,
+        "required_capital": required_capital,
+        "instrument_group": instrument_group,
         "visual_config": {
             "symbol": underlying,
-            "exchange": "MCX" if is_commodity else template["instrument_group"],
+            "exchange": "MCX" if is_commodity else instrument_group,
             "options": options_block,
             "commodity_options": options_block if is_commodity else None,
-            "risk": {**dict(DEFAULT_STRATEGY_RISK), "required_capital": template["required_capital"]},
+            "risk": {**dict(DEFAULT_STRATEGY_RISK), "required_capital": required_capital},
         },
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1923,11 +1932,6 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
 
 
 async def seed_default_strategies_for_user(user_id: str) -> int:
-    await db.strategies.delete_many({
-        "user_id": user_id,
-        "name": {"$in": sorted(LEGACY_DEFAULT_STRATEGY_NAMES)},
-        "status": {"$in": ["draft", "active"]},
-    })
     existing = await db.strategies.find({"user_id": user_id}, {"_id": 0, "name": 1}).to_list(500)
     existing_names = {row.get("name") for row in existing}
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
