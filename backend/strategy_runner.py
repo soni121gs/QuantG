@@ -32,6 +32,11 @@ LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
+NON_ERROR_ENTRY_BLOCKS = (
+    "cooldown-active",
+    "duplicate-buy-dropped",
+    "max-trades-day-reached",
+)
 
 
 async def _sleep_or_stop(stop_event: asyncio.Event, seconds: int) -> None:
@@ -68,6 +73,19 @@ def _validate_signal(signal: Dict[str, Any], data: List[dict]) -> Dict[str, Any]
             "filtered": True,
             "trend": {},
         }
+
+
+def _entry_block_reason(exc: Exception) -> str | None:
+    status_code = getattr(exc, "status_code", None)
+    detail = str(getattr(exc, "detail", "") or exc)
+    if status_code not in (None, 409):
+        return None
+    if not any(prefix in detail for prefix in ("Option entry blocked:", "Strategy entry blocked:")):
+        return None
+    for reason in NON_ERROR_ENTRY_BLOCKS:
+        if reason in detail:
+            return reason
+    return None
 
 
 async def _acquire_lock(db) -> bool:
@@ -295,6 +313,18 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     )
                     logger.info(f"strategy {s['id']} → {action} {log_target}")
                 except Exception as e:
+                    block_reason = _entry_block_reason(e)
+                    if block_reason:
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set,
+                                      "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": f"Entry skipped: {block_reason}"},
+                             "$unset": {"last_error": ""},
+                             "$inc": inc_set},
+                        )
+                        continue
                     logger.warning(f"order failed for strategy {s['id']}: {e}")
                     await db.strategies.update_one(
                         {"id": s["id"]},

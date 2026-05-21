@@ -197,7 +197,7 @@ export default function ApiKeys() {
               <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Kotak Neo credentials above to prepare the broker connection.</div>
             )}
             <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
-              SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Env: {kotakStatus.env_ready ? "ready" : "missing TOTP/MPIN/mobile"} · {kotakStatus.reason || "ready"}
+              SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Env: {kotakStatus.env_ready ? "ready" : `missing ${(kotakStatus.missing_env || []).join(", ") || "TOTP/MPIN/mobile"}`} · {kotakStatus.reason || "ready"}
             </div>
           </div>
           <div className="flex gap-2">

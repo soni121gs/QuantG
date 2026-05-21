@@ -112,31 +112,37 @@ def safe_holdings(kite: KiteConnect) -> Optional[List[Dict[str, Any]]]:
 
 
 # ===== Instrument-token cache (refreshed every 12h) =====
-_INSTRUMENT_CACHE: Dict[str, Any] = {"by_symbol": {}, "cached_at": None}
+_INSTRUMENT_CACHE: Dict[str, Any] = {"by_segment": {}}
 
 
 def instrument_token(kite: KiteConnect, symbol: str, segment: str = "NSE") -> Optional[int]:
-    """Resolve an NSE tradingsymbol to its instrument_token. Caches the full
-    instrument dump in-process for 12h (it's ~2 MB). Returns None on miss."""
+    """Resolve a tradingsymbol to its instrument_token for one exchange segment.
+
+    The cache is keyed by segment. This matters for index symbols such as
+    BSE:SENSEX; an NSE cache must not be reused for BSE lookups.
+    """
     sym = symbol.upper()
+    segment = (segment or "NSE").upper()
     now = datetime.now(timezone.utc)
-    cached_at = _INSTRUMENT_CACHE["cached_at"]
+    segment_cache = _INSTRUMENT_CACHE["by_segment"].get(segment) or {"by_symbol": {}, "cached_at": None}
+    cached_at = segment_cache["cached_at"]
     stale = cached_at is None or (now - cached_at).total_seconds() > 43200
     if stale:
         try:
             instruments = kite.instruments(segment)
-            _INSTRUMENT_CACHE["by_symbol"] = {
+            by_symbol = {
                 i["tradingsymbol"].upper(): int(i["instrument_token"])
                 for i in instruments
                 if i.get("tradingsymbol") and i.get("instrument_token")
             }
-            _INSTRUMENT_CACHE["cached_at"] = now
-            logger.info(f"instrument cache refreshed: {len(_INSTRUMENT_CACHE['by_symbol'])} symbols")
+            segment_cache = {"by_symbol": by_symbol, "cached_at": now}
+            _INSTRUMENT_CACHE["by_segment"][segment] = segment_cache
+            logger.info(f"instrument cache refreshed: segment={segment} symbols={len(by_symbol)}")
         except Exception as e:
-            logger.warning(f"instruments load failed: {e}")
-            if not _INSTRUMENT_CACHE["by_symbol"]:
+            logger.warning(f"instruments load failed for segment {segment}: {e}")
+            if not segment_cache["by_symbol"]:
                 return None
-    return _INSTRUMENT_CACHE["by_symbol"].get(sym)
+    return segment_cache["by_symbol"].get(sym)
 
 
 def safe_historical(

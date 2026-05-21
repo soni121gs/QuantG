@@ -41,6 +41,9 @@ const formatDataSource = (source) => {
 const strategyNotice = (s) => {
   if (s.last_filter_reason) return { text: s.last_filter_reason, kind: "filter" };
   if (s.last_error?.startsWith("Signal filtered:")) return { text: s.last_error, kind: "filter" };
+  if (s.last_error?.includes("entry blocked: cooldown-active")) return { text: "Entry skipped: cooldown-active", kind: "filter" };
+  if (s.last_error?.includes("entry blocked: duplicate-buy-dropped")) return { text: "Entry skipped: duplicate-buy-dropped", kind: "filter" };
+  if (s.last_error?.includes("entry blocked: max-trades-day-reached")) return { text: "Entry skipped: max-trades-day-reached", kind: "filter" };
   if (s.last_error) return { text: s.last_error, kind: "error" };
   return null;
 };
@@ -128,6 +131,21 @@ export default function Strategies() {
     }
   };
 
+  const installPresets = async () => {
+    try {
+      const r = await api.post("/strategies/seed-defaults");
+      const inserted = r.data?.inserted || 0;
+      if (inserted) {
+        toast.success(`Installed ${inserted} draft live-style presets`);
+      } else {
+        toast.info("Live-style presets are already installed");
+      }
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Preset install failed");
+    }
+  };
+
   // Filter strategies by asset class
   const filteredList = selectedAsset === "all" ? list : list.filter((s) => getAssetClass(s) === selectedAsset);
 
@@ -180,6 +198,9 @@ export default function Strategies() {
         <div className="flex gap-2">
           <button onClick={load} className="border border-[var(--qd-border)] hover:border-white text-[var(--qd-text-2)] text-xs font-mono uppercase tracking-wider px-3 py-2 rounded-sm flex items-center gap-2" data-testid="refresh-strategies">
             <RefreshCw size={14} />
+          </button>
+          <button onClick={installPresets} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center gap-2" data-testid="install-presets-btn">
+            <Zap size={14} /> Presets
           </button>
           <Link to="/python" className="border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center gap-2" data-testid="new-python-btn">
             <Code2 size={14} /> Python

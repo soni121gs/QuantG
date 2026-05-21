@@ -374,6 +374,12 @@ class RealtimeTickManager:
         for ticker in tickers:
             ticker.stop()
 
+    def stop_for_user(self, user_id: str) -> None:
+        with self._lock:
+            ticker = self._tickers.get(user_id)
+        if ticker:
+            ticker.stop()
+
     def is_running(self, user_id: str) -> bool:
         ticker = self._tickers.get(user_id)
         return ticker.is_running() if ticker else False

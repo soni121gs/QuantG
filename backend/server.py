@@ -498,6 +498,8 @@ async def _fetch_strategy_history(
         try:
             token_to_symbol: Dict[int, str] = {}
             for s in SYMBOLS:
+                if s["symbol"] in options_helper.INDEX_SPOT_SYMBOL:
+                    continue
                 tok = kite_helper.instrument_token(kite, s["symbol"])
                 if tok:
                     token_to_symbol[tok] = s["symbol"]
@@ -834,8 +836,13 @@ def run(data):
 """
 
 DEFAULT_STRATEGY_RISK = {
-    "stop_loss_pct": 0.20,
-    "take_profit_pct": 0.40,
+    # Human percent values. The SQLite option ledger stores these as fractions.
+    "stop_loss_pct": 22.0,
+    "take_profit_pct": 45.0,
+    "trail_trigger_pct": 25.0,
+    "trail_step_pct": 10.0,
+    "cooldown_minutes": 20,
+    "max_trades_day": 2,
     "pause_on_issue": True,
 }
 
@@ -1079,6 +1086,206 @@ DEFAULT_OPTION_STRATEGIES = [
 ]
 
 
+TREND_CONTINUATION_CODE = """def run(data):
+    if len(data) < 80:
+        return []
+    last = data[-1]
+    today = str(last['date'])[:10]
+    clock = str(last['date'])[11:16]
+    if clock < '09:45' or clock > '14:45':
+        return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+    prev_high = max(highs[-11:-1])
+    prev_low = min(lows[-11:-1])
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
+    atr = sum(tr) / len(tr)
+    body = abs(closes[-1] - closes[-2])
+    if str(data[-2]['date'])[:10] != today:
+        return []
+    if closes[-1] > prev_high and sma20 > sma50 and closes[-1] > sma20 and body > atr * 0.35:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if closes[-1] < prev_low and sma20 < sma50 and closes[-1] < sma20 and body > atr * 0.35:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+OPENING_RANGE_VWAP_CODE = """def run(data):
+    today_bars = [d for d in data if str(d['date'])[:10] == str(data[-1]['date'])[:10]]
+    if len(today_bars) < 5:
+        return []
+    last = today_bars[-1]
+    clock = str(last['date'])[11:16]
+    if clock < '09:35' or clock > '11:15':
+        return []
+    opening = today_bars[:3]
+    range_high = max(float(d.get('high', d['close'])) for d in opening)
+    range_low = min(float(d.get('low', d['close'])) for d in opening)
+    closes = [float(d['close']) for d in today_bars]
+    highs = [float(d.get('high', d['close'])) for d in today_bars]
+    lows = [float(d.get('low', d['close'])) for d in today_bars]
+    vols = [max(1, int(d.get('volume', 1))) for d in today_bars]
+    typical_value = sum(((highs[i] + lows[i] + closes[i]) / 3) * vols[i] for i in range(len(today_bars)))
+    vwap = typical_value / max(1, sum(vols))
+    avg_vol = sum(vols[:-1]) / max(1, len(vols) - 1)
+    if closes[-1] > range_high and closes[-1] > vwap and vols[-1] > avg_vol * 1.05:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if closes[-1] < range_low and closes[-1] < vwap and vols[-1] > avg_vol * 1.05:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+VWAP_PULLBACK_CODE = """def run(data):
+    today_bars = [d for d in data if str(d['date'])[:10] == str(data[-1]['date'])[:10]]
+    if len(today_bars) < 15:
+        return []
+    last = today_bars[-1]
+    clock = str(last['date'])[11:16]
+    if clock < '10:00' or clock > '14:30':
+        return []
+    closes = [float(d['close']) for d in today_bars]
+    highs = [float(d.get('high', d['close'])) for d in today_bars]
+    lows = [float(d.get('low', d['close'])) for d in today_bars]
+    vols = [max(1, int(d.get('volume', 1))) for d in today_bars]
+    typical_value = sum(((highs[i] + lows[i] + closes[i]) / 3) * vols[i] for i in range(len(today_bars)))
+    vwap = typical_value / max(1, sum(vols))
+    ma20 = sum(closes[-20:]) / min(20, len(closes))
+    ma20_prev = sum(closes[-21:-1]) / min(20, len(closes) - 1)
+    prev_high = max(highs[-6:-1])
+    prev_low = min(lows[-6:-1])
+    if ma20 > ma20_prev and closes[-2] <= vwap and closes[-1] > vwap and closes[-1] > prev_high:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if ma20 < ma20_prev and closes[-2] >= vwap and closes[-1] < vwap and closes[-1] < prev_low:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+ATR_VOLUME_BREAKOUT_CODE = """def run(data):
+    if len(data) < 70:
+        return []
+    last = data[-1]
+    clock = str(last['date'])[11:16]
+    if clock < '10:15' or clock > '14:40':
+        return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
+    atr = sum(tr) / len(tr)
+    recent_range = sum(highs[i] - lows[i] for i in range(len(data)-8, len(data)-2)) / 6
+    prev_high = max(highs[-13:-1])
+    prev_low = min(lows[-13:-1])
+    avg_vol = sum(vols[-21:-1]) / 20
+    if recent_range < atr * 0.85 and vols[-1] > avg_vol * 1.15 and closes[-1] > prev_high:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if recent_range < atr * 0.85 and vols[-1] > avg_vol * 1.15 and closes[-1] < prev_low:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+RSI_REVERSAL_CODE = """def run(data):
+    if len(data) < 60:
+        return []
+    last = data[-1]
+    clock = str(last['date'])[11:16]
+    if clock < '10:00' or clock > '14:15':
+        return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    def calc_rsi(end, period):
+        gains = 0
+        losses = 0
+        for j in range(end - period + 1, end + 1):
+            change = closes[j] - closes[j-1]
+            if change > 0:
+                gains += change
+            else:
+                losses += abs(change)
+        avg_gain = gains / period
+        avg_loss = losses / period if losses else 0.0001
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+    rsi_now = calc_rsi(len(closes) - 1, 14)
+    rsi_prev = calc_rsi(len(closes) - 2, 14)
+    sma50 = sum(closes[-50:]) / 50
+    prev_high = max(highs[-5:-1])
+    prev_low = min(lows[-5:-1])
+    if rsi_prev < 32 and rsi_now > 38 and closes[-1] > prev_high and closes[-1] > sma50:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if rsi_prev > 68 and rsi_now < 62 and closes[-1] < prev_low and closes[-1] < sma50:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+DEFAULT_OPTION_STRATEGIES = [
+    {
+        "name": "NIFTY VWAP Trend Breakout",
+        "description": "Trades only confirmed NIFTY trend breakouts with SMA, ATR, and time filters.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": TREND_CONTINUATION_CODE,
+    },
+    {
+        "name": "NIFTY Opening Range VWAP",
+        "description": "Uses current-day opening range only, confirmed by VWAP and volume.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": OPENING_RANGE_VWAP_CODE,
+    },
+    {
+        "name": "NIFTY VWAP Pullback Continuation",
+        "description": "Waits for a pullback to VWAP, then continuation through a short swing.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": VWAP_PULLBACK_CODE,
+    },
+    {
+        "name": "NIFTY ATR Volume Expansion",
+        "description": "Trades post-compression moves only when ATR and volume confirm expansion.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": ATR_VOLUME_BREAKOUT_CODE,
+    },
+    {
+        "name": "NIFTY RSI Reversal With Trend",
+        "description": "Countertrend entry only after RSI recovery and reclaim of a short swing.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": RSI_REVERSAL_CODE,
+    },
+    {
+        "name": "SENSEX VWAP Trend Breakout",
+        "description": "Trades only confirmed SENSEX trend breakouts with SMA, ATR, and time filters.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": TREND_CONTINUATION_CODE,
+    },
+    {
+        "name": "SENSEX Opening Range VWAP",
+        "description": "Uses current-day SENSEX opening range only, confirmed by VWAP and volume.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": OPENING_RANGE_VWAP_CODE,
+    },
+    {
+        "name": "SENSEX VWAP Pullback Continuation",
+        "description": "Waits for SENSEX pullback to VWAP, then continuation through a short swing.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": VWAP_PULLBACK_CODE,
+    },
+    {
+        "name": "SENSEX ATR Volume Expansion",
+        "description": "Trades post-compression SENSEX moves only when ATR and volume confirm.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": ATR_VOLUME_BREAKOUT_CODE,
+    },
+    {
+        "name": "SENSEX RSI Reversal With Trend",
+        "description": "SENSEX reversal entry only after RSI recovery and swing confirmation.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "python_code": RSI_REVERSAL_CODE,
+    },
+]
+
+
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
@@ -1126,15 +1333,19 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     return StrategyOut(**clean)
 
 
-async def seed_default_strategies_for_user(user_id: str) -> None:
-    if await db.strategies.count_documents({"user_id": user_id}) > 0:
-        return
-    docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES]
+async def seed_default_strategies_for_user(user_id: str) -> int:
+    existing = await db.strategies.find({"user_id": user_id}, {"_id": 0, "name": 1}).to_list(500)
+    existing_names = {row.get("name") for row in existing}
+    docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
+    if not docs:
+        return 0
     try:
         await db.strategies.insert_many(docs)
         logger.info(f"Seeded {len(docs)} default option strategies for user {user_id}")
+        return len(docs)
     except Exception as e:
         logger.warning(f"Failed to seed default strategies for user {user_id}: {e}")
+        return 0
 
 
 async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
@@ -1292,6 +1503,13 @@ def _kotak_transaction_type(side: str) -> str:
     return "B" if (side or "BUY").upper() == "BUY" else "S"
 
 
+def _kotak_trading_symbol(exchange: str, trading_symbol: str) -> str:
+    symbol = str(trading_symbol or "").upper()
+    if (exchange or "").upper() in {"NSE", "BSE"} and symbol and not symbol.endswith("-EQ"):
+        return f"{symbol}-EQ"
+    return symbol
+
+
 def _extract_kotak_order_id(payload: Any) -> Optional[str]:
     if isinstance(payload, dict):
         for key in ("nOrdNo", "order_id", "orderId", "OrderNo", "NOrdNo", "nestOrderNumber"):
@@ -1340,7 +1558,7 @@ async def _place_kotak_order(
             product=(product or "MIS").upper(),
             price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
             quantity=int(quantity),
-            trading_symbol=trading_symbol,
+            trading_symbol=_kotak_trading_symbol(exchange, trading_symbol),
             transaction_type=_kotak_transaction_type(side),
             order_type=_kotak_order_type(order_type),
             tag=execution_tag,
@@ -1354,8 +1572,11 @@ async def _place_kotak_order(
         await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=f"Kotak rejected order: {result.get('error')}")
+    broker_order_id = _extract_kotak_order_id(result.get("response"))
+    if not broker_order_id:
+        logger.warning("Kotak order response did not include order id: %s", result.get("response"))
     return {
-        "broker_order_id": _extract_kotak_order_id(result.get("response")),
+        "broker_order_id": broker_order_id,
         "raw": result.get("response"),
         "tag": execution_tag,
         "attempts": attempts,
@@ -1506,8 +1727,12 @@ async def list_strategies(user=Depends(get_current_user)):
 
 @api.post("/strategies/seed-defaults")
 async def seed_default_strategies(user=Depends(get_current_user)):
-    await seed_default_strategies_for_user(user["id"])
-    return {"ok": True, "message": "Default NIFTY and SENSEX option strategies seeded. Review them in the Strategies tab."}
+    inserted = await seed_default_strategies_for_user(user["id"])
+    return {
+        "ok": True,
+        "inserted": inserted,
+        "message": "Live-style NIFTY and SENSEX option presets installed. Review and backtest before enabling LIVE.",
+    }
 
 
 @api.get("/strategies/{sid}", response_model=StrategyOut)
@@ -2312,6 +2537,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if not paper:
             kite, _ = await get_user_kite(user_id)
             if not kite:
+                if execution_broker == "kotak_neo":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Kotak execution currently still needs Zerodha connected for option LTP and contract selection. Connect Zerodha for data, then Connect Kotak for execution.",
+                    )
                 raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected.")
             try:
                 ltp_resp = kite.ltp([f"{opt_exchange}:{opt_symbol}"])
@@ -2806,21 +3036,46 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
         if o.get("order_id") and o.get("status")
     }
     fixed = 0
+    missing_fixed = 0
+    now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(minutes=10)
     rows = await db.orders.find({
         "user_id": user_id,
         "status": {"$in": ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"]},
-        "broker_order_id": {"$exists": True, "$ne": None},
-    }, {"_id": 0, "id": 1, "broker_order_id": 1}).to_list(500)
+        "broker": {"$in": ["zerodha", None]},
+    }, {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1}).to_list(500)
     for row in rows:
-        status = broker_status.get(row.get("broker_order_id"))
+        broker_order_id = row.get("broker_order_id")
+        status = broker_status.get(broker_order_id)
         if status in {"COMPLETE", "CANCELLED", "REJECTED"}:
             res = await db.orders.update_one(
                 {"user_id": user_id, "id": row["id"]},
-                {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
+                {"$set": {"status": status, "updated_at": now.isoformat()}},
             )
             fixed += res.modified_count
+            continue
+
+        created_at = row.get("created_at")
+        created_dt = None
+        if isinstance(created_at, datetime):
+            created_dt = created_at.astimezone(timezone.utc)
+        elif isinstance(created_at, str):
+            try:
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                created_dt = None
+        if broker_order_id and broker_order_id not in broker_status and created_dt and created_dt < stale_before:
+            res = await db.orders.update_one(
+                {"user_id": user_id, "id": row["id"]},
+                {"$set": {
+                    "status": "CANCELLED",
+                    "status_message": "Local stale open order cleared: broker no longer reports this order.",
+                    "updated_at": now.isoformat(),
+                }},
+            )
+            missing_fixed += res.modified_count
     _ORDER_SYNC_CACHE.pop(user_id, None)
-    return {"fixed": fixed, "checked": len(rows)}
+    return {"fixed": fixed + missing_fixed, "broker_closed_fixed": fixed, "missing_from_broker_fixed": missing_fixed, "checked": len(rows)}
 
 
 async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
@@ -2857,6 +3112,7 @@ async def list_orders(user=Depends(get_current_user)):
     kite, _ = await get_user_kite(user["id"])
     if kite:
         await _sync_kite_order_statuses(user["id"], kite)
+        await _stale_local_open_orders(user["id"], kite)
     await _sync_kotak_order_statuses(user["id"])
     rows = await db.orders.find({"user_id": user["id"]},
                                 {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
@@ -3105,6 +3361,7 @@ async def orders_ws(websocket: WebSocket):
             kite, _ = await get_user_kite(user["id"])
             if kite:
                 await _sync_kite_order_statuses(user["id"], kite)
+                await _stale_local_open_orders(user["id"], kite)
             await _sync_kotak_order_statuses(user["id"])
             rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
             await websocket.send_json({
@@ -3141,11 +3398,11 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             "cooldown_until": ledger_row.get("cooldown_until"),
             "required_capital": ledger_row.get("required_capital", 0),
             "max_lots": 1,
-            "target_pct": ledger_row.get("target_pct"),
-            "stoploss_pct": ledger_row.get("stoploss_pct"),
+            "target_pct": round(float(ledger_row.get("target_pct") or 0) * 100, 2),
+            "stoploss_pct": round(float(ledger_row.get("stoploss_pct") or 0) * 100, 2),
             "trailing_sl_enabled": ledger_row.get("trailing_sl_enabled"),
-            "trail_trigger_pct": ledger_row.get("trail_trigger_pct"),
-            "trail_step_pct": ledger_row.get("trail_step_pct"),
+            "trail_trigger_pct": round(float(ledger_row.get("trail_trigger_pct") or 0) * 100, 2),
+            "trail_step_pct": round(float(ledger_row.get("trail_step_pct") or 0) * 100, 2),
             "cooldown_minutes": ledger_row.get("cooldown_minutes"),
             "max_trades_day": ledger_row.get("max_trades_day"),
             "risk_settings": ledger_row.get("risk_settings", {}),
@@ -3196,9 +3453,11 @@ NSE_INDEX_MAP = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK"}
 
 
 def _nse_token(sym: str) -> str:
-    """Build instrument key for Kite ltp/quote calls. Indices go to NSE, equities to NSE."""
-    if sym in NSE_INDEX_MAP:
-        return f"NSE:{NSE_INDEX_MAP[sym]}"
+    """Build exchange:tradingsymbol for Kite market quote calls."""
+    sym_upper = sym.upper()
+    if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
+        exchange, tradingsymbol = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
+        return f"{exchange}:{tradingsymbol}"
     return f"NSE:{sym}"
 
 
@@ -3225,12 +3484,16 @@ async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
     gateway = _KOTAK_GATEWAYS.get(user_id)
     if gateway:
         gw_status = gateway.status()
+        gateway_error = gw_status.get("last_error")
         status.update({
             "connected": bool(gw_status.get("authenticated")),
             "gateway": gw_status,
-            "reason": None if gw_status.get("authenticated") else status.get("reason"),
+            "reason": None if gw_status.get("authenticated") else (gateway_error or status.get("reason")),
         })
-    status["env_ready"] = all(os.environ.get(k) for k in ("KOTAK_MOBILE_NUMBER", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET_KEY"))
+    required_env = ("KOTAK_MOBILE_NUMBER", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET_KEY")
+    missing_env = [k for k in required_env if not os.environ.get(k)]
+    status["env_ready"] = not missing_env
+    status["missing_env"] = missing_env
     return status
 
 
@@ -3399,7 +3662,18 @@ async def live_readiness(user=Depends(get_current_user)):
 def _is_strategy_blocking_error(message: Optional[str]) -> bool:
     if not message:
         return False
-    return not str(message).startswith("Signal filtered:")
+    text = str(message)
+    non_blocking = (
+        "Signal filtered:",
+        "Entry skipped:",
+        "Option entry blocked: cooldown-active",
+        "Strategy entry blocked: cooldown-active",
+        "Option entry blocked: duplicate-buy-dropped",
+        "Strategy entry blocked: duplicate-buy-dropped",
+        "Option entry blocked: max-trades-day-reached",
+        "Strategy entry blocked: max-trades-day-reached",
+    )
+    return not any(text.startswith(prefix) or prefix in text for prefix in non_blocking)
 
 
 def _build_recovery_plan(
@@ -3469,6 +3743,8 @@ async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
         return {"started": False, "reason": "tick_manager_missing", "status": status}
     token_to_symbol: Dict[int, str] = {}
     for s in SYMBOLS:
+        if s["symbol"] in options_helper.INDEX_SPOT_SYMBOL:
+            continue
         tok = kite_helper.instrument_token(kite, s["symbol"])
         if tok:
             token_to_symbol[tok] = s["symbol"]
@@ -3488,10 +3764,24 @@ async def ops_diagnostics(user=Depends(get_current_user)):
     kite, kite_status = await get_user_kite(user["id"])
     kotak_status = await get_user_kotak_status(user["id"])
     order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
+    stale_order_repair = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": "zerodha_not_connected"}
     kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    stale_nonblocking_error_ids = [
+        s.get("id")
+        for s in strategies
+        if s.get("last_error") and not _is_strategy_blocking_error(s.get("last_error"))
+    ]
+    if stale_nonblocking_error_ids:
+        await db.strategies.update_many(
+            {"user_id": user["id"], "id": {"$in": stale_nonblocking_error_ids}},
+            {"$unset": {"last_error": ""}},
+        )
+        for s in strategies:
+            if s.get("id") in stale_nonblocking_error_ids:
+                s.pop("last_error", None)
     errored = [
         {
             "id": s.get("id"),
@@ -3541,7 +3831,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "open_orders": orders_open,
             "paper_positions": positions_count,
         },
-        "order_sync": {**order_sync, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0)},
+        "order_sync": {**order_sync, **stale_order_repair, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0)},
         "recovery_plan": recovery_plan,
         "rate_limits": {
             "kite_history_cache_entries": len(_HISTORY_CACHE),
@@ -3728,6 +4018,9 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
             "access_token_expires_at": expires_at,
         }},
     )
+    tick_manager = getattr(app.state, "tick_manager", None)
+    if tick_manager:
+        tick_manager.stop_for_user(user["id"])
     return {"connected": True, "kite_user_id": session.get("user_id"), "expires_at": expires_at}
 
 
@@ -4048,6 +4341,9 @@ async def zerodha_disconnect(user=Depends(get_current_user)):
         {"$unset": {"access_token": "", "public_token": "", "access_token_expires_at": "",
                     "access_token_obtained_at": "", "kite_user_id": ""}},
     )
+    tick_manager = getattr(app.state, "tick_manager", None)
+    if tick_manager:
+        tick_manager.stop_for_user(user["id"])
     return {"disconnected": True}
 
 
@@ -4150,9 +4446,11 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                 broker_symbols_by_user[user_id] = {
                     p.get("tradingsymbol"): p for p in net_positions if p.get("tradingsymbol") and int(p.get("quantity") or 0) != 0
                 }
-                for idx_symbol, kite_symbol in (("NIFTY", "NIFTY 50"), ("SENSEX", "SENSEX")):
-                    ltp_resp = kite_helper.safe_ltp(kite, [f"NSE:{kite_symbol}"]) or {}
-                    node = ltp_resp.get(f"NSE:{kite_symbol}") or {}
+                for idx_symbol in ("NIFTY", "SENSEX"):
+                    exch, kite_symbol = options_helper.INDEX_SPOT_SYMBOL[idx_symbol]
+                    key = f"{exch}:{kite_symbol}"
+                    ltp_resp = kite_helper.safe_ltp(kite, [key]) or {}
+                    node = ltp_resp.get(key) or {}
                     if node.get("last_price"):
                         option_ledger.record_market_tick(idx_symbol, float(node["last_price"]), "zerodha")
 
@@ -4166,7 +4464,9 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                     option_ledger.close_position(sid, float(pos.get("ltp") or pos.get("entry_price") or 0), "orphan-strategy")
                     continue
                 user_id = strategy["user_id"]
-                ltp = await _current_ltp_for_symbol(user_id, pos["symbol"], "NFO")
+                underlying = ((strategy.get("visual_config") or {}).get("options") or {}).get("underlying", "NIFTY")
+                pos_exchange = options_helper.OPT_EXCHANGE.get(str(underlying).upper(), "NFO")
+                ltp = await _current_ltp_for_symbol(user_id, pos["symbol"], pos_exchange)
                 if ltp is None:
                     broker_pos = broker_symbols_by_user.get(user_id, {}).get(pos["symbol"])
                     ltp = float(broker_pos.get("last_price") or pos["ltp"]) if broker_pos else float(pos["ltp"])

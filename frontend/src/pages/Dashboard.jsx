@@ -69,13 +69,13 @@ const EngineStrategyCard = ({ row, onSave }) => {
   const pos = row.active_position || {};
   const risk = row.risk_settings || {};
   const [form, setForm] = useState({
-    target_pct: row.target_pct ?? 0.4,
-    stoploss_pct: row.stoploss_pct ?? 0.2,
+    target_pct: row.target_pct ?? 45,
+    stoploss_pct: row.stoploss_pct ?? 22,
     trailing_sl_enabled: row.trailing_sl_enabled ?? true,
-    trail_trigger_pct: row.trail_trigger_pct ?? 0.2,
-    trail_step_pct: row.trail_step_pct ?? 0.1,
-    cooldown_minutes: row.cooldown_minutes ?? 5,
-    max_trades_day: row.max_trades_day ?? 3,
+    trail_trigger_pct: row.trail_trigger_pct ?? 25,
+    trail_step_pct: row.trail_step_pct ?? 10,
+    cooldown_minutes: row.cooldown_minutes ?? 20,
+    max_trades_day: row.max_trades_day ?? 2,
     daily_loss_limit: risk.daily_loss_limit ?? 0,
     required_capital: row.required_capital ?? 0,
   });
@@ -452,8 +452,8 @@ export default function Dashboard() {
           </h2>
           <div className="grid grid-cols-2 gap-3 font-mono text-xs">
             <FundCell k="Max lot" v="1 locked" />
-            <FundCell k="Cooldown" v={`${telemetry?.strategies_page_data?.[0]?.cooldown_minutes ?? 5} min`} />
-            <FundCell k="Max trades/day" v={telemetry?.strategies_page_data?.[0]?.max_trades_day ?? 3} />
+            <FundCell k="Cooldown" v={`${telemetry?.strategies_page_data?.[0]?.cooldown_minutes ?? 20} min`} />
+            <FundCell k="Max trades/day" v={telemetry?.strategies_page_data?.[0]?.max_trades_day ?? 2} />
             <FundCell k="Daily loss" v={`₹${formatINR(telemetry?.strategies_page_data?.[0]?.risk_settings?.daily_loss_limit || 0)}`} />
           </div>
         </div>
