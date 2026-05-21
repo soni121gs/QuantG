@@ -291,13 +291,18 @@ class QuantGNeoGateway:
         try:
             self._install_callbacks()
             if hasattr(self._client, "subscribe"):
-                response = self._client.subscribe(tokens)
+                response = self._client.subscribe(
+                    instrument_tokens=tokens,
+                    isIndex=any(str(t.get("exchange_segment", "")).endswith("_idx") for t in tokens),
+                    isDepth=False,
+                )
             elif hasattr(self._client, "subscribe_symbol"):
                 response = self._client.subscribe_symbol(tokens)
             else:
                 return self._failure("NeoAPI subscribe method not found")
             with self._lock:
                 self._subscribed_tokens = tokens
+            self._seed_latest_quotes(tokens)
             logger.info("Kotak Neo subscribed to %s tokens", len(tokens))
             return {"ok": True, "tokens": tokens, "response": response}
         except Exception as exc:
@@ -455,6 +460,52 @@ class QuantGNeoGateway:
             setattr(self._client, "on_error", self.on_error)
         except Exception as exc:
             self._set_error(f"Callback installation failed: {exc}")
+
+    def _seed_latest_quotes(self, tokens: List[Dict[str, str]]) -> None:
+        """Prime the ticker cache through Kotak quotes while websocket warms up."""
+        if self._client is None or not tokens or not hasattr(self._client, "quotes"):
+            return
+        try:
+            response = self._client.quotes(instrument_tokens=tokens, quote_type="ltp")
+            self._ingest_quote_response(response)
+        except Exception as exc:
+            logger.warning("Kotak quote seed failed: %s", exc)
+
+    def _ingest_quote_response(self, response: Any) -> None:
+        received_at = datetime.now(timezone.utc).isoformat()
+        candidates: List[Dict[str, Any]] = []
+
+        def collect(node: Any) -> None:
+            if isinstance(node, list):
+                for item in node:
+                    collect(item)
+                return
+            if not isinstance(node, dict):
+                return
+            token = node.get("tk") or node.get("instrument_token") or node.get("instrumentToken") or node.get("token")
+            ltp = node.get("ltp") or node.get("last_price") or node.get("lastPrice") or node.get("last_traded_price")
+            if token and ltp not in (None, ""):
+                candidates.append({"token": str(token), "ltp": ltp, "raw": node})
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    collect(value)
+
+        collect(response)
+        if not candidates:
+            return
+        with self._lock:
+            for item in candidates:
+                symbol = self._symbol_for_token(item["token"])
+                normalized = {
+                    "token": item["token"],
+                    "symbol": symbol,
+                    "ltp": float(item["ltp"]),
+                    "received_at": received_at,
+                    "raw": item["raw"],
+                }
+                self._ticks_by_token[item["token"]] = normalized
+                if symbol:
+                    self._ticks_by_symbol[symbol.upper()] = normalized
 
     def _normalize_tokens(self, instrument_tokens: Iterable[Dict[str, Any]]) -> List[Dict[str, str]]:
         out: List[Dict[str, str]] = []

@@ -1591,6 +1591,13 @@ def _active_key(user_id: str, value: str) -> str:
     return f"{user_id}:{value}"
 
 
+def _strategy_lock_ids(user_id: str, strategy_id: str, instrument_key: str) -> List[str]:
+    return [
+        f"{user_id}:instrument:{instrument_key}",
+        f"{user_id}:strategy:{strategy_id}",
+    ]
+
+
 async def _strategy_row(user_id: str, strategy_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not strategy_id:
         return None
@@ -1638,6 +1645,31 @@ async def _reserve_strategy_position(
     row = await _strategy_row(user_id, strategy_id)
     risk = ((row or {}).get("visual_config") or {}).get("risk") or {}
     now = datetime.now(timezone.utc).isoformat()
+    lock_ids = _strategy_lock_ids(user_id, strategy_id, instrument_key)
+    lock_docs = [
+        {
+            "_id": lock_id,
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "instrument_key": instrument_key,
+            "trading_symbol": trading_symbol,
+            "created_at": now,
+        }
+        for lock_id in lock_ids
+    ]
+    acquired_locks: List[str] = []
+    try:
+        for lock_doc in lock_docs:
+            await db.strategy_position_locks.insert_one(lock_doc)
+            acquired_locks.append(lock_doc["_id"])
+    except DuplicateKeyError:
+        if acquired_locks:
+            await db.strategy_position_locks.delete_many({"_id": {"$in": acquired_locks}})
+        raise HTTPException(
+            status_code=409,
+            detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
+        )
+
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -1662,6 +1694,7 @@ async def _reserve_strategy_position(
     try:
         await db.strategy_positions.insert_one(doc)
     except DuplicateKeyError:
+        await db.strategy_position_locks.delete_many({"_id": {"$in": lock_ids}})
         raise HTTPException(
             status_code=409,
             detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
@@ -1706,6 +1739,7 @@ async def _cancel_strategy_reservation(reservation: Optional[Dict[str, Any]], re
         {"$set": {"status": "CANCELLED", "cancel_reason": reason, "updated_at": now},
          "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
     )
+    await _release_strategy_position_locks(reservation)
 
 
 async def _open_strategy_position_for_exit(
@@ -1771,6 +1805,20 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
             "updated_at": now,
         }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
     )
+    await _release_strategy_position_locks(position)
+
+
+async def _release_strategy_position_locks(position: Optional[Dict[str, Any]]) -> None:
+    if not position:
+        return
+    user_id = position.get("user_id")
+    strategy_id = position.get("strategy_id")
+    instrument_key = position.get("instrument_key")
+    if not user_id or not strategy_id or not instrument_key:
+        return
+    await db.strategy_position_locks.delete_many({
+        "_id": {"$in": _strategy_lock_ids(str(user_id), str(strategy_id), str(instrument_key))}
+    })
 
 
 async def _reopen_strategy_position_after_exit_reject(position_id: str, user_id: str, reason: str) -> None:
@@ -4828,6 +4876,32 @@ def _build_recovery_plan(
     }
 
 
+def _kotak_ticker_status(user_id: str) -> Dict[str, Any]:
+    gateway = _KOTAK_GATEWAYS.get(user_id)
+    if not gateway:
+        return {
+            "connected": False,
+            "connecting": False,
+            "subscribed_tokens": 0,
+            "websocket_url": "kotak-neo-sdk",
+            "last_error": "Kotak gateway not connected",
+        }
+    status = gateway.status()
+    authenticated = bool(status.get("authenticated"))
+    subscribed = int(status.get("subscribed_tokens") or 0)
+    ticks = int(status.get("ticks") or 0)
+    return {
+        "connected": bool(authenticated and subscribed and ticks),
+        "connecting": bool(authenticated and subscribed and not ticks),
+        "authenticated": authenticated,
+        "subscribed_tokens": subscribed,
+        "ticks": ticks,
+        "last_tick_at": status.get("last_tick_at"),
+        "last_error": status.get("last_error"),
+        "websocket_url": "kotak-neo-sdk",
+    }
+
+
 async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
     kite, status = await get_user_kite(user_id)
     if not kite:
@@ -4931,7 +5005,9 @@ async def ops_diagnostics(user=Depends(get_current_user)):
     kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
     strategy_position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
     tick_manager = getattr(app.state, "tick_manager", None)
-    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
+    zerodha_tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
+    kotak_tick_status = _kotak_ticker_status(user["id"])
+    tick_status = kotak_tick_status if settings.get("data_broker") == "kotak_neo" else zerodha_tick_status
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
     stale_nonblocking_error_ids = [
         s.get("id")
@@ -4987,6 +5063,8 @@ async def ops_diagnostics(user=Depends(get_current_user)):
         "kotak_neo": kotak_status,
         "upstox": await get_user_upstox_status(user["id"]),
         "ticker": tick_status,
+        "zerodha_ticker": zerodha_tick_status,
+        "kotak_ticker": kotak_tick_status,
         "counts": {
             "strategies": len(strategies),
             "live_strategies": len([s for s in strategies if s.get("status") == "live"]),

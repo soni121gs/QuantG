@@ -43,6 +43,8 @@ export default function OpsConsole() {
 
   const counts = data?.counts || {};
   const ticker = data?.ticker || {};
+  const zerodhaTicker = data?.zerodha_ticker || {};
+  const kotakTicker = data?.kotak_ticker || {};
   const zerodha = data?.zerodha || {};
   const kotak = data?.kotak_neo || {};
   const upstox = data?.upstox || {};
@@ -109,10 +111,17 @@ export default function OpsConsole() {
           />
           <Action
             icon={Wifi}
-            title="Restart Zerodha Ticker"
-            text="Reconnect the Kite websocket and resubscribe symbols."
+            title={prefs.data_broker === "kotak_neo" ? "Restart Data Ticker" : "Restart Zerodha Ticker"}
+            text={prefs.data_broker === "kotak_neo" ? "Subscribe Kotak Neo market data for the watchlist." : "Reconnect the Kite websocket and resubscribe symbols."}
             busy={busy === "ticker"}
             onClick={() => run("ticker", "/ops/ticker/restart")}
+          />
+          <Action
+            icon={Wifi}
+            title="Start Kotak Ticker"
+            text="Subscribe Kotak Neo market data without changing broker preferences."
+            busy={busy === "kotakTicker"}
+            onClick={() => run("kotakTicker", "/market/kotak-ticker/start")}
           />
           <Action
             icon={Trash2}
@@ -145,6 +154,8 @@ export default function OpsConsole() {
           <Row k="Subscribed tokens" v={ticker.subscribed_tokens ?? 0} />
           <Row k="Websocket URL" v={ticker.websocket_url || "-"} />
           <Row k="Ticker error" v={ticker.last_error || "-"} />
+          <Row k="Zerodha ticker" v={`${zerodhaTicker.connected ? "connected" : zerodhaTicker.connecting ? "connecting" : "down"} / ${zerodhaTicker.subscribed_tokens ?? 0} tokens`} />
+          <Row k="Kotak ticker" v={`${kotakTicker.connected ? "connected" : kotakTicker.connecting ? "connecting" : "down"} / ${kotakTicker.subscribed_tokens ?? 0} tokens / ${kotakTicker.ticks ?? 0} ticks`} />
           <Row k="Zerodha expiry" v={fmt(zerodha.expires_at)} />
           <Row k="Kotak Neo" v={kotak.keys_saved ? `Configured${kotak.sdk_available ? "" : " / SDK missing"}` : "Not configured"} />
           <Row k="Upstox" v={upstox.keys_saved ? `Configured${upstox.sdk_available ? "" : " / SDK missing"}` : "Not configured"} />
@@ -224,6 +235,7 @@ function actionMessage(key, data) {
   if (key === "pause") return `Paused ${data.paused_strategies || 0} strategies.`;
   if (key === "enable") return `Enabled ${data.enabled_strategies || 0} strategies.`;
   if (key === "ticker") return data.started ? `Ticker restart requested for ${data.tokens || 0} symbols.` : `Ticker not started: ${data.reason || "unknown"}`;
+  if (key === "kotakTicker") return data.started ? `Kotak ticker subscribed to ${data.tokens || 0} symbols.` : `Kotak ticker not started: ${data.reason || "unknown"}`;
   if (key === "clear") return `Cleared errors on ${data.updated_strategies || 0} strategies.`;
   if (key === "orders") return data.ok ? `Synced ${data.sync?.checked || 0} broker orders, fixed ${data.stale?.fixed || 0}.` : `Order sync skipped: ${data.reason || "unknown"}`;
   if (key === "recover") return `Recovery ran ${data.actions?.length || 0} safe checks.`;
