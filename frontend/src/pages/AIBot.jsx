@@ -5,9 +5,19 @@ import { Bot, Send, Sparkles, User, Wand2 } from "lucide-react";
 const SESSION = "default";
 const SUGGESTIONS = [
   "Suggest a momentum strategy for NIFTY",
-  "Explain RSI vs MACD in 3 bullets",
-  "Write Python for Bollinger band squeeze",
+  "Give me a pre-market risk checklist",
+  "Explain today's MCX commodity setup",
   "How to manage risk with a 1L portfolio?",
+];
+const MODES = [
+  { id: "chat", label: "Chat" },
+  { id: "agent", label: "Strategy Agent" },
+  { id: "brief", label: "Market Brief" },
+];
+const BRIEF_PROMPTS = [
+  "Create a short market brief for NIFTY, BANKNIFTY, SENSEX, and MCX commodities.",
+  "Summarize risks before placing live orders today.",
+  "Build a checklist for commodity trades using exact Kotak MCX symbols.",
 ];
 
 export default function AIBot() {
@@ -19,6 +29,7 @@ export default function AIBot() {
   const [agentText, setAgentText] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const [proposal, setProposal] = useState(null);
+  const [mode, setMode] = useState("chat");
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -67,14 +78,33 @@ export default function AIBot() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)] gap-3" data-testid="ai-bot-page">
-      <div className="mb-3">
-        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// GOOGLE AI STUDIO</div>
-        <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> QuantBot</h1>
-        <p className="text-xs text-[var(--qd-text-2)] mt-1">Your AI trading co-pilot. Ask for strategies, code, or analysis.</p>
+    <div className="flex h-[calc(100vh-130px)] flex-col gap-4" data-testid="ai-bot-page">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// GOOGLE AI STUDIO</div>
+          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> QuantBot</h1>
+          <p className="text-xs text-[var(--qd-text-2)] mt-1">Chat, strategy editing, and market briefs are separated so the workspace stays calm.</p>
+        </div>
+        <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1" data-testid="ai-mode-tabs">
+          {MODES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setMode(item.id)}
+              className={`px-3 py-2 font-mono text-[10px] uppercase tracking-wider rounded ${mode === item.id ? "bg-[var(--qd-accent)] text-white" : "text-[var(--qd-text-2)] hover:text-white"}`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="qd-card p-3" data-testid="ai-agent-controls">
+      {mode === "agent" && (
+      <div className="qd-card p-4" data-testid="ai-agent-controls">
+        <div className="mb-3">
+          <h2 className="font-head text-lg font-semibold text-white">Strategy Agent</h2>
+          <p className="mt-1 text-xs text-[var(--qd-text-2)]">Preview Gemini changes, inspect validation, then apply only when the proposal looks right.</p>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_auto] gap-2 items-end">
           <div>
             <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Strategy</label>
@@ -122,6 +152,29 @@ export default function AIBot() {
           </div>
         )}
       </div>
+      )}
+
+      {mode === "brief" && (
+        <div className="qd-card p-4">
+          <h2 className="font-head text-lg font-semibold text-white">Market Brief</h2>
+          <p className="mt-1 text-xs text-[var(--qd-text-2)]">Use these as one-click Google AI prompts for market context, commodities, and risk.</p>
+          <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+            {BRIEF_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                onClick={() => {
+                  setMode("chat");
+                  send(prompt);
+                }}
+                className="rounded border border-[var(--qd-border)] p-3 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-white"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 qd-card flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages">
@@ -150,7 +203,7 @@ export default function AIBot() {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Ask QuantBot about strategies, markets, code..."
+            placeholder={mode === "agent" ? "Ask about the current proposal or strategy risk..." : "Ask QuantBot about strategies, commodities, markets, code..."}
             className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2.5 text-sm text-white font-mono rounded-sm"
             data-testid="ai-input"
           />

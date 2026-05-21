@@ -82,10 +82,10 @@ export default function Layout({ children }) {
   })();
 
   return (
-    <div className="min-h-screen flex flex-col bg-[var(--qd-bg)]">
+    <div className="min-h-screen flex flex-col qd-shell">
       {/* Top Bar */}
       <header
-        className="sticky top-0 z-50 border-b border-[var(--qd-border)] bg-[#0a0a0b]/95 backdrop-blur"
+        className="sticky top-0 z-50 border-b border-[var(--qd-border)] bg-[rgba(8,10,13,0.92)] backdrop-blur-xl"
         data-testid="top-bar"
       >
         <div className="flex items-center justify-between px-3 md:px-4 h-12 gap-3">
@@ -101,7 +101,7 @@ export default function Layout({ children }) {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 bg-gradient-to-br from-[var(--qd-accent)] to-[#00d9ff] flex items-center justify-center rounded-sm">
+              <div className="w-7 h-7 bg-[var(--qd-accent)] flex items-center justify-center rounded">
                 <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
               <span className="font-head font-bold tracking-tight text-white text-base">
@@ -143,7 +143,7 @@ export default function Layout({ children }) {
                 }`}
                 data-testid="top-pnl"
               >
-                ₹{formatINR(pnl ?? 0)}
+                INR {formatINR(pnl ?? 0)}
               </span>
             </div>
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
@@ -169,7 +169,7 @@ export default function Layout({ children }) {
       <div className="flex flex-1 min-h-0">
         {/* Desktop Sidebar */}
         <aside
-          className="hidden lg:block w-52 border-r border-[var(--qd-border)] bg-[#08080a] sticky top-[48px] self-start h-[calc(100vh-48px)] overflow-y-auto"
+          className="hidden lg:flex lg:flex-col w-56 border-r border-[var(--qd-border)] bg-[rgba(8,10,13,0.9)] sticky top-[48px] self-start h-[calc(100vh-48px)] overflow-y-auto"
           data-testid="sidebar"
         >
           <nav className="flex flex-col p-2 gap-0.5">
@@ -182,7 +182,7 @@ export default function Layout({ children }) {
                   `flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-sm ${
                     isActive
                       ? "bg-[var(--qd-surface-2)] text-white border-l-2 border-[var(--qd-accent)]"
-                      : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface)]"
+                      : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface-2)]"
                   }`
                 }
               >
@@ -210,7 +210,7 @@ export default function Layout({ children }) {
             data-testid="drawer-overlay"
           >
             <aside
-              className="absolute left-0 top-0 bottom-0 w-64 bg-[#08080a] border-r border-[var(--qd-border)] p-3 flex flex-col"
+              className="absolute left-0 top-0 bottom-0 w-72 bg-[var(--qd-bg-2)] border-r border-[var(--qd-border)] p-3 flex flex-col"
               onClick={(e) => e.stopPropagation()}
               data-testid="mobile-drawer"
             >
@@ -266,7 +266,7 @@ export default function Layout({ children }) {
 
       {/* Mobile bottom nav */}
       <nav
-        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-[#0a0a0b]/95 backdrop-blur border-t border-[var(--qd-border)]"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-[rgba(8,10,13,0.95)] backdrop-blur-xl border-t border-[var(--qd-border)]"
         data-testid="mobile-bottom-nav"
       >
         {MOBILE_NAV.map((n) => (

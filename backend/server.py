@@ -912,6 +912,37 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 # ============== Routes: Market ==============
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    if settings.get("data_broker") == "kotak_neo":
+        gateway = _KOTAK_GATEWAYS.get(user["id"])
+        if gateway and gateway.status().get("authenticated"):
+            if gateway.status().get("subscribed_tokens", 0) == 0:
+                await _start_user_kotak_ticker(user["id"])
+            kotak_rows = []
+            live_count = 0
+            for i, s in enumerate(SYMBOLS):
+                tick = gateway.latest_tick_by_symbol(s["symbol"])
+                if tick and tick.get("ltp"):
+                    price = float(tick["ltp"])
+                    live_count += 1
+                    change = round(price - s["base"], 2)
+                    pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
+                    kotak_rows.append({
+                        "symbol": s["symbol"],
+                        "name": s["name"],
+                        "price": price,
+                        "change": change,
+                        "pct": pct,
+                        "source": "kotak_neo",
+                        "feed": "kotak-neo-ticker",
+                        "tick_time": tick.get("received_at"),
+                    })
+                else:
+                    lp = live_price(s["base"], i)
+                    kotak_rows.append({"symbol": s["symbol"], "name": s["name"], **lp, "source": "kotak_pending", "feed": "kotak-neo-ticker"})
+            if live_count:
+                return kotak_rows
+
     # Try live Kite first — use ohlc() so we get last_price AND previous close
     kite, status = await get_user_kite(user["id"])
     if kite:
@@ -4821,6 +4852,75 @@ async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
     return {"started": True, "tokens": len(token_to_symbol), "status": tick_manager.status_info(user_id)}
 
 
+def _collect_kotak_instruments(node: Any, out: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    out = out or []
+    if node is None or len(out) >= 25:
+        return out
+    if isinstance(node, list):
+        for item in node:
+            _collect_kotak_instruments(item, out)
+        return out
+    if not isinstance(node, dict):
+        return out
+
+    symbol = node.get("trdSym") or node.get("trading_symbol") or node.get("tradingSymbol") or node.get("symbol") or node.get("pSymbolName") or node.get("ts")
+    token = node.get("instrument_token") or node.get("instrumentToken") or node.get("token") or node.get("tk") or node.get("pSymbol")
+    exchange_segment = node.get("exchange_segment") or node.get("exSeg") or node.get("exchangeSegment")
+    if symbol and token:
+        candidate = {
+            "symbol": str(symbol).upper(),
+            "instrument_token": str(token),
+            "exchange_segment": str(exchange_segment or "nse_cm"),
+        }
+        if not any(x["instrument_token"] == candidate["instrument_token"] for x in out):
+            out.append(candidate)
+    for value in node.values():
+        _collect_kotak_instruments(value, out)
+    return out
+
+
+async def _start_user_kotak_ticker(user_id: str, symbols: Optional[List[str]] = None, exchange: str = "NSE") -> Dict[str, Any]:
+    gateway = await get_user_kotak_gateway(user_id)
+    if not gateway:
+        return {"started": False, "reason": "kotak_not_configured"}
+    status = gateway.status()
+    if not status.get("authenticated"):
+        return {"started": False, "reason": "kotak_not_authenticated", "status": status}
+
+    target_symbols = [s.upper() for s in (symbols or [s["symbol"] for s in SYMBOLS])]
+    segment = _kotak_exchange_segment(exchange)
+    tokens: List[Dict[str, Any]] = []
+    failures: List[Dict[str, str]] = []
+    for symbol in target_symbols:
+        try:
+            result = await asyncio.to_thread(gateway.search_scrip, exchange_segment=segment, symbol=symbol)
+            if not result.get("ok"):
+                failures.append({"symbol": symbol, "reason": result.get("error", "search_failed")})
+                continue
+            candidates = _collect_kotak_instruments(result.get("response"))
+            exact = next((c for c in candidates if c.get("symbol") == symbol), None)
+            chosen = exact or (candidates[0] if candidates else None)
+            if chosen:
+                chosen["symbol"] = symbol
+                chosen["exchange_segment"] = chosen.get("exchange_segment") or segment
+                tokens.append(chosen)
+            else:
+                failures.append({"symbol": symbol, "reason": "no_token_found"})
+        except Exception as exc:
+            failures.append({"symbol": symbol, "reason": str(exc)})
+
+    if not tokens:
+        return {"started": False, "reason": "no_kotak_tokens_resolved", "failures": failures[:8], "status": gateway.status()}
+    result = await asyncio.to_thread(gateway.subscribe_symbols, tokens)
+    return {
+        "started": bool(result.get("ok")),
+        "tokens": len(result.get("tokens") or tokens),
+        "failures": failures[:8],
+        "status": gateway.status(),
+        "result": result,
+    }
+
+
 @api.get("/ops/diagnostics")
 async def ops_diagnostics(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
@@ -4908,6 +5008,9 @@ async def ops_diagnostics(user=Depends(get_current_user)):
 
 @api.post("/ops/ticker/restart")
 async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    if settings.get("data_broker") == "kotak_neo":
+        return await _start_user_kotak_ticker(user["id"])
     tick_manager = getattr(app.state, "tick_manager", None)
     if tick_manager:
         try:
@@ -4917,6 +5020,11 @@ async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_
         except Exception as e:
             logger.warning(f"ticker stop from ops failed: {e}")
     return await _start_user_ticker(user["id"])
+
+
+@api.post("/market/kotak-ticker/start")
+async def market_kotak_ticker_start(req: OpsActionReq = None, user=Depends(get_current_user)):
+    return await _start_user_kotak_ticker(user["id"])
 
 
 @api.post("/ops/orders/sync")
@@ -4950,6 +5058,8 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         actions.append({"name": "kotak_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
         order_feed = await asyncio.to_thread(kotak_gateway.subscribe_order_feed)
         actions.append({"name": "kotak_order_feed", "result": order_feed})
+        market_feed = await _start_user_kotak_ticker(user["id"])
+        actions.append({"name": "kotak_market_ticker", "result": market_feed})
     else:
         actions.append({"name": "kotak_order_feed", "skipped": True, "reason": "not_connected"})
 
