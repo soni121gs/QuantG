@@ -30,10 +30,12 @@ export default function AIBot() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [proposal, setProposal] = useState(null);
   const [mode, setMode] = useState("chat");
+  const [aiStatus, setAiStatus] = useState(null);
   const endRef = useRef(null);
 
   useEffect(() => {
     api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
+    api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
     api.get("/strategies").then((r) => {
       setStrategies(r.data || []);
       if (r.data?.[0]) setSelectedStrategy(r.data[0].id);
@@ -84,6 +86,12 @@ export default function AIBot() {
           <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// GOOGLE AI STUDIO</div>
           <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> QuantBot</h1>
           <p className="text-xs text-[var(--qd-text-2)] mt-1">Chat, strategy editing, and market briefs are separated so the workspace stays calm.</p>
+          <div className="mt-2 inline-flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)]">
+            <span className={aiStatus?.provider === "google-ai-studio" ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>
+              {aiStatus?.provider || "checking"}
+            </span>
+            <span>{aiStatus?.model || "model loading"}</span>
+          </div>
         </div>
         <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1" data-testid="ai-mode-tabs">
           {MODES.map((item) => (

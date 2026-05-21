@@ -819,6 +819,25 @@ async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
     return rows
 
 
+@api.get("/ai/status")
+async def ai_status(user=Depends(get_current_user)):
+    configured = bool(os.environ.get("GEMINI_API_KEY"))
+    sdk_available = True
+    sdk_error = None
+    try:
+        from google import genai  # noqa: F401
+    except Exception as exc:
+        sdk_available = False
+        sdk_error = str(exc)
+    return {
+        "provider": "google-ai-studio" if configured and sdk_available else "local-fallback",
+        "model": GEMINI_MODEL if configured and sdk_available else "quantg-local-rules",
+        "gemini_configured": configured,
+        "google_genai_sdk_available": sdk_available,
+        "sdk_error": sdk_error,
+    }
+
+
 @api.post("/ai/chat")
 async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
     content = req.message.strip()
