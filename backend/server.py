@@ -703,11 +703,6 @@ def _google_ai_reply_sync(message: str, recent_messages: Optional[List[Dict[str,
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return _quantbot_reply(message)
-    try:
-        from google import genai  # type: ignore
-    except Exception as e:
-        logger.warning("Google GenAI SDK unavailable: %s", e)
-        return _quantbot_reply(message)
 
     history_text = ""
     for row in (recent_messages or [])[-8:]:
@@ -734,15 +729,20 @@ Recent chat:
 User: {message}
 """
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        response = requests.post(
+            url,
+            params={"key": api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=GEMINI_TIMEOUT_SEC,
         )
-        text = (getattr(response, "text", None) or "").strip()
+        response.raise_for_status()
+        payload = response.json()
+        parts = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+        text = "\n".join(str(part.get("text") or "") for part in parts).strip()
         return text or _quantbot_reply(message)
     except Exception as e:
-        logger.warning("Google AI reply failed: %s", e)
+        logger.warning("Google Gemini REST reply failed: %s", e)
         return _quantbot_reply(message)
 
 
@@ -773,10 +773,6 @@ def _google_strategy_edit_sync(strategy: Dict[str, Any], instruction: str) -> Di
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
-    try:
-        from google import genai  # type: ignore
-    except Exception as e:
-        raise RuntimeError(f"Google GenAI SDK unavailable: {e}")
 
     current_config = strategy.get("visual_config") or {}
     prompt = f"""
@@ -809,9 +805,17 @@ Return JSON with:
   "notes": ["short practical notes"]
 }}
 """
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-    text = (getattr(response, "text", None) or "").strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    response = requests.post(
+        url,
+        params={"key": api_key},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=GEMINI_TIMEOUT_SEC,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    parts = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+    text = "\n".join(str(part.get("text") or "") for part in parts).strip()
     return _extract_json_object(text)
 
 
@@ -898,19 +902,13 @@ async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
 @api.get("/ai/status")
 async def ai_status(user=Depends(get_current_user)):
     configured = bool(os.environ.get("GEMINI_API_KEY"))
-    sdk_available = True
-    sdk_error = None
-    try:
-        from google import genai  # noqa: F401
-    except Exception as exc:
-        sdk_available = False
-        sdk_error = str(exc)
     return {
-        "provider": "google-ai-studio" if configured and sdk_available else "local-fallback",
-        "model": GEMINI_MODEL if configured and sdk_available else "quantg-local-rules",
+        "provider": "google-ai-studio-rest" if configured else "local-fallback",
+        "model": GEMINI_MODEL if configured else "quantg-local-rules",
         "gemini_configured": configured,
-        "google_genai_sdk_available": sdk_available,
-        "sdk_error": sdk_error,
+        "google_genai_sdk_available": False,
+        "sdk_error": None,
+        "transport": "rest",
     }
 
 

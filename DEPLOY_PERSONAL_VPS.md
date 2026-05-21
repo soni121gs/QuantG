@@ -1,4 +1,4 @@
-# QuantG Version 8 Personal VPS Runbook
+# QuantG Version 10 Personal VPS Runbook
 
 Domain: `www.quantgtrade.com`
 Root domain: `quantgtrade.com`
@@ -70,7 +70,90 @@ Never change `JWT_SECRET` unless you accept logging in again.
 Never change `CREDENTIAL_ENCRYPTION_KEY` unless you accept saving Zerodha keys again.
 Remove `EMERGENT_LLM_KEY` from old `.env` files. QuantBot now uses `GEMINI_API_KEY`.
 
-## 4. Deploy Version 8
+## 4. Clean VPS Reset And Deploy Version 10
+
+Use this when the VPS has stale Docker images, stale frontend bundles, or an old
+deployment that keeps serving Version 8. This keeps a backup of important data,
+then rebuilds QuantG from a fresh clone.
+
+From the VPS as `root`:
+
+```bash
+cd /root
+
+# Keep secrets and a Mongo backup before deleting Docker volumes.
+BACKUP_DIR=/root/quantg-backup-$(date +%F-%H%M)
+mkdir -p "$BACKUP_DIR"
+
+if [ -d /root/QuantG ]; then
+  cp /root/QuantG/backend/.env "$BACKUP_DIR/backend.env" 2>/dev/null || true
+fi
+
+docker exec quantg-mongo mongodump --archive=/tmp/quantg.archive --db quantg 2>/dev/null || true
+docker cp quantg-mongo:/tmp/quantg.archive "$BACKUP_DIR/quantg.archive" 2>/dev/null || true
+
+# Stop and remove old app containers, old app volumes, and stale images.
+cd /root/QuantG 2>/dev/null && docker compose down -v --remove-orphans || true
+docker system prune -af
+rm -rf /root/QuantG
+
+# Reboot if Ubuntu says "System restart required", then SSH back in and continue.
+reboot
+```
+
+After reconnecting:
+
+```bash
+cd /root
+git clone https://github.com/soni121gs/QuantG.git
+cd /root/QuantG
+git log --oneline -3
+```
+
+Confirm the top commits include:
+
+```text
+f9f21c6 Fix frontend Docker build context
+da5f6b9 Bump app version to v10
+360806c Overhaul strategy catalog, commodities, and Gemini AI scoring
+```
+
+Restore secrets:
+
+```bash
+cp /root/quantg-backup-*/backend.env /root/QuantG/backend/.env
+nano /root/QuantG/backend/.env
+```
+
+Build and start:
+
+```bash
+cd /root/QuantG
+docker compose build --no-cache --progress=plain backend frontend
+docker compose up -d
+docker compose ps
+```
+
+Verify the new frontend bundle is inside the running frontend container:
+
+```bash
+docker compose exec frontend sh -c "grep -R 'Standardized Strategies' /usr/share/nginx/html/static/js || echo NOT_FOUND"
+docker compose exec frontend sh -c "grep -R 'v10.0' /usr/share/nginx/html/static/js || echo NOT_FOUND"
+```
+
+Open:
+
+```text
+https://www.quantgtrade.com/strategies?fresh=v10
+```
+
+Hard refresh with `Ctrl + Shift + R`.
+
+Do not restore the Mongo archive by default. A fresh database lets Version 10
+seed the new standardized strategy catalog. Restore the old Mongo archive only
+if you need previous users, orders, broker keys, or old strategies back.
+
+## 5. Normal Deploy Version 10
 
 From your repo folder on the VPS:
 
@@ -95,7 +178,7 @@ https://www.quantgtrade.com
 
 Caddy will issue the SSL certificate automatically once DNS points to the VPS and ports `80/443` are open.
 
-## 5. Zerodha Redirect URL
+## 6. Zerodha Redirect URL
 
 In Kite Developer Console, set redirect URL to:
 
@@ -105,7 +188,7 @@ https://www.quantgtrade.com/broker-keys?status=success
 
 Zerodha access tokens expire daily. Reconnect each trading morning before live trading.
 
-## 6. Safe Runtime Commands
+## 7. Safe Runtime Commands
 
 Restart app without deleting data:
 
@@ -136,7 +219,7 @@ docker compose down -v
 This also deletes the SQLite option-engine runtime ledger because it removes the
 `backend-state` volume.
 
-## 7. Backup Mongo
+## 8. Backup Mongo
 
 Run before risky deploys:
 
@@ -152,7 +235,7 @@ docker cp ./quantg.archive quantg-mongo:/tmp/quantg.archive
 docker exec quantg-mongo mongorestore --archive=/tmp/quantg.archive --drop
 ```
 
-## 8. Ops Console
+## 9. Ops Console
 
 Inside the app, open:
 
@@ -171,7 +254,7 @@ It can:
 
 It cannot fix broker-side rejected orders, expired Zerodha login, wrong Kite redirect URL, blocked DNS/firewall, or invalid strategy logic. Those still need manual correction.
 
-## 9. Tomorrow Morning Checklist
+## 10. Tomorrow Morning Checklist
 
 Before live market use:
 
