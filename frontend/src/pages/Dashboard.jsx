@@ -182,18 +182,20 @@ export default function Dashboard() {
   const [orders, setOrders] = useState([]);
   const [funds, setFunds] = useState(null);
   const [telemetry, setTelemetry] = useState(null);
+  const [commodities, setCommodities] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [p, w, ps, o, f, t] = await Promise.all([
+      const [p, w, ps, o, f, t, c] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/positions"),
         api.get("/orders"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
+        api.get("/market/commodities"),
       ]);
       setPf(p.data);
       setWatch(w.data);
@@ -201,6 +203,7 @@ export default function Dashboard() {
       setOrders(o.data || []);
       setFunds(f.data);
       setTelemetry(t.data);
+      setCommodities(c.data || []);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -429,16 +432,30 @@ export default function Dashboard() {
             </div>
             <div className="grid grid-cols-3 gap-px bg-[var(--qd-border)]">
               <div className="bg-[var(--qd-surface)] p-3">
-                <Field label="MCX orders" value={commodityOrders.length} />
+                <Field label="Feed" value={commodities[0]?.source === "kotak_neo" ? "Kotak live" : "Mock"} />
               </div>
               <div className="bg-[var(--qd-surface)] p-3">
                 <Field label="Positions" value={commodityPositions.length} />
               </div>
               <div className="bg-[var(--qd-surface)] p-3">
-                <Field label="Route" value="Kotak exact" />
+                <Field label="Orders" value={commodityOrders.length} />
               </div>
             </div>
             <div className="divide-y divide-[var(--qd-border)]">
+              {commodities.map((item) => (
+                <div key={item.symbol} className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="font-mono text-sm font-semibold text-white">{item.symbol}</div>
+                    <div className="mt-1 truncate text-xs text-[var(--qd-text-3)]">{item.name}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-mono text-sm font-bold text-white">{money(item.price)}</div>
+                    <div className={`font-mono text-xs font-semibold ${toneClass(item.change)}`}>
+                      {pctFmt(item.pct)}
+                    </div>
+                  </div>
+                </div>
+              ))}
               {commodityOrders.length ? commodityOrders.map((order) => (
                 <div key={order.id} className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3">
                   <div className="min-w-0">
@@ -453,7 +470,7 @@ export default function Dashboard() {
                 </div>
               )) : (
                 <div className="p-5 text-sm text-[var(--qd-text-2)]">
-                  No commodity orders yet. Use Orders with exchange MCX and the exact Kotak trading symbol.
+                  No commodity orders yet. Use exchange MCX with exact Kotak trading symbols when placing orders.
                 </div>
               )}
             </div>

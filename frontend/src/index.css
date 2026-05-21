@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@500;600;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -26,7 +26,7 @@
 html, body, #root {
   background: var(--qd-bg);
   color: var(--qd-text);
-  font-family: 'IBM Plex Sans', 'Inter', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
 }
@@ -37,7 +37,7 @@ body {
 }
 
 .font-mono { font-family: 'JetBrains Mono', monospace; }
-.font-head { font-family: 'Chivo', sans-serif; letter-spacing: 0; }
+.font-head { font-family: 'Inter', system-ui, sans-serif; letter-spacing: 0; }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -106,11 +106,7 @@ body {
 }
 
 .qd-grid-bg {
-  background-image:
-    radial-gradient(circle at 18% 0%, rgba(47,128,237,0.08), transparent 26rem),
-    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-  background-size: 32px 32px;
+  background: var(--qd-bg);
 }
 
 .qd-shell {

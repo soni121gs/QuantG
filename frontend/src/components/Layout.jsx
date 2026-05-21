@@ -3,13 +3,11 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   KeyRound,
-  Code2,
   Blocks,
   Bot,
   ListOrdered,
   PieChart,
   LogOut,
-  Activity,
   Wallet,
   Menu,
   X,
@@ -25,15 +23,13 @@ import { APP_VERSION_LABEL } from "../lib/version";
 
 const NAV = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
-  { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
-  { to: "/python", icon: Code2, label: "Python", id: "nav-python" },
-  { to: "/visual", icon: Blocks, label: "Visual Builder", id: "nav-visual" },
+  { to: "/strategies", icon: Blocks, label: "Strategy Catalog", id: "nav-strategies" },
   { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "nav-aibot" },
   { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
   { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
-  { to: "/market-hub", icon: HeartPulse, label: "Market Hub", id: "nav-market-hub" },
-  { to: "/broker-keys", icon: KeyRound, label: "Broker Keys", id: "nav-keys" },
-  { to: "/ops", icon: ShieldAlert, label: "Ops Console", id: "nav-ops" },
+  { to: "/market-hub", icon: HeartPulse, label: "Markets", id: "nav-market-hub" },
+  { to: "/broker-keys", icon: KeyRound, label: "Brokers", id: "nav-keys" },
+  { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
   { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
 ];
 

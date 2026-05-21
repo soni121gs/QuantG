@@ -165,6 +165,9 @@ class StrategyReq(BaseModel):
     python_code: Optional[str] = None
     visual_config: Optional[Dict[str, Any]] = None
     asset_class: Optional[str] = None
+    strategy_type: Optional[str] = None
+    required_capital: Optional[float] = None
+    instrument_group: Optional[str] = None
     status: str = "draft"  # draft | live | paused
 
 
@@ -176,6 +179,11 @@ class StrategyOut(BaseModel):
     python_code: Optional[str] = None
     visual_config: Optional[Dict[str, Any]] = None
     asset_class: str = "equity"
+    strategy_type: str = "Option Buying"
+    required_capital: float = 0.0
+    instrument_group: Optional[str] = None
+    ai_confidence_score: Optional[float] = None
+    ai_confidence_reason: Optional[str] = None
     status: str
     created_at: str
     last_pnl: Optional[float] = None
@@ -330,6 +338,11 @@ SYMBOLS = [
     {"symbol": "NIFTY", "name": "Nifty 50", "base": 24850.40},
     {"symbol": "BANKNIFTY", "name": "Bank Nifty", "base": 52340.85},
     {"symbol": "SENSEX", "name": "BSE Sensex", "base": 81460.20},
+]
+
+COMMODITY_SYMBOLS = [
+    {"symbol": "CRUDEOIL", "name": "MCX Crude Oil", "base": 6550.0, "exchange": "MCX"},
+    {"symbol": "NATURALGAS", "name": "MCX Natural Gas", "base": 245.0, "exchange": "MCX"},
 ]
 
 # Mock ticks should move during market hours, then freeze. This keeps paper PnL
@@ -713,7 +726,7 @@ Safety and scope:
 - Never say you placed, modified, or cancelled an order.
 - For live trading advice, emphasize paper testing, position sizing, liquidity, slippage, and daily loss limits.
 - If writing QuantG strategy code, return deterministic Python with `def run(data):` and signals shaped like `{{'date': data[i]['date'], 'action': 'BUY'}}`.
-- Keep answers concise and practical for NIFTY, BANKNIFTY, SENSEX, Zerodha, Kotak Neo, and QuantG workflows.
+- Keep answers concise and practical for NIFTY, BANKNIFTY, SENSEX, MCX crude oil, MCX natural gas, Zerodha, Kotak Neo, and QuantG workflows.
 
 Recent chat:
 {history_text or "None"}
@@ -807,7 +820,70 @@ def _strategy_market_symbol(row: Dict[str, Any]) -> str:
     opt_cfg = vc.get("options") or {}
     if opt_cfg.get("enabled"):
         return (opt_cfg.get("underlying") or "NIFTY").upper()
+    commodity_cfg = vc.get("commodity_options") or {}
+    if commodity_cfg.get("underlying"):
+        return str(commodity_cfg.get("underlying")).upper()
     return (vc.get("symbol") or "RELIANCE").upper()
+
+
+def _market_score_for_strategy(row: Dict[str, Any], market_by_symbol: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    symbol = _strategy_market_symbol(row)
+    market = market_by_symbol.get(symbol) or {}
+    pct = float(market.get("pct") or 0)
+    score = 52.0
+    reasons = []
+
+    if row.get("status") == "live":
+        score += 8
+        reasons.append("strategy is live")
+    elif row.get("status") == "paused":
+        score -= 6
+        reasons.append("strategy is paused")
+
+    if row.get("last_error"):
+        score -= 22
+        reasons.append("recent runtime error")
+    if row.get("last_data_live"):
+        score += 8
+        reasons.append("live broker data")
+    elif row.get("last_data_source"):
+        score += 2
+        reasons.append("data source available")
+
+    if _strategy_type(row) == "Option Selling":
+        if abs(pct) <= 0.35:
+            score += 16
+            reasons.append("low directional movement favors premium selling")
+        else:
+            score -= 10
+            reasons.append("directional movement is elevated for selling")
+    else:
+        if abs(pct) >= 0.25:
+            score += 14
+            reasons.append("momentum is visible")
+        elif abs(pct) <= 0.08:
+            score -= 7
+            reasons.append("momentum is muted")
+
+    signals = int(row.get("signals_fired") or 0)
+    evaluations = int(row.get("evaluations") or 0)
+    if evaluations:
+        score += min(8, signals / max(1, evaluations) * 20)
+        reasons.append("scanner telemetry included")
+
+    clamped = round(max(5.0, min(95.0, score)), 1)
+    return {
+        "strategy_id": row["id"],
+        "symbol": symbol,
+        "score": clamped,
+        "reason": "; ".join(reasons[:3]) or "baseline market structure score",
+        "market": {
+            "price": market.get("price"),
+            "pct": market.get("pct"),
+            "source": market.get("source"),
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @api.get("/ai/chat/{session_id}")
@@ -873,6 +949,64 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
     }
     await db.ai_chats.insert_many([user_msg, bot_msg])
     return {k: v for k, v in bot_msg.items() if k not in {"_id", "user_id", "session_id"}}
+
+
+@api.get("/ai/strategy-scores")
+async def ai_strategy_scores(user=Depends(get_current_user)):
+    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(500)
+    market_rows = await watchlist(user=user)
+    commodity_rows = await commodity_watchlist(user=user)
+    market_by_symbol = {r["symbol"]: r for r in [*market_rows, *commodity_rows]}
+    scores = [_market_score_for_strategy(row, market_by_symbol) for row in rows]
+    for score in scores:
+        score["user_id"] = user["id"]
+        await db.strategy_ai_scores.update_one(
+            {"strategy_id": score["strategy_id"], "user_id": user["id"]},
+            {"$set": score},
+            upsert=True,
+        )
+    return {
+        "scores": [{k: v for k, v in score.items() if k != "user_id"} for score in scores],
+        "provider": "gemini-context" if os.environ.get("GEMINI_API_KEY") else "local-market-structure",
+    }
+
+
+@api.get("/ai/market-analysis")
+async def ai_market_analysis(user=Depends(get_current_user)):
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(50)
+    market_rows = await watchlist(user=user)
+    commodity_rows = await commodity_watchlist(user=user)
+    scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in [*market_rows, *commodity_rows]}) for row in strategies]
+    prompt = (
+        "Analyze this QuantG market structure snapshot for educational risk context only. "
+        "Mention NIFTY/SENSEX and MCX crude oil/natural gas when relevant. "
+        "Keep it concise and do not promise returns.\n\n"
+        + json.dumps({
+            "market": market_rows[:8],
+            "commodities": commodity_rows,
+            "strategy_scores": scores[:12],
+        }, default=str)[:9000]
+    )
+    return {
+        "provider": "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback",
+        "content": await _google_ai_reply(prompt, []),
+        "scores": scores,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api.get("/ai/training-context")
+async def ai_training_context(user=Depends(get_current_user)):
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
+    recent_scores = await db.strategy_ai_scores.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("generated_at", -1).to_list(100)
+    return {
+        "purpose": "Context-feed payload for Gemini prompts and offline fine-tuning experiments.",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "market": await watchlist(user=user),
+        "commodities": await commodity_watchlist(user=user),
+        "strategies": [_strategy_out(row).model_dump() for row in strategies],
+        "recent_ai_scores": recent_scores,
+    }
 
 
 # ============== Routes: Broker keys ==============
@@ -992,12 +1126,57 @@ async def watchlist(user=Depends(get_current_user)):
     return out
 
 
+@api.get("/market/commodities")
+async def commodity_watchlist(user=Depends(get_current_user)):
+    """MCX commodity feed for crude oil and natural gas.
+
+    Kotak Neo ticks are preferred when authenticated. Mock rows stay explicit so
+    the UI can distinguish demo context from broker data.
+    """
+    settings = await get_user_settings(user["id"])
+    gateway = _KOTAK_GATEWAYS.get(user["id"]) if settings.get("data_broker") == "kotak_neo" else None
+    rows = []
+    for i, s in enumerate(COMMODITY_SYMBOLS):
+        tick = gateway.latest_tick_by_symbol(s["symbol"]) if gateway and gateway.status().get("authenticated") else None
+        if tick and tick.get("ltp"):
+            price = float(tick["ltp"])
+            change = round(price - s["base"], 2)
+            pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
+            rows.append({
+                "symbol": s["symbol"],
+                "name": s["name"],
+                "exchange": s["exchange"],
+                "price": price,
+                "change": change,
+                "pct": pct,
+                "source": "kotak_neo",
+                "feed": "kotak-neo-mcx",
+                "tick_time": tick.get("received_at"),
+            })
+            continue
+        lp = live_price(s["base"], i + 100)
+        rows.append({
+            "symbol": s["symbol"],
+            "name": s["name"],
+            "exchange": s["exchange"],
+            **lp,
+            "source": "mock",
+            "feed": "mock-mcx",
+        })
+    return rows
+
+
 @api.get("/market/quote/{symbol}")
 async def quote(symbol: str, user=Depends(get_current_user)):
-    found = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
+    found = next((s for s in [*SYMBOLS, *COMMODITY_SYMBOLS] if s["symbol"] == symbol.upper()), None)
     if not found:
         raise HTTPException(status_code=404, detail="Symbol not found")
-    idx = SYMBOLS.index(found)
+    idx = [*SYMBOLS, *COMMODITY_SYMBOLS].index(found)
+    if found.get("exchange") == "MCX":
+        rows = await commodity_watchlist(user=user)
+        item = next((r for r in rows if r["symbol"] == found["symbol"]), None)
+        if item:
+            return item
     kite, _ = await get_user_kite(user["id"])
     if kite:
         q = kite_helper.safe_quote(kite, [_nse_token(found["symbol"])])
@@ -1491,8 +1670,149 @@ DEFAULT_OPTION_STRATEGIES = [
     },
 ]
 
+COMMODITY_MOMENTUM_BREAKOUT_CODE = """def run(data):
+    if len(data) < 55:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+    prev_high = max(highs[-12:-1])
+    prev_low = min(lows[-12:-1])
+    avg_vol = sum(vols[-21:-1]) / 20
+    if closes[-1] > prev_high and sma20 > sma50 and vols[-1] > avg_vol * 1.1:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    if closes[-1] < prev_low and sma20 < sma50 and vols[-1] > avg_vol * 1.1:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+COMMODITY_RANGE_SELLING_CODE = """def run(data):
+    if len(data) < 45:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    recent_range = max(highs[-20:]) - min(lows[-20:])
+    wider_range = max(highs[-40:]) - min(lows[-40:])
+    drift = abs(closes[-1] - closes[-10]) / max(1, closes[-10])
+    if wider_range and recent_range < wider_range * 0.55 and drift < 0.015:
+        return [{'date': last['date'], 'action': 'SELL'}]
+    return []
+"""
+
+COMMODITY_VOLATILITY_STRADDLE_CODE = """def run(data):
+    if len(data) < 35:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
+    atr = sum(tr) / len(tr)
+    compression = sum(highs[i] - lows[i] for i in range(len(data)-8, len(data))) / 8
+    if compression < atr * 0.75:
+        return [{'date': last['date'], 'action': 'BUY'}]
+    return []
+"""
+
+STANDARD_STRATEGY_CATALOG = [
+    {
+        "name": "NIFTY VWAP Trend Breakout",
+        "description": "Directional NIFTY option buying with VWAP, SMA, ATR, and time filters.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
+        "python_code": TREND_CONTINUATION_CODE,
+    },
+    {
+        "name": "NIFTY Opening Range VWAP",
+        "description": "Directional NIFTY option buying after opening range breakouts confirmed by VWAP and volume.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
+        "python_code": OPENING_RANGE_VWAP_CODE,
+    },
+    {
+        "name": "SENSEX VWAP Trend Breakout",
+        "description": "Directional SENSEX option buying with trend, volatility, and time-of-day filters.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
+        "python_code": TREND_CONTINUATION_CODE,
+    },
+    {
+        "name": "SENSEX RSI Reversal With Trend",
+        "description": "SENSEX option buying only after RSI recovery aligns with swing and SMA confirmation.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
+        "python_code": RSI_REVERSAL_CODE,
+    },
+    {
+        "name": "Crude Oil Momentum Breakout",
+        "description": "MCX crude oil option buying for volume-backed trend breakouts.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
+        "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
+    },
+    {
+        "name": "Crude Oil Iron Condor Range",
+        "description": "MCX crude oil option selling template for consolidation and range-bound volatility.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
+        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
+        "python_code": COMMODITY_RANGE_SELLING_CODE,
+    },
+    {
+        "name": "Natural Gas Momentum Breakout",
+        "description": "MCX natural gas option buying for directional expansion after compression.",
+        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 55000.0, "instrument_group": "MCX",
+        "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
+    },
+    {
+        "name": "Natural Gas Volatility Straddle",
+        "description": "MCX natural gas option buying template for low-volatility setups before expansion.",
+        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 70000.0, "instrument_group": "MCX",
+        "python_code": COMMODITY_VOLATILITY_STRADDLE_CODE,
+    },
+]
+
+DEFAULT_OPTION_STRATEGIES = STANDARD_STRATEGY_CATALOG
+
+LEGACY_DEFAULT_STRATEGY_NAMES = {
+    "NIFTY Momentum EMA",
+    "NIFTY RSI Reversion",
+    "NIFTY Opening Range Breakout",
+    "NIFTY ATR Trend",
+    "NIFTY Trend Recheck",
+    "NIFTY VWAP Pullback Continuation",
+    "NIFTY ATR Volume Expansion",
+    "NIFTY RSI Reversal With Trend",
+    "SENSEX Momentum EMA",
+    "SENSEX RSI Reversion",
+    "SENSEX Opening Range",
+    "SENSEX ATR Trend",
+    "SENSEX Trend Recheck",
+    "SENSEX Opening Range VWAP",
+    "SENSEX VWAP Pullback Continuation",
+    "SENSEX ATR Volume Expansion",
+}
+
 
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    underlying = str(template["underlying"]).upper()
+    is_commodity = template.get("instrument_group") == "MCX" or underlying in {"CRUDEOIL", "NATURALGAS"}
+    options_block = {
+        "enabled": not is_commodity,
+        "underlying": underlying,
+        "strike_mode": template["strike_mode"],
+        "otm_points": template["otm_points"],
+        "expiry_offset": template.get("expiry_offset", 0),
+        "lots": template["lots"],
+        "required_capital": template["required_capital"],
+    }
     return {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -1500,17 +1820,16 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "description": template["description"],
         "kind": "python",
         "python_code": template["python_code"],
-        "asset_class": "options",
+        "asset_class": "commodity" if is_commodity else "options",
+        "strategy_type": template["strategy_type"],
+        "required_capital": template["required_capital"],
+        "instrument_group": template["instrument_group"],
         "visual_config": {
-            "options": {
-                "enabled": True,
-                "underlying": template["underlying"],
-                "strike_mode": template["strike_mode"],
-                "otm_points": template["otm_points"],
-                "expiry_offset": template.get("expiry_offset", 0),
-                "lots": template["lots"],
-            },
-            "risk": dict(DEFAULT_STRATEGY_RISK),
+            "symbol": underlying,
+            "exchange": "MCX" if is_commodity else template["instrument_group"],
+            "options": options_block,
+            "commodity_options": options_block if is_commodity else None,
+            "risk": {**dict(DEFAULT_STRATEGY_RISK), "required_capital": template["required_capital"]},
         },
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1522,13 +1841,76 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
 
 def _strategy_asset_class(row: Dict[str, Any]) -> str:
     explicit = (row.get("asset_class") or "").lower()
-    if explicit in ("equity", "options", "futures"):
+    if explicit in ("equity", "options", "futures", "commodity"):
         return explicit
     visual_config = row.get("visual_config") or {}
+    symbol = str(visual_config.get("symbol") or "").upper()
+    if symbol in {"CRUDEOIL", "NATURALGAS"}:
+        return "commodity"
     options_config = visual_config.get("options") or {}
     if options_config.get("enabled"):
         return "options"
     return "equity"
+
+
+def _strategy_instrument_group(row: Dict[str, Any]) -> str:
+    explicit = row.get("instrument_group")
+    if explicit:
+        return str(explicit).upper()
+    visual_config = row.get("visual_config") or {}
+    exchange = visual_config.get("exchange")
+    if exchange:
+        return str(exchange).upper()
+    options_config = visual_config.get("options") or {}
+    underlying = str(options_config.get("underlying") or visual_config.get("symbol") or "").upper()
+    if underlying in {"CRUDEOIL", "NATURALGAS"}:
+        return "MCX"
+    if underlying == "SENSEX":
+        return "BFO"
+    if underlying:
+        return "NFO"
+    return "NSE"
+
+
+def _strategy_type(row: Dict[str, Any]) -> str:
+    explicit = str(row.get("strategy_type") or "").strip().lower()
+    if explicit in {"option buying", "buying", "long option", "option_buying"}:
+        return "Option Buying"
+    if explicit in {"option selling", "selling", "short option", "option_selling"}:
+        return "Option Selling"
+    visual_config = row.get("visual_config") or {}
+    options_config = visual_config.get("commodity_options") or visual_config.get("options") or {}
+    strike_mode = str(options_config.get("strike_mode") or "").upper()
+    name = str(row.get("name") or "").lower()
+    if strike_mode.endswith("SELL") or any(token in name for token in ("condor", "covered call", "short straddle", "selling")):
+        return "Option Selling"
+    return "Option Buying"
+
+
+def _strategy_required_capital(row: Dict[str, Any]) -> float:
+    for value in (
+        row.get("required_capital"),
+        ((row.get("visual_config") or {}).get("risk") or {}).get("required_capital"),
+        (((row.get("visual_config") or {}).get("options") or {}).get("required_capital")),
+        (((row.get("visual_config") or {}).get("commodity_options") or {}).get("required_capital")),
+    ):
+        if value is not None:
+            try:
+                return round(float(value), 2)
+            except (TypeError, ValueError):
+                pass
+    visual_config = row.get("visual_config") or {}
+    options_config = visual_config.get("commodity_options") or visual_config.get("options") or {}
+    underlying = str(options_config.get("underlying") or visual_config.get("symbol") or "").upper()
+    base = {
+        "NIFTY": 35000.0,
+        "SENSEX": 45000.0,
+        "CRUDEOIL": 65000.0,
+        "NATURALGAS": 55000.0,
+    }.get(underlying, 25000.0)
+    if _strategy_type(row) == "Option Selling":
+        base = max(base, 125000.0)
+    return base
 
 
 def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
@@ -1536,10 +1918,18 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     clean.pop("_id", None)
     clean.pop("user_id", None)
     clean["asset_class"] = _strategy_asset_class(clean)
+    clean["strategy_type"] = _strategy_type(clean)
+    clean["required_capital"] = _strategy_required_capital(clean)
+    clean["instrument_group"] = _strategy_instrument_group(clean)
     return StrategyOut(**clean)
 
 
 async def seed_default_strategies_for_user(user_id: str) -> int:
+    await db.strategies.delete_many({
+        "user_id": user_id,
+        "name": {"$in": sorted(LEGACY_DEFAULT_STRATEGY_NAMES)},
+        "status": {"$in": ["draft", "active"]},
+    })
     existing = await db.strategies.find({"user_id": user_id}, {"_id": 0, "name": 1}).to_list(500)
     existing_names = {row.get("name") for row in existing}
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
@@ -1573,7 +1963,9 @@ def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
     visual_config = row.get("visual_config") or {}
     risk = visual_config.get("risk") or {}
     options_config = visual_config.get("options") or {}
-    required_capital = risk.get("required_capital")
+    required_capital = row.get("required_capital")
+    if required_capital is None:
+        required_capital = risk.get("required_capital")
     if required_capital is None:
         lots = max(1, int(options_config.get("lots") or 1))
         required_capital = float(options_config.get("required_capital") or 0) * lots
@@ -2190,6 +2582,11 @@ async def unwind_strategy(sid: str, user=Depends(get_current_user)):
 
 @api.post("/strategies", response_model=StrategyOut)
 async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
+    visual_config = req.visual_config or {}
+    risk_config = dict((visual_config.get("risk") or {}))
+    if req.required_capital is not None:
+        risk_config["required_capital"] = float(req.required_capital)
+        visual_config = {**visual_config, "risk": risk_config}
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
@@ -2197,8 +2594,11 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
         "description": req.description or "",
         "kind": req.kind,
         "python_code": req.python_code or (DEFAULT_PYTHON if req.kind == "python" else None),
-        "visual_config": req.visual_config,
-        "asset_class": req.asset_class or ("options" if ((req.visual_config or {}).get("options") or {}).get("enabled") else "equity"),
+        "visual_config": visual_config,
+        "asset_class": req.asset_class or ("options" if ((visual_config or {}).get("options") or {}).get("enabled") else "equity"),
+        "strategy_type": req.strategy_type,
+        "required_capital": req.required_capital,
+        "instrument_group": req.instrument_group,
         "status": req.status,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_pnl": None,
@@ -2220,7 +2620,7 @@ async def seed_default_strategies(user=Depends(get_current_user)):
     return {
         "ok": True,
         "inserted": inserted,
-        "message": "Live-style NIFTY and SENSEX option presets installed. Review and backtest before enabling LIVE.",
+        "message": "Standardized index and MCX option presets installed. Review and backtest before enabling LIVE.",
     }
 
 
@@ -2271,6 +2671,12 @@ async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_u
     update = {k: v for k, v in req.model_dump().items() if v is not None}
     if "asset_class" not in update and "visual_config" in update:
         update["asset_class"] = "options" if ((update["visual_config"] or {}).get("options") or {}).get("enabled") else "equity"
+    if "required_capital" in update:
+        visual_config = dict(update.get("visual_config") or (await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "visual_config": 1}) or {}).get("visual_config") or {})
+        risk_config = dict(visual_config.get("risk") or {})
+        risk_config["required_capital"] = float(update["required_capital"])
+        visual_config["risk"] = risk_config
+        update["visual_config"] = visual_config
     await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update})
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
     if not row:

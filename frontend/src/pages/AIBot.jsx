@@ -31,6 +31,8 @@ export default function AIBot() {
   const [proposal, setProposal] = useState(null);
   const [mode, setMode] = useState("chat");
   const [aiStatus, setAiStatus] = useState(null);
+  const [marketAnalysis, setMarketAnalysis] = useState(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -76,6 +78,18 @@ export default function AIBot() {
       setProposal({ ok: false, error: e.response?.data?.detail || e.message });
     } finally {
       setAgentBusy(false);
+    }
+  };
+
+  const runMarketAnalysis = async () => {
+    setAnalysisBusy(true);
+    try {
+      const r = await api.get("/ai/market-analysis");
+      setMarketAnalysis(r.data);
+    } catch (e) {
+      setMarketAnalysis({ content: `Error: ${e.response?.data?.detail || e.message}` });
+    } finally {
+      setAnalysisBusy(false);
     }
   };
 
@@ -164,8 +178,25 @@ export default function AIBot() {
 
       {mode === "brief" && (
         <div className="qd-card p-4">
-          <h2 className="font-head text-lg font-semibold text-white">Market Brief</h2>
-          <p className="mt-1 text-xs text-[var(--qd-text-2)]">Use these as one-click Google AI prompts for market context, commodities, and risk.</p>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="font-head text-lg font-semibold text-white">Market Brief</h2>
+              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini reads live strategy scores, index context, and MCX crude oil/natural gas feed snapshots.</p>
+            </div>
+            <button
+              type="button"
+              onClick={runMarketAnalysis}
+              disabled={analysisBusy}
+              className="rounded bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-white disabled:opacity-50"
+            >
+              {analysisBusy ? "Analyzing" : "Run Gemini Analysis"}
+            </button>
+          </div>
+          {marketAnalysis?.content && (
+            <div className="mt-3 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3 text-sm leading-relaxed text-[var(--qd-text-2)] whitespace-pre-wrap">
+              {marketAnalysis.content}
+            </div>
+          )}
           <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
             {BRIEF_PROMPTS.map((prompt) => (
               <button
