@@ -56,7 +56,7 @@ if len(JWT_SECRET.encode()) < 32:
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
-APP_VERSION = "8.0"
+APP_VERSION = "10.0"
 
 app = FastAPI(title="QuantG Algo Trading API", version=APP_VERSION)
 api = APIRouter(prefix="/api")
