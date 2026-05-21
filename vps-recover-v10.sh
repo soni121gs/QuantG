@@ -41,8 +41,12 @@ git reset --hard "origin/${BRANCH}"
 echo "Current commits:"
 git log --oneline -5
 
-if [ -f "${BACKUP_DIR}/backend.env" ] && [ ! -f backend/.env ]; then
-  cp "${BACKUP_DIR}/backend.env" backend/.env
+if [ ! -f backend/.env ]; then
+  LATEST_ENV="$(ls -t /root/quantg-backup-*/backend.env 2>/dev/null | head -1 || true)"
+  if [ -n "$LATEST_ENV" ]; then
+    cp "$LATEST_ENV" backend/.env
+    echo "Restored backend/.env from $LATEST_ENV"
+  fi
 fi
 
 if [ ! -f backend/.env ]; then
