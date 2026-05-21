@@ -6287,11 +6287,11 @@ async def startup():
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
 
-    # Seed default option strategies for any user with no strategies yet.
+    # Add any missing built-in presets for every user. This is additive by name:
+    # it keeps custom/old strategies intact and only inserts missing v10 presets.
     try:
         async for user_row in db.users.find({}, {"id": 1}):
-            if await db.strategies.count_documents({"user_id": user_row["id"]}) == 0:
-                await seed_default_strategies_for_user(user_row["id"])
+            await seed_default_strategies_for_user(user_row["id"])
     except Exception as e:
         logger.warning(f"default strategy seeding skipped: {e}")
 
