@@ -14,6 +14,7 @@ import base64
 import math
 import logging
 import time
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -24,6 +25,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSock
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
 
 import kite_helper
@@ -77,6 +79,8 @@ _RATE_LIMIT_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, QuantGNeoGateway] = {}
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
 
 def _fernet() -> Fernet:
@@ -206,6 +210,7 @@ class OrderReq(BaseModel):
     order_type: str = "MARKET"  # MARKET | LIMIT
     price: Optional[float] = None
     product: str = "MIS"
+    exchange: str = "NSE"
 
 
 class StrategyRuntimeSettingsReq(BaseModel):
@@ -219,6 +224,9 @@ class StrategyRuntimeSettingsReq(BaseModel):
     max_trades_day: Optional[int] = None
     daily_loss_limit: Optional[float] = None
     required_capital: Optional[float] = None
+    time_exit_minutes: Optional[int] = None
+    indicator_exit_enabled: Optional[bool] = None
+    exit_mode: Optional[str] = None
 
 
 class ProfileUpdateReq(BaseModel):
@@ -256,6 +264,11 @@ class KotakSubscribeReq(BaseModel):
 class ChatReq(BaseModel):
     session_id: str = "default"
     message: str
+
+
+class StrategyAIModifyReq(BaseModel):
+    instruction: str
+    apply: bool = False
 
 
 # ============== Auth helpers ==============
@@ -324,6 +337,11 @@ SYMBOLS = [
 IST_OFFSET = timedelta(hours=5, minutes=30)
 NSE_OPEN_MINUTE = 9 * 60 + 15
 NSE_CLOSE_MINUTE = 15 * 60 + 30
+MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
+MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
+SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO", "MCX", "CDS"}
+ACTIVE_STRATEGY_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "OPEN", "EXITING"}
+STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND"}
 
 
 def _last_nse_session_close_utc(now_utc: Optional[datetime] = None) -> datetime:
@@ -668,6 +686,130 @@ def _quantbot_reply(message: str) -> str:
     )
 
 
+def _google_ai_reply_sync(message: str, recent_messages: Optional[List[Dict[str, Any]]] = None) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return _quantbot_reply(message)
+    try:
+        from google import genai  # type: ignore
+    except Exception as e:
+        logger.warning("Google GenAI SDK unavailable: %s", e)
+        return _quantbot_reply(message)
+
+    history_text = ""
+    for row in (recent_messages or [])[-8:]:
+        role = "User" if row.get("role") == "user" else "Assistant"
+        content = str(row.get("content") or "").strip()
+        if content:
+            history_text += f"{role}: {content[:1200]}\n"
+
+    prompt = f"""
+You are QuantBot inside QuantG, a personal Indian algo-trading terminal.
+
+Safety and scope:
+- Give educational and implementation help only.
+- Never claim profit is guaranteed.
+- Never tell the user to bypass broker, exchange, or app risk controls.
+- Never say you placed, modified, or cancelled an order.
+- For live trading advice, emphasize paper testing, position sizing, liquidity, slippage, and daily loss limits.
+- If writing QuantG strategy code, return deterministic Python with `def run(data):` and signals shaped like `{{'date': data[i]['date'], 'action': 'BUY'}}`.
+- Keep answers concise and practical for NIFTY, BANKNIFTY, SENSEX, Zerodha, Kotak Neo, and QuantG workflows.
+
+Recent chat:
+{history_text or "None"}
+
+User: {message}
+"""
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+        )
+        text = (getattr(response, "text", None) or "").strip()
+        return text or _quantbot_reply(message)
+    except Exception as e:
+        logger.warning("Google AI reply failed: %s", e)
+        return _quantbot_reply(message)
+
+
+async def _google_ai_reply(message: str, recent_messages: Optional[List[Dict[str, Any]]] = None) -> str:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_google_ai_reply_sync, message, recent_messages),
+            timeout=GEMINI_TIMEOUT_SEC,
+        )
+    except Exception as e:
+        logger.warning("Google AI reply timeout/fallback: %s", e)
+        return _quantbot_reply(message)
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("AI response did not contain a JSON object")
+    return json.loads(raw[start:end + 1])
+
+
+def _google_strategy_edit_sync(strategy: Dict[str, Any], instruction: str) -> Dict[str, Any]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    try:
+        from google import genai  # type: ignore
+    except Exception as e:
+        raise RuntimeError(f"Google GenAI SDK unavailable: {e}")
+
+    current_config = strategy.get("visual_config") or {}
+    prompt = f"""
+You are editing a QuantG trading strategy. Return JSON only.
+
+Hard rules:
+- Keep Python deterministic and sandbox-safe.
+- Do not import modules, read files, call network, call brokers, or place orders.
+- Strategy code must define exactly `def run(data):` and return a list of signals.
+- Signal shape must be `{{"date": data[i]["date"], "action": "BUY"}}` or SELL.
+- Prefer fewer, higher-quality signals with volume/VWAP/ATR/trend filters.
+- Keep risk realistic. Do not promise profit.
+
+Existing strategy:
+name: {strategy.get("name")}
+description: {strategy.get("description")}
+visual_config JSON: {json.dumps(current_config, default=str)[:6000]}
+python_code:
+{(strategy.get("python_code") or "")[:12000]}
+
+User instruction:
+{instruction}
+
+Return JSON with:
+{{
+  "name": "short name",
+  "description": "what changed",
+  "python_code": "complete Python code",
+  "visual_config": {{...}},
+  "notes": ["short practical notes"]
+}}
+"""
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    text = (getattr(response, "text", None) or "").strip()
+    return _extract_json_object(text)
+
+
+def _strategy_market_symbol(row: Dict[str, Any]) -> str:
+    vc = row.get("visual_config") or {}
+    opt_cfg = vc.get("options") or {}
+    if opt_cfg.get("enabled"):
+        return (opt_cfg.get("underlying") or "NIFTY").upper()
+    return (vc.get("symbol") or "RELIANCE").upper()
+
+
 @api.get("/ai/chat/{session_id}")
 async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
     rows = await db.ai_chats.find(
@@ -691,10 +833,21 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
         "user_id": user["id"],
         "session_id": req.session_id,
     }
+    recent_messages = await db.ai_chats.find(
+        {"user_id": user["id"], "session_id": req.session_id},
+        {"_id": 0, "role": 1, "content": 1},
+    ).sort("created_at", -1).to_list(8)
+    recent_messages = list(reversed(recent_messages))
+    provider = "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback"
+    reply = await _google_ai_reply(content, recent_messages)
+    if provider == "google-ai-studio" and reply == _quantbot_reply(content):
+        provider = "local-fallback"
     bot_msg = {
         "id": str(uuid.uuid4()),
         "role": "assistant",
-        "content": _quantbot_reply(content),
+        "content": reply,
+        "provider": provider,
+        "model": GEMINI_MODEL if provider == "google-ai-studio" else "quantg-local-rules",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "user_id": user["id"],
         "session_id": req.session_id,
@@ -843,6 +996,9 @@ DEFAULT_STRATEGY_RISK = {
     "trail_step_pct": 10.0,
     "cooldown_minutes": 20,
     "max_trades_day": 2,
+    "time_exit_minutes": 45,
+    "indicator_exit_enabled": True,
+    "exit_mode": "tp_sl_tsl_or_signal",
     "pause_on_issue": True,
 }
 
@@ -1304,7 +1460,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
                 "expiry_offset": template.get("expiry_offset", 0),
                 "lots": template["lots"],
             },
-            "risk": DEFAULT_STRATEGY_RISK,
+            "risk": dict(DEFAULT_STRATEGY_RISK),
         },
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1391,6 +1547,209 @@ async def _get_strategy_risk(user_id: str, sid: str) -> Dict[str, Any]:
     return ((row or {}).get("visual_config") or {}).get("risk") or {}
 
 
+def _instrument_key(exchange: str, trading_symbol: str, instrument_token: Any = None) -> str:
+    exch = (exchange or "NSE").upper()
+    token = str(instrument_token or "").strip()
+    symbol = str(trading_symbol or "").upper().strip()
+    if token:
+        return f"{exch}:TOKEN:{token}"
+    return f"{exch}:SYMBOL:{symbol}"
+
+
+def _active_key(user_id: str, value: str) -> str:
+    return f"{user_id}:{value}"
+
+
+async def _strategy_row(user_id: str, strategy_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not strategy_id:
+        return None
+    return await db.strategies.find_one({"id": strategy_id, "user_id": user_id}, {"_id": 0})
+
+
+async def _reserve_strategy_position(
+    *,
+    user_id: str,
+    strategy_id: Optional[str],
+    instrument_key: str,
+    trading_symbol: str,
+    exchange: str,
+    instrument_token: Any,
+    quantity: int,
+    entry_price: float,
+    source: str,
+) -> Optional[Dict[str, Any]]:
+    """Create the central ownership row before sending a strategy BUY.
+
+    Sparse unique indexes on active_instrument_key and active_strategy_key make
+    the reservation atomic across runner cycles and concurrent requests.
+    """
+    if not strategy_id:
+        return None
+    existing = await db.strategy_positions.find_one({
+        "user_id": user_id,
+        "$or": [
+            {"active_instrument_key": _active_key(user_id, instrument_key)},
+            {"active_strategy_key": _active_key(user_id, strategy_id)},
+        ],
+        "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
+    }, {"_id": 0})
+    if existing:
+        if existing.get("instrument_key") == instrument_key:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Instrument already has active strategy position: {existing.get('strategy_id')} {existing.get('status')}. New BUY blocked.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=f"Strategy already has active position {existing.get('trading_symbol')} ({existing.get('status')}). Re-entry blocked.",
+        )
+
+    row = await _strategy_row(user_id, strategy_id)
+    risk = ((row or {}).get("visual_config") or {}).get("risk") or {}
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "strategy_id": strategy_id,
+        "instrument_key": instrument_key,
+        "active_instrument_key": _active_key(user_id, instrument_key),
+        "active_strategy_key": _active_key(user_id, strategy_id),
+        "instrument_token": instrument_token,
+        "trading_symbol": trading_symbol,
+        "symbol": trading_symbol,
+        "exchange": exchange,
+        "quantity": int(quantity),
+        "open_quantity": int(quantity),
+        "average_buy_price": float(entry_price or 0),
+        "entry_time": now,
+        "status": "RESERVED",
+        "tp_sl_tsl_config": dict(risk),
+        "source": source,
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        await db.strategy_positions.insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
+        )
+    return doc
+
+
+async def _activate_strategy_position(
+    reservation: Optional[Dict[str, Any]],
+    *,
+    order_id: str,
+    broker_order_id: Optional[str],
+    average_buy_price: float,
+    quantity: int,
+    paper: bool,
+) -> None:
+    if not reservation:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    await db.strategy_positions.update_one(
+        {"id": reservation["id"], "user_id": reservation["user_id"]},
+        {"$set": {
+            "entry_order_id": order_id,
+            "broker_order_id": broker_order_id,
+            "entry_broker_order_id": broker_order_id,
+            "quantity": int(quantity),
+            "open_quantity": int(quantity),
+            "average_buy_price": float(average_buy_price or 0),
+            "status": "OPEN" if paper else "PENDING_OPEN",
+            "mode": "paper" if paper else "live",
+            "updated_at": now,
+        }},
+    )
+
+
+async def _cancel_strategy_reservation(reservation: Optional[Dict[str, Any]], reason: str) -> None:
+    if not reservation:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    await db.strategy_positions.update_one(
+        {"id": reservation["id"], "user_id": reservation["user_id"], "status": "RESERVED"},
+        {"$set": {"status": "CANCELLED", "cancel_reason": reason, "updated_at": now},
+         "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+    )
+
+
+async def _open_strategy_position_for_exit(
+    *,
+    user_id: str,
+    strategy_id: Optional[str],
+    instrument_key: str,
+) -> Optional[Dict[str, Any]]:
+    if not strategy_id:
+        return None
+    row = await db.strategy_positions.find_one({
+        "user_id": user_id,
+        "strategy_id": strategy_id,
+        "instrument_key": instrument_key,
+        "status": "OPEN",
+    }, {"_id": 0})
+    if not row:
+        active = await db.strategy_positions.find_one({
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "status": {"$in": ["RESERVED", "PENDING_OPEN", "EXITING"]},
+        }, {"_id": 0})
+        detail = (
+            f"Strategy position is {active.get('status')} for {active.get('trading_symbol')}; SELL blocked."
+            if active else
+            f"No stored OPEN strategy position for {instrument_key}; SELL must come from Position Manager."
+        )
+        raise HTTPException(status_code=409, detail=detail)
+    return row
+
+
+async def _mark_strategy_position_exiting(position: Optional[Dict[str, Any]], *, exit_order_id: str, exit_broker_order_id: Optional[str]) -> None:
+    if not position:
+        return
+    await db.strategy_positions.update_one(
+        {"id": position["id"], "user_id": position["user_id"], "status": "OPEN"},
+        {"$set": {
+            "status": "EXITING",
+            "exit_order_id": exit_order_id,
+            "exit_broker_order_id": exit_broker_order_id,
+            "exit_time": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
+
+async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *, exit_price: float, reason: str) -> None:
+    if not position:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    entry = float(position.get("average_buy_price") or 0)
+    pnl = round((float(exit_price or 0) - entry) * qty, 2)
+    await db.strategy_positions.update_one(
+        {"id": position["id"], "user_id": position["user_id"]},
+        {"$set": {
+            "status": "CLOSED",
+            "open_quantity": 0,
+            "exit_price": float(exit_price or 0),
+            "realised_pnl": pnl,
+            "exit_reason": reason,
+            "closed_at": now,
+            "updated_at": now,
+        }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+    )
+
+
+async def _reopen_strategy_position_after_exit_reject(position_id: str, user_id: str, reason: str) -> None:
+    await db.strategy_positions.update_one(
+        {"id": position_id, "user_id": user_id, "status": "EXITING"},
+        {"$set": {"status": "OPEN", "exit_reject_reason": reason, "updated_at": datetime.now(timezone.utc).isoformat()},
+         "$unset": {"exit_order_id": "", "exit_broker_order_id": "", "exit_time": ""}},
+    )
+
+
 async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any]]:
     return await db.orders.find({
         "user_id": user_id,
@@ -1400,54 +1759,54 @@ async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any
 
 
 async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit") -> Dict[str, Any]:
-    orders = await _collect_strategy_orders(user_id, sid)
-    net: Dict[str, int] = {}
-    for o in orders:
-        qty = int(o.get("filled_qty") or o.get("qty") or 0)
-        sign = 1 if o["side"] == "BUY" else -1
-        net[o["symbol"]] = net.get(o["symbol"], 0) + sign * qty
     results = []
-    for sym, qty_net in net.items():
-        if qty_net == 0:
+    positions = await db.strategy_positions.find({
+        "user_id": user_id,
+        "strategy_id": sid,
+        "status": "OPEN",
+    }, {"_id": 0}).to_list(20)
+    for pos in positions:
+        sym = pos.get("trading_symbol") or pos.get("symbol")
+        qty_net = int(pos.get("open_quantity") or pos.get("quantity") or 0)
+        if not sym or qty_net <= 0:
             continue
-        side = "SELL" if qty_net > 0 else "BUY"
-        order = next((o for o in orders if o["symbol"] == sym), None)
         place_kwargs: Dict[str, Any] = {
             "user_id": user_id,
-            "side": side,
+            "side": "SELL",
             "order_type": "MARKET",
-            "product": None,
+            "product": pos.get("product"),
             "source": f"{reason}:strategy:{sid}",
         }
-        if order and order.get("asset_type") == "option":
-            lot_size = int(order.get("lot_size") or 1)
-            place_kwargs["symbol"] = order["symbol"]
+        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
+            lot_size = int(pos.get("lot_size") or 1)
+            place_kwargs["symbol"] = sym
             place_kwargs["option_contract"] = {
-                "tradingsymbol": order["symbol"],
-                "exchange": order.get("exchange", "NFO"),
-                "instrument_token": order.get("instrument_token"),
+                "tradingsymbol": sym,
+                "exchange": pos.get("exchange", "NFO"),
+                "instrument_token": pos.get("instrument_token"),
                 "lot_size": lot_size,
-                "strike": order.get("strike"),
-                "expiry": order.get("expiry"),
-                "underlying": order.get("underlying"),
-                "option_type": order.get("option_type"),
-                "transaction_type": side,
+                "strike": pos.get("strike"),
+                "expiry": pos.get("expiry"),
+                "underlying": pos.get("underlying"),
+                "option_type": pos.get("option_type"),
+                "transaction_type": "SELL",
             }
-            place_kwargs["qty"] = max(1, math.ceil(abs(qty_net) / lot_size))
+            place_kwargs["qty"] = max(1, math.ceil(qty_net / lot_size))
         else:
             place_kwargs["symbol"] = sym
-            place_kwargs["qty"] = abs(qty_net)
+            place_kwargs["qty"] = qty_net
+            place_kwargs["exchange"] = pos.get("exchange") or "NSE"
         try:
             result = await _place_order_core(**place_kwargs)
-            results.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "ok", "order_id": result.get("id")})
+            results.append({"symbol": sym, "qty": qty_net, "side": "SELL", "status": "ok", "order_id": result.get("id")})
         except Exception as e:
-            results.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": str(e)})
+            results.append({"symbol": sym, "qty": qty_net, "side": "SELL", "status": "failed", "error": str(e)})
     if reason in ("risk-trigger", "feed-stale"):
         await db.strategies.update_one({"id": sid, "user_id": user_id}, {"$set": {
             "status": "paused",
             "last_error": f"Auto-paused after {reason} due to risk or data issue.",
         }})
-    return {"closed_positions": results, "open_positions_found": len([v for v in net.values() if v != 0])}
+    return {"closed_positions": results, "open_positions_found": len(positions)}
 
 
 async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True) -> Optional[float]:
@@ -1510,6 +1869,28 @@ def _kotak_trading_symbol(exchange: str, trading_symbol: str) -> str:
     return symbol
 
 
+def _kotak_trading_symbol_candidates(exchange: str, trading_symbol: str) -> List[str]:
+    symbol = str(trading_symbol or "").upper().strip()
+    if not symbol:
+        return []
+    exchange = (exchange or "").upper()
+    candidates = []
+    if exchange in {"NSE", "BSE"}:
+        candidates = [symbol if symbol.endswith("-EQ") else f"{symbol}-EQ", symbol]
+    else:
+        candidates = [symbol, symbol.replace(" ", "")]
+    out = []
+    for item in candidates:
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _kotak_symbol_error(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(part in text for part in ("symbol", "scrip", "trading", "instrument", "token"))
+
+
 def _extract_kotak_order_id(payload: Any) -> Optional[str]:
     if isinstance(payload, dict):
         for key in ("nOrdNo", "order_id", "orderId", "OrderNo", "NOrdNo", "nestOrderNumber"):
@@ -1549,27 +1930,36 @@ async def _place_kotak_order(
     execution_tag = tag or _new_execution_tag()
     attempts = 0
     result: Dict[str, Any] = {}
+    symbol_used = None
     max_attempts = int(os.environ.get("KOTAK_ORDER_MAX_ATTEMPTS", "1"))
-    for attempt in range(1, max(1, max_attempts) + 1):
-        attempts = attempt
-        result = await asyncio.to_thread(
-            gateway.place_order,
-            exchange_segment=_kotak_exchange_segment(exchange),
-            product=(product or "MIS").upper(),
-            price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
-            quantity=int(quantity),
-            trading_symbol=_kotak_trading_symbol(exchange, trading_symbol),
-            transaction_type=_kotak_transaction_type(side),
-            order_type=_kotak_order_type(order_type),
-            tag=execution_tag,
-        )
+    candidates = _kotak_trading_symbol_candidates(exchange, trading_symbol)
+    for candidate_idx, candidate in enumerate(candidates):
+        symbol_used = candidate
+        for attempt in range(1, max(1, max_attempts) + 1):
+            attempts += 1
+            result = await asyncio.to_thread(
+                gateway.place_order,
+                exchange_segment=_kotak_exchange_segment(exchange),
+                product=(product or "MIS").upper(),
+                price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
+                quantity=int(quantity),
+                trading_symbol=candidate,
+                transaction_type=_kotak_transaction_type(side),
+                order_type=_kotak_order_type(order_type),
+                tag=execution_tag,
+            )
+            if result.get("ok"):
+                break
+            error = str(result.get("error") or "")
+            if not OrderExecutionRetry.is_retryable_error(error) or attempt >= max_attempts:
+                break
+            retry_cfg = OrderExecutionRetry.retry_config(attempt)
+            await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
         if result.get("ok"):
             break
         error = str(result.get("error") or "")
-        if not OrderExecutionRetry.is_retryable_error(error) or attempt >= max_attempts:
+        if candidate_idx >= len(candidates) - 1 or not _kotak_symbol_error(error):
             break
-        retry_cfg = OrderExecutionRetry.retry_config(attempt)
-        await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=f"Kotak rejected order: {result.get('error')}")
     broker_order_id = _extract_kotak_order_id(result.get("response"))
@@ -1580,6 +1970,7 @@ async def _place_kotak_order(
         "raw": result.get("response"),
         "tag": execution_tag,
         "attempts": attempts,
+        "trading_symbol": symbol_used,
     }
 
 
@@ -1790,6 +2181,80 @@ async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_u
     return _strategy_out(row)
 
 
+@api.post("/strategies/{sid}/ai-modify")
+async def ai_modify_strategy(sid: str, req: StrategyAIModifyReq, user=Depends(get_current_user)):
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    instruction = (req.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Tell the AI what to change.")
+
+    try:
+        proposal = await asyncio.wait_for(
+            asyncio.to_thread(_google_strategy_edit_sync, row, instruction),
+            timeout=GEMINI_TIMEOUT_SEC,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"AI strategy edit failed: {e}")
+
+    proposed_code = str(proposal.get("python_code") or "").strip()
+    if "def run(data):" not in proposed_code:
+        raise HTTPException(status_code=400, detail="AI proposal rejected: missing def run(data):")
+
+    visual_config = proposal.get("visual_config") if isinstance(proposal.get("visual_config"), dict) else (row.get("visual_config") or {})
+    test_row = {**row, "visual_config": visual_config}
+    symbol = _strategy_market_symbol(test_row)
+    history = await _fetch_strategy_history(user["id"], symbol, days=30, interval="5minute", allow_mock=True)
+    data = history.get("data") or []
+    if not data:
+        raise HTTPException(status_code=400, detail=f"AI proposal rejected: no candles available for {symbol}")
+    try:
+        signals = safe_run_strategy(proposed_code, data[-250:])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"AI proposal rejected by sandbox: {e}")
+
+    validation = {
+        "symbol": symbol,
+        "candles": len(data[-250:]),
+        "data_source": history.get("source"),
+        "signals": len(signals),
+        "last_signal": signals[-1] if signals else None,
+    }
+    response = {
+        "ok": True,
+        "applied": False,
+        "proposal": {
+            "name": proposal.get("name") or row.get("name"),
+            "description": proposal.get("description") or row.get("description"),
+            "python_code": proposed_code,
+            "visual_config": visual_config,
+            "notes": proposal.get("notes") if isinstance(proposal.get("notes"), list) else [],
+        },
+        "validation": validation,
+    }
+    if req.apply:
+        update = {
+            "name": response["proposal"]["name"],
+            "description": response["proposal"]["description"],
+            "python_code": proposed_code,
+            "visual_config": visual_config,
+            "asset_class": "options" if ((visual_config or {}).get("options") or {}).get("enabled") else row.get("asset_class", "equity"),
+            "ai_modified_at": datetime.now(timezone.utc).isoformat(),
+            "ai_last_instruction": instruction[:1000],
+            "last_signal_validation": validation,
+        }
+        await db.strategies.update_one(
+            {"id": sid, "user_id": user["id"]},
+            {"$set": update, "$unset": {"last_error": ""}},
+        )
+        new_row = {**row, **update}
+        _sync_option_ledger_strategy(new_row)
+        response["applied"] = True
+        response["strategy"] = _strategy_out({k: v for k, v in new_row.items() if k not in {"_id", "user_id"}})
+    return response
+
+
 @api.delete("/strategies/{sid}")
 async def delete_strategy(sid: str, user=Depends(get_current_user)):
     res = await db.strategies.delete_one({"id": sid, "user_id": user["id"]})
@@ -1826,6 +2291,9 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
         "max_trades_day": req.max_trades_day,
         "daily_loss_limit": req.daily_loss_limit,
         "required_capital": req.required_capital,
+        "time_exit_minutes": req.time_exit_minutes,
+        "indicator_exit_enabled": req.indicator_exit_enabled,
+        "exit_mode": req.exit_mode,
     }
     for key, value in mapping.items():
         if value is not None:
@@ -1897,38 +2365,11 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
 
 @api.post("/strategies/{sid}/exit-all")
 async def exit_strategy_positions(sid: str, user=Depends(get_current_user)):
-    """Square off every open position that originated from this strategy.
-    Walks completed orders tagged with source=*strategy:{sid}*, computes net
-    qty per symbol, and places opposite MARKET orders to neutralise."""
+    """Square off every stored open Position Manager row for this strategy."""
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    # Match both auto (strategy:sid) AND manual (manual:strategy:sid) sources
-    orders = await db.orders.find({
-        "user_id": user["id"],
-        "source": {"$regex": f"strategy:{sid}"},
-        "status": "COMPLETE",
-    }, {"_id": 0}).to_list(1000)
-    net: Dict[str, int] = {}
-    for o in orders:
-        sign = 1 if o["side"] == "BUY" else -1
-        net[o["symbol"]] = net.get(o["symbol"], 0) + sign * int(o.get("filled_qty") or o.get("qty") or 0)
-    closed: List[Dict[str, Any]] = []
-    for sym, qty_net in net.items():
-        if qty_net == 0:
-            continue
-        side = "SELL" if qty_net > 0 else "BUY"
-        try:
-            result = await _place_order_core(
-                user_id=user["id"], symbol=sym, side=side, qty=abs(qty_net),
-                order_type="MARKET", product=None, source=f"exit:strategy:{sid}",
-            )
-            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "ok", "order_id": result.get("id")})
-        except HTTPException as e:
-            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": e.detail})
-        except Exception as e:
-            closed.append({"symbol": sym, "qty": abs(qty_net), "side": side, "status": "failed", "error": str(e)})
-    return {"closed_positions": closed, "open_positions_found": len([v for v in net.values() if v != 0])}
+    return await _close_strategy_positions(user["id"], sid, reason="exit")
 
 
 @api.post("/strategies/{sid}/test-run")
@@ -2017,7 +2458,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             user_id=user["id"], symbol=symbol, side=action,
                             qty=int(opt_cfg.get("lots") or 1),
                             order_type="MARKET", product=None,
-                            source=f"test-run:{sid}",
+                            source=f"test-run:strategy:{sid}",
                             option_contract=option_contract_used,
                         )
                     else:
@@ -2028,7 +2469,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             qty=None,
                             order_type="MARKET",
                             product=None,
-                            source=f"test-run:{sid}",
+                            source=f"test-run:strategy:{sid}",
                         )
                     await db.strategies.update_one(
                         {"id": sid},
@@ -2355,7 +2796,7 @@ async def _check_trade_count_guard(user_id: str, max_trades: int) -> None:
     trades = await db.orders.count_documents({
         "user_id": user_id,
         "created_at": {"$gte": today_start},
-        "status": {"$nin": ["REJECTED", "CANCELLED"]},
+        "status": {"$nin": ["REJECTED", "CANCELLED", "STALE", "BROKER_NOT_FOUND"]},
     })
     if trades >= int(max_trades):
         raise HTTPException(
@@ -2391,7 +2832,7 @@ def _open_order_statuses() -> set:
 
 
 def _closed_order_statuses() -> set:
-    return {"COMPLETE", "CANCELLED", "REJECTED"}
+    return {"COMPLETE", "CANCELLED", "REJECTED", "STALE", "BROKER_NOT_FOUND"}
 
 
 async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
@@ -2467,10 +2908,21 @@ def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
     return ist_now.weekday() < 5 and NSE_OPEN_MINUTE <= minutes <= NSE_CLOSE_MINUTE
 
 
+def _is_order_market_open(exchange: str, now_utc: Optional[datetime] = None) -> bool:
+    exchange = (exchange or "NSE").upper()
+    if exchange == "MCX":
+        now_utc = now_utc or datetime.now(timezone.utc)
+        ist_now = now_utc + IST_OFFSET
+        minutes = ist_now.hour * 60 + ist_now.minute
+        return ist_now.weekday() < 5 and MCX_OPEN_MINUTE <= minutes <= MCX_CLOSE_MINUTE
+    return _is_nse_market_open(now_utc)
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
-                            option_contract: Optional[Dict[str, Any]] = None) -> dict:
+                            option_contract: Optional[Dict[str, Any]] = None,
+                            exchange: str = "NSE") -> dict:
     """Shared order-placement business logic. Honours paper_mode + risk limits.
     Used by both the /orders endpoint and the background strategy runner.
 
@@ -2491,6 +2943,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
     if order_type == "LIMIT" and not price:
         raise HTTPException(status_code=400, detail="LIMIT orders require a price")
+    exchange = (exchange or "NSE").upper()
+    if exchange not in SUPPORTED_ORDER_EXCHANGES:
+        raise HTTPException(status_code=400, detail=f"exchange must be one of {sorted(SUPPORTED_ORDER_EXCHANGES)}")
 
     strategy_id = await _strategy_source_id(source)
     settings = await get_user_settings(user_id)
@@ -2501,10 +2956,19 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             status_code=400,
             detail=f"Live execution through {execution_broker} is not enabled yet. Switch execution broker to zerodha/kotak_neo or use PAPER.",
         )
-    if not paper and order_type == "MARKET" and not _is_nse_market_open():
-        raise HTTPException(status_code=400, detail="Live MARKET orders are blocked outside NSE market hours.")
+    if not paper and order_type == "MARKET" and not _is_order_market_open(exchange):
+        market_name = "MCX" if exchange == "MCX" else "NSE/BSE"
+        raise HTTPException(status_code=400, detail=f"Live MARKET orders are blocked outside {market_name} market hours.")
 
-    exit_source = any(str(source).startswith(prefix) for prefix in ("exit", "manual-exit", "risk-trigger", "feed-stale", "squareoff"))
+    exit_source = side == "SELL" or any(str(source).startswith(prefix) for prefix in (
+        "exit",
+        "manual-exit",
+        "risk-trigger",
+        "feed-stale",
+        "squareoff",
+        "time-exit",
+        "intraday-squareoff",
+    ))
     if not exit_source:
         await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
     if not exit_source:
@@ -2528,6 +2992,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # Transaction type comes from the contract (BUY for long, SELL for write)
         opt_side = (option_contract.get("transaction_type") or side).upper()
         ledger_opened = False
+        instrument_key = _instrument_key(opt_exchange, opt_symbol, option_contract.get("instrument_token"))
+        position_reservation: Optional[Dict[str, Any]] = None
+        exit_position_record: Optional[Dict[str, Any]] = None
         execution_tag = _new_execution_tag()
         execution_attempts = 0
         execution_recovered = False
@@ -2549,9 +3016,20 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             except Exception as e:
                 logger.warning(f"option LTP fetch failed for {opt_symbol}: {e}")
                 fill_price = price or 0.0
-            if fill_price <= 0:
+            if opt_side == "BUY" and fill_price <= 0:
                 raise HTTPException(status_code=400, detail=f"Live option LTP unavailable for {opt_symbol}; order blocked.")
             if strategy_id and opt_side == "BUY":
+                position_reservation = await _reserve_strategy_position(
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    instrument_key=instrument_key,
+                    trading_symbol=opt_symbol,
+                    exchange=opt_exchange,
+                    instrument_token=option_contract.get("instrument_token"),
+                    quantity=broker_qty,
+                    entry_price=float(fill_price or 0),
+                    source=source,
+                )
                 decision = option_ledger.try_open_position(
                     strategy_id=strategy_id,
                     symbol=opt_symbol,
@@ -2560,9 +3038,27 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     quantity=lots,
                 )
                 if not decision.accepted:
+                    await _cancel_strategy_reservation(position_reservation, decision.reason)
                     logger.info("option BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
                     raise HTTPException(status_code=409, detail=f"Option entry blocked: {decision.reason}")
                 ledger_opened = True
+            if strategy_id and opt_side == "SELL":
+                exit_position_record = await _open_strategy_position_for_exit(
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    instrument_key=instrument_key,
+                )
+                broker_qty = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or broker_qty)
+                lots = max(1, math.ceil(broker_qty / lot_size))
+                await _assert_broker_has_position_quantity(user_id, kite, opt_exchange, opt_symbol, broker_qty)
+            if opt_side == "BUY" and fill_price and broker_qty * fill_price > settings["max_position_size"]:
+                if ledger_opened and strategy_id:
+                    option_ledger.release_failed_open(strategy_id)
+                await _cancel_strategy_reservation(position_reservation, "max-position-size")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Order value INR {broker_qty * fill_price:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
+                )
             try:
                 if execution_broker == "kotak_neo":
                     res = await _place_kotak_order(
@@ -2598,6 +3094,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             except Exception as e:
                 if ledger_opened:
                     option_ledger.release_failed_open(strategy_id)
+                await _cancel_strategy_reservation(position_reservation, str(e))
                 raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
         else:
             # Paper mode: estimate option premium as ~2% of spot (rough proxy)
@@ -2605,6 +3102,17 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             fill_price = price or round(float(spot) * 0.02, 2)
             fill_price = _simulate_paper_fill_price(fill_price, opt_side)
             if strategy_id and opt_side == "BUY":
+                position_reservation = await _reserve_strategy_position(
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    instrument_key=instrument_key,
+                    trading_symbol=opt_symbol,
+                    exchange=opt_exchange,
+                    instrument_token=option_contract.get("instrument_token"),
+                    quantity=broker_qty,
+                    entry_price=float(fill_price or 0),
+                    source=source,
+                )
                 decision = option_ledger.try_open_position(
                     strategy_id=strategy_id,
                     symbol=opt_symbol,
@@ -2613,15 +3121,25 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     quantity=lots,
                 )
                 if not decision.accepted:
+                    await _cancel_strategy_reservation(position_reservation, decision.reason)
                     logger.info("option BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
                     raise HTTPException(status_code=409, detail=f"Option entry blocked: {decision.reason}")
                 ledger_opened = True
+            if strategy_id and opt_side == "SELL":
+                exit_position_record = await _open_strategy_position_for_exit(
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    instrument_key=instrument_key,
+                )
+                broker_qty = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or broker_qty)
+                lots = max(1, math.ceil(broker_qty / lot_size))
             broker_order_id = None
 
         brokerage = _simulate_paper_brokerage(fill_price, broker_qty) if paper else 0.0
-        if fill_price and broker_qty * fill_price > settings["max_position_size"]:
+        if opt_side == "BUY" and fill_price and broker_qty * fill_price > settings["max_position_size"]:
             if ledger_opened and strategy_id:
                 option_ledger.release_failed_open(strategy_id)
+            await _cancel_strategy_reservation(position_reservation, "max-position-size")
             raise HTTPException(
                 status_code=400,
                 detail=f"Order value INR {broker_qty * fill_price:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
@@ -2663,6 +3181,29 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "lot_size": lot_size,
         }
         await db.orders.insert_one(doc)
+        if strategy_id and opt_side == "BUY":
+            await _activate_strategy_position(
+                position_reservation,
+                order_id=doc["id"],
+                broker_order_id=broker_order_id,
+                average_buy_price=fill_price,
+                quantity=broker_qty,
+                paper=paper,
+            )
+            if position_reservation:
+                await db.strategy_positions.update_one(
+                    {"id": position_reservation["id"], "user_id": user_id},
+                    {"$set": {
+                        "asset_type": "option",
+                        "lot_size": lot_size,
+                        "lots": lots,
+                        "underlying": option_contract.get("underlying"),
+                        "option_type": option_contract.get("option_type"),
+                        "strike": option_contract.get("strike"),
+                        "expiry": option_contract.get("expiry"),
+                        "product": opt_product,
+                    }},
+                )
 
         # Paper positions tracking — keyed by option tradingsymbol
         if paper:
@@ -2693,6 +3234,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     "strategy_id": strategy_id,
                 })
         if strategy_id and opt_side == "SELL":
+            await _mark_strategy_position_exiting(
+                exit_position_record,
+                exit_order_id=doc["id"],
+                exit_broker_order_id=broker_order_id,
+            )
+            if paper:
+                await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
             option_ledger.close_position(
                 strategy_id=strategy_id,
                 exit_price=float(fill_price or 0),
@@ -2702,31 +3250,192 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         doc.pop("user_id", None)
         return doc
 
-    # ===== EQUITY PATH (existing behaviour) =====
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
+    # ===== KOTAK DIRECT PATH =====
+    # For MCX commodities and exact Kotak F&O symbols, QuantG cannot derive
+    # price history from the stock watchlist. We still allow controlled manual
+    # execution through Kotak Neo using the exact exchange/trading symbol.
+    if not sym:
+        direct_symbol = symbol.upper().strip()
+        if not direct_symbol:
+            raise HTTPException(status_code=400, detail="symbol is required")
+        direct_product = (product or ("NRML" if exchange in {"MCX", "NFO", "BFO", "CDS"} else settings["default_product"] or "MIS")).upper()
+        instrument_key = _instrument_key(exchange, direct_symbol, None)
+        position_reservation = None
+        exit_position_record = None
+        broker_order_id = None
+        execution_tag = _new_execution_tag()
+        execution_attempts = 0
+        execution_recovered = False
+        fill_price = float(price or 0)
+        if strategy_id and side == "BUY":
+            position_reservation = await _reserve_strategy_position(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                instrument_key=instrument_key,
+                trading_symbol=direct_symbol,
+                exchange=exchange,
+                instrument_token=None,
+                quantity=int(qty or 1),
+                entry_price=float(fill_price or 0),
+                source=source,
+            )
+        if strategy_id and side == "SELL":
+            exit_position_record = await _open_strategy_position_for_exit(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                instrument_key=instrument_key,
+            )
+            qty = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or qty or 1)
+        if side == "BUY" and fill_price and qty and qty * fill_price > settings["max_position_size"]:
+            await _cancel_strategy_reservation(position_reservation, "max-position-size")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Order value INR {qty * fill_price:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
+            )
+        if not paper:
+            if execution_broker != "kotak_neo":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{exchange} exact-symbol orders are enabled only for Kotak Neo execution in this build.",
+                )
+            if strategy_id and side == "SELL":
+                await _assert_broker_has_position_quantity(user_id, None, exchange, direct_symbol, int(qty or 1))
+            try:
+                res = await _place_kotak_order(
+                    user_id,
+                    trading_symbol=direct_symbol,
+                    exchange=exchange,
+                    side=side,
+                    quantity=int(qty or 1),
+                    order_type=order_type,
+                    product=direct_product,
+                    price=price,
+                    tag=execution_tag,
+                )
+                broker_order_id = res.get("broker_order_id")
+                execution_attempts = int(res.get("attempts") or 1)
+            except Exception as e:
+                await _cancel_strategy_reservation(position_reservation, str(e))
+                raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
+        else:
+            fill_price = price if order_type == "LIMIT" and price else _simulate_paper_fill_price(fill_price or 1.0, side)
+
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "symbol": direct_symbol,
+            "side": side,
+            "qty": int(qty or 1),
+            "filled_qty": int(qty or 1) if paper else None,
+            "pending_qty": 0 if paper else None,
+            "status_message": "Exact Kotak symbol order" if exchange == "MCX" else None,
+            "realised_pnl": 0.0,
+            "order_type": order_type,
+            "price": fill_price,
+            "brokerage": _simulate_paper_brokerage(fill_price, int(qty or 1)) if paper else 0.0,
+            "product": direct_product,
+            "status": "COMPLETE" if paper else "OPEN",
+            "mode": "paper" if paper else "live",
+            "broker": "paper" if paper else execution_broker,
+            "broker_order_id": broker_order_id,
+            "execution_tag": execution_tag if not paper else None,
+            "execution_attempts": execution_attempts,
+            "execution_recovered": execution_recovered,
+            "source": source,
+            "strategy_id": strategy_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "asset_type": "commodity" if exchange == "MCX" else "external",
+            "exchange": exchange,
+        }
+        await db.orders.insert_one(doc)
+        if strategy_id and side == "BUY":
+            await _activate_strategy_position(
+                position_reservation,
+                order_id=doc["id"],
+                broker_order_id=broker_order_id,
+                average_buy_price=fill_price,
+                quantity=int(qty or 1),
+                paper=paper,
+            )
+            if position_reservation:
+                await db.strategy_positions.update_one(
+                    {"id": position_reservation["id"], "user_id": user_id},
+                    {"$set": {"asset_type": doc["asset_type"], "product": direct_product}},
+                )
+        if strategy_id and side == "SELL":
+            await _mark_strategy_position_exiting(exit_position_record, exit_order_id=doc["id"], exit_broker_order_id=broker_order_id)
+            if paper:
+                await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
+        if paper:
+            pos = await db.positions.find_one({"user_id": user_id, "symbol": direct_symbol})
+            delta = int(qty or 1) if side == "BUY" else -int(qty or 1)
+            if pos:
+                new_qty = pos["qty"] + delta
+                if new_qty == 0:
+                    await db.positions.delete_one({"_id": pos["_id"]})
+                else:
+                    avg = (
+                        (pos["avg_price"] * pos["qty"] + fill_price * int(qty or 1)) / (pos["qty"] + int(qty or 1))
+                        if side == "BUY" and (pos["qty"] + int(qty or 1))
+                        else pos["avg_price"]
+                    )
+                    await db.positions.update_one({"_id": pos["_id"]}, {"$set": {"qty": new_qty, "avg_price": round(avg, 2)}})
+            else:
+                await db.positions.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "symbol": direct_symbol,
+                    "qty": delta,
+                    "avg_price": fill_price,
+                    "created_at": doc["created_at"],
+                    "asset_type": doc["asset_type"],
+                    "exchange": exchange,
+                    "strategy_id": strategy_id,
+                })
+        doc.pop("_id", None)
+        doc.pop("user_id", None)
+        return doc
+
+    # ===== EQUITY PATH (existing behaviour) =====
     if not sym:
         raise HTTPException(status_code=400, detail="Unknown symbol")
+    equity_exchange = exchange if exchange in {"NSE", "BSE"} else "NSE"
     product = product or settings["default_product"] or "MIS"
 
     # Risk guard: max position size
-    live_ltp = await _current_ltp_for_symbol(user_id, symbol.upper(), "NSE", allow_mock=False) if not paper else None
-    if not paper and live_ltp is None:
+    live_ltp = await _current_ltp_for_symbol(user_id, symbol.upper(), equity_exchange, allow_mock=False) if not paper else None
+    if not paper and side == "BUY" and live_ltp is None:
         raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {symbol.upper()}; order blocked.")
     fill_price_hint = price or live_ltp or live_price(sym["base"], SYMBOLS.index(sym))["price"]
     if qty is None and strategy_id:
         cap = float(settings.get("per_strategy_capital") or settings.get("max_position_size") or 0)
         qty = max(1, int(cap // fill_price_hint)) if cap > 0 and fill_price_hint > 0 else settings["default_qty"]
     qty = int(qty or settings["default_qty"] or 1)
-    if qty * fill_price_hint > settings["max_position_size"]:
+    if side == "BUY" and qty * fill_price_hint > settings["max_position_size"]:
         raise HTTPException(status_code=400,
             detail=f"Order value INR {qty * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.")
 
     broker_order_id = None
     ledger_opened = False
+    instrument_key = _instrument_key(equity_exchange, symbol.upper(), None)
+    position_reservation = None
+    exit_position_record = None
     execution_tag = _new_execution_tag()
     execution_attempts = 0
     execution_recovered = False
     if strategy_id and side == "BUY":
+        position_reservation = await _reserve_strategy_position(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            instrument_key=instrument_key,
+            trading_symbol=symbol.upper(),
+            exchange=equity_exchange,
+            instrument_token=None,
+            quantity=qty,
+            entry_price=float(fill_price_hint or 0),
+            source=source,
+        )
         decision = option_ledger.try_open_position(
             strategy_id=strategy_id,
             symbol=symbol.upper(),
@@ -2735,21 +3444,31 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             quantity=1,
         )
         if not decision.accepted:
+            await _cancel_strategy_reservation(position_reservation, decision.reason)
             logger.info("strategy BUY dropped strategy=%s reason=%s", strategy_id, decision.reason)
             raise HTTPException(status_code=409, detail=f"Strategy entry blocked: {decision.reason}")
         ledger_opened = True
+    if strategy_id and side == "SELL":
+        exit_position_record = await _open_strategy_position_for_exit(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            instrument_key=instrument_key,
+        )
+        qty = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or qty)
     if not paper:
         kite, _ = await get_user_kite(user_id)
         if execution_broker == "zerodha" and not kite:
             if ledger_opened:
                 option_ledger.release_failed_open(strategy_id)
             raise HTTPException(status_code=400, detail="Live mode is ON but Zerodha is not connected. Connect on Broker Keys or flip to Paper.")
+        if strategy_id and side == "SELL":
+            await _assert_broker_has_position_quantity(user_id, kite, equity_exchange, symbol.upper(), qty)
         try:
             if execution_broker == "kotak_neo":
                 res = await _place_kotak_order(
                     user_id,
                     trading_symbol=symbol.upper(),
-                    exchange="NSE",
+                    exchange=equity_exchange,
                     side=side,
                     quantity=qty,
                     order_type=order_type,
@@ -2763,7 +3482,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 res = await _place_kite_order_with_recovery(
                     kite,
                     tradingsymbol=symbol.upper(),
-                    exchange="NSE",
+                    exchange=equity_exchange,
                     transaction_type=side,
                     quantity=qty,
                     order_type=order_type,
@@ -2779,6 +3498,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         except Exception as e:
             if ledger_opened:
                 option_ledger.release_failed_open(strategy_id)
+            await _cancel_strategy_reservation(position_reservation, str(e))
             raise HTTPException(status_code=400, detail=f"Broker rejected order: {e}")
         fill_price = fill_price_hint  # actual fill comes via Kite later
     else:
@@ -2809,8 +3529,23 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "source": source,
         "strategy_id": strategy_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "exchange": equity_exchange,
     }
     await db.orders.insert_one(doc)
+    if strategy_id and side == "BUY":
+        await _activate_strategy_position(
+            position_reservation,
+            order_id=doc["id"],
+            broker_order_id=broker_order_id,
+            average_buy_price=fill_price,
+            quantity=qty,
+            paper=paper,
+        )
+        if position_reservation:
+            await db.strategy_positions.update_one(
+                {"id": position_reservation["id"], "user_id": user_id},
+                {"$set": {"asset_type": "equity", "product": product}},
+            )
 
     # Update local paper positions only when paper-mode
     if paper:
@@ -2840,6 +3575,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 "strategy_id": strategy_id,
             })
     if strategy_id and side == "SELL":
+        await _mark_strategy_position_exiting(exit_position_record, exit_order_id=doc["id"], exit_broker_order_id=broker_order_id)
+        if paper:
+            await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
         option_ledger.close_position(
             strategy_id=strategy_id,
             exit_price=float(fill_price or 0),
@@ -2855,6 +3593,7 @@ async def place_order(req: OrderReq, user=Depends(get_current_user)):
     return await _place_order_core(
         user_id=user["id"], symbol=req.symbol, side=req.side, qty=req.qty,
         order_type=req.order_type, price=req.price, product=req.product, source="manual",
+        exchange=req.exchange,
     )
 
 
@@ -2871,6 +3610,7 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
     return await _place_order_core(
         user_id=user["id"], symbol=symbol, side=side, qty=qty,
         order_type="MARKET", product=target.get("product"), source="manual-exit",
+        exchange=target.get("exchange") or "NSE",
     )
 
 
@@ -3017,6 +3757,42 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
             {"$set": set_doc},
         )
         updated += res.modified_count
+        if status == "COMPLETE":
+            pos_set = {
+                "status": "OPEN",
+                "average_buy_price": avg_price or set_doc.get("price") or 0,
+                "updated_at": now,
+            }
+            filled_qty = int(o.get("filled_quantity") or 0)
+            if filled_qty > 0:
+                pos_set["quantity"] = filled_qty
+                pos_set["open_quantity"] = filled_qty
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": broker_order_id, "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": pos_set},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": broker_order_id, "status": "EXITING"},
+                {"_id": 0},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _close_strategy_position_record(
+                    pos,
+                    exit_price=float(o.get("average_price") or o.get("price") or pos.get("average_buy_price") or 0),
+                    reason="broker-exit-complete",
+                )
+        elif status in {"CANCELLED", "REJECTED"}:
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": broker_order_id, "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": {"status": status, "updated_at": now, "broker_status_message": o.get("status_message")},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": broker_order_id, "status": "EXITING"},
+                {"_id": 0, "id": 1, "user_id": 1},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, o.get("status_message") or status)
     result = {"checked": len(live_orders), "updated": updated}
     _ORDER_SYNC_CACHE[user_id] = {"cached_at": time.monotonic(), "result": result}
     return result
@@ -3043,7 +3819,7 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
         "user_id": user_id,
         "status": {"$in": ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"]},
         "broker": {"$in": ["zerodha", None]},
-    }, {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1}).to_list(500)
+    }, {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1, "strategy_id": 1}).to_list(500)
     for row in rows:
         broker_order_id = row.get("broker_order_id")
         status = broker_status.get(broker_order_id)
@@ -3064,18 +3840,102 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
                 created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")).astimezone(timezone.utc)
             except Exception:
                 created_dt = None
-        if broker_order_id and broker_order_id not in broker_status and created_dt and created_dt < stale_before:
+        if created_dt and created_dt < stale_before and (not broker_order_id or broker_order_id not in broker_status):
+            stale_status = "BROKER_NOT_FOUND" if broker_order_id else "STALE"
+            message = (
+                "Local stale open order cleared: broker no longer reports this order."
+                if broker_order_id else
+                "Local stale open order cleared: no broker order id was ever recorded."
+            )
             res = await db.orders.update_one(
                 {"user_id": user_id, "id": row["id"]},
                 {"$set": {
-                    "status": "CANCELLED",
-                    "status_message": "Local stale open order cleared: broker no longer reports this order.",
+                    "status": stale_status,
+                    "status_message": message,
+                    "visibility": "hidden",
                     "updated_at": now.isoformat(),
                 }},
             )
             missing_fixed += res.modified_count
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_order_id": row["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": {"status": stale_status, "updated_at": now.isoformat()},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+            )
     _ORDER_SYNC_CACHE.pop(user_id, None)
     return {"fixed": fixed + missing_fixed, "broker_closed_fixed": fixed, "missing_from_broker_fixed": missing_fixed, "checked": len(rows)}
+
+
+def _kotak_order_items(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        out: List[Dict[str, Any]] = []
+        for item in payload:
+            out.extend(_kotak_order_items(item))
+        return out
+    if not isinstance(payload, dict):
+        return []
+    if _extract_kotak_order_id(payload):
+        return [payload]
+    out: List[Dict[str, Any]] = []
+    for key in ("data", "orders", "orderBook", "order_book", "result", "records"):
+        if key in payload:
+            out.extend(_kotak_order_items(payload.get(key)))
+    if out:
+        return out
+    for value in payload.values():
+        out.extend(_kotak_order_items(value))
+    return out
+
+
+def _kotak_position_items(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        out: List[Dict[str, Any]] = []
+        for item in payload:
+            out.extend(_kotak_position_items(item))
+        return out
+    if not isinstance(payload, dict):
+        return []
+    if any(key in payload for key in ("netQty", "net_quantity", "quantity", "qty")) and any(
+        key in payload for key in ("trdSym", "trading_symbol", "tradingSymbol", "symbol")
+    ):
+        return [payload]
+    out: List[Dict[str, Any]] = []
+    for key in ("data", "positions", "positionBook", "position_book", "result", "records"):
+        if key in payload:
+            out.extend(_kotak_position_items(payload.get(key)))
+    if out:
+        return out
+    for value in payload.values():
+        out.extend(_kotak_position_items(value))
+    return out
+
+
+def _kotak_first(row: Dict[str, Any], keys: List[str]) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _normalize_kotak_order_status(status: Any) -> Optional[str]:
+    if status in (None, ""):
+        return None
+    text = str(status).strip().upper()
+    mapping = {
+        "TRD": "COMPLETE",
+        "TRADED": "COMPLETE",
+        "COMPLETED": "COMPLETE",
+        "COMPLETE": "COMPLETE",
+        "REJ": "REJECTED",
+        "REJECTED": "REJECTED",
+        "CXL": "CANCELLED",
+        "CANCELED": "CANCELLED",
+        "CANCELLED": "CANCELLED",
+        "OPEN": "OPEN",
+        "PENDING": "PENDING",
+    }
+    return mapping.get(text, text)
 
 
 async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
@@ -3083,38 +3943,189 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
     if not gateway:
         return {"checked": 0, "updated": 0}
     updates = gateway.latest_orders()
+    report_count = 0
+    if gateway.status().get("authenticated"):
+        report = await asyncio.to_thread(gateway.order_report)
+        if report.get("ok"):
+            for item in _kotak_order_items(report.get("response")):
+                order_id = _extract_kotak_order_id(item)
+                if order_id:
+                    updates[str(order_id)] = {
+                        "order_id": str(order_id),
+                        "status": _kotak_first(item, ["ordSt", "status", "ordStatus", "orderStatus", "order_status"]),
+                        "filled_qty": _kotak_first(item, ["fldQty", "filledQty", "filled_quantity", "filledQuantity"]),
+                        "pending_qty": _kotak_first(item, ["unfilledQty", "pendingQty", "pending_quantity", "remainingQty"]),
+                        "average_price": _kotak_first(item, ["avgPrc", "averagePrice", "average_price", "avg_price"]),
+                        "raw": item,
+                    }
+            report_count = len(updates)
     updated = 0
     now = datetime.now(timezone.utc).isoformat()
     for order_id, row in updates.items():
-        status = row.get("status")
+        status = _normalize_kotak_order_status(row.get("status"))
         set_doc = {
             "updated_at": now,
             "status_message": status,
         }
         if status:
-            set_doc["status"] = str(status).upper()
+            set_doc["status"] = status
         if row.get("filled_qty") not in (None, ""):
             try:
                 set_doc["filled_qty"] = int(float(row.get("filled_qty")))
             except Exception:
                 set_doc["filled_qty"] = row.get("filled_qty")
+        if row.get("pending_qty") not in (None, ""):
+            try:
+                set_doc["pending_qty"] = int(float(row.get("pending_qty")))
+            except Exception:
+                set_doc["pending_qty"] = row.get("pending_qty")
+        if row.get("average_price") not in (None, ""):
+            try:
+                avg = float(row.get("average_price"))
+                if avg > 0:
+                    set_doc["price"] = avg
+            except Exception:
+                pass
         res = await db.orders.update_many(
             {"user_id": user_id, "broker": "kotak_neo", "broker_order_id": str(order_id)},
             {"$set": set_doc},
         )
         updated += res.modified_count
-    return {"checked": len(updates), "updated": updated}
+        if status == "COMPLETE":
+            avg_price = float(set_doc.get("price") or 0)
+            filled_qty = set_doc.get("filled_qty")
+            pos_set = {"status": "OPEN", "updated_at": now}
+            if avg_price > 0:
+                pos_set["average_buy_price"] = avg_price
+            if filled_qty not in (None, ""):
+                pos_set["quantity"] = int(filled_qty)
+                pos_set["open_quantity"] = int(filled_qty)
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": pos_set},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
+                {"_id": 0},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
+        elif status in {"CANCELLED", "REJECTED"}:
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": {"status": status, "updated_at": now, "broker_status_message": row.get("status")},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
+                {"_id": 0, "id": 1},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
+    return {"checked": len(updates), "updated": updated, "report_checked": report_count}
+
+
+async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    if kite:
+        data = kite_helper.safe_positions(kite)
+        for p in (data or {}).get("net") or []:
+            symbol = p.get("tradingsymbol")
+            qty = int(p.get("quantity") or 0)
+            if symbol and qty != 0:
+                exchange = p.get("exchange") or ("NFO" if str(symbol).endswith(("CE", "PE")) else "NSE")
+                out[_instrument_key(exchange, symbol, None)] = p
+                out[f"SYMBOL:{str(symbol).upper()}"] = p
+    gateway = _KOTAK_GATEWAYS.get(user_id)
+    if gateway and gateway.status().get("authenticated"):
+        result = await asyncio.to_thread(gateway.positions)
+        if result.get("ok"):
+            for p in _kotak_position_items(result.get("response")):
+                symbol = _kotak_first(p, ["trdSym", "trading_symbol", "tradingSymbol", "symbol"])
+                qty = _kotak_first(p, ["netQty", "net_quantity", "quantity", "qty"])
+                try:
+                    qty_i = int(float(qty or 0))
+                except Exception:
+                    qty_i = 0
+                if symbol and qty_i != 0:
+                    exchange = _kotak_first(p, ["exSeg", "exchange_segment", "exchange"]) or "NSE"
+                    out[_instrument_key(str(exchange).upper(), str(symbol).upper(), None)] = p
+                    out[f"SYMBOL:{str(symbol).upper()}"] = p
+    return out
+
+
+async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[str, int]:
+    gateway = _KOTAK_GATEWAYS.get(user_id)
+    has_kotak = bool(gateway and gateway.status().get("authenticated"))
+    if not kite and not has_kotak:
+        return {"checked": 0, "broker_positions": 0, "marked_broker_not_found": 0, "reason": "no_broker_connected"}
+    broker_positions = await _live_broker_position_symbols(user_id, kite)
+    rows = await db.strategy_positions.find({
+        "user_id": user_id,
+        "mode": "live",
+        "status": {"$in": ["OPEN", "EXITING"]},
+    }, {"_id": 0}).to_list(500)
+    marked = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        symbol = str(row.get("trading_symbol") or row.get("symbol") or "").upper()
+        key = row.get("instrument_key")
+        if key not in broker_positions and f"SYMBOL:{symbol}" not in broker_positions:
+            if row.get("status") == "EXITING":
+                await _close_strategy_position_record(
+                    row,
+                    exit_price=float(row.get("exit_price") or row.get("average_buy_price") or 0),
+                    reason="broker-position-closed",
+                )
+                marked += 1
+                continue
+            res = await db.strategy_positions.update_one(
+                {"id": row["id"], "user_id": user_id},
+                {"$set": {
+                    "status": "BROKER_NOT_FOUND",
+                    "broker_sync_note": "Broker has no matching net position; app position marked stale.",
+                    "updated_at": now,
+                }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+            )
+            marked += res.modified_count
+    return {"checked": len(rows), "broker_positions": len(broker_positions), "marked_broker_not_found": marked}
+
+
+def _broker_position_quantity(row: Dict[str, Any]) -> int:
+    value = row.get("quantity")
+    if value is None:
+        value = _kotak_first(row, ["netQty", "net_quantity", "qty"])
+    try:
+        return abs(int(float(value or 0)))
+    except Exception:
+        return 0
+
+
+async def _assert_broker_has_position_quantity(user_id: str, kite, exchange: str, symbol: str, qty: int) -> None:
+    positions = await _live_broker_position_symbols(user_id, kite)
+    row = positions.get(_instrument_key(exchange, symbol, None)) or positions.get(f"SYMBOL:{symbol.upper()}")
+    broker_qty = _broker_position_quantity(row or {})
+    if broker_qty < int(qty or 0):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Broker position quantity mismatch for {symbol}: broker has {broker_qty}, QuantG wants to sell {qty}. Run Sync with Broker before retrying.",
+        )
 
 
 @api.get("/orders")
-async def list_orders(user=Depends(get_current_user)):
+async def list_orders(include_stale: bool = False, user=Depends(get_current_user)):
     """Local order log + live broker orders (merged) so users see EVERY status."""
     kite, _ = await get_user_kite(user["id"])
     if kite:
         await _sync_kite_order_statuses(user["id"], kite)
         await _stale_local_open_orders(user["id"], kite)
     await _sync_kotak_order_statuses(user["id"])
-    rows = await db.orders.find({"user_id": user["id"]},
+    await _sync_strategy_positions_with_broker(user["id"], kite)
+    order_query: Dict[str, Any] = {"user_id": user["id"]}
+    if not include_stale:
+        order_query["status"] = {"$nin": list(STALE_ORDER_STATUSES)}
+        order_query["visibility"] = {"$ne": "hidden"}
+    rows = await db.orders.find(order_query,
                                 {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     # Add live Kite orders not already represented locally.
     if kite:
@@ -3168,6 +4179,35 @@ async def list_positions(user=Depends(get_current_user)):
         cached = await db.kite_positions_cache.find_one({"user_id": user["id"]}, {"_id": 0})
         if cached:
             return [{**p, "stale": True, "cached_at": cached.get("cached_at")} for p in cached.get("positions", [])]
+    if not settings.get("paper_mode", True) and settings.get("execution_broker") == "kotak_neo":
+        gateway = _KOTAK_GATEWAYS.get(user["id"])
+        if gateway and gateway.status().get("authenticated"):
+            result = await asyncio.to_thread(gateway.positions)
+            if result.get("ok"):
+                out = []
+                for p in _kotak_position_items(result.get("response")):
+                    qty = _kotak_first(p, ["netQty", "net_quantity", "quantity", "qty"])
+                    try:
+                        qty_i = int(float(qty or 0))
+                    except Exception:
+                        qty_i = 0
+                    if qty_i == 0:
+                        continue
+                    avg = float(_kotak_first(p, ["avgPrc", "averagePrice", "average_price", "avg_price"]) or 0)
+                    ltp = float(_kotak_first(p, ["ltp", "last_price", "lastTradedPrice"]) or avg or 0)
+                    out.append({
+                        "symbol": _kotak_first(p, ["trdSym", "trading_symbol", "tradingSymbol", "symbol"]) or "-",
+                        "qty": qty_i,
+                        "avg_price": round(avg, 2),
+                        "ltp": round(ltp, 2),
+                        "pnl": round(float(_kotak_first(p, ["pnl", "unrealisedPnl", "unrealized_pnl"]) or ((ltp - avg) * qty_i)), 2),
+                        "product": _kotak_first(p, ["prod", "product"]),
+                        "exchange": _kotak_first(p, ["exSeg", "exchange_segment", "exchange"]) or "MCX",
+                        "mode": "live",
+                        "broker": "kotak_neo",
+                    })
+                if out:
+                    return out
     # Paper / fallback
     rows = await db.positions.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
     out = []
@@ -3363,7 +4403,11 @@ async def orders_ws(websocket: WebSocket):
                 await _sync_kite_order_statuses(user["id"], kite)
                 await _stale_local_open_orders(user["id"], kite)
             await _sync_kotak_order_statuses(user["id"])
-            rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
+            rows = await db.orders.find({
+                "user_id": user["id"],
+                "status": {"$nin": list(STALE_ORDER_STATUSES)},
+                "visibility": {"$ne": "hidden"},
+            }, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
             await websocket.send_json({
                 "type": "orders",
                 "server_time_ist": (datetime.now(timezone.utc) + IST_OFFSET).isoformat(),
@@ -3389,6 +4433,7 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             _sync_option_ledger_strategy(row)
             ledger_row = option_ledger.snapshot().get(row["id"], {})
         active_position = ledger_row.get("active_position")
+        visual_risk = ((row.get("visual_config") or {}).get("risk") or {})
         strategies_page_data.append({
             "strategy_id": row["id"],
             "name": row.get("name"),
@@ -3405,7 +4450,10 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             "trail_step_pct": round(float(ledger_row.get("trail_step_pct") or 0) * 100, 2),
             "cooldown_minutes": ledger_row.get("cooldown_minutes"),
             "max_trades_day": ledger_row.get("max_trades_day"),
-            "risk_settings": ledger_row.get("risk_settings", {}),
+            "risk_settings": {**(ledger_row.get("risk_settings", {}) or {}), **visual_risk},
+            "time_exit_minutes": visual_risk.get("time_exit_minutes", 45),
+            "indicator_exit_enabled": visual_risk.get("indicator_exit_enabled", True),
+            "exit_mode": visual_risk.get("exit_mode", "tp_sl_tsl_or_signal"),
             "daily_pnl": ledger_row.get("daily_pnl", {}),
             "re_entry_allowed": ledger_row.get("state", "IDLE") == "IDLE",
             "active_position": active_position,
@@ -3480,6 +4528,7 @@ async def get_user_kite(user_id: str):
 async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
+    neo_fin_key = decrypt_secret(keys.get("api_secret")) if keys else None
     status = kotak_helper.status_from_keys(keys, consumer_key)
     gateway = _KOTAK_GATEWAYS.get(user_id)
     if gateway:
@@ -3490,10 +4539,16 @@ async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
             "gateway": gw_status,
             "reason": None if gw_status.get("authenticated") else (gateway_error or status.get("reason")),
         })
-    required_env = ("KOTAK_MOBILE_NUMBER", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET_KEY")
-    missing_env = [k for k in required_env if not os.environ.get(k)]
+    required_values = {
+        "KOTAK_MOBILE_NUMBER": os.environ.get("KOTAK_MOBILE_NUMBER"),
+        "KOTAK_UCC": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
+        "KOTAK_MPIN": os.environ.get("KOTAK_MPIN"),
+        "KOTAK_TOTP_SECRET_KEY": os.environ.get("KOTAK_TOTP_SECRET_KEY"),
+    }
+    missing_env = [k for k, value in required_values.items() if not value]
     status["env_ready"] = not missing_env
     status["missing_env"] = missing_env
+    status["neo_fin_key_saved"] = bool(neo_fin_key or os.environ.get("KOTAK_NEO_FIN_KEY"))
     return status
 
 
@@ -3502,10 +4557,12 @@ async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[
         return _KOTAK_GATEWAYS[user_id]
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
+    neo_fin_key = decrypt_secret(keys.get("api_secret")) if keys else None
     if not consumer_key:
         return None
     config = {
         "consumer_key": consumer_key,
+        "neo_fin_key": os.environ.get("KOTAK_NEO_FIN_KEY") or neo_fin_key,
         "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER"),
         "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
         "mpin": os.environ.get("KOTAK_MPIN"),
@@ -3672,6 +4729,12 @@ def _is_strategy_blocking_error(message: Optional[str]) -> bool:
         "Strategy entry blocked: duplicate-buy-dropped",
         "Option entry blocked: max-trades-day-reached",
         "Strategy entry blocked: max-trades-day-reached",
+        "Instrument already has active strategy position:",
+        "Strategy already has active position",
+        "Instrument/strategy already reserved",
+        "New BUY blocked",
+        "Duplicate BUY blocked",
+        "Re-entry blocked",
     )
     return not any(text.startswith(prefix) or prefix in text for prefix in non_blocking)
 
@@ -3766,6 +4829,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
     order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
     stale_order_repair = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": "zerodha_not_connected"}
     kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
+    strategy_position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
@@ -3831,7 +4895,7 @@ async def ops_diagnostics(user=Depends(get_current_user)):
             "open_orders": orders_open,
             "paper_positions": positions_count,
         },
-        "order_sync": {**order_sync, **stale_order_repair, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0)},
+        "order_sync": {**order_sync, **stale_order_repair, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0), "strategy_positions_marked": strategy_position_sync.get("marked_broker_not_found", 0)},
         "recovery_plan": recovery_plan,
         "rate_limits": {
             "kite_history_cache_entries": len(_HISTORY_CACHE),
@@ -3858,12 +4922,12 @@ async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_
 @api.post("/ops/orders/sync")
 async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
     kite, status = await get_user_kite(user["id"])
-    if not kite:
-        return {"ok": False, "reason": status.get("reason", "zerodha_not_connected"), "status": status}
     _ORDER_SYNC_CACHE.pop(user["id"], None)
-    sync = await _sync_kite_order_statuses(user["id"], kite)
-    stale = await _stale_local_open_orders(user["id"], kite)
-    return {"ok": True, "sync": sync, "stale": stale}
+    sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0, "reason": status.get("reason", "zerodha_not_connected")}
+    stale = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": status.get("reason", "zerodha_not_connected")}
+    kotak_sync = await _sync_kotak_order_statuses(user["id"])
+    position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
+    return {"ok": True, "sync": sync, "stale": stale, "kotak_sync": kotak_sync, "position_sync": position_sync}
 
 
 @api.post("/ops/auto-recover")
@@ -3874,6 +4938,7 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         _ORDER_SYNC_CACHE.pop(user["id"], None)
         actions.append({"name": "zerodha_order_sync", "result": await _sync_kite_order_statuses(user["id"], kite)})
         actions.append({"name": "stale_order_repair", "result": await _stale_local_open_orders(user["id"], kite)})
+        actions.append({"name": "strategy_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
         ticker_result = await _start_user_ticker(user["id"])
         actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
     else:
@@ -3882,6 +4947,7 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
     kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
     if kotak_gateway and kotak_gateway.status().get("authenticated"):
         actions.append({"name": "kotak_order_sync", "result": await _sync_kotak_order_statuses(user["id"])})
+        actions.append({"name": "kotak_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
         order_feed = await asyncio.to_thread(kotak_gateway.subscribe_order_feed)
         actions.append({"name": "kotak_order_feed", "result": order_feed})
     else:
@@ -4035,6 +5101,20 @@ async def kotak_status(user=Depends(get_current_user)):
     return await get_user_kotak_status(user["id"])
 
 
+@api.get("/kotak/diagnostics")
+async def kotak_diagnostics(user=Depends(get_current_user)):
+    status = await get_user_kotak_status(user["id"])
+    gateway = _KOTAK_GATEWAYS.get(user["id"])
+    order_sync = await _sync_kotak_order_statuses(user["id"]) if gateway else {"checked": 0, "updated": 0}
+    return {
+        "ok": bool(status.get("connected")),
+        "status": status,
+        "order_sync": order_sync,
+        "supported_segments": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"],
+        "commodity_note": "For MCX, use the exact Kotak trading symbol from scrip search, for example a current GOLD/CRUDEOIL futures symbol.",
+    }
+
+
 @api.post("/kotak/login")
 async def kotak_login(user=Depends(get_current_user)):
     gateway = await get_user_kotak_gateway(user["id"], fresh=True)
@@ -4063,6 +5143,32 @@ async def kotak_subscribe(req: KotakSubscribeReq, user=Depends(get_current_user)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Kotak subscribe failed"))
     return {"ok": True, "status": gateway.status(), "tokens": result.get("tokens", [])}
+
+
+@api.get("/kotak/search-scrip")
+async def kotak_search_scrip(
+    exchange: str = "MCX",
+    symbol: str = "",
+    expiry: Optional[str] = None,
+    option_type: Optional[str] = None,
+    strike_price: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    gateway = await get_user_kotak_gateway(user["id"])
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
+    segment = _kotak_exchange_segment(exchange)
+    result = await asyncio.to_thread(
+        gateway.search_scrip,
+        exchange_segment=segment,
+        symbol=symbol,
+        expiry=expiry,
+        option_type=option_type,
+        strike_price=strike_price,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Kotak scrip search failed"))
+    return {"ok": True, "exchange_segment": segment, "response": result.get("response")}
 
 
 @api.post("/kotak/order-feed/start")
@@ -4479,7 +5585,17 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                     option_ledger.close_position(sid, float(ltp), "broker-position-missing")
                     continue
 
-                exit_reason = "intraday-squareoff-1515" if squareoff_due else option_ledger.exit_signal_for_position(updated or pos)
+                risk_cfg = ((strategy.get("visual_config") or {}).get("risk") or {})
+                time_exit_minutes = int(risk_cfg.get("time_exit_minutes") or 0)
+                time_exit_due = False
+                if time_exit_minutes > 0:
+                    entry_dt = _parse_iso_dt(pos.get("entry_time"))
+                    time_exit_due = bool(entry_dt and (datetime.now(timezone.utc) - entry_dt).total_seconds() >= time_exit_minutes * 60)
+                exit_reason = (
+                    "intraday-squareoff-1515" if squareoff_due
+                    else f"time-exit-{time_exit_minutes}m" if time_exit_due
+                    else option_ledger.exit_signal_for_position(updated or pos)
+                )
                 if not exit_reason:
                     continue
                 logger.info("option engine exit strategy=%s symbol=%s reason=%s", sid, pos["symbol"], exit_reason)
@@ -4544,6 +5660,9 @@ async def startup():
         ("broker_keys", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("strategies", "user_id", {}),
         ("orders", [("user_id", 1), ("created_at", -1)], {}),
+        ("strategy_positions", [("user_id", 1), ("strategy_id", 1), ("status", 1)], {}),
+        ("strategy_positions", "active_instrument_key", {"unique": True, "sparse": True}),
+        ("strategy_positions", "active_strategy_key", {"unique": True, "sparse": True}),
         ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
         ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
     ]

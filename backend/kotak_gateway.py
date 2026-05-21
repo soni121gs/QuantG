@@ -46,6 +46,7 @@ class QuantGNeoGateway:
         self._config = config or {}
         self._environment = self._get("environment", environment)
         self._consumer_key = self._get("consumer_key", env="KOTAK_CONSUMER_KEY")
+        self._neo_fin_key = self._get("neo_fin_key", env="KOTAK_NEO_FIN_KEY")
         self._mobile_number = self._get("mobile_number", env="KOTAK_MOBILE_NUMBER")
         self._ucc = self._get("ucc", env="KOTAK_UCC")
         self._mpin = self._get("mpin", env="KOTAK_MPIN")
@@ -58,6 +59,9 @@ class QuantGNeoGateway:
         self._ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
         self._orders_by_id: Dict[str, Dict[str, Any]] = {}
         self._last_error: Optional[str] = None
+        self._last_order_request: Optional[Dict[str, Any]] = None
+        self._last_order_response: Optional[Any] = None
+        self._last_successful_order_at: Optional[str] = None
         self._lock = threading.RLock()
 
         if NeoAPI is None:
@@ -68,7 +72,12 @@ class QuantGNeoGateway:
             return
 
         try:
-            self._client = NeoAPI(environment=self._environment, consumer_key=self._consumer_key)
+            self._client = NeoAPI(
+                environment=self._environment,
+                access_token=None,
+                neo_fin_key=self._neo_fin_key,
+                consumer_key=self._consumer_key,
+            )
             self._install_callbacks()
         except Exception as exc:
             self._set_error(f"NeoAPI initialization failed: {exc}")
@@ -105,7 +114,13 @@ class QuantGNeoGateway:
                 ucc=str(self._ucc),
                 totp=totp_code,
             )
+            level_one_error = self._response_error(level_one)
+            if level_one_error:
+                return self._failure(f"TOTP login failed: {level_one_error}")
             level_two = self._unlock_trade_session(str(self._mpin))
+            level_two_error = self._response_error(level_two)
+            if level_two_error:
+                return self._failure(f"MPIN validation failed: {level_two_error}")
             with self._lock:
                 self._authenticated = True
                 self._last_error = None
@@ -175,12 +190,88 @@ class QuantGNeoGateway:
             "tag": tag,
             **extra,
         }
+        with self._lock:
+            self._last_order_request = dict(mapped)
+            self._last_order_response = None
         try:
             response = self._client.place_order(**mapped)
+            with self._lock:
+                self._last_order_response = self._compact(response)
+            response_error = self._response_error(response)
+            if response_error:
+                return self._failure(f"Order placement failed: {response_error}")
             logger.info("Kotak Neo order placed symbol=%s side=%s qty=%s", trading_symbol, transaction_type, quantity)
+            with self._lock:
+                self._last_successful_order_at = datetime.now(timezone.utc).isoformat()
+                self._last_error = None
             return {"ok": True, "response": response}
         except Exception as exc:
             return self._failure(f"Order placement failed: {exc}")
+
+    def order_report(self) -> Dict[str, Any]:
+        """Fetch Kotak order book through the SDK for reconciliation."""
+        if self._client is None:
+            return self._failure("NeoAPI client is not initialized")
+        if not self._authenticated:
+            return self._failure("Kotak Neo session is not authenticated")
+        try:
+            if not hasattr(self._client, "order_report"):
+                return self._failure("NeoAPI order_report method not found")
+            response = self._client.order_report()
+            response_error = self._response_error(response)
+            if response_error:
+                return self._failure(f"Order report failed: {response_error}")
+            return {"ok": True, "response": response}
+        except Exception as exc:
+            return self._failure(f"Order report failed: {exc}")
+
+    def positions(self) -> Dict[str, Any]:
+        """Fetch Kotak positions through the SDK."""
+        if self._client is None:
+            return self._failure("NeoAPI client is not initialized")
+        if not self._authenticated:
+            return self._failure("Kotak Neo session is not authenticated")
+        try:
+            if not hasattr(self._client, "positions"):
+                return self._failure("NeoAPI positions method not found")
+            response = self._client.positions()
+            response_error = self._response_error(response)
+            if response_error:
+                return self._failure(f"Positions fetch failed: {response_error}")
+            return {"ok": True, "response": response}
+        except Exception as exc:
+            return self._failure(f"Positions fetch failed: {exc}")
+
+    def search_scrip(
+        self,
+        *,
+        exchange_segment: str,
+        symbol: str = "",
+        expiry: Optional[str] = None,
+        option_type: Optional[str] = None,
+        strike_price: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Search Kotak's scrip master so users can find exact MCX/F&O symbols."""
+        if self._client is None:
+            return self._failure("NeoAPI client is not initialized")
+        if not self._authenticated:
+            return self._failure("Kotak Neo session is not authenticated")
+        try:
+            if not hasattr(self._client, "search_scrip"):
+                return self._failure("NeoAPI search_scrip method not found")
+            response = self._client.search_scrip(
+                exchange_segment=exchange_segment,
+                symbol=symbol,
+                expiry=expiry,
+                option_type=option_type,
+                strike_price=strike_price,
+            )
+            response_error = self._response_error(response)
+            if response_error:
+                return self._failure(f"Scrip search failed: {response_error}")
+            return {"ok": True, "response": response}
+        except Exception as exc:
+            return self._failure(f"Scrip search failed: {exc}")
 
     def subscribe_symbols(self, instrument_tokens: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         """Subscribe to market data ticks for Kotak token dictionaries.
@@ -314,6 +405,9 @@ class QuantGNeoGateway:
                 "order_updates": len(self._orders_by_id),
                 "last_tick_at": last_tick_at,
                 "last_error": self._last_error,
+                "last_order_request": dict(self._last_order_request) if self._last_order_request else None,
+                "last_order_response": self._last_order_response,
+                "last_successful_order_at": self._last_successful_order_at,
             }
 
     def logout(self) -> Dict[str, Any]:
@@ -400,6 +494,42 @@ class QuantGNeoGateway:
         with self._lock:
             self._last_error = prefixed
         logger.error(prefixed)
+
+    def _response_error(self, payload: Any) -> Optional[str]:
+        """Kotak SDK often returns an error dictionary instead of raising."""
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            for key in ("Error", "Error Message", "error", "errMsg", "errorMessage"):
+                value = payload.get(key)
+                if value not in (None, "", [], {}):
+                    return self._compact_text(value)
+            status = str(payload.get("stat") or payload.get("status") or payload.get("State") or "").upper()
+            if status in {"NOT_OK", "FAIL", "FAILED", "ERROR", "REJECTED"}:
+                return self._compact_text(payload.get("message") or payload.get("reason") or payload)
+            for value in payload.values():
+                found = self._response_error(value)
+                if found:
+                    return found
+        if isinstance(payload, list):
+            for item in payload:
+                found = self._response_error(item)
+                if found:
+                    return found
+        return None
+
+    def _compact(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(k): self._compact(v) for k, v in list(value.items())[:50]}
+        if isinstance(value, list):
+            return [self._compact(v) for v in value[:20]]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _compact_text(self, value: Any) -> str:
+        text = str(self._compact(value))
+        return text[:1000]
 
     @staticmethod
     def _mask(value: str) -> str:

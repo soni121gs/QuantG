@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { Bot, Send, Sparkles, User } from "lucide-react";
+import { Bot, Send, Sparkles, User, Wand2 } from "lucide-react";
 
 const SESSION = "default";
 const SUGGESTIONS = [
@@ -14,10 +14,19 @@ export default function AIBot() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [strategies, setStrategies] = useState([]);
+  const [selectedStrategy, setSelectedStrategy] = useState("");
+  const [agentText, setAgentText] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [proposal, setProposal] = useState(null);
   const endRef = useRef(null);
 
   useEffect(() => {
     api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
+    api.get("/strategies").then((r) => {
+      setStrategies(r.data || []);
+      if (r.data?.[0]) setSelectedStrategy(r.data[0].id);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -37,12 +46,81 @@ export default function AIBot() {
     } finally { setBusy(false); }
   };
 
+  const runAgent = async (apply = false) => {
+    if (!selectedStrategy || !agentText.trim() || agentBusy) return;
+    setAgentBusy(true);
+    try {
+      const r = await api.post(`/strategies/${selectedStrategy}/ai-modify`, {
+        instruction: agentText.trim(),
+        apply,
+      });
+      setProposal(r.data);
+      if (apply) {
+        const latest = await api.get("/strategies");
+        setStrategies(latest.data || []);
+      }
+    } catch (e) {
+      setProposal({ ok: false, error: e.response?.data?.detail || e.message });
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)]" data-testid="ai-bot-page">
+    <div className="flex flex-col h-[calc(100vh-130px)] gap-3" data-testid="ai-bot-page">
       <div className="mb-3">
-        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// CLAUDE SONNET 4.5</div>
+        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// GOOGLE AI STUDIO</div>
         <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> QuantBot</h1>
         <p className="text-xs text-[var(--qd-text-2)] mt-1">Your AI trading co-pilot. Ask for strategies, code, or analysis.</p>
+      </div>
+
+      <div className="qd-card p-3" data-testid="ai-agent-controls">
+        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_auto] gap-2 items-end">
+          <div>
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Strategy</label>
+            <select value={selectedStrategy} onChange={(e) => setSelectedStrategy(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-xs text-white font-mono rounded-sm">
+              {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Agent Instruction</label>
+            <input
+              value={agentText}
+              onChange={(e) => setAgentText(e.target.value)}
+              placeholder="Tighten entries, add VWAP filter, reduce false signals..."
+              className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-xs text-white font-mono rounded-sm"
+              data-testid="agent-instruction"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => runAgent(false)} disabled={agentBusy || !selectedStrategy || !agentText.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
+              <Wand2 size={14} /> Preview
+            </button>
+            <button onClick={() => runAgent(true)} disabled={agentBusy || !selectedStrategy || !agentText.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+              Apply
+            </button>
+          </div>
+        </div>
+        {proposal && (
+          <div className="mt-3 border-t border-[var(--qd-border)] pt-3 text-xs font-mono">
+            {proposal.ok === false ? (
+              <div className="text-[var(--qd-loss)]">{proposal.error}</div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-3">
+                <div className="text-[var(--qd-text-2)] whitespace-pre-wrap max-h-28 overflow-y-auto">
+                  {proposal.proposal?.description || "Proposal ready."}
+                  {(proposal.proposal?.notes || []).map((n) => `\n- ${n}`)}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Small label="Applied" value={proposal.applied ? "yes" : "no"} />
+                  <Small label="Signals" value={proposal.validation?.signals ?? 0} />
+                  <Small label="Symbol" value={proposal.validation?.symbol || "-"} />
+                  <Small label="Source" value={proposal.validation?.data_source || "-"} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 qd-card flex flex-col min-h-0">
@@ -105,3 +183,10 @@ const Message = ({ m }) => {
     </div>
   );
 };
+
+const Small = ({ label, value }) => (
+  <div className="border border-[var(--qd-border)] px-2 py-1 rounded-sm min-w-0">
+    <div className="text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="text-white truncate">{value}</div>
+  </div>
+);

@@ -82,7 +82,7 @@ export default function Profile() {
             <div className="text-sm text-[var(--qd-text-2)]">
               {form.paper_mode
                 ? "PAPER — orders are simulated locally. Safe to test strategies."
-                : "LIVE — orders go to your Zerodha account. Real money at risk."}
+                : "LIVE — orders go to your selected execution broker. Real money at risk."}
             </div>
           </div>
         </div>
@@ -249,7 +249,7 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
           <h2 className="font-head text-xl text-white">Go LIVE — Pre-flight Check</h2>
         </div>
         <p className="text-xs text-[var(--qd-text-2)] mb-4">
-          Once enabled, orders go to your real Zerodha account at NSE. Real money at risk.
+          Once enabled, orders go to your selected broker account. Real money at risk.
         </p>
         {loading ? (
           <div className="text-center py-10 font-mono text-sm text-[var(--qd-text-2)]">Running checks...</div>

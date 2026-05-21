@@ -78,6 +78,9 @@ const EngineStrategyCard = ({ row, onSave }) => {
     max_trades_day: row.max_trades_day ?? 2,
     daily_loss_limit: risk.daily_loss_limit ?? 0,
     required_capital: row.required_capital ?? 0,
+    time_exit_minutes: row.time_exit_minutes ?? risk.time_exit_minutes ?? 45,
+    indicator_exit_enabled: row.indicator_exit_enabled ?? risk.indicator_exit_enabled ?? true,
+    exit_mode: row.exit_mode ?? risk.exit_mode ?? "tp_sl_tsl_or_signal",
   });
   const update = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
   const pnl = pos.unrealized_pnl ?? 0;
@@ -125,9 +128,26 @@ const EngineStrategyCard = ({ row, onSave }) => {
           <RuntimeInput label="Cooldown min" value={form.cooldown_minutes} onChange={(v) => update("cooldown_minutes", v)} />
           <RuntimeInput label="Max trades/day" value={form.max_trades_day} onChange={(v) => update("max_trades_day", v)} />
           <RuntimeInput label="Daily loss" value={form.daily_loss_limit} onChange={(v) => update("daily_loss_limit", v)} />
+          <RuntimeInput label="Time exit min" value={form.time_exit_minutes} onChange={(v) => update("time_exit_minutes", v)} />
+          <label className="space-y-1">
+            <span className="block font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Exit mode</span>
+            <select
+              value={form.exit_mode}
+              onChange={(e) => update("exit_mode", e.target.value)}
+              className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-sm px-2 py-1.5 text-xs text-white font-mono"
+            >
+              <option value="tp_sl_tsl_or_signal">TP/SL/Trail + Signal</option>
+              <option value="tp_sl_tsl_only">TP/SL/Trail only</option>
+              <option value="signal_only">Signal only</option>
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-xs font-mono text-[var(--qd-text-2)]">
             <input type="checkbox" checked={form.trailing_sl_enabled} onChange={(e) => update("trailing_sl_enabled", e.target.checked)} />
             Trailing SL
+          </label>
+          <label className="flex items-center gap-2 text-xs font-mono text-[var(--qd-text-2)]">
+            <input type="checkbox" checked={form.indicator_exit_enabled} onChange={(e) => update("indicator_exit_enabled", e.target.checked)} />
+            Signal exit
           </label>
           <button onClick={() => onSave(row.strategy_id, form)} className="border border-[var(--qd-accent)] text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white rounded-sm px-3 py-2 text-xs font-mono uppercase flex items-center justify-center gap-2">
             <Save size={12} /> Save

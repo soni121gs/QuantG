@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
@@ -17,6 +18,9 @@ logger = logging.getLogger("quantg.realtime")
 _TICK_INTERVAL_MINUTES = 5
 _MAX_BARS = 400
 _KITE_WS_ROOT = "wss://ws.kite.trade"
+_KITE_CONNECT_TIMEOUT_SEC = int(os.environ.get("KITE_WS_CONNECT_TIMEOUT_SEC", "60"))
+_KITE_RECONNECT_MAX_TRIES = int(os.environ.get("KITE_WS_RECONNECT_MAX_TRIES", "120"))
+_KITE_RECONNECT_MAX_DELAY = int(os.environ.get("KITE_WS_RECONNECT_MAX_DELAY_SEC", "10"))
 
 
 def _mask_secret(value: str, visible: int = 4) -> str:
@@ -30,6 +34,11 @@ def _mask_secret(value: str, visible: int = 4) -> str:
 def _auth_failure_text(value: Any) -> bool:
     text = str(value or "").lower()
     return any(part in text for part in ("403", "forbidden", "unauthor", "invalid token", "token"))
+
+
+def _handshake_timeout_text(value: Any) -> bool:
+    text = str(value or "").lower()
+    return "opening handshake" in text or "handshake timeout" in text
 
 
 def _safe_ws_response(response: Any) -> Dict[str, Any]:
@@ -235,6 +244,8 @@ class KiteRealtimeTicker:
         self._auth_failed = _auth_failure_text(code) or _auth_failure_text(reason)
         if self._auth_failed:
             self._last_error = f"auth_failed: {self._last_error}; reconnect Zerodha on Broker Keys"
+        elif _handshake_timeout_text(reason):
+            self._last_error = f"{self._last_error}; websocket handshake timeout, restart ticker if it does not reconnect"
         logger.warning(f"Kite realtime websocket error: {code} {reason}")
 
     def _on_reconnect(self, ws, attempts_count: int) -> None:
@@ -282,8 +293,9 @@ class KiteRealtimeTicker:
                     access_token,
                     root=_KITE_WS_ROOT,
                     reconnect=True,
-                    reconnect_max_tries=300,
-                    reconnect_max_delay=10,
+                    reconnect_max_tries=_KITE_RECONNECT_MAX_TRIES,
+                    reconnect_max_delay=_KITE_RECONNECT_MAX_DELAY,
+                    connect_timeout=_KITE_CONNECT_TIMEOUT_SEC,
                 )
                 self._ticker.on_ticks = self._on_ticks
                 self._ticker.on_connect = self._on_connect

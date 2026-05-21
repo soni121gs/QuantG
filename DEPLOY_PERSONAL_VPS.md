@@ -53,15 +53,22 @@ OPTION_LEDGER_PATH=/data/runtime_state.sqlite3
 LIVE_ORDER_MAX_ATTEMPTS=2
 KOTAK_ORDER_MAX_ATTEMPTS=1
 
+# Google AI Studio / Gemini API for QuantBot
+GEMINI_API_KEY=your_google_ai_studio_api_key
+GEMINI_MODEL=gemini-3.5-flash
+GEMINI_TIMEOUT_SEC=20
+
 # Kotak Neo V2 session unlock
 KOTAK_MOBILE_NUMBER=your_registered_mobile
 KOTAK_UCC=your_kotak_client_code
 KOTAK_MPIN=your_mpin
 KOTAK_TOTP_SECRET_KEY=your_totp_secret
+KOTAK_NEO_FIN_KEY=optional_neo_fin_key_if_not_saved_in_broker_keys
 ```
 
 Never change `JWT_SECRET` unless you accept logging in again.
 Never change `CREDENTIAL_ENCRYPTION_KEY` unless you accept saving Zerodha keys again.
+Remove `EMERGENT_LLM_KEY` from old `.env` files. QuantBot now uses `GEMINI_API_KEY`.
 
 ## 4. Deploy Version 8
 
@@ -184,6 +191,15 @@ Then in the app:
 2. Open Broker Keys.
 3. Reconnect Zerodha if you use Zerodha data or execution.
 4. Click Connect Kotak if you use Kotak execution/order feed.
+5. For Kotak commodities, connect Kotak, open Orders, choose `MCX`, search the current Kotak trading symbol, then place the order with `NRML` or `MIS`.
+
+Kotak diagnostic commands after deploy:
+
+```bash
+docker compose exec backend python -c "from neo_api_client import NeoAPI; print('Kotak SDK OK')"
+```
+
+Inside the app, open Broker Keys and Market Hub to check Kotak status and the latest Neo rejection message.
 5. Open Ops Console and run Auto Recover.
 6. Confirm Live Recovery Plan is READY or only has non-blocking market-closed info.
 7. Open Market Hub and check Ticker Quality plus Signal Stack.

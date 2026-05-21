@@ -76,7 +76,9 @@ cat > .env << EOF
 JWT_SECRET=$(openssl rand -base64 32)
 MONGO_URL=mongodb://admin:admin123@mongo:27017
 DB_NAME=quantg
-EMERGENT_LLM_KEY=your-key-here
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash
+GEMINI_TIMEOUT_SEC=20
 
 # Frontend
 REACT_APP_BACKEND_URL=http://${VPS_IP}:8000

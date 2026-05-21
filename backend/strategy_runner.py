@@ -36,6 +36,10 @@ NON_ERROR_ENTRY_BLOCKS = (
     "cooldown-active",
     "duplicate-buy-dropped",
     "max-trades-day-reached",
+    "New BUY blocked",
+    "Duplicate BUY blocked",
+    "Re-entry blocked",
+    "already has active",
 )
 
 
@@ -80,7 +84,13 @@ def _entry_block_reason(exc: Exception) -> str | None:
     detail = str(getattr(exc, "detail", "") or exc)
     if status_code not in (None, 409):
         return None
-    if not any(prefix in detail for prefix in ("Option entry blocked:", "Strategy entry blocked:")):
+    if not any(prefix in detail for prefix in (
+        "Option entry blocked:",
+        "Strategy entry blocked:",
+        "Instrument already has active strategy position:",
+        "Strategy already has active position",
+        "Instrument/strategy already reserved",
+    )):
         return None
     for reason in NON_ERROR_ENTRY_BLOCKS:
         if reason in detail:

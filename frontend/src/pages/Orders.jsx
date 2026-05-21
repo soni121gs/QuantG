@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { api, formatINR } from "../lib/api";
-import { useNavigate } from "react-router-dom";
 import { ShoppingCart } from "lucide-react";
 
 export default function Orders() {
@@ -8,8 +7,10 @@ export default function Orders() {
   const [watch, setWatch] = useState([]);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("ALL");
-  const [form, setForm] = useState({ symbol: "RELIANCE", side: "BUY", qty: 1, order_type: "MARKET", price: "" });
-  const navigate = useNavigate();
+  const [form, setForm] = useState({ symbol: "RELIANCE", exchange: "NSE", side: "BUY", qty: 1, order_type: "MARKET", price: "", product: "MIS" });
+  const [symbolResults, setSymbolResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const load = () => Promise.all([
     api.get("/orders").then((r) => setOrders(r.data)),
@@ -37,6 +38,47 @@ export default function Orders() {
     } catch (e) { alert(e.response?.data?.detail || "Order failed"); }
   };
 
+  const collectKotakSymbols = (node, out = []) => {
+    if (!node || out.length > 20) return out;
+    if (Array.isArray(node)) {
+      node.forEach((x) => collectKotakSymbols(x, out));
+      return out;
+    }
+    if (typeof node === "object") {
+      const symbol = node.trdSym || node.trading_symbol || node.tradingSymbol || node.symbol || node.pSymbolName || node.ts;
+      if (symbol && !out.some((x) => x.symbol === symbol)) {
+        out.push({ symbol, token: node.instrument_token || node.instrumentToken || node.token || node.tk });
+      }
+      Object.values(node).forEach((x) => collectKotakSymbols(x, out));
+    }
+    return out;
+  };
+
+  const searchKotakSymbol = async () => {
+    if (!form.symbol.trim()) return;
+    setSearching(true);
+    try {
+      const r = await api.get("/kotak/search-scrip", { params: { exchange: form.exchange, symbol: form.symbol.trim() } });
+      setSymbolResults(collectKotakSymbols(r.data.response).slice(0, 10));
+    } catch (e) {
+      alert(e.response?.data?.detail || "Kotak search failed");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const syncBroker = async () => {
+    setSyncing(true);
+    try {
+      await api.post("/ops/orders/sync");
+      await load();
+    } catch (e) {
+      alert(e.response?.data?.detail || "Broker sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div className="space-y-4" data-testid="orders-page">
       <div className="flex items-center justify-between">
@@ -44,9 +86,14 @@ export default function Orders() {
           <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// EXECUTION</div>
           <h1 className="font-head text-3xl font-bold text-white mt-1">Orders</h1>
         </div>
-        <button onClick={() => setOpen(true)} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center gap-2" data-testid="place-order-btn">
-          <ShoppingCart size={14} /> Place Order
-        </button>
+        <div className="flex gap-2">
+          <button onClick={syncBroker} disabled={syncing} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] disabled:opacity-50 text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm">
+            Sync with Broker
+          </button>
+          <button onClick={() => setOpen(true)} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center gap-2" data-testid="place-order-btn">
+            <ShoppingCart size={14} /> Place Order
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -80,7 +127,7 @@ export default function Orders() {
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Exch</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Status</th>
               </tr>
             </thead>
             <tbody className="font-mono">
@@ -88,6 +135,7 @@ export default function Orders() {
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "—"}</td>
                   <td className="px-4 py-2.5 text-white">{o.symbol}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.exchange || "-"}</td>
                   <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                   <td className="px-4 py-2.5">{o.qty}</td>
                   <td className="px-4 py-2.5">{formatINR(o.price)}</td>
@@ -109,12 +157,60 @@ export default function Orders() {
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="qd-card w-full max-w-md p-6 space-y-3" data-testid="order-modal">
             <h2 className="font-head text-xl text-white">Place Order</h2>
-            <div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Exchange</label>
+                <select
+                  value={form.exchange}
+                  onChange={(e) => {
+                    const exchange = e.target.value;
+                    setSymbolResults([]);
+                    setForm({
+                      ...form,
+                      exchange,
+                      product: ["MCX", "NFO", "BFO", "CDS"].includes(exchange) ? "NRML" : form.product,
+                      symbol: ["NSE", "BSE"].includes(exchange) ? (watch[0]?.symbol || "RELIANCE") : "",
+                    });
+                  }}
+                  className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm"
+                  data-testid="order-exchange"
+                >
+                  {["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"].map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Product</label>
+                <select value={form.product} onChange={(e) => setForm({ ...form, product: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-product">
+                  {["MIS", "CNC", "NRML"].map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className={["NSE", "BSE"].includes(form.exchange) ? "" : "hidden"}>
               <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
-              <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol">
+              <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid={["NSE", "BSE"].includes(form.exchange) ? "order-symbol" : "order-symbol-watch-hidden"}>
                 {watch.map((s) => <option key={s.symbol} value={s.symbol}>{`${s.symbol} — ₹${formatINR(s.price)}`}</option>)}
               </select>
             </div>
+            {!["NSE", "BSE"].includes(form.exchange) && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
+                <div className="flex gap-2 mt-1">
+                  <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} placeholder="Exact Kotak trading symbol" className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol" />
+                  <button type="button" onClick={searchKotakSymbol} disabled={searching || !form.symbol.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+                    Search
+                  </button>
+                </div>
+                {symbolResults.length > 0 && (
+                  <div className="mt-2 max-h-28 overflow-y-auto border border-[var(--qd-border)] rounded-sm">
+                    {symbolResults.map((r) => (
+                      <button key={`${r.symbol}-${r.token || ""}`} type="button" onClick={() => setForm({ ...form, symbol: r.symbol })} className="w-full text-left px-3 py-1.5 text-xs font-mono text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface-2)]">
+                        {r.symbol}{r.token ? ` - ${r.token}` : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setForm({ ...form, side: "BUY" })} className={`py-2 font-mono text-xs uppercase rounded-sm ${form.side === "BUY" ? "qd-btn-buy" : "border border-[var(--qd-border)] text-white"}`} data-testid="side-buy">BUY</button>
               <button type="button" onClick={() => setForm({ ...form, side: "SELL" })} className={`py-2 font-mono text-xs uppercase rounded-sm ${form.side === "SELL" ? "qd-btn-sell" : "border border-[var(--qd-border)] text-white"}`} data-testid="side-sell">SELL</button>
