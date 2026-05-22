@@ -5087,8 +5087,13 @@ async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
 
 
 async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[KotakNeoGateway]:
-    if not fresh and user_id in _KOTAK_GATEWAYS:
-        return _KOTAK_GATEWAYS[user_id]
+    cached = _KOTAK_GATEWAYS.get(user_id)
+    if not fresh and cached:
+        cached_status = cached.status()
+        if cached_status.get("initialized") or cached_status.get("state") in {"CLIENT_CREATED", "LOGIN_DONE", "TWO_FA_DONE", "READY"}:
+            return cached
+        logger.info("Dropping uninitialized Kotak gateway from cache for user=%s state=%s", user_id, cached_status.get("state"))
+        _KOTAK_GATEWAYS.pop(user_id, None)
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
     consumer_secret = decrypt_secret(keys.get("api_secret")) if keys else None
@@ -5778,7 +5783,12 @@ async def kotak_diagnostics(user=Depends(get_current_user)):
 
 @api.post("/kotak/login")
 async def kotak_login(user=Depends(get_current_user)):
-    gateway = await get_user_kotak_gateway(user["id"])
+    existing = _KOTAK_GATEWAYS.get(user["id"])
+    existing_status = existing.status() if existing else {}
+    gateway = await get_user_kotak_gateway(
+        user["id"],
+        fresh=bool(existing_status and not existing_status.get("initialized")),
+    )
     if not gateway:
         raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key, Consumer Secret, mobile, MPIN/password, and TOTP secret first.")
     status = gateway.status()

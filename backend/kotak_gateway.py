@@ -90,18 +90,40 @@ class KotakNeoGateway:
         if missing:
             self._set_error(f"Missing Kotak API credentials: {', '.join(missing)}")
             return
+        with self._lock:
+            self._last_error = None
+            self._state = KotakGatewayState.DISCONNECTED
         try:
             logger.info("Kotak Neo creating SDK client environment=%s", self._environment)
-            self._client = NeoAPI(
-                consumer_key=str(self._consumer_key),
-                consumer_secret=str(self._consumer_secret),
-                environment=self._environment,
-                access_token=None,
-            )
+            self._client = self._build_sdk_client()
             self._transition(KotakGatewayState.CLIENT_CREATED, "NeoAPI client created")
             self._install_callbacks()
         except Exception as exc:
             self._set_error(f"NeoAPI initialization failed: {self._friendly_error(exc)}")
+
+    def _build_sdk_client(self):
+        """Create NeoAPI once, tolerating small SDK constructor differences."""
+        attempts = [
+            {
+                "consumer_key": str(self._consumer_key),
+                "consumer_secret": str(self._consumer_secret),
+                "environment": self._environment,
+                "access_token": None,
+            },
+            {
+                "consumer_key": str(self._consumer_key),
+                "consumer_secret": str(self._consumer_secret),
+                "environment": self._environment,
+            },
+        ]
+        errors: List[str] = []
+        for kwargs in attempts:
+            try:
+                return NeoAPI(**kwargs)
+            except TypeError as exc:
+                errors.append(self._friendly_error(exc))
+                continue
+        raise RuntimeError("; ".join(errors) or "NeoAPI constructor rejected QuantG credentials")
 
     def authenticate(self) -> Dict[str, Any]:
         """Run login -> TOTP -> session_2fa before any trading/data call."""
@@ -155,9 +177,14 @@ class KotakNeoGateway:
     def reconnect(self) -> Dict[str, Any]:
         """Safely re-run login on the existing SDK client after session expiry."""
         if self._client is None:
+            previous_error = self._last_error
             self._create_client_once()
         if self._client is None:
-            return self._failure("Cannot reconnect Kotak Neo because the SDK client is not initialized")
+            return {
+                "ok": False,
+                "error": self._last_error or previous_error or "Kotak Neo SDK client could not be created. Check Consumer Key, Consumer Secret, SDK install, and backend logs.",
+                "state": self._state.value,
+            }
         logger.info("Kotak Neo reconnect requested current_state=%s", self._state.value)
         with self._lock:
             self._authenticated = False
