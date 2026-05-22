@@ -4,6 +4,7 @@ import {
   Activity,
   Blocks,
   Bot,
+  CheckCircle2,
   Code2,
   Filter,
   Pause,
