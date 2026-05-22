@@ -20,6 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api, formatINR, pctFmt } from "../lib/api";
+import { useExecutionState } from "../hooks/useExecutionState";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
@@ -176,6 +177,7 @@ const MarketRow = ({ item }) => (
 );
 
 export default function Dashboard() {
+  const { positions: execPositions, orders: execOrders, refresh: refreshExecution } = useExecutionState({ pollMs: 4000 });
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -188,19 +190,18 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [p, w, ps, o, f, t, c] = await Promise.all([
+      const [p, w, f, t, c] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
-        api.get("/positions"),
-        api.get("/orders"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
         api.get("/market/commodities"),
       ]);
+      await refreshExecution();
       setPf(p.data);
       setWatch(w.data);
-      setPositions(ps.data);
-      setOrders(o.data || []);
+      setPositions(execPositions);
+      setOrders(execOrders);
       setFunds(f.data);
       setTelemetry(t.data);
       setCommodities(c.data || []);
@@ -208,7 +209,12 @@ export default function Dashboard() {
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
     }
-  }, []);
+  }, [execPositions, execOrders, refreshExecution]);
+
+  useEffect(() => {
+    setPositions(execPositions);
+    setOrders(execOrders);
+  }, [execPositions, execOrders]);
 
   useEffect(() => {
     load();
@@ -384,6 +390,11 @@ export default function Dashboard() {
               ))}
             </div>
             <div className="mt-4 divide-y divide-[var(--qd-border)]">
+              {strategies.filter((row) => row.active_position?.symbol).slice(0, 3).map((row) => (
+                <EngineStrategyCard key={row.strategy_id} row={row} onSave={saveRuntimeSettings} />
+              ))}
+            </div>
+            <div className="mt-2 divide-y divide-[var(--qd-border)]">
               {strategies.slice(0, 5).map((row) => {
                 const pos = row.active_position || {};
                 const pnl = pos.unrealized_pnl ?? row.daily_pnl?.realised_pnl ?? 0;
@@ -393,6 +404,8 @@ export default function Dashboard() {
                       <div className="truncate text-sm font-semibold text-white">{row.name}</div>
                       <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
                         {pos.symbol || "No active position"}
+                        {pos.target_price ? ` · TP ${money(pos.target_price)}` : ""}
+                        {pos.stoploss_price ? ` · SL ${money(pos.stoploss_price)}` : ""}
                       </div>
                     </div>
                     <StatusPill tone={row.state === "OPEN" ? "good" : row.state === "COOLDOWN" ? "warn" : row.state === "DISABLED" ? "bad" : "neutral"}>
@@ -530,16 +543,22 @@ export default function Dashboard() {
                   <th className="px-4 py-3">Qty</th>
                   <th className="px-4 py-3">Avg</th>
                   <th className="px-4 py-3">LTP</th>
+                  <th className="px-4 py-3">Target</th>
+                  <th className="px-4 py-3">Stop</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">P&L</th>
                 </tr>
               </thead>
               <tbody className="font-mono">
-                {positions.map((p) => (
-                  <tr key={p.symbol} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
+                {positions.filter((p) => p.qty).map((p) => (
+                  <tr key={`${p.symbol}-${p.strategy_id || ""}`} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
                     <td className="px-4 py-3 font-semibold text-white">{p.symbol}</td>
                     <td className="px-4 py-3 text-[var(--qd-text-2)]">{p.qty}</td>
                     <td className="px-4 py-3 text-[var(--qd-text-2)]">{money(p.avg_price)}</td>
                     <td className="px-4 py-3 text-[var(--qd-text-2)]">{money(p.ltp)}</td>
+                    <td className="px-4 py-3 text-[var(--qd-profit)]">{p.take_profit != null ? money(p.take_profit) : "—"}</td>
+                    <td className="px-4 py-3 text-[var(--qd-loss)]">{p.stop_loss != null ? money(p.stop_loss) : "—"}</td>
+                    <td className="px-4 py-3 text-[10px] uppercase text-[var(--qd-warn)]">{p.execution_status || p.ledger_status || "—"}</td>
                     <td className={`px-4 py-3 text-right font-semibold ${toneClass(p.pnl)}`}>{money(p.pnl)}</td>
                   </tr>
                 ))}

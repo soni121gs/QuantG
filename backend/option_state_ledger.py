@@ -24,6 +24,13 @@ STATE_OPEN = "OPEN"
 STATE_COOLDOWN = "COOLDOWN"
 STATE_DISABLED = "DISABLED"
 
+POSITION_PENDING = "PENDING"
+POSITION_FILLED = "FILLED"
+POSITION_CLOSED = "CLOSED"
+
+SIDE_LONG = "LONG"
+SIDE_SHORT = "SHORT"
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -43,6 +50,11 @@ def parse_iso(value: Optional[str]) -> Optional[datetime]:
         return parsed
     except ValueError:
         return None
+
+
+def _normalize_side(value: Optional[str]) -> str:
+    text = str(value or SIDE_LONG).strip().upper()
+    return SIDE_SHORT if text in {SIDE_SHORT, "SHORT", "SELL"} else SIDE_LONG
 
 
 @dataclass(frozen=True)
@@ -123,12 +135,14 @@ class OptionStateLedger:
                     strategy_id TEXT PRIMARY KEY,
                     symbol TEXT NOT NULL,
                     option_type TEXT NOT NULL,
+                    position_side TEXT NOT NULL DEFAULT 'LONG',
                     entry_price REAL NOT NULL,
                     ltp REAL NOT NULL,
                     target_price REAL NOT NULL,
                     stoploss_price REAL NOT NULL,
                     trailing_sl REAL,
                     highest_ltp REAL NOT NULL,
+                    lowest_ltp REAL,
                     quantity INTEGER NOT NULL,
                     status TEXT NOT NULL,
                     entry_time TEXT NOT NULL,
@@ -184,7 +198,14 @@ class OptionStateLedger:
                 );
                 """
             )
+            self._ensure_column(conn, "open_positions", "position_side", "TEXT NOT NULL DEFAULT 'LONG'")
+            self._ensure_column(conn, "open_positions", "lowest_ltp", "REAL")
         logger.info("SQLite option state ledger initialized")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def close(self) -> None:
         self.pool.close()
@@ -288,6 +309,37 @@ class OptionStateLedger:
                 )
             return len(rows)
 
+    @staticmethod
+    def _brackets(
+        entry_price: float,
+        *,
+        target_pct: float,
+        stoploss_pct: float,
+        trailing_enabled: bool,
+        trail_trigger_pct: float,
+        trail_step_pct: float,
+        position_side: str,
+    ) -> tuple[float, float, Optional[float]]:
+        entry = float(entry_price)
+        side = _normalize_side(position_side)
+        if side == SIDE_SHORT:
+            target_price = round(entry * (1 - target_pct), 2)
+            stoploss_price = round(entry * (1 + stoploss_pct), 2)
+            trailing_sl = (
+                round(entry * (1 - trail_trigger_pct + trail_step_pct), 2)
+                if trailing_enabled
+                else None
+            )
+            return target_price, stoploss_price, trailing_sl
+        target_price = round(entry * (1 + target_pct), 2)
+        stoploss_price = round(entry * (1 - stoploss_pct), 2)
+        trailing_sl = (
+            round(entry * (1 + trail_trigger_pct - trail_step_pct), 2)
+            if trailing_enabled
+            else None
+        )
+        return target_price, stoploss_price, trailing_sl
+
     def try_open_position(
         self,
         *,
@@ -296,9 +348,20 @@ class OptionStateLedger:
         option_type: str,
         entry_price: float,
         quantity: int,
+        position_side: str = SIDE_LONG,
+        broker_confirmed: bool = False,
     ) -> LedgerDecision:
+        if broker_confirmed:
+            return self.confirm_position_fill(
+                strategy_id=strategy_id,
+                entry_price=entry_price,
+                quantity=quantity,
+                position_side=position_side,
+                create_if_missing=True,
+            )
         now = utc_now()
         quantity = max(1, int(quantity))
+        side = _normalize_side(position_side)
         with self.pool.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -328,10 +391,19 @@ class OptionStateLedger:
                 if risk and risk["kill_switch_enabled"]:
                     conn.execute("ROLLBACK")
                     return LedgerDecision(False, "kill-switch-enabled", current_state)
-                if current_state == STATE_OPEN:
-                    pos = self._position_for_conn(conn, strategy_id)
+                existing = conn.execute(
+                    "SELECT * FROM open_positions WHERE strategy_id = ?",
+                    (strategy_id,),
+                ).fetchone()
+                if existing:
+                    if existing["status"] == POSITION_PENDING:
+                        conn.execute("ROLLBACK")
+                        return LedgerDecision(False, "pending-entry-exists", current_state, self._row_to_position(existing))
                     conn.execute("ROLLBACK")
-                    return LedgerDecision(False, "duplicate-buy-dropped", current_state, pos)
+                    return LedgerDecision(False, "duplicate-buy-dropped", current_state, self._row_to_position(existing))
+                if current_state == STATE_OPEN:
+                    conn.execute("ROLLBACK")
+                    return LedgerDecision(False, "duplicate-buy-dropped", current_state)
                 if current_state == STATE_COOLDOWN and cooldown_until and cooldown_until > now:
                     conn.execute("ROLLBACK")
                     return LedgerDecision(False, "cooldown-active", current_state)
@@ -352,38 +424,38 @@ class OptionStateLedger:
                     conn.execute("ROLLBACK")
                     return LedgerDecision(False, "daily-loss-limit-hit", current_state)
 
-                target_pct = float(state["target_pct"])
-                stoploss_pct = float(state["stoploss_pct"])
-                trail_trigger_pct = float(state["trail_trigger_pct"])
-                trail_step_pct = float(state["trail_step_pct"])
-                trailing_enabled = bool(state["trailing_sl_enabled"])
-                target_price = round(entry_price * (1 + target_pct), 2)
-                stoploss_price = round(entry_price * (1 - stoploss_pct), 2)
-                trailing_sl = (
-                    round(entry_price * (1 + trail_trigger_pct - trail_step_pct), 2)
-                    if trailing_enabled
-                    else None
+                target_price, stoploss_price, trailing_sl = self._brackets(
+                    entry_price,
+                    target_pct=float(state["target_pct"]),
+                    stoploss_pct=float(state["stoploss_pct"]),
+                    trailing_enabled=bool(state["trailing_sl_enabled"]),
+                    trail_trigger_pct=float(state["trail_trigger_pct"]),
+                    trail_step_pct=float(state["trail_step_pct"]),
+                    position_side=side,
                 )
                 capped_quantity = min(quantity, max(1, int(state["max_lots"])))
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO open_positions (
-                        strategy_id, symbol, option_type, entry_price, ltp,
-                        target_price, stoploss_price, trailing_sl, highest_ltp,
+                        strategy_id, symbol, option_type, position_side, entry_price, ltp,
+                        target_price, stoploss_price, trailing_sl, highest_ltp, lowest_ltp,
                         quantity, status, entry_time
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         strategy_id,
                         symbol,
                         option_type,
+                        side,
                         entry_price,
                         entry_price,
                         target_price,
                         stoploss_price,
                         trailing_sl,
                         entry_price,
+                        entry_price,
                         capped_quantity,
+                        POSITION_PENDING,
                         iso(now),
                     ),
                 )
@@ -392,8 +464,150 @@ class OptionStateLedger:
                     (strategy_id,),
                 )
                 conn.execute("COMMIT")
-                logger.info("option ledger opened strategy=%s symbol=%s qty=%s", strategy_id, symbol, capped_quantity)
-                return LedgerDecision(True, "opened", STATE_OPEN, self.get_active_position(strategy_id))
+                logger.info("option ledger pending strategy=%s symbol=%s side=%s qty=%s", strategy_id, symbol, side, capped_quantity)
+                return LedgerDecision(True, "pending", STATE_OPEN, self.get_active_position(strategy_id))
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def confirm_position_fill(
+        self,
+        *,
+        strategy_id: str,
+        entry_price: Optional[float] = None,
+        quantity: Optional[int] = None,
+        position_side: Optional[str] = None,
+        create_if_missing: bool = False,
+    ) -> LedgerDecision:
+        now = utc_now()
+        with self.pool.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                pos = conn.execute(
+                    "SELECT * FROM open_positions WHERE strategy_id = ?",
+                    (strategy_id,),
+                ).fetchone()
+                state = conn.execute(
+                    "SELECT * FROM strategy_states WHERE strategy_id = ?",
+                    (strategy_id,),
+                ).fetchone()
+                if not pos:
+                    if not create_if_missing:
+                        conn.execute("ROLLBACK")
+                        return LedgerDecision(False, "no-pending-position", state["state"] if state else None)
+                    if state is None:
+                        conn.execute(
+                            "INSERT INTO strategy_states (strategy_id, state, max_lots) VALUES (?, 'IDLE', 1)",
+                            (strategy_id,),
+                        )
+                        state = conn.execute(
+                            "SELECT * FROM strategy_states WHERE strategy_id = ?",
+                            (strategy_id,),
+                        ).fetchone()
+                    side = _normalize_side(position_side or SIDE_LONG)
+                    fill_price = float(entry_price or 0)
+                    fill_qty = max(1, int(quantity or 1))
+                    target_price, stoploss_price, trailing_sl = self._brackets(
+                        fill_price,
+                        target_pct=float(state["target_pct"]),
+                        stoploss_pct=float(state["stoploss_pct"]),
+                        trailing_enabled=bool(state["trailing_sl_enabled"]),
+                        trail_trigger_pct=float(state["trail_trigger_pct"]),
+                        trail_step_pct=float(state["trail_step_pct"]),
+                        position_side=side,
+                    )
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO open_positions (
+                            strategy_id, symbol, option_type, position_side, entry_price, ltp,
+                            target_price, stoploss_price, trailing_sl, highest_ltp, lowest_ltp,
+                            quantity, status, entry_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            strategy_id,
+                            "",
+                            "",
+                            side,
+                            fill_price,
+                            fill_price,
+                            target_price,
+                            stoploss_price,
+                            trailing_sl,
+                            fill_price,
+                            fill_price,
+                            fill_qty,
+                            POSITION_FILLED,
+                            iso(now),
+                        ),
+                    )
+                    conn.execute(
+                        "UPDATE strategy_states SET state='OPEN', cooldown_until=NULL, max_lots=1 WHERE strategy_id=?",
+                        (strategy_id,),
+                    )
+                    conn.execute("COMMIT")
+                    return LedgerDecision(True, "filled", STATE_OPEN, self.get_active_position(strategy_id))
+                if pos["status"] == POSITION_FILLED:
+                    conn.execute("ROLLBACK")
+                    return LedgerDecision(True, "already-filled", STATE_OPEN, self._row_to_position(pos))
+                if pos["status"] == POSITION_CLOSED:
+                    conn.execute("ROLLBACK")
+                    return LedgerDecision(False, "position-closed", state["state"] if state else None)
+
+                side = _normalize_side(position_side or pos["position_side"])
+                fill_price = float(entry_price if entry_price is not None else pos["entry_price"])
+                fill_qty = max(1, int(quantity or pos["quantity"]))
+                if state:
+                    target_price, stoploss_price, trailing_sl = self._brackets(
+                        fill_price,
+                        target_pct=float(state["target_pct"]),
+                        stoploss_pct=float(state["stoploss_pct"]),
+                        trailing_enabled=bool(state["trailing_sl_enabled"]),
+                        trail_trigger_pct=float(state["trail_trigger_pct"]),
+                        trail_step_pct=float(state["trail_step_pct"]),
+                        position_side=side,
+                    )
+                else:
+                    target_price = float(pos["target_price"])
+                    stoploss_price = float(pos["stoploss_price"])
+                    trailing_sl = pos["trailing_sl"]
+
+                conn.execute(
+                    """
+                    UPDATE open_positions SET
+                        position_side=?,
+                        entry_price=?,
+                        ltp=?,
+                        target_price=?,
+                        stoploss_price=?,
+                        trailing_sl=?,
+                        highest_ltp=?,
+                        lowest_ltp=?,
+                        quantity=?,
+                        status=?
+                    WHERE strategy_id=?
+                    """,
+                    (
+                        side,
+                        fill_price,
+                        fill_price,
+                        target_price,
+                        stoploss_price,
+                        trailing_sl,
+                        fill_price,
+                        fill_price,
+                        fill_qty,
+                        POSITION_FILLED,
+                        strategy_id,
+                    ),
+                )
+                conn.execute(
+                    "UPDATE strategy_states SET state='OPEN', cooldown_until=NULL, max_lots=1 WHERE strategy_id=?",
+                    (strategy_id,),
+                )
+                conn.execute("COMMIT")
+                logger.info("option ledger filled strategy=%s side=%s price=%s", strategy_id, side, fill_price)
+                return LedgerDecision(True, "filled", STATE_OPEN, self.get_active_position(strategy_id))
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -414,8 +628,22 @@ class OptionStateLedger:
                 if not state or not pos:
                     conn.execute("ROLLBACK")
                     return LedgerDecision(False, "no-open-position", state["state"] if state else None)
+                if pos["status"] not in {POSITION_FILLED, POSITION_PENDING}:
+                    conn.execute("ROLLBACK")
+                    return LedgerDecision(False, "position-not-active", state["state"])
 
-                pnl = round((float(exit_price) - float(pos["entry_price"])) * int(pos["quantity"]), 2)
+                side = _normalize_side(pos["position_side"])
+                entry = float(pos["entry_price"])
+                exit_val = float(exit_price)
+                qty = int(pos["quantity"])
+                if side == SIDE_SHORT:
+                    pnl = round((entry - exit_val) * qty, 2)
+                else:
+                    pnl = round((exit_val - entry) * qty, 2)
+                conn.execute(
+                    "UPDATE open_positions SET status=?, ltp=? WHERE strategy_id=?",
+                    (POSITION_CLOSED, exit_val, strategy_id),
+                )
                 conn.execute(
                     """
                     INSERT INTO trade_journal (
@@ -428,8 +656,8 @@ class OptionStateLedger:
                         pos["symbol"],
                         pos["option_type"],
                         pos["entry_price"],
-                        exit_price,
-                        pos["quantity"],
+                        exit_val,
+                        qty,
                         pnl,
                         pos["entry_time"],
                         iso(now),
@@ -490,20 +718,31 @@ class OptionStateLedger:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 pos = conn.execute("SELECT * FROM open_positions WHERE strategy_id=?", (strategy_id,)).fetchone()
-                if not pos:
+                if not pos or pos["status"] != POSITION_FILLED:
                     conn.execute("ROLLBACK")
                     return None
                 state = conn.execute("SELECT * FROM strategy_states WHERE strategy_id=?", (strategy_id,)).fetchone()
+                side = _normalize_side(pos["position_side"])
                 highest_ltp = max(float(pos["highest_ltp"]), float(ltp))
+                lowest_ltp = min(float(pos["lowest_ltp"] or pos["entry_price"]), float(ltp))
                 trailing_sl = pos["trailing_sl"]
-                if state and state["trailing_sl_enabled"] and highest_ltp > float(pos["entry_price"]):
-                    candidate = round(highest_ltp * (1 - float(state["trail_step_pct"])), 2)
-                    trailing_sl = max(float(trailing_sl or 0), candidate)
+                if state and state["trailing_sl_enabled"]:
+                    if side == SIDE_SHORT and lowest_ltp < float(pos["entry_price"]):
+                        candidate = round(lowest_ltp * (1 + float(state["trail_step_pct"])), 2)
+                        trailing_sl = min(float(trailing_sl or candidate), candidate)
+                    elif side == SIDE_LONG and highest_ltp > float(pos["entry_price"]):
+                        candidate = round(highest_ltp * (1 - float(state["trail_step_pct"])), 2)
+                        trailing_sl = max(float(trailing_sl or 0), candidate)
                 conn.execute(
-                    "UPDATE open_positions SET ltp=?, highest_ltp=?, trailing_sl=? WHERE strategy_id=?",
-                    (ltp, highest_ltp, trailing_sl, strategy_id),
+                    "UPDATE open_positions SET ltp=?, highest_ltp=?, lowest_ltp=?, trailing_sl=? WHERE strategy_id=?",
+                    (ltp, highest_ltp, lowest_ltp, trailing_sl, strategy_id),
                 )
-                unrealised = round((float(ltp) - float(pos["entry_price"])) * int(pos["quantity"]), 2)
+                entry = float(pos["entry_price"])
+                qty = int(pos["quantity"])
+                if side == SIDE_SHORT:
+                    unrealised = round((entry - float(ltp)) * qty, 2)
+                else:
+                    unrealised = round((float(ltp) - entry) * qty, 2)
                 conn.execute(
                     """
                     INSERT INTO daily_pnl (trade_date, strategy_id, realised_pnl, unrealised_pnl, trades)
@@ -575,7 +814,13 @@ class OptionStateLedger:
 
     def open_positions(self) -> List[Dict[str, Any]]:
         with self.pool.connection() as conn:
-            return [self._row_to_position(row) for row in conn.execute("SELECT * FROM open_positions").fetchall()]
+            return [
+                self._row_to_position(row)
+                for row in conn.execute(
+                    "SELECT * FROM open_positions WHERE status IN (?, ?)",
+                    (POSITION_PENDING, POSITION_FILLED),
+                ).fetchall()
+            ]
 
     def record_market_tick(self, symbol: str, ltp: float, data_source: str, tick_time: Optional[datetime] = None) -> None:
         with self.pool.connection() as conn:
@@ -619,7 +864,17 @@ class OptionStateLedger:
             }
 
     def exit_signal_for_position(self, position: Dict[str, Any]) -> Optional[str]:
+        if position.get("status") != POSITION_FILLED:
+            return None
         ltp = float(position["ltp"])
+        side = _normalize_side(position.get("position_side"))
+        if side == SIDE_SHORT:
+            if ltp <= float(position["target_price"]):
+                return "target-hit"
+            effective_sl = position.get("trailing_sl") or position.get("stoploss_price")
+            if ltp >= float(effective_sl):
+                return "trailing-sl-hit" if position.get("trailing_sl") else "stoploss-hit"
+            return None
         if ltp >= float(position["target_price"]):
             return "target-hit"
         effective_sl = position.get("trailing_sl") or position.get("stoploss_price")
@@ -632,17 +887,26 @@ class OptionStateLedger:
         return self._row_to_position(row) if row else None
 
     def _row_to_position(self, row: sqlite3.Row) -> Dict[str, Any]:
-        unrealized_pnl = round((float(row["ltp"]) - float(row["entry_price"])) * int(row["quantity"]), 2)
+        side = _normalize_side(row["position_side"] if "position_side" in row.keys() else SIDE_LONG)
+        entry = float(row["entry_price"])
+        ltp = float(row["ltp"])
+        qty = int(row["quantity"])
+        if side == SIDE_SHORT:
+            unrealized_pnl = round((entry - ltp) * qty, 2)
+        else:
+            unrealized_pnl = round((ltp - entry) * qty, 2)
         return {
             "strategy_id": row["strategy_id"],
             "symbol": row["symbol"],
             "option_type": row["option_type"],
+            "position_side": side,
             "entry_price": row["entry_price"],
             "ltp": row["ltp"],
             "target_price": row["target_price"],
             "stoploss_price": row["stoploss_price"],
             "trailing_sl": row["trailing_sl"],
             "highest_ltp": row["highest_ltp"],
+            "lowest_ltp": row["lowest_ltp"] if "lowest_ltp" in row.keys() else row["entry_price"],
             "quantity": row["quantity"],
             "status": row["status"],
             "entry_time": row["entry_time"],

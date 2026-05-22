@@ -25,6 +25,8 @@ try:  # pragma: no cover - depends on production dependency install
 except Exception:  # pragma: no cover
     NeoAPI = None
 
+import kite_helper
+
 
 logger = logging.getLogger("quantg.kotak_gateway")
 
@@ -377,7 +379,8 @@ class KotakNeoGateway:
             response_error = self._response_error(response)
             if response_error:
                 return self._failure(f"Positions fetch failed: {response_error}")
-            return {"ok": True, "response": response}
+            normalized = kite_helper.normalize_positions_payload(response, broker="kotak")
+            return {"ok": True, "response": normalized, "raw": response}
         except Exception as exc:
             return self._failure(f"Positions fetch failed: {self._friendly_error(exc)}")
 
@@ -533,6 +536,18 @@ class KotakNeoGateway:
     def latest_orders(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
             return {order_id: dict(order) for order_id, order in self._orders_by_id.items()}
+
+    @staticmethod
+    def normalize_order_report_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = kite_helper.normalize_order_update(item, broker="kotak")
+        order_id = normalized.get("order_id")
+        if order_id:
+            normalized["order_id"] = str(order_id)
+        return normalized
+
+    @staticmethod
+    def normalize_positions_response(payload: Any) -> Dict[str, List[Dict[str, Any]]]:
+        return kite_helper.normalize_positions_payload(payload, broker="kotak")
 
     def status(self) -> Dict[str, Any]:
         with self._lock:

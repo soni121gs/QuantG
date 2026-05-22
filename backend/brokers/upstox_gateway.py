@@ -13,6 +13,8 @@ from urllib.parse import urlencode
 
 import requests
 
+import kite_helper
+
 
 logger = logging.getLogger("quantg.upstox_gateway")
 
@@ -144,10 +146,15 @@ class UpstoxGateway:
         return self._request("DELETE", "/v2/order/cancel", hft=True, params={"order_id": order_id})
 
     def get_order_book(self) -> Dict[str, Any]:
-        return self._request("GET", "/v2/order/retrieve-all")
+        payload = self._request("GET", "/v2/order/retrieve-all")
+        items = order_items(payload)
+        normalized = [kite_helper.normalize_order_update(item, broker="upstox") for item in items]
+        return {"data": normalized, "orders": normalized, "raw": payload}
 
     def get_positions(self) -> Dict[str, Any]:
-        return self._request("GET", "/v2/portfolio/short-term-positions")
+        payload = self._request("GET", "/v2/portfolio/short-term-positions")
+        normalized = kite_helper.normalize_positions_payload(payload, broker="upstox")
+        return {"data": normalized, "net": normalized.get("net") or [], "raw": payload}
 
     def get_market_quote(self, instrument_keys: Iterable[str]) -> Dict[str, Any]:
         keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
@@ -261,6 +268,14 @@ def order_items(payload: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def normalize_positions_response(payload: Any) -> Dict[str, List[Dict[str, Any]]]:
+    return kite_helper.normalize_positions_payload(payload, broker="upstox")
+
+
+def normalize_order_items(payload: Any) -> List[Dict[str, Any]]:
+    return [kite_helper.normalize_order_update(item, broker="upstox") for item in order_items(payload)]
+
+
 def position_items(payload: Any) -> List[Dict[str, Any]]:
     if isinstance(payload, list):
         out: List[Dict[str, Any]] = []
@@ -269,6 +284,11 @@ def position_items(payload: Any) -> List[Dict[str, Any]]:
         return out
     if not isinstance(payload, dict):
         return []
+    if isinstance(payload.get("net"), list):
+        return [row for row in payload["net"] if isinstance(row, dict)]
+    nested = payload.get("data")
+    if isinstance(nested, dict) and isinstance(nested.get("net"), list):
+        return [row for row in nested["net"] if isinstance(row, dict)]
     if any(key in payload for key in ("quantity", "net_quantity", "overnight_quantity")) and any(
         key in payload for key in ("instrument_token", "tradingsymbol", "trading_symbol")
     ):

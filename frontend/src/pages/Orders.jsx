@@ -1,41 +1,61 @@
 import React, { useEffect, useState } from "react";
-import { api, formatINR } from "../lib/api";
-import { ShoppingCart } from "lucide-react";
+import { api, formatINR, formatApiErrorDetail } from "../lib/api";
+import { useExecutionState } from "../hooks/useExecutionState";
+import { ShoppingCart, AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
+
+const OPEN_STATUSES = ["OPEN", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
 
 export default function Orders() {
-  const [orders, setOrders] = useState([]);
+  const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 4000 });
   const [watch, setWatch] = useState([]);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("ALL");
-  const [form, setForm] = useState({ symbol: "RELIANCE", exchange: "NSE", side: "BUY", qty: 1, order_type: "MARKET", price: "", product: "MIS" });
+  const [form, setForm] = useState({
+    symbol: "RELIANCE",
+    exchange: "NSE",
+    side: "BUY",
+    qty: 1,
+    order_type: "MARKET",
+    price: "",
+    product: "MIS",
+    stop_loss: "",
+    take_profit: "",
+  });
   const [symbolResults, setSymbolResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  const load = () => Promise.all([
-    api.get("/orders").then((r) => setOrders(r.data)),
-    api.get("/market/watchlist").then((r) => setWatch(r.data)),
-  ]);
   useEffect(() => {
-    load();
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
+    api.get("/market/watchlist").then((r) => setWatch(r.data)).catch(() => {});
   }, []);
 
   const filtered = orders.filter((o) => {
+    const status = o.execution_status || o.status;
     if (filter === "ALL") return true;
-    if (filter === "OPEN") return ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"].includes(o.status);
-    if (filter === "COMPLETE") return o.status === "COMPLETE";
-    if (filter === "CANCELLED") return ["CANCELLED", "REJECTED"].includes(o.status);
+    if (filter === "OPEN") return OPEN_STATUSES.includes(status);
+    if (filter === "COMPLETE") return status === "COMPLETE";
+    if (filter === "CANCELLED") return ["CANCELLED", "REJECTED"].includes(status);
+    if (filter === "FAILED") return status === "FAILED";
     return true;
   });
 
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/orders", { ...form, qty: +form.qty, price: form.price ? +form.price : null });
-      setOpen(false); load();
-    } catch (e) { alert(e.response?.data?.detail || "Order failed"); }
+      await api.post("/orders", {
+        ...form,
+        qty: +form.qty,
+        price: form.price ? +form.price : null,
+        stop_loss: form.stop_loss ? +form.stop_loss : null,
+        take_profit: form.take_profit ? +form.take_profit : null,
+      });
+      setOpen(false);
+      await refresh();
+      toast.success("Order submitted");
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Order failed");
+    }
   };
 
   const collectKotakSymbols = (node, out = []) => {
@@ -71,9 +91,10 @@ export default function Orders() {
     setSyncing(true);
     try {
       await api.post("/ops/orders/sync");
-      await load();
+      await refresh();
+      toast.success("Broker sync complete");
     } catch (e) {
-      alert(e.response?.data?.detail || "Broker sync failed");
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Broker sync failed");
     } finally {
       setSyncing(false);
     }
@@ -85,6 +106,7 @@ export default function Orders() {
         <div>
           <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// EXECUTION</div>
           <h1 className="font-head text-3xl font-bold text-white mt-1">Orders</h1>
+          <p className="text-xs text-[var(--qd-text-2)] mt-1 font-mono">Broker: {executionBroker}</p>
         </div>
         <div className="flex gap-2">
           <button onClick={syncBroker} disabled={syncing} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] disabled:opacity-50 text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm">
@@ -96,9 +118,16 @@ export default function Orders() {
         </div>
       </div>
 
+      {error && (
+        <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 flex gap-2">
+          <AlertTriangle size={16} className="text-[var(--qd-warn)]" />
+          <span className="text-sm text-[var(--qd-text-2)]">{error}</span>
+        </div>
+      )}
+
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1" data-testid="order-filter">
-          {["ALL", "OPEN", "COMPLETE", "CANCELLED"].map((f) => (
+          {["ALL", "OPEN", "COMPLETE", "CANCELLED", "FAILED"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -107,11 +136,13 @@ export default function Orders() {
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
             >
-              {f} {f !== "ALL" && `· ${orders.filter((o) =>
-                f === "OPEN" ? ["OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"].includes(o.status)
-                : f === "COMPLETE" ? o.status === "COMPLETE"
-                : ["CANCELLED", "REJECTED"].includes(o.status)
-              ).length}`}
+              {f} {f !== "ALL" && `· ${orders.filter((o) => {
+                const status = o.execution_status || o.status;
+                if (f === "OPEN") return OPEN_STATUSES.includes(status);
+                if (f === "COMPLETE") return status === "COMPLETE";
+                if (f === "FAILED") return status === "FAILED";
+                return ["CANCELLED", "REJECTED"].includes(status);
+              }).length}`}
             </button>
           ))}
         </div>
@@ -127,26 +158,29 @@ export default function Orders() {
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Exch</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Seg</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">SL</th><th className="px-4 py-2">TP</th><th className="px-4 py-2">Status</th>
               </tr>
             </thead>
             <tbody className="font-mono">
-              {filtered.map((o) => (
+              {filtered.map((o) => {
+                const status = o.execution_status || o.status;
+                return (
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "—"}</td>
                   <td className="px-4 py-2.5 text-white">{o.symbol}</td>
-                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.exchange || "-"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.segment || o.exchange || "-"}</td>
                   <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                   <td className="px-4 py-2.5">{o.qty}</td>
                   <td className="px-4 py-2.5">{formatINR(o.price)}</td>
-                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.order_type}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-loss)]">{o.stop_loss != null ? formatINR(o.stop_loss) : "—"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.take_profit != null ? formatINR(o.take_profit) : "—"}</td>
                   <td className={`px-4 py-2.5 ${
-                    o.status === "COMPLETE" ? "text-[var(--qd-profit)]" :
-                    ["CANCELLED", "REJECTED"].includes(o.status) ? "text-[var(--qd-loss)]" :
+                    status === "COMPLETE" ? "text-[var(--qd-profit)]" :
+                    status === "FAILED" || ["CANCELLED", "REJECTED"].includes(status) ? "text-[var(--qd-loss)]" :
                     "text-[var(--qd-warn)]"
-                  }`}>{o.status}</td>
+                  }`} title={o.status_message || ""}>{status}</td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table></div>
         )}
@@ -233,6 +267,16 @@ export default function Orders() {
                 <input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-price" />
               </div>
             )}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Stop loss (app)</label>
+                <input type="number" value={form.stop_loss} onChange={(e) => setForm({ ...form, stop_loss: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" />
+              </div>
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Take profit (app)</label>
+                <input type="number" value={form.take_profit} onChange={(e) => setForm({ ...form, take_profit: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" />
+              </div>
+            </div>
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setOpen(false)} className="flex-1 border border-[var(--qd-border)] hover:border-white text-white py-2 text-xs font-mono uppercase rounded-sm">Cancel</button>
               <button type="submit" className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">

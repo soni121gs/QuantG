@@ -32,6 +32,9 @@ def test_duplicate_buy_is_dropped_atomically(tmp_path):
     assert snapshot["state"] == "OPEN"
     assert snapshot["max_lots"] == 1
     assert snapshot["active_position"]["symbol"] == "NIFTY24MAY22000CE"
+    assert snapshot["active_position"]["status"] == "PENDING"
+    assert ledger.confirm_position_fill(strategy_id="s1", entry_price=100.0, quantity=1).accepted
+    assert ledger.snapshot()["s1"]["active_position"]["status"] == "FILLED"
     ledger.close()
 
 
@@ -45,6 +48,7 @@ def test_close_moves_to_cooldown_and_journals_trade(tmp_path):
         option_type="PE",
         entry_price=200.0,
         quantity=1,
+        broker_confirmed=True,
     ).accepted
 
     decision = ledger.close_position("s1", exit_price=230.0, exit_reason="target-hit")
