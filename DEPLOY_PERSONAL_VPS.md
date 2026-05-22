@@ -64,6 +64,13 @@ KOTAK_UCC=your_kotak_client_code
 KOTAK_MPIN=your_mpin
 KOTAK_TOTP_SECRET_KEY=your_totp_secret
 KOTAK_NEO_FIN_KEY=optional_neo_fin_key_if_not_saved_in_broker_keys
+
+# Upstox API v2 OAuth
+UPSTOX_API_KEY=your_upstox_api_key
+UPSTOX_API_SECRET=your_upstox_api_secret
+UPSTOX_REDIRECT_URI=https://yourdomain.com/api/broker/upstox/callback
+UPSTOX_ACCESS_TOKEN=
+UPSTOX_ORDER_MAX_ATTEMPTS=1
 ```
 
 Never change `JWT_SECRET` unless you accept logging in again.

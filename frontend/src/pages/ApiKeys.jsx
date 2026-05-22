@@ -126,7 +126,17 @@ export default function ApiKeys() {
     }
   };
 
+  const connectUpstox = async () => {
+    try {
+      const r = await api.get("/broker/upstox/login");
+      window.location.href = r.data.url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Upstox login URL unavailable");
+    }
+  };
+
   const redirectUrl = `${window.location.origin}/broker-keys?status=success`;
+  const upstoxRedirectUrl = `${window.location.origin}/api/broker/upstox/callback`;
 
   return (
     <div className="space-y-4 max-w-4xl" data-testid="api-keys-page">
@@ -255,6 +265,28 @@ export default function ApiKeys() {
           )}
           <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
             SDK: {upstoxStatus.sdk_available ? "available" : "not installed"} · OAuth, market data, and live routing remain disabled until verified.
+          </div>
+        </div>
+      </div>
+
+      <div className="qd-card p-5" data-testid="upstox-connect-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Connect Upstox OAuth</h2>
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm">
+            <div className={upstoxStatus.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-2)]"}>
+              {upstoxStatus.connected ? "Upstox connected" : upstoxStatus.keys_saved ? "Upstox keys saved. Click Connect Upstox." : "Save Upstox API Key and Secret first."}
+            </div>
+            <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
+              Redirect URL: <span className="text-[var(--qd-profit)] break-all">{upstoxRedirectUrl}</span>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { navigator.clipboard.writeText(upstoxRedirectUrl); toast.success("Copied"); }} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+              Copy URL
+            </button>
+            <button onClick={connectUpstox} disabled={!upstoxStatus.keys_saved} className="bg-[var(--qd-profit)] disabled:opacity-40 text-black hover:opacity-85 px-5 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2">
+              <ExternalLink size={14} /> {upstoxStatus.connected ? "Re-connect Upstox" : "Connect Upstox"}
+            </button>
           </div>
         </div>
       </div>

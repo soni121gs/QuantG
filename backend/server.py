@@ -22,6 +22,7 @@ import bcrypt
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -32,6 +33,8 @@ import kite_helper
 import kotak_helper
 import upstox_helper
 from kotak_gateway import KotakNeoGateway
+from brokers.upstox_gateway import UpstoxGateway, extract_order_id as extract_upstox_order_id
+from brokers import upstox_gateway as upstox_gateway_utils
 import options_helper
 import backtrader_runner
 import strategy_runner
@@ -79,6 +82,7 @@ _RATE_LIMIT_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
+_UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
@@ -274,6 +278,25 @@ class KotakSubscribeReq(BaseModel):
 
 class KotakLoginReq(BaseModel):
     current_otp: Optional[str] = None
+
+
+class UpstoxTestOrderReq(BaseModel):
+    instrument_token: str
+    qty: int = Field(gt=0, description="Quantity must be > 0")
+    side: str
+    order_type: str = "MARKET"
+    price: Optional[float] = None
+    product: str = "I"
+    validity: str = "DAY"
+    trigger_price: Optional[float] = None
+    disclosed_quantity: int = 0
+    is_amo: bool = False
+    market_protection: Optional[float] = -1
+    confirm_live_order: bool = False
+
+
+class UpstoxSubscribeReq(BaseModel):
+    instruments: List[str]
 
 
 class ChatReq(BaseModel):
@@ -2329,6 +2352,17 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
             tick = gateway.latest_tick_by_symbol(symbol.upper())
             if tick and tick.get("ltp"):
                 return float(tick["ltp"])
+    if data_broker == "upstox":
+        gateway = await get_user_upstox_gateway(user_id)
+        token = _upstox_instrument_token(exchange, symbol)
+        if gateway and gateway.connected and token:
+            try:
+                quote = await asyncio.to_thread(gateway.get_market_quote, [token])
+                for item in (quote.get("data") or {}).values():
+                    if isinstance(item, dict) and item.get("last_price") not in (None, ""):
+                        return float(item["last_price"])
+            except Exception as exc:
+                logger.warning("Upstox LTP failed for %s: %s", symbol, exc)
     kite, _ = await get_user_kite(user_id)
     if kite:
         try:
@@ -2344,6 +2378,17 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
             tick = gateway.latest_tick_by_symbol(symbol.upper())
             if tick and tick.get("ltp"):
                 return float(tick["ltp"])
+    if data_broker != "upstox" and settings.get("fallback_broker") == "upstox":
+        gateway = await get_user_upstox_gateway(user_id)
+        token = _upstox_instrument_token(exchange, symbol)
+        if gateway and gateway.connected and token:
+            try:
+                quote = await asyncio.to_thread(gateway.get_market_quote, [token])
+                for item in (quote.get("data") or {}).values():
+                    if isinstance(item, dict) and item.get("last_price") not in (None, ""):
+                        return float(item["last_price"])
+            except Exception:
+                pass
     if not allow_mock:
         return None
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
@@ -2482,6 +2527,123 @@ async def _place_kotak_order(
         "tag": execution_tag,
         "attempts": attempts,
         "trading_symbol": symbol_used,
+    }
+
+
+UPSTOX_EQUITY_INSTRUMENTS = {
+    "RELIANCE": "NSE_EQ|INE002A01018",
+    "TCS": "NSE_EQ|INE467B01029",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "INFY": "NSE_EQ|INE009A01021",
+    "ICICIBANK": "NSE_EQ|INE090A01021",
+    "SBIN": "NSE_EQ|INE062A01020",
+    "AXISBANK": "NSE_EQ|INE238A01034",
+    "ITC": "NSE_EQ|INE154A01025",
+    "LT": "NSE_EQ|INE018A01030",
+    "MARUTI": "NSE_EQ|INE585B01010",
+}
+
+
+def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_token: Any = None) -> Optional[str]:
+    token = str(instrument_token or "").strip()
+    if "|" in token:
+        return token
+    symbol = str(trading_symbol or "").upper().strip()
+    if "|" in symbol:
+        return symbol
+    if (exchange or "").upper() == "NSE":
+        return UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
+    return None
+
+
+def _upstox_first(row: Dict[str, Any], keys: List[str]) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _normalize_upstox_order_status(status: Any) -> Optional[str]:
+    if status in (None, ""):
+        return None
+    text = str(status).strip().upper()
+    mapping = {
+        "COMPLETE": "COMPLETE",
+        "COMPLETED": "COMPLETE",
+        "TRADED": "COMPLETE",
+        "CANCELLED": "CANCELLED",
+        "CANCELED": "CANCELLED",
+        "REJECTED": "REJECTED",
+        "OPEN": "OPEN",
+        "PENDING": "PENDING",
+        "TRIGGER PENDING": "TRIGGER PENDING",
+        "VALIDATION PENDING": "VALIDATION PENDING",
+    }
+    return mapping.get(text, text)
+
+
+async def _place_upstox_order(
+    user_id: str,
+    *,
+    instrument_token: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    product: str,
+    price: Optional[float] = None,
+    tag: Optional[str] = None,
+    validity: str = "DAY",
+    trigger_price: Optional[float] = None,
+    disclosed_quantity: int = 0,
+    is_amo: bool = False,
+    market_protection: Optional[float] = -1,
+) -> Dict[str, Any]:
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Upstox is not configured. Save API key/secret and complete OAuth first.")
+    if not gateway.connected:
+        raise HTTPException(status_code=400, detail="Upstox is not connected. Open /api/broker/upstox/login and complete OAuth.")
+    execution_tag = tag or _new_execution_tag()
+    max_attempts = int(os.environ.get("UPSTOX_ORDER_MAX_ATTEMPTS", "1"))
+    attempts = 0
+    result: Dict[str, Any] = {}
+    last_error = None
+    for attempt in range(1, max(1, max_attempts) + 1):
+        attempts = attempt
+        try:
+            result = await asyncio.to_thread(
+                gateway.place_order,
+                instrument_token=instrument_token,
+                quantity=int(quantity),
+                side=side,
+                order_type=order_type,
+                product=product,
+                price=price,
+                tag=execution_tag,
+                validity=validity,
+                trigger_price=trigger_price,
+                disclosed_quantity=disclosed_quantity,
+                is_amo=is_amo,
+                market_protection=market_protection,
+            )
+            break
+        except Exception as exc:
+            last_error = str(exc)
+            if not OrderExecutionRetry.is_retryable_error(last_error) or attempt >= max_attempts:
+                raise HTTPException(status_code=400, detail=f"Upstox rejected order: {last_error}")
+            retry_cfg = OrderExecutionRetry.retry_config(attempt)
+            await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
+    broker_order_id = extract_upstox_order_id(result)
+    if not broker_order_id:
+        logger.warning("Upstox order response did not include order id: %s", result)
+    return {
+        "broker_order_id": broker_order_id,
+        "raw": result,
+        "tag": execution_tag,
+        "attempts": attempts,
+        "instrument_token": instrument_token,
+        "last_error": last_error,
     }
 
 
@@ -3348,8 +3510,10 @@ def _simulate_paper_brokerage(fill_price: float, quantity: int) -> float:
     return round(brokerage, 2)
 
 
-def _new_execution_tag() -> str:
-    return f"QG{uuid.uuid4().hex[:14]}".upper()
+def _new_execution_tag(strategy_id: Optional[str] = None) -> str:
+    strategy_part = re.sub(r"[^A-Za-z0-9]", "", strategy_id or "MANUAL")[:8] or "MANUAL"
+    trade_part = uuid.uuid4().hex[:8]
+    return f"QG_{strategy_part}_{trade_part}".upper()
 
 
 def _open_order_statuses() -> set:
@@ -3476,10 +3640,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     settings = await get_user_settings(user_id)
     paper = settings.get("paper_mode", True)
     execution_broker = settings.get("execution_broker", "zerodha")
-    if not paper and execution_broker not in {"zerodha", "kotak_neo"}:
+    if not paper and execution_broker not in {"zerodha", "kotak_neo", "upstox"}:
         raise HTTPException(
             status_code=400,
-            detail=f"Live execution through {execution_broker} is not enabled yet. Switch execution broker to zerodha/kotak_neo or use PAPER.",
+            detail=f"Live execution through {execution_broker} is not enabled yet. Switch execution broker to zerodha/kotak_neo/upstox or use PAPER.",
         )
     if not paper and order_type == "MARKET" and not _is_order_market_open(exchange):
         market_name = "MCX" if exchange == "MCX" else "NSE/BSE"
@@ -3520,7 +3684,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         instrument_key = _instrument_key(opt_exchange, opt_symbol, option_contract.get("instrument_token"))
         position_reservation: Optional[Dict[str, Any]] = None
         exit_position_record: Optional[Dict[str, Any]] = None
-        execution_tag = _new_execution_tag()
+        execution_tag = _new_execution_tag(strategy_id)
         execution_attempts = 0
         execution_recovered = False
 
@@ -3590,6 +3754,26 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                         user_id,
                         trading_symbol=opt_symbol,
                         exchange=opt_exchange,
+                        side=opt_side,
+                        quantity=broker_qty,
+                        order_type=order_type,
+                        product=opt_product,
+                        price=price,
+                        tag=execution_tag,
+                    )
+                    broker_order_id = res.get("broker_order_id")
+                    execution_attempts = int(res.get("attempts") or 1)
+                elif execution_broker == "upstox":
+                    upstox_token = _upstox_instrument_token(
+                        opt_exchange,
+                        opt_symbol,
+                        option_contract.get("upstox_instrument_token") or option_contract.get("instrument_token"),
+                    )
+                    if not upstox_token:
+                        raise RuntimeError(f"Upstox instrument token unavailable for {opt_symbol}. Use an Upstox instrument key such as NSE_FO|12345.")
+                    res = await _place_upstox_order(
+                        user_id,
+                        instrument_token=upstox_token,
                         side=opt_side,
                         quantity=broker_qty,
                         order_type=order_type,
@@ -3789,7 +3973,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         position_reservation = None
         exit_position_record = None
         broker_order_id = None
-        execution_tag = _new_execution_tag()
+        execution_tag = _new_execution_tag(strategy_id)
         execution_attempts = 0
         execution_recovered = False
         fill_price = float(price or 0)
@@ -3819,25 +4003,40 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 detail=f"Order value INR {qty * fill_price:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
             )
         if not paper:
-            if execution_broker != "kotak_neo":
+            if execution_broker not in {"kotak_neo", "upstox"}:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"{exchange} exact-symbol orders are enabled only for Kotak Neo execution in this build.",
+                    detail=f"{exchange} exact-symbol orders are enabled only for Kotak Neo or Upstox execution in this build.",
                 )
             if strategy_id and side == "SELL":
                 await _assert_broker_has_position_quantity(user_id, None, exchange, direct_symbol, int(qty or 1))
             try:
-                res = await _place_kotak_order(
-                    user_id,
-                    trading_symbol=direct_symbol,
-                    exchange=exchange,
-                    side=side,
-                    quantity=int(qty or 1),
-                    order_type=order_type,
-                    product=direct_product,
-                    price=price,
-                    tag=execution_tag,
-                )
+                if execution_broker == "upstox":
+                    upstox_token = _upstox_instrument_token(exchange, direct_symbol)
+                    if not upstox_token:
+                        raise RuntimeError("For Upstox exact-symbol orders, pass the Upstox instrument key, e.g. NSE_EQ|INE002A01018.")
+                    res = await _place_upstox_order(
+                        user_id,
+                        instrument_token=upstox_token,
+                        side=side,
+                        quantity=int(qty or 1),
+                        order_type=order_type,
+                        product=direct_product,
+                        price=price,
+                        tag=execution_tag,
+                    )
+                else:
+                    res = await _place_kotak_order(
+                        user_id,
+                        trading_symbol=direct_symbol,
+                        exchange=exchange,
+                        side=side,
+                        quantity=int(qty or 1),
+                        order_type=order_type,
+                        product=direct_product,
+                        price=price,
+                        tag=execution_tag,
+                    )
                 broker_order_id = res.get("broker_order_id")
                 execution_attempts = int(res.get("attempts") or 1)
             except Exception as e:
@@ -3946,7 +4145,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     instrument_key = _instrument_key(equity_exchange, symbol.upper(), None)
     position_reservation = None
     exit_position_record = None
-    execution_tag = _new_execution_tag()
+    execution_tag = _new_execution_tag(strategy_id)
     execution_attempts = 0
     execution_recovered = False
     if strategy_id and side == "BUY":
@@ -3994,6 +4193,22 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     user_id,
                     trading_symbol=symbol.upper(),
                     exchange=equity_exchange,
+                    side=side,
+                    quantity=qty,
+                    order_type=order_type,
+                    product=product,
+                    price=price,
+                    tag=execution_tag,
+                )
+                broker_order_id = res.get("broker_order_id")
+                execution_attempts = int(res.get("attempts") or 1)
+            elif execution_broker == "upstox":
+                upstox_token = _upstox_instrument_token(equity_exchange, symbol.upper())
+                if not upstox_token:
+                    raise RuntimeError(f"Upstox instrument token unavailable for {symbol.upper()}.")
+                res = await _place_upstox_order(
+                    user_id,
+                    instrument_token=upstox_token,
                     side=side,
                     quantity=qty,
                     order_type=order_type,
@@ -4550,6 +4765,79 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
     return {"checked": len(updates), "updated": updated, "report_checked": report_count}
 
 
+async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway or not gateway.connected:
+        return {"checked": 0, "updated": 0, "reason": "upstox_not_connected"}
+    try:
+        report = await asyncio.to_thread(gateway.get_order_book)
+    except Exception as exc:
+        logger.warning("Upstox order book fetch failed: %s", exc)
+        return {"checked": 0, "updated": 0, "reason": str(exc)}
+    items = upstox_gateway_utils.order_items(report)
+    updated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for item in items:
+        order_id = extract_upstox_order_id(item)
+        if not order_id:
+            continue
+        status = _normalize_upstox_order_status(_upstox_first(item, ["status", "order_status"]))
+        set_doc = {
+            "updated_at": now,
+            "status_message": _upstox_first(item, ["status_message", "status_message_raw"]) or status,
+        }
+        if status:
+            set_doc["status"] = status
+        for source_key, target_key in (
+            ("filled_quantity", "filled_qty"),
+            ("pending_quantity", "pending_qty"),
+            ("average_price", "price"),
+        ):
+            value = item.get(source_key)
+            if value not in (None, ""):
+                try:
+                    set_doc[target_key] = float(value) if target_key == "price" else int(float(value))
+                except Exception:
+                    set_doc[target_key] = value
+        res = await db.orders.update_many(
+            {"user_id": user_id, "broker": "upstox", "broker_order_id": str(order_id)},
+            {"$set": set_doc},
+        )
+        updated += res.modified_count
+        if status == "COMPLETE":
+            avg_price = float(set_doc.get("price") or 0)
+            filled_qty = set_doc.get("filled_qty")
+            pos_set = {"status": "OPEN", "updated_at": now}
+            if avg_price > 0:
+                pos_set["average_buy_price"] = avg_price
+            if filled_qty not in (None, ""):
+                pos_set["quantity"] = int(filled_qty)
+                pos_set["open_quantity"] = int(filled_qty)
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": pos_set},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
+                {"_id": 0},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
+        elif status in {"CANCELLED", "REJECTED"}:
+            await db.strategy_positions.update_many(
+                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "OPEN"]}},
+                {"$set": {"status": status, "updated_at": now, "broker_status_message": set_doc.get("status_message")},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+            )
+            exit_positions = await db.strategy_positions.find(
+                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
+                {"_id": 0, "id": 1},
+            ).to_list(20)
+            for pos in exit_positions:
+                await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
+    return {"checked": len(items), "updated": updated}
+
+
 async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     if kite:
@@ -4576,13 +4864,33 @@ async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Di
                     exchange = _kotak_first(p, ["exSeg", "exchange_segment", "exchange"]) or "NSE"
                     out[_instrument_key(str(exchange).upper(), str(symbol).upper(), None)] = p
                     out[f"SYMBOL:{str(symbol).upper()}"] = p
+    upstox_gateway = await get_user_upstox_gateway(user_id)
+    if upstox_gateway and upstox_gateway.connected:
+        try:
+            result = await asyncio.to_thread(upstox_gateway.get_positions)
+            for p in upstox_gateway_utils.position_items(result):
+                token = _upstox_first(p, ["instrument_token", "instrument_key"])
+                symbol = _upstox_first(p, ["tradingsymbol", "trading_symbol", "symbol"]) or token
+                qty = _upstox_first(p, ["quantity", "net_quantity"])
+                try:
+                    qty_i = int(float(qty or 0))
+                except Exception:
+                    qty_i = 0
+                if symbol and qty_i != 0:
+                    exchange = _upstox_first(p, ["exchange"]) or str(token or "").split("|", 1)[0].replace("_EQ", "")
+                    out[_instrument_key(str(exchange).upper(), str(symbol).upper(), token)] = p
+                    out[f"SYMBOL:{str(symbol).upper()}"] = p
+        except Exception as exc:
+            logger.warning("Upstox positions fetch failed: %s", exc)
     return out
 
 
 async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[str, int]:
     gateway = _KOTAK_GATEWAYS.get(user_id)
     has_kotak = bool(gateway and gateway.status().get("authenticated"))
-    if not kite and not has_kotak:
+    upstox_gateway = await get_user_upstox_gateway(user_id)
+    has_upstox = bool(upstox_gateway and upstox_gateway.connected)
+    if not kite and not has_kotak and not has_upstox:
         return {"checked": 0, "broker_positions": 0, "marked_broker_not_found": 0, "reason": "no_broker_connected"}
     broker_positions = await _live_broker_position_symbols(user_id, kite)
     rows = await db.strategy_positions.find({
@@ -4645,6 +4953,7 @@ async def list_orders(include_stale: bool = False, user=Depends(get_current_user
         await _sync_kite_order_statuses(user["id"], kite)
         await _stale_local_open_orders(user["id"], kite)
     await _sync_kotak_order_statuses(user["id"])
+    await _sync_upstox_order_statuses(user["id"])
     await _sync_strategy_positions_with_broker(user["id"], kite)
     order_query: Dict[str, Any] = {"user_id": user["id"]}
     if not include_stale:
@@ -4733,6 +5042,38 @@ async def list_positions(user=Depends(get_current_user)):
                     })
                 if out:
                     return out
+    if not settings.get("paper_mode", True) and settings.get("execution_broker") == "upstox":
+        gateway = await get_user_upstox_gateway(user["id"])
+        if gateway and gateway.connected:
+            try:
+                result = await asyncio.to_thread(gateway.get_positions)
+                out = []
+                for p in upstox_gateway_utils.position_items(result):
+                    qty = _upstox_first(p, ["quantity", "net_quantity"])
+                    try:
+                        qty_i = int(float(qty or 0))
+                    except Exception:
+                        qty_i = 0
+                    if qty_i == 0:
+                        continue
+                    avg = float(_upstox_first(p, ["average_price", "avg_price"]) or 0)
+                    ltp = float(_upstox_first(p, ["last_price", "ltp"]) or avg or 0)
+                    out.append({
+                        "symbol": _upstox_first(p, ["tradingsymbol", "trading_symbol", "symbol"]) or _upstox_first(p, ["instrument_token"]),
+                        "qty": qty_i,
+                        "avg_price": round(avg, 2),
+                        "ltp": round(ltp, 2),
+                        "pnl": round(float(_upstox_first(p, ["pnl", "unrealised_pnl", "unrealized_pnl"]) or ((ltp - avg) * qty_i)), 2),
+                        "product": _upstox_first(p, ["product"]),
+                        "exchange": _upstox_first(p, ["exchange"]),
+                        "mode": "live",
+                        "broker": "upstox",
+                        "instrument_token": _upstox_first(p, ["instrument_token", "instrument_key"]),
+                    })
+                if out:
+                    return out
+            except Exception as exc:
+                logger.warning("Upstox positions fetch failed: %s", exc)
     # Paper / fallback
     rows = await db.positions.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
     out = []
@@ -5121,8 +5462,55 @@ async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
-    api_key = decrypt_secret(keys.get("api_key")) if keys else None
-    return upstox_helper.status_from_keys(keys, api_key)
+    api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
+    api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
+    access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
+    redirect_uri = os.environ.get("UPSTOX_REDIRECT_URI") or (keys or {}).get("redirect_uri")
+    status = upstox_helper.status_from_keys(keys, api_key)
+    gateway = _UPSTOX_GATEWAYS.get(user_id)
+    gateway_status = gateway.status() if gateway else {}
+    missing = [
+        name
+        for name, value in {
+            "UPSTOX_API_KEY": api_key,
+            "UPSTOX_API_SECRET": api_secret,
+            "UPSTOX_REDIRECT_URI": redirect_uri,
+        }.items()
+        if not value
+    ]
+    status.update({
+        "connected": bool(access_token),
+        "authenticated": bool(access_token),
+        "keys_saved": bool(keys or api_key),
+        "api_secret_saved": bool(api_secret),
+        "redirect_uri_ready": bool(redirect_uri),
+        "access_token_saved": bool(access_token),
+        "env_ready": not missing,
+        "missing_env": missing,
+        "reason": None if access_token else ("no_token" if api_key else "no_keys"),
+        "gateway": gateway_status or None,
+    })
+    return status
+
+
+async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional[UpstoxGateway]:
+    if not fresh and user_id in _UPSTOX_GATEWAYS:
+        return _UPSTOX_GATEWAYS[user_id]
+    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
+    api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
+    api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
+    access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
+    redirect_uri = os.environ.get("UPSTOX_REDIRECT_URI") or (keys or {}).get("redirect_uri")
+    if not api_key and not access_token:
+        return None
+    gateway = UpstoxGateway(
+        api_key=api_key,
+        api_secret=api_secret,
+        access_token=access_token,
+        redirect_uri=redirect_uri,
+    )
+    _UPSTOX_GATEWAYS[user_id] = gateway
+    return gateway
 
 
 async def get_user_settings(user_id: str) -> dict:
@@ -5151,12 +5539,18 @@ async def live_readiness(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     data_broker = settings.get("data_broker", "zerodha")
     execution_broker = settings.get("execution_broker", "zerodha")
-    required_brokers = {b for b in (data_broker, execution_broker) if b in {"zerodha", "kotak_neo"}}
+    required_brokers = {b for b in (data_broker, execution_broker) if b in {"zerodha", "kotak_neo", "upstox"}}
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
     kotak_status = await get_user_kotak_status(user["id"])
+    upstox_status = await get_user_upstox_status(user["id"])
     zerodha_required = "zerodha" in required_brokers
     kotak_required = "kotak_neo" in required_brokers
-    required_keys_ok = (not zerodha_required or bool(keys)) and (not kotak_required or bool(kotak_status.get("keys_saved")))
+    upstox_required = "upstox" in required_brokers
+    required_keys_ok = (
+        (not zerodha_required or bool(keys))
+        and (not kotak_required or bool(kotak_status.get("keys_saved")))
+        and (not upstox_required or bool(upstox_status.get("keys_saved")))
+    )
     checks.append({
         "id": "broker_keys",
         "label": "Required broker credentials saved",
@@ -5165,7 +5559,11 @@ async def live_readiness(user=Depends(get_current_user)):
     })
     kite, status = await get_user_kite(user["id"])
     checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
-    required_sessions_ok = (not zerodha_required or bool(status.get("connected"))) and (not kotak_required or bool(kotak_status.get("connected")))
+    required_sessions_ok = (
+        (not zerodha_required or bool(status.get("connected")))
+        and (not kotak_required or bool(kotak_status.get("connected")))
+        and (not upstox_required or bool(upstox_status.get("connected")))
+    )
     checks.append({
         "id": "kite_session",
         "label": "Active selected broker session",
@@ -5178,6 +5576,9 @@ async def live_readiness(user=Depends(get_current_user)):
     if execution_broker == "kotak_neo":
         funds_ok = bool(kotak_status.get("connected"))
         funds_msg = "Kotak connected; live margin check not exposed yet."
+    elif execution_broker == "upstox":
+        funds_ok = bool(upstox_status.get("connected"))
+        funds_msg = "Upstox connected; live margin check not exposed yet."
     elif kite:
         try:
             margins = kite.margins(segment="equity")
@@ -5900,8 +6301,189 @@ async def kotak_start_order_feed(user=Depends(get_current_user)):
     return {"ok": True, "status": gateway.status()}
 
 
+@api.get("/broker/upstox/login")
+async def upstox_login(request: Request, user=Depends(get_current_user)):
+    gateway = await get_user_upstox_gateway(user["id"], fresh=True)
+    if not gateway or not gateway.api_key:
+        raise HTTPException(status_code=400, detail="Save Upstox API key and secret first.")
+    redirect_uri = gateway.redirect_uri or str(request.url_for("upstox_callback"))
+    state = secrets.token_urlsafe(24)
+    await db.broker_oauth_states.insert_one({
+        "state": state,
+        "broker": "upstox",
+        "user_id": user["id"],
+        "redirect_uri": redirect_uri,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    try:
+        url = gateway.build_login_url(state=state, redirect_uri=redirect_uri)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"url": url, "redirect_uri": redirect_uri, "api_key": _mask_secret(gateway.api_key, 6, 0)}
+
+
+@api.get("/broker/upstox/callback", name="upstox_callback")
+async def upstox_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    if error:
+        raise HTTPException(status_code=400, detail=f"Upstox OAuth error: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing Upstox OAuth code/state.")
+    state_doc = await db.broker_oauth_states.find_one({"state": state, "broker": "upstox"}, {"_id": 0})
+    if not state_doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired Upstox OAuth state. Start login again.")
+    user_id = state_doc["user_id"]
+    gateway = await get_user_upstox_gateway(user_id, fresh=True)
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Upstox credentials are not configured for this user.")
+    try:
+        token_response = await asyncio.to_thread(gateway.exchange_code, code=code, redirect_uri=state_doc.get("redirect_uri"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Upstox token exchange failed: {exc}")
+    access_token = token_response.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Upstox token response did not include access_token.")
+    await db.broker_keys.update_one(
+        {"user_id": user_id, "broker": "upstox"},
+        {
+            "$set": {
+                "access_token": encrypt_secret(str(access_token)),
+                "upstox_user_id": token_response.get("user_id"),
+                "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
+                "token_response_meta": {
+                    k: v for k, v in token_response.items()
+                    if k not in {"access_token", "extended_token"}
+                },
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "$setOnInsert": {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "broker": "upstox",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        upsert=True,
+    )
+    await db.broker_oauth_states.delete_one({"state": state, "broker": "upstox"})
+    _UPSTOX_GATEWAYS.pop(user_id, None)
+    return RedirectResponse(url="/broker-keys?upstox=connected", status_code=303)
+
+
+@api.post("/broker/upstox/order/test")
+async def upstox_test_order(req: UpstoxTestOrderReq, user=Depends(get_current_user)):
+    side = req.side.upper()
+    order_type = req.order_type.upper()
+    if side not in {"BUY", "SELL"}:
+        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    if order_type not in {"MARKET", "LIMIT", "SL", "SL-M"}:
+        raise HTTPException(status_code=400, detail="order_type must be MARKET, LIMIT, SL or SL-M")
+    tag = _new_execution_tag()
+    preview = {
+        "instrument_token": req.instrument_token,
+        "quantity": req.qty,
+        "side": side,
+        "order_type": order_type,
+        "product": UpstoxGateway.normalize_product(req.product),
+        "price": req.price,
+        "validity": req.validity,
+        "trigger_price": req.trigger_price,
+        "disclosed_quantity": req.disclosed_quantity,
+        "is_amo": req.is_amo,
+        "market_protection": req.market_protection,
+        "tag": tag,
+    }
+    if not req.confirm_live_order:
+        return {
+            "ok": False,
+            "dry_run": True,
+            "message": "Set confirm_live_order=true to place this real Upstox test order.",
+            "preview": preview,
+        }
+    res = await _place_upstox_order(
+        user["id"],
+        instrument_token=req.instrument_token,
+        side=side,
+        quantity=req.qty,
+        order_type=order_type,
+        product=req.product,
+        price=req.price,
+        tag=tag,
+        validity=req.validity,
+        trigger_price=req.trigger_price,
+        disclosed_quantity=req.disclosed_quantity,
+        is_amo=req.is_amo,
+        market_protection=req.market_protection,
+    )
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "symbol": req.instrument_token,
+        "side": side,
+        "qty": req.qty,
+        "filled_qty": None,
+        "pending_qty": None,
+        "status_message": None,
+        "realised_pnl": 0.0,
+        "order_type": order_type,
+        "price": float(req.price or 0),
+        "brokerage": 0.0,
+        "product": UpstoxGateway.normalize_product(req.product),
+        "status": "OPEN",
+        "mode": "live",
+        "broker": "upstox",
+        "broker_order_id": res.get("broker_order_id"),
+        "execution_tag": tag,
+        "execution_attempts": res.get("attempts"),
+        "source": "manual-upstox-test",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "instrument_token": req.instrument_token,
+    }
+    await db.orders.insert_one(doc)
+    doc.pop("_id", None)
+    doc.pop("user_id", None)
+    return {"ok": True, "order": doc, "broker_response": res.get("raw")}
+
+
+@api.get("/broker/upstox/positions")
+async def upstox_positions(user=Depends(get_current_user)):
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway or not gateway.connected:
+        raise HTTPException(status_code=400, detail="Upstox is not connected.")
+    return await asyncio.to_thread(gateway.get_positions)
+
+
+@api.get("/broker/upstox/orders")
+async def upstox_orders(user=Depends(get_current_user)):
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway or not gateway.connected:
+        raise HTTPException(status_code=400, detail="Upstox is not connected.")
+    return await asyncio.to_thread(gateway.get_order_book)
+
+
+@api.get("/broker/upstox/quote")
+async def upstox_quote(instrument_key: str, user=Depends(get_current_user)):
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway or not gateway.connected:
+        raise HTTPException(status_code=400, detail="Upstox is not connected.")
+    keys = [part.strip() for part in instrument_key.split(",") if part.strip()]
+    return await asyncio.to_thread(gateway.get_market_quote, keys)
+
+
+@api.post("/broker/upstox/market-data/start")
+async def upstox_market_data_start(req: UpstoxSubscribeReq, user=Depends(get_current_user)):
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway or not gateway.connected:
+        raise HTTPException(status_code=400, detail="Upstox is not connected.")
+    return await asyncio.to_thread(gateway.start_market_data_ws, req.instruments)
+
+
 @api.get("/upstox/status")
 async def upstox_status(user=Depends(get_current_user)):
+    return await get_user_upstox_status(user["id"])
+
+
+@api.get("/broker/upstox/status")
+async def broker_upstox_status(user=Depends(get_current_user)):
     return await get_user_upstox_status(user["id"])
 
 
@@ -6355,6 +6937,7 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
                             not tick_status.get("connected") or stale
                         ):
                             await _start_user_ticker(user_id)
+                await _sync_upstox_order_statuses(user_id)
         except Exception as e:
             logger.warning(f"broker reconciliation error: {e}")
         slept = 0
@@ -6449,6 +7032,7 @@ async def startup():
 
     app.state.tick_manager = RealtimeTickManager()
     app.state.kotak_gateways = _KOTAK_GATEWAYS
+    app.state.upstox_gateways = _UPSTOX_GATEWAYS
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
