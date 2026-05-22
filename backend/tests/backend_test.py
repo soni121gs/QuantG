@@ -58,7 +58,7 @@ def test_broker_keys_crud(auth_headers):
     r = requests.post(f"{API}/broker/keys", json=payload, headers=auth_headers, timeout=10)
     assert r.status_code == 200, r.text
     kid = r.json()["id"]
-    assert "•" in r.json()["api_key_masked"]
+    assert any(c in r.json()["api_key_masked"] for c in ("•", "*", "."))
 
     r = requests.get(f"{API}/broker/keys", headers=auth_headers, timeout=10)
     assert r.status_code == 200

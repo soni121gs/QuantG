@@ -27,7 +27,7 @@ def test_duplicate_buy_is_dropped_atomically(tmp_path):
     rejected = [d for d in decisions if not d.accepted]
     assert len(accepted) == 1
     assert len(rejected) == 7
-    assert {d.reason for d in rejected} == {"duplicate-buy-dropped"}
+    assert {d.reason for d in rejected} == {"pending-entry-exists"}
     snapshot = ledger.snapshot()["s1"]
     assert snapshot["state"] == "OPEN"
     assert snapshot["max_lots"] == 1

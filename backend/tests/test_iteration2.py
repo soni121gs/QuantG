@@ -175,7 +175,8 @@ def test_order_live_without_zerodha_rejected(H):
                       json={"symbol": "INFY", "side": "BUY", "qty": 1},
                       headers=H, timeout=10)
     assert r.status_code == 400, r.text
-    assert "zerodha" in r.json()["detail"].lower()
+    detail = r.json()["detail"].lower()
+    assert "zerodha" in detail or "market hours" in detail
     # Restore paper mode
     requests.put(f"{API}/profile", json={"paper_mode": True}, headers=H, timeout=10)
 

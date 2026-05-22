@@ -82,6 +82,10 @@ class MarketTrendAnalyzer:
             direction = 0
             reversal_risk = 0.7
         
+        # Bollinger Bands & MACD Indicators
+        bb = MarketTrendAnalyzer._bollinger_bands(closes)
+        macd = MarketTrendAnalyzer._macd(closes)
+        
         return {
             "trend": trend,
             "strength": round(strength, 2),
@@ -98,6 +102,47 @@ class MarketTrendAnalyzer:
             "reversal_risk": round(reversal_risk, 2),  # 0=low risk, 1=high risk
             "current_price": round(current_price, 2),
             "price_change_pct": round(price_change, 2),
+            "bollinger": bb,
+            "macd": macd,
+        }
+    
+    @staticmethod
+    def _bollinger_bands(closes: List[float], period: int = 20, std_dev: int = 2) -> Dict[str, Any]:
+        if len(closes) < period:
+            return {"sma": 0.0, "upper": 0.0, "lower": 0.0, "width_pct": 0.0}
+        
+        import math
+        chunk = closes[-period:]
+        sma = sum(chunk) / period
+        variance = sum((x - sma) ** 2 for x in chunk) / period
+        std = math.sqrt(variance)
+        
+        upper = sma + (std_dev * std)
+        lower = sma - (std_dev * std)
+        width_pct = ((upper - lower) / sma * 100) if sma else 0.0
+        
+        return {
+            "sma": round(sma, 2),
+            "upper": round(upper, 2),
+            "lower": round(lower, 2),
+            "width_pct": round(width_pct, 2),
+        }
+
+    @staticmethod
+    def _macd(closes: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, Any]:
+        if len(closes) < slow + signal:
+            return {"macd_line": 0.0, "signal_line": 0.0, "histogram": 0.0}
+        
+        ema_fast = MarketTrendAnalyzer._ema(closes, fast)
+        ema_slow = MarketTrendAnalyzer._ema(closes, slow)
+        
+        macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+        signal_line = MarketTrendAnalyzer._ema(macd_line, signal)
+        
+        return {
+            "macd_line": round(macd_line[-1], 2),
+            "signal_line": round(signal_line[-1], 2),
+            "histogram": round(macd_line[-1] - signal_line[-1], 2),
         }
     
     @staticmethod

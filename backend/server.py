@@ -668,44 +668,8 @@ async def health():
     return {"status": "ok", "service": "QuantG API", "version": APP_VERSION}
 
 
-@api.post("/auth/register", response_model=TokenOut)
-async def register(req: RegisterReq):
-    email = req.email.lower().strip()
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user_doc = {
-        "id": str(uuid.uuid4()),
-        "email": email,
-        "name": req.name or email.split("@")[0],
-        "password_hash": hash_password(req.password),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.users.insert_one(user_doc)
-    await seed_default_strategies_for_user(user_doc["id"])
-    token = create_token(user_doc["id"], email)
-    return TokenOut(
-        access_token=token,
-        user=UserOut(id=user_doc["id"], email=email, name=user_doc["name"], created_at=user_doc["created_at"]),
-    )
+# ============== Routes: Auth (extracted to routes/auth.py) ==============
 
-
-@api.post("/auth/login", response_model=TokenOut)
-async def login(req: LoginReq):
-    email = req.email.lower().strip()
-    user = await db.users.find_one({"email": email})
-    if not user or not verify_password(req.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_token(user["id"], email)
-    return TokenOut(
-        access_token=token,
-        user=UserOut(id=user["id"], email=email, name=user.get("name"), created_at=user["created_at"]),
-    )
-
-
-@api.get("/auth/me", response_model=UserOut)
-async def me(user=Depends(get_current_user)):
-    return UserOut(id=user["id"], email=user["email"], name=user.get("name"), created_at=user["created_at"])
 
 
 # ============== Routes: AI Bot ==============
@@ -942,121 +906,8 @@ def _market_score_for_strategy(row: Dict[str, Any], market_by_symbol: Dict[str, 
     }
 
 
-@api.get("/ai/chat/{session_id}")
-async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
-    rows = await db.ai_chats.find(
-        {"user_id": user["id"], "session_id": session_id},
-        {"_id": 0, "user_id": 0, "session_id": 0},
-    ).sort("created_at", 1).to_list(100)
-    return rows
+# ============== Routes: AI Bot (extracted to routes/ai.py) ==============
 
-
-@api.get("/ai/status")
-async def ai_status(user=Depends(get_current_user)):
-    configured = bool(os.environ.get("GEMINI_API_KEY"))
-    return {
-        "provider": "google-ai-studio-rest" if configured else "local-fallback",
-        "model": GEMINI_MODEL if configured else "quantg-local-rules",
-        "gemini_configured": configured,
-        "google_genai_sdk_available": False,
-        "sdk_error": None,
-        "transport": "rest",
-    }
-
-
-@api.post("/ai/chat")
-async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
-    content = req.message.strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="Message is required")
-
-    user_msg = {
-        "id": str(uuid.uuid4()),
-        "role": "user",
-        "content": content,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "user_id": user["id"],
-        "session_id": req.session_id,
-    }
-    recent_messages = await db.ai_chats.find(
-        {"user_id": user["id"], "session_id": req.session_id},
-        {"_id": 0, "role": 1, "content": 1},
-    ).sort("created_at", -1).to_list(8)
-    recent_messages = list(reversed(recent_messages))
-    provider = "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback"
-    reply = await _google_ai_reply(content, recent_messages)
-    if provider == "google-ai-studio" and reply == _quantbot_reply(content):
-        provider = "local-fallback"
-    bot_msg = {
-        "id": str(uuid.uuid4()),
-        "role": "assistant",
-        "content": reply,
-        "provider": provider,
-        "model": GEMINI_MODEL if provider == "google-ai-studio" else "quantg-local-rules",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "user_id": user["id"],
-        "session_id": req.session_id,
-    }
-    await db.ai_chats.insert_many([user_msg, bot_msg])
-    return {k: v for k, v in bot_msg.items() if k not in {"_id", "user_id", "session_id"}}
-
-
-@api.get("/ai/strategy-scores")
-async def ai_strategy_scores(user=Depends(get_current_user)):
-    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(500)
-    market_rows = await watchlist(user=user)
-    commodity_rows = await commodity_watchlist(user=user)
-    market_by_symbol = {r["symbol"]: r for r in [*market_rows, *commodity_rows]}
-    scores = [_market_score_for_strategy(row, market_by_symbol) for row in rows]
-    for score in scores:
-        score["user_id"] = user["id"]
-        await db.strategy_ai_scores.update_one(
-            {"strategy_id": score["strategy_id"], "user_id": user["id"]},
-            {"$set": score},
-            upsert=True,
-        )
-    return {
-        "scores": [{k: v for k, v in score.items() if k != "user_id"} for score in scores],
-        "provider": "gemini-context" if os.environ.get("GEMINI_API_KEY") else "local-market-structure",
-    }
-
-
-@api.get("/ai/market-analysis")
-async def ai_market_analysis(user=Depends(get_current_user)):
-    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(50)
-    market_rows = await watchlist(user=user)
-    commodity_rows = await commodity_watchlist(user=user)
-    scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in [*market_rows, *commodity_rows]}) for row in strategies]
-    prompt = (
-        "Analyze this QuantG market structure snapshot for educational risk context only. "
-        "Mention NIFTY/SENSEX and MCX crude oil/natural gas when relevant. "
-        "Keep it concise and do not promise returns.\n\n"
-        + json.dumps({
-            "market": market_rows[:8],
-            "commodities": commodity_rows,
-            "strategy_scores": scores[:12],
-        }, default=str)[:9000]
-    )
-    return {
-        "provider": "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback",
-        "content": await _google_ai_reply(prompt, []),
-        "scores": scores,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@api.get("/ai/training-context")
-async def ai_training_context(user=Depends(get_current_user)):
-    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(200)
-    recent_scores = await db.strategy_ai_scores.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("generated_at", -1).to_list(100)
-    return {
-        "purpose": "Context-feed payload for Gemini prompts and offline fine-tuning experiments.",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "market": await watchlist(user=user),
-        "commodities": await commodity_watchlist(user=user),
-        "strategies": [_strategy_out(row).model_dump() for row in strategies],
-        "recent_ai_scores": recent_scores,
-    }
 
 
 # ============== Routes: Broker keys ==============
@@ -2544,7 +2395,7 @@ async def _place_kotak_order(
                 price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
                 quantity=int(quantity),
                 trading_symbol=candidate,
-                transaction_type=_kotak_transaction_type(side),
+                transaction_type=_kotak_transaction_type(side.upper()),
                 order_type=_kotak_order_type(order_type),
                 tag=execution_tag,
             )
@@ -2716,6 +2567,12 @@ async def _place_upstox_order(
     attempts = 0
     result: Dict[str, Any] = {}
     last_error = None
+
+    # Upstox V2 Mapping: MIS -> I, NRML/CNC -> D
+    normalized_product = "I" if product.upper() in ["MIS", "INTRADAY", "I"] else "D"
+    normalized_side = "BUY" if side.upper() in ["BUY", "B"] else "SELL"
+    normalized_type = order_type.upper()
+
     for attempt in range(1, max(1, max_attempts) + 1):
         attempts = attempt
         try:
@@ -2723,10 +2580,10 @@ async def _place_upstox_order(
                 gateway.place_order,
                 instrument_token=instrument_token,
                 quantity=int(quantity),
-                side=side,
-                order_type=order_type,
-                product=product,
-                price=price,
+                side=normalized_side,
+                order_type=normalized_type,
+                product=normalized_product,
+                price=0 if normalized_type == "MARKET" else price,
                 tag=execution_tag,
                 validity=validity,
                 trigger_price=trigger_price,
@@ -6624,8 +6481,8 @@ async def _start_user_kotak_ticker(user_id: str, symbols: Optional[List[str]] = 
     }
 
 
-@api.get("/ops/diagnostics")
-async def ops_diagnostics(user=Depends(get_current_user)):
+# ============== Routes: Ops Console (extracted to routes/ops.py) ==============
+async def ops_diagnostics(user):
     settings = await get_user_settings(user["id"])
     kite, kite_status = await get_user_kite(user["id"])
     kotak_status = await get_user_kotak_status(user["id"])
@@ -6711,120 +6568,41 @@ async def ops_diagnostics(user=Depends(get_current_user)):
         },
         "errored_strategies": errored,
     }
-
-
-@api.post("/ops/ticker/restart")
-async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user)):
-    settings = await get_user_settings(user["id"])
-    if settings.get("data_broker") == "kotak_neo":
-        return await _start_user_kotak_ticker(user["id"])
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if tick_manager:
-        try:
-            ticker = tick_manager._tickers.get(user["id"])
-            if ticker:
-                ticker.stop()
-        except Exception as e:
-            logger.warning(f"ticker stop from ops failed: {e}")
-    return await _start_user_ticker(user["id"])
-
-
-@api.post("/market/kotak-ticker/start")
-async def market_kotak_ticker_start(req: OpsActionReq = None, user=Depends(get_current_user)):
-    return await _start_user_kotak_ticker(user["id"])
-
-
-@api.post("/ops/orders/sync")
-async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
-    kite, status = await get_user_kite(user["id"])
-    _ORDER_SYNC_CACHE.pop(user["id"], None)
-    sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0, "reason": status.get("reason", "zerodha_not_connected")}
-    stale = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": status.get("reason", "zerodha_not_connected")}
-    kotak_sync = await _sync_kotak_order_statuses(user["id"])
-    position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
-    return {"ok": True, "sync": sync, "stale": stale, "kotak_sync": kotak_sync, "position_sync": position_sync}
-
-
-@api.post("/ops/auto-recover")
-async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_user)):
-    actions: List[Dict[str, Any]] = []
-    kite, kite_status = await get_user_kite(user["id"])
-    if kite:
-        _ORDER_SYNC_CACHE.pop(user["id"], None)
-        actions.append({"name": "zerodha_order_sync", "result": await _sync_kite_order_statuses(user["id"], kite)})
-        actions.append({"name": "stale_order_repair", "result": await _stale_local_open_orders(user["id"], kite)})
-        actions.append({"name": "strategy_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
-        ticker_result = await _start_user_ticker(user["id"])
-        actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
-    else:
-        actions.append({"name": "zerodha_session", "skipped": True, "reason": kite_status.get("reason", "not_connected")})
-
-    kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
-    if kotak_gateway and kotak_gateway.status().get("authenticated"):
-        actions.append({"name": "kotak_order_sync", "result": await _sync_kotak_order_statuses(user["id"])})
-        actions.append({"name": "kotak_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
-        order_feed = await asyncio.to_thread(kotak_gateway.subscribe_order_feed)
-        actions.append({"name": "kotak_order_feed", "result": order_feed})
-        market_feed = await _start_user_kotak_ticker(user["id"])
-        actions.append({"name": "kotak_market_ticker", "result": market_feed})
-    else:
-        actions.append({"name": "kotak_order_feed", "skipped": True, "reason": "not_connected"})
-
-    diagnostics = await ops_diagnostics(user=user)
-    return {"ok": True, "actions": actions, "recovery_plan": diagnostics.get("recovery_plan")}
-
-
-@api.post("/ops/emergency-stop")
-async def ops_emergency_stop(req: OpsActionReq = None, user=Depends(get_current_user)):
-    now = datetime.now(timezone.utc).isoformat()
-    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "id": 1}).to_list(500)
-    for row in strategies:
-        option_ledger.set_kill_switch(True, strategy_id=row["id"])
-    await db.users.update_one({"id": user["id"]}, {"$set": {"paper_mode": True, "ops_last_emergency_stop_at": now}})
-    res = await db.strategies.update_many(
-        {"user_id": user["id"], "status": "live"},
-        {"$set": {"status": "paused", "last_error": f"Emergency stop at {now}: switched to PAPER and paused automation."}},
-    )
-    return {"ok": True, "paper_mode": True, "paused_strategies": res.modified_count, "disabled_strategies": len(strategies), "at": now}
-
-
-@api.post("/ops/strategies/pause-all")
-async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)):
-    res = await db.strategies.update_many(
-        {"user_id": user["id"], "status": "live"},
-        {"$set": {"status": "paused", "last_error": None}},
-    )
-    return {"ok": True, "paused_strategies": res.modified_count}
-
-
-@api.post("/ops/strategies/enable-all")
-async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_current_user)):
-    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
-    for row in rows:
-        _sync_option_ledger_strategy(row)
-        option_ledger.set_kill_switch(False, strategy_id=row["id"])
-    res = await db.strategies.update_many(
-        {"user_id": user["id"]},
-        {"$set": {"status": "live"}, "$unset": {"last_error": "", "last_signal_validation": ""}},
-    )
-    return {"ok": True, "enabled_strategies": res.modified_count, "ledger_enabled": len(rows)}
-
-
-@api.post("/ops/strategies/clear-errors")
-async def ops_clear_strategy_errors(req: OpsActionReq = None, user=Depends(get_current_user)):
-    res = await db.strategies.update_many(
-        {"user_id": user["id"]},
-        {"$unset": {"last_error": "", "last_signal_validation": ""}},
-    )
-    return {"ok": True, "updated_strategies": res.modified_count}
-
-
 # ============== Routes: Ops Console - END ==============
 
 # ============== Routes: Funds ==============
 @api.get("/funds")
 async def funds(user=Depends(get_current_user)):
     """Return broker funds & margins when live, otherwise a paper-money snapshot."""
+    settings = await get_user_settings(user["id"])
+    execution_broker = settings.get("execution_broker", "zerodha")
+    
+    if execution_broker == "upstox":
+        upstox_gw = await get_user_upstox_gateway(user["id"])
+        if upstox_gw and upstox_gw.connected:
+            try:
+                margins_payload = await asyncio.to_thread(upstox_gw.get_margins)
+                if margins_payload and margins_payload.get("status") == "success":
+                    data = margins_payload.get("data", {})
+                    equity = data.get("equity", {})
+                    avail = round(float(equity.get("available_margin") or 0), 2)
+                    used = round(float(equity.get("used_margin") or 0), 2)
+                    payin = round(float(equity.get("payin_amount") or 0), 2)
+                    opening = round(avail + used - payin, 2)
+                    return {
+                        "source": "live",
+                        "available_cash": avail,
+                        "opening_balance": opening,
+                        "intraday_payin": payin,
+                        "used_margin": used,
+                        "m2m_realised": 0.0,
+                        "m2m_unrealised": 0.0,
+                        "span": round(float(equity.get("span_margin") or 0), 2),
+                        "delivery_margin": 0.0,
+                    }
+            except Exception as e:
+                logger.warning(f"Upstox margins fetch failed: {e}")
+
     kite, _ = await get_user_kite(user["id"])
     if kite:
         try:
@@ -7737,6 +7515,15 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
             slept += 1
     logger.info("Broker reconciliation loop stopped")
 
+
+# Include modular routers into api router to ensure /api prefix is preserved
+from routes.auth import router as auth_router
+from routes.ai import router as ai_router
+from routes.ops import router as ops_router
+
+api.include_router(auth_router)
+api.include_router(ai_router)
+api.include_router(ops_router)
 
 # ============== Boot ==============
 app.include_router(api)

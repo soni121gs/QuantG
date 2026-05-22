@@ -34,6 +34,7 @@ class UpstoxGateway:
         redirect_uri: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> None:
+        import threading
         self.access_token = access_token or os.environ.get("UPSTOX_ACCESS_TOKEN")
         self.api_key = api_key or os.environ.get("UPSTOX_API_KEY")
         self.api_secret = api_secret or os.environ.get("UPSTOX_API_SECRET")
@@ -42,6 +43,13 @@ class UpstoxGateway:
         self.last_error: Optional[str] = None
         self.last_request_at: Optional[str] = None
         self.last_order_response: Optional[Any] = None
+        
+        self._ticks_by_token: Dict[str, Dict[str, Any]] = {}
+        self._ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
+        self._subscribed_tokens: List[str] = []
+        self._ws_running = False
+        self._ws_thread = None
+        self._lock = threading.RLock()
 
     @property
     def connected(self) -> bool:
@@ -156,11 +164,41 @@ class UpstoxGateway:
         normalized = kite_helper.normalize_positions_payload(payload, broker="upstox")
         return {"data": normalized, "net": normalized.get("net") or [], "raw": payload}
 
+    def get_margins(self) -> Dict[str, Any]:
+        """Fetch Upstox user available and utilized funds across equity and commodity desks."""
+        return self._request("GET", "/v2/user/get-funds-and-margin")
+
+    def get_option_chain(self, underlying_key: str, expiry_date: str) -> Dict[str, Any]:
+        """Fetch low-latency index Option Chain lookup from Upstox."""
+        return self._request("GET", "/v2/option/chain", params={
+            "instrument_key": underlying_key,
+            "expiry_date": expiry_date,
+        })
+
     def get_market_quote(self, instrument_keys: Iterable[str]) -> Dict[str, Any]:
         keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
         if not keys:
             raise ValueError("At least one Upstox instrument key is required")
-        return self._request("GET", "/v2/market-quote/ltp", params={"instrument_key": keys})
+        res = self._request("GET", "/v2/market-quote/ltp", params={"instrument_key": keys})
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            received_at = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                for token, node in res["data"].items():
+                    if isinstance(node, dict):
+                        ltp = node.get("last_price") or node.get("ltp")
+                        if ltp not in (None, ""):
+                            val = float(ltp)
+                            symbol = token.split("|")[-1] if "|" in token else token
+                            normalized = {
+                                "token": token,
+                                "symbol": symbol,
+                                "ltp": val,
+                                "received_at": received_at,
+                                "raw": node,
+                            }
+                            self._ticks_by_token[token] = normalized
+                            self._ticks_by_symbol[symbol.upper()] = normalized
+        return res
 
     @staticmethod
     def parse_quote_ltp(payload: Any, instrument_key: Optional[str] = None) -> Optional[float]:
@@ -189,15 +227,67 @@ class UpstoxGateway:
                                 pass
         return None
 
+    def latest_tick(self, instrument_token: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            tick = self._ticks_by_token.get(str(instrument_token))
+            return dict(tick) if tick else None
+
+    def latest_tick_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            tick = self._ticks_by_symbol.get(str(symbol).upper())
+            return dict(tick) if tick else None
+
+    def latest_ticks(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return {token: dict(tick) for token, tick in self._ticks_by_token.items()}
+
     def start_market_data_ws(self, instruments: Iterable[str]) -> Dict[str, Any]:
+        """Start high-frequency async REST tracking for active instruments as a highly reliable feed."""
         keys = [str(k).strip() for k in instruments if str(k).strip()]
+        if not keys:
+            return {"ok": False, "reason": "no_instruments_supplied"}
+        
+        with self._lock:
+            self._subscribed_tokens = keys
+            if self._ws_running:
+                return {"ok": True, "started": True, "reused": True, "tokens": len(keys)}
+            self._ws_running = True
+            
+        import threading
+        import time
+        
+        def run_polling():
+            logger.info("Upstox live market feed tracking thread started")
+            while True:
+                with self._lock:
+                    if not self._ws_running:
+                        break
+                    current_tokens = list(self._subscribed_tokens)
+                if not current_tokens:
+                    time.sleep(1)
+                    continue
+                try:
+                    for i in range(0, len(current_tokens), 50):
+                        chunk = current_tokens[i:i+50]
+                        self.get_market_quote(chunk)
+                except Exception as exc:
+                    logger.warning("Upstox market feed polling failed: %s", exc)
+                time.sleep(1.0)
+            logger.info("Upstox live market feed tracking thread stopped")
+
+        self._ws_thread = threading.Thread(target=run_polling, daemon=True)
+        self._ws_thread.start()
         return {
-            "ok": False,
-            "started": False,
-            "reason": "upstox_websocket_not_enabled",
-            "message": "REST adapter is ready. Wire Upstox websocket authorization/feed decoding after live token tests.",
-            "instruments": keys,
+            "ok": True,
+            "started": True,
+            "tokens": len(keys),
+            "feed": "upstox-high-frequency-polling",
         }
+
+    def stop_market_data_ws(self) -> Dict[str, Any]:
+        with self._lock:
+            self._ws_running = False
+        return {"ok": True, "stopped": True}
 
     def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
         if not self.access_token:
