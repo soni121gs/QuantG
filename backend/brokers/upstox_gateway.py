@@ -162,6 +162,33 @@ class UpstoxGateway:
             raise ValueError("At least one Upstox instrument key is required")
         return self._request("GET", "/v2/market-quote/ltp", params={"instrument_key": keys})
 
+    @staticmethod
+    def parse_quote_ltp(payload: Any, instrument_key: Optional[str] = None) -> Optional[float]:
+        if not isinstance(payload, dict):
+            return None
+        data = payload.get("data")
+        if isinstance(data, dict):
+            if instrument_key and instrument_key in data:
+                node = data.get(instrument_key)
+                if isinstance(node, dict):
+                    for field in ("last_price", "ltp", "close", "last_traded_price"):
+                        value = node.get(field)
+                        if value not in (None, ""):
+                            try:
+                                return float(value)
+                            except Exception:
+                                pass
+            for node in data.values():
+                if isinstance(node, dict):
+                    for field in ("last_price", "ltp", "close", "last_traded_price"):
+                        value = node.get(field)
+                        if value not in (None, ""):
+                            try:
+                                return float(value)
+                            except Exception:
+                                pass
+        return None
+
     def start_market_data_ws(self, instruments: Iterable[str]) -> Dict[str, Any]:
         keys = [str(k).strip() for k in instruments if str(k).strip()]
         return {

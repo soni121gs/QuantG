@@ -37,4 +37,5 @@ def status_from_keys(keys: Optional[Dict[str, Any]], api_key: Optional[str]) -> 
         "requests_gateway_available": True,
         "reason": "no_token",
         "client_id": keys.get("user_id_at_broker"),
+        "redirect_uri": keys.get("redirect_uri"),
     }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, formatApiErrorDetail } from "../lib/api";
 import { KeyRound, Trash2, Save, ShieldCheck, AlertTriangle, ExternalLink, CheckCircle2, XCircle, Copy } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,7 +14,9 @@ export default function ApiKeys() {
     mobile_number: "",
     mpin: "",
     totp_secret_key: "",
+    redirect_uri: "",
   });
+  const [upstoxRedirectUri, setUpstoxRedirectUri] = useState("");
   const [saving, setSaving] = useState(false);
   const [zStatus, setZStatus] = useState({ connected: false });
   const [kotakStatus, setKotakStatus] = useState({ connected: false });
@@ -23,12 +25,23 @@ export default function ApiKeys() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
+  const defaultUpstoxRedirect = () => `${window.location.origin}/api/broker/upstox/callback`;
+
   const load = () =>
     Promise.all([
       api.get("/broker/keys").then((r) => setKeys(r.data)),
       api.get("/zerodha/status").then((r) => setZStatus(r.data)).catch(() => {}),
       api.get("/kotak/status").then((r) => setKotakStatus(r.data)).catch(() => {}),
       api.get("/upstox/status").then((r) => setUpstoxStatus(r.data)).catch(() => {}),
+      api.get("/broker/upstox/config").then((r) => {
+        const uri = r.data.redirect_uri || defaultUpstoxRedirect();
+        setUpstoxRedirectUri(uri);
+        setForm((prev) => ({ ...prev, redirect_uri: uri }));
+      }).catch(() => {
+        const uri = defaultUpstoxRedirect();
+        setUpstoxRedirectUri(uri);
+        setForm((prev) => ({ ...prev, redirect_uri: uri }));
+      }),
     ]);
   useEffect(() => { load(); }, []);
 
@@ -51,11 +64,23 @@ export default function ApiKeys() {
     }
   }, [params, navigate]);
 
+  useEffect(() => {
+    if (params.get("upstox") === "connected") {
+      toast.success("Upstox connected successfully");
+      navigate("/broker-keys", { replace: true });
+      load();
+    }
+  }, [params, navigate]);
+
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post("/broker/keys", form);
+      const payload = { ...form };
+      if (form.broker === "upstox") {
+        payload.redirect_uri = form.redirect_uri || upstoxRedirectUri || defaultUpstoxRedirect();
+      }
+      await api.post("/broker/keys", payload);
       toast.success("Keys saved securely");
       setForm({ ...form, api_key: "", api_secret: "", mobile_number: "", mpin: "", totp_secret_key: "" });
       load();
@@ -129,14 +154,19 @@ export default function ApiKeys() {
   const connectUpstox = async () => {
     try {
       const r = await api.get("/broker/upstox/login");
+      if (!r.data?.url) {
+        toast.error("Upstox did not return a login URL. Check API key, secret, and redirect URI.");
+        return;
+      }
       window.location.href = r.data.url;
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Upstox login URL unavailable");
+      const detail = formatApiErrorDetail(e.response?.data?.detail) || "Upstox login URL unavailable";
+      toast.error(detail);
     }
   };
 
   const redirectUrl = `${window.location.origin}/broker-keys?status=success`;
-  const upstoxRedirectUrl = `${window.location.origin}/api/broker/upstox/callback`;
+  const upstoxRedirectUrl = upstoxRedirectUri || defaultUpstoxRedirect();
 
   return (
     <div className="space-y-4 max-w-4xl" data-testid="api-keys-page">
@@ -274,11 +304,12 @@ export default function ApiKeys() {
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm">
             <div className={upstoxStatus.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-2)]"}>
-              {upstoxStatus.connected ? "Upstox connected" : upstoxStatus.keys_saved ? "Upstox keys saved. Click Connect Upstox." : "Save Upstox API Key and Secret first."}
+              {upstoxStatus.connected ? "Upstox connected — live data and orders enabled" : upstoxStatus.keys_saved ? "Upstox keys saved. Click Connect Upstox." : "Save Upstox API Key and Secret first."}
             </div>
-            <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
-              Redirect URL: <span className="text-[var(--qd-profit)] break-all">{upstoxRedirectUrl}</span>
+            <div className="text-xs text-[var(--qd-text-3)] mt-2">
+              Paste this Redirect URL in Upstox Developer Portal (exact match):
             </div>
+            <div className="text-xs font-mono text-[var(--qd-profit)] break-all mt-1">{upstoxRedirectUrl}</div>
           </div>
           <div className="flex gap-2">
             <button onClick={() => { navigator.clipboard.writeText(upstoxRedirectUrl); toast.success("Copied"); }} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">

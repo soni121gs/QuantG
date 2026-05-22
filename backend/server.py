@@ -157,6 +157,7 @@ class BrokerKeyReq(BaseModel):
     mobile_number: Optional[str] = None
     mpin: Optional[str] = None
     totp_secret_key: Optional[str] = None
+    redirect_uri: Optional[str] = None
 
 
 class BrokerKeyOut(BaseModel):
@@ -1088,6 +1089,12 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
                 doc[key] = encrypt_secret(value)
             elif existing and existing.get(key):
                 doc[key] = existing.get(key)
+    if broker == "upstox":
+        redirect_uri = (req.redirect_uri or (existing or {}).get("redirect_uri") or os.environ.get("UPSTOX_REDIRECT_URI") or "").strip()
+        if not redirect_uri:
+            redirect_uri = "https://www.quantgtrade.com/api/broker/upstox/callback"
+        doc["redirect_uri"] = redirect_uri
+        _UPSTOX_GATEWAYS.pop(user["id"], None)
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": broker},
         {"$set": doc},
@@ -1156,6 +1163,11 @@ async def watchlist(user=Depends(get_current_user)):
                     kotak_rows.append({"symbol": s["symbol"], "name": s["name"], **lp, "source": "kotak_pending", "feed": "kotak-neo-ticker"})
             if live_count:
                 return kotak_rows
+
+    if settings.get("data_broker") == "upstox":
+        upstox_rows = await _upstox_watchlist_rows(user["id"])
+        if upstox_rows and any(row.get("source") == "upstox" for row in upstox_rows):
+            return upstox_rows
 
     # Try live Kite first — use ohlc() so we get last_price AND previous close
     kite, status = await get_user_kite(user["id"])
@@ -2390,9 +2402,9 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
         if gateway and gateway.connected and token:
             try:
                 quote = await asyncio.to_thread(gateway.get_market_quote, [token])
-                for item in (quote.get("data") or {}).values():
-                    if isinstance(item, dict) and item.get("last_price") not in (None, ""):
-                        return float(item["last_price"])
+                ltp = UpstoxGateway.parse_quote_ltp(quote, token)
+                if ltp is not None:
+                    return ltp
             except Exception as exc:
                 logger.warning("Upstox LTP failed for %s: %s", symbol, exc)
     kite, _ = await get_user_kite(user_id)
@@ -2416,9 +2428,9 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
         if gateway and gateway.connected and token:
             try:
                 quote = await asyncio.to_thread(gateway.get_market_quote, [token])
-                for item in (quote.get("data") or {}).values():
-                    if isinstance(item, dict) and item.get("last_price") not in (None, ""):
-                        return float(item["last_price"])
+                ltp = UpstoxGateway.parse_quote_ltp(quote, token)
+                if ltp is not None:
+                    return ltp
             except Exception:
                 pass
     if not allow_mock:
@@ -2573,7 +2585,32 @@ UPSTOX_EQUITY_INSTRUMENTS = {
     "ITC": "NSE_EQ|INE154A01025",
     "LT": "NSE_EQ|INE018A01030",
     "MARUTI": "NSE_EQ|INE585B01010",
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "SENSEX": "BSE_INDEX|SENSEX",
 }
+
+
+def _public_base_url(request: Optional[Request] = None) -> str:
+    explicit = (os.environ.get("APP_PUBLIC_URL") or os.environ.get("PUBLIC_APP_URL") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    if request is not None:
+        proto = (request.headers.get("x-forwarded-proto") or str(request.url.scheme) or "https").split(",")[0].strip()
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+        if host:
+            return f"{proto}://{host}"
+    return "https://www.quantgtrade.com"
+
+
+def _upstox_redirect_uri(request: Optional[Request] = None, keys: Optional[Dict[str, Any]] = None) -> str:
+    env_uri = (os.environ.get("UPSTOX_REDIRECT_URI") or "").strip()
+    if env_uri:
+        return env_uri
+    saved = (keys or {}).get("redirect_uri")
+    if saved:
+        return str(saved).strip()
+    return f"{_public_base_url(request)}/api/broker/upstox/callback"
 
 
 def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_token: Any = None) -> Optional[str]:
@@ -2583,9 +2620,47 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     symbol = str(trading_symbol or "").upper().strip()
     if "|" in symbol:
         return symbol
-    if (exchange or "").upper() == "NSE":
+    exch = (exchange or "NSE").upper()
+    if exch in {"NSE", "BSE"}:
         return UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
+    if "|" in symbol and "_" in symbol.split("|", 1)[0]:
+        return symbol
     return None
+
+
+async def _upstox_watchlist_rows(user_id: str) -> List[Dict[str, Any]]:
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway or not gateway.connected:
+        return []
+    keys = [_upstox_instrument_token("NSE", s["symbol"]) for s in SYMBOLS]
+    keys = [k for k in keys if k]
+    if not keys:
+        return []
+    try:
+        quote = await asyncio.to_thread(gateway.get_market_quote, keys)
+    except Exception as exc:
+        logger.warning("Upstox watchlist quote failed: %s", exc)
+        return []
+    out: List[Dict[str, Any]] = []
+    for s in SYMBOLS:
+        token = _upstox_instrument_token("NSE", s["symbol"])
+        ltp = UpstoxGateway.parse_quote_ltp(quote, token) if token else None
+        if ltp is None:
+            lp = live_price(s["base"], SYMBOLS.index(s))
+            out.append({**lp, "symbol": s["symbol"], "name": s["name"], "source": "upstox_pending", "feed": "upstox-rest"})
+            continue
+        change = round(float(ltp) - s["base"], 2)
+        pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
+        out.append({
+            "symbol": s["symbol"],
+            "name": s["name"],
+            "price": float(ltp),
+            "change": change,
+            "pct": pct,
+            "source": "upstox",
+            "feed": "upstox-rest",
+        })
+    return out
 
 
 def _upstox_first(row: Dict[str, Any], keys: List[str]) -> Any:
@@ -2670,7 +2745,9 @@ async def _place_upstox_order(
     if not broker_order_id:
         logger.warning("Upstox order response did not include order id: %s", result)
     return {
+        "ok": True,
         "broker_order_id": broker_order_id,
+        "order_id": broker_order_id,
         "raw": result,
         "tag": execution_tag,
         "attempts": attempts,
@@ -6149,7 +6226,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
     api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
     access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
-    redirect_uri = os.environ.get("UPSTOX_REDIRECT_URI") or (keys or {}).get("redirect_uri")
+    redirect_uri = _upstox_redirect_uri(None, keys)
     status = upstox_helper.status_from_keys(keys, api_key)
     gateway = _UPSTOX_GATEWAYS.get(user_id)
     gateway_status = gateway.status() if gateway else {}
@@ -6184,7 +6261,7 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
     api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
     access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
-    redirect_uri = os.environ.get("UPSTOX_REDIRECT_URI") or (keys or {}).get("redirect_uri")
+    redirect_uri = _upstox_redirect_uri(None, keys)
     if not api_key and not access_token:
         return None
     gateway = UpstoxGateway(
@@ -6985,12 +7062,38 @@ async def kotak_start_order_feed(user=Depends(get_current_user)):
     return {"ok": True, "status": gateway.status()}
 
 
+@api.get("/broker/upstox/config")
+async def upstox_config(request: Request, user=Depends(get_current_user)):
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "upstox"}, {"_id": 0})
+    redirect_uri = _upstox_redirect_uri(request, keys)
+    return {
+        "redirect_uri": redirect_uri,
+        "register_in_upstox_portal": True,
+        "hint": "Add this exact Redirect URL in the Upstox Developer app, then save API Key + Secret here.",
+    }
+
+
 @api.get("/broker/upstox/login")
 async def upstox_login(request: Request, user=Depends(get_current_user)):
-    gateway = await get_user_upstox_gateway(user["id"], fresh=True)
-    if not gateway or not gateway.api_key:
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "upstox"}, {"_id": 0})
+    if not keys:
         raise HTTPException(status_code=400, detail="Save Upstox API key and secret first.")
-    redirect_uri = gateway.redirect_uri or str(request.url_for("upstox_callback"))
+    api_key = os.environ.get("UPSTOX_API_KEY") or decrypt_secret(keys.get("api_key"))
+    api_secret = os.environ.get("UPSTOX_API_SECRET") or decrypt_secret(keys.get("api_secret"))
+    if not api_key or not api_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Upstox API key or secret is missing. Re-save your Upstox credentials on this page.",
+        )
+    redirect_uri = _upstox_redirect_uri(request, keys)
+    await db.broker_keys.update_one(
+        {"user_id": user["id"], "broker": "upstox"},
+        {"$set": {"redirect_uri": redirect_uri, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    gateway = await get_user_upstox_gateway(user["id"], fresh=True)
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Upstox gateway could not be initialized.")
+    gateway.redirect_uri = redirect_uri
     state = secrets.token_urlsafe(24)
     await db.broker_oauth_states.insert_one({
         "state": state,
@@ -7002,8 +7105,11 @@ async def upstox_login(request: Request, user=Depends(get_current_user)):
     try:
         url = gateway.build_login_url(state=state, redirect_uri=redirect_uri)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"url": url, "redirect_uri": redirect_uri, "api_key": _mask_secret(gateway.api_key, 6, 0)}
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upstox login URL could not be built: {exc}. Register redirect URI exactly as: {redirect_uri}",
+        )
+    return {"url": url, "redirect_uri": redirect_uri, "api_key": _mask_secret(api_key, 6, 0)}
 
 
 @api.get("/broker/upstox/callback", name="upstox_callback")
@@ -7050,7 +7156,8 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     )
     await db.broker_oauth_states.delete_one({"state": state, "broker": "upstox"})
     _UPSTOX_GATEWAYS.pop(user_id, None)
-    return RedirectResponse(url="/broker-keys?upstox=connected", status_code=303)
+    base = _public_base_url(None)
+    return RedirectResponse(url=f"{base}/broker-keys?upstox=connected", status_code=303)
 
 
 @api.post("/broker/upstox/order/test")
