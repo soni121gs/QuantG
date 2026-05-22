@@ -147,11 +147,9 @@ class KotakNeoGateway:
             return self._failure("pyotp is not installed")
 
         try:
+            otp = pyotp.TOTP(str(self._totp_secret_key)).now()
             logger.info("Kotak Neo login step 1 started mobile=%s", self._mask(str(self._mobile_number)))
-            login_response = self._client.login(
-                mobilenumber=str(self._mobile_number),
-                password=str(self._password),
-            )
+            login_response = self._run_login_step(otp)
             login_error = self._response_error(login_response)
             if login_error:
                 return self._failure(f"Kotak login failed: {login_error}")
@@ -159,9 +157,8 @@ class KotakNeoGateway:
             with self._lock:
                 self._last_login_at = datetime.now(timezone.utc).isoformat()
 
-            otp = pyotp.TOTP(str(self._totp_secret_key)).now()
             logger.info("Kotak Neo login step 2FA started")
-            two_fa_response = self._client.session_2fa(OTP=otp)
+            two_fa_response = self._run_two_fa_step(otp)
             two_fa_error = self._response_error(two_fa_response)
             if two_fa_error:
                 return self._failure(f"Kotak 2FA failed: {two_fa_error}")
@@ -176,6 +173,68 @@ class KotakNeoGateway:
             return {"ok": True, "login": login_response, "session_2fa": two_fa_response, "status": self.status()}
         except Exception as exc:
             return self._failure(f"Authentication failed: {self._friendly_error(exc)}")
+
+    def _run_login_step(self, otp: str) -> Any:
+        """Run whichever first login method the installed Kotak SDK exposes."""
+        if hasattr(self._client, "login"):
+            try:
+                return self._client.login(
+                    mobilenumber=str(self._mobile_number),
+                    password=str(self._password),
+                )
+            except TypeError:
+                return self._client.login(str(self._mobile_number), str(self._password))
+
+        if hasattr(self._client, "totp_login"):
+            try:
+                return self._client.totp_login(
+                    mobile_number=str(self._mobile_number),
+                    ucc=str(self._username or ""),
+                    totp=otp,
+                )
+            except TypeError:
+                try:
+                    return self._client.totp_login(
+                        mobilenumber=str(self._mobile_number),
+                        ucc=str(self._username or ""),
+                        totp=otp,
+                    )
+                except TypeError:
+                    return self._client.totp_login(str(self._mobile_number), str(self._username or ""), otp)
+
+        auth_methods = sorted(name for name in dir(self._client) if "login" in name.lower())
+        raise RuntimeError(
+            "Kotak Neo SDK login method not found. Available login methods: "
+            + ", ".join(auth_methods or ["none"])
+        )
+
+    def _run_two_fa_step(self, otp: str) -> Any:
+        """Run second-factor validation for new and old Kotak SDK variants."""
+        if hasattr(self._client, "session_2fa"):
+            try:
+                return self._client.session_2fa(OTP=otp)
+            except TypeError:
+                return self._client.session_2fa(otp)
+
+        if hasattr(self._client, "totp_validate"):
+            try:
+                return self._client.totp_validate(mpin=str(self._password))
+            except TypeError:
+                return self._client.totp_validate(str(self._password))
+
+        if hasattr(self._client, "password_login"):
+            try:
+                return self._client.password_login(password=str(self._password))
+            except TypeError:
+                return self._client.password_login(str(self._password))
+
+        auth_methods = sorted(
+            name for name in dir(self._client) if "2fa" in name.lower() or "validate" in name.lower() or "password" in name.lower()
+        )
+        raise RuntimeError(
+            "Kotak Neo SDK 2FA validation method not found. Available auth methods: "
+            + ", ".join(auth_methods or ["none"])
+        )
 
     def reconnect(self) -> Dict[str, Any]:
         """Safely re-run login on the existing SDK client after session expiry."""
