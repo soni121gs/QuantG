@@ -148,6 +148,9 @@ class BrokerKeyReq(BaseModel):
     api_key: str
     api_secret: str
     user_id_at_broker: Optional[str] = None
+    mobile_number: Optional[str] = None
+    mpin: Optional[str] = None
+    totp_secret_key: Optional[str] = None
 
 
 class BrokerKeyOut(BaseModel):
@@ -1025,6 +1028,18 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
         "created_at": (existing or {}).get("created_at", datetime.now(timezone.utc).isoformat()),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if broker == "kotak_neo":
+        # Allow Kotak to be configured from the UI. Env vars still override
+        # these values at runtime for VPS deployments.
+        for key, value in {
+            "mobile_number": req.mobile_number,
+            "mpin": req.mpin,
+            "totp_secret_key": req.totp_secret_key,
+        }.items():
+            if value not in (None, ""):
+                doc[key] = encrypt_secret(value)
+            elif existing and existing.get(key):
+                doc[key] = existing.get(key)
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": broker},
         {"$set": doc},
@@ -5045,16 +5060,29 @@ async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
             "gateway": gw_status,
             "reason": None if gw_status.get("authenticated") else (gateway_error or status.get("reason")),
         })
+    mobile_number = os.environ.get("KOTAK_MOBILE_NUMBER") or (decrypt_secret(keys.get("mobile_number")) if keys else None)
+    mpin = os.environ.get("KOTAK_MPIN") or (decrypt_secret(keys.get("mpin")) if keys else None)
+    totp_secret_key = os.environ.get("KOTAK_TOTP_SECRET_KEY") or (decrypt_secret(keys.get("totp_secret_key")) if keys else None)
     required_values = {
-        "KOTAK_MOBILE_NUMBER": os.environ.get("KOTAK_MOBILE_NUMBER"),
+        "KOTAK_MOBILE_NUMBER": mobile_number,
         "KOTAK_UCC": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "KOTAK_MPIN": os.environ.get("KOTAK_MPIN"),
-        "KOTAK_TOTP_SECRET_KEY": os.environ.get("KOTAK_TOTP_SECRET_KEY"),
+        "KOTAK_MPIN": mpin,
+        "KOTAK_TOTP_SECRET_KEY": totp_secret_key,
     }
     missing_env = [k for k, value in required_values.items() if not value]
+    neo_fin_key_valid = bool(not neo_fin_key or re.fullmatch(r"[A-Za-z]+", str(neo_fin_key)))
     status["env_ready"] = not missing_env
     status["missing_env"] = missing_env
     status["neo_fin_key_saved"] = bool(neo_fin_key or os.environ.get("KOTAK_NEO_FIN_KEY"))
+    status["neo_fin_key_valid"] = neo_fin_key_valid
+    if not neo_fin_key_valid:
+        status["reason"] = "neo_fin_key_must_be_alphabetical_only"
+    status["credentials_source"] = {
+        "mobile_number": "env" if os.environ.get("KOTAK_MOBILE_NUMBER") else ("saved" if mobile_number else "missing"),
+        "ucc": "env" if os.environ.get("KOTAK_UCC") else ("saved" if (keys or {}).get("user_id_at_broker") else "missing"),
+        "mpin": "env" if os.environ.get("KOTAK_MPIN") else ("saved" if mpin else "missing"),
+        "totp_secret_key": "env" if os.environ.get("KOTAK_TOTP_SECRET_KEY") else ("saved" if totp_secret_key else "missing"),
+    }
     return status
 
 
@@ -5069,10 +5097,10 @@ async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[
     config = {
         "consumer_key": consumer_key,
         "neo_fin_key": os.environ.get("KOTAK_NEO_FIN_KEY") or neo_fin_key,
-        "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER"),
+        "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER") or decrypt_secret(keys.get("mobile_number")),
         "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "mpin": os.environ.get("KOTAK_MPIN"),
-        "totp_secret_key": os.environ.get("KOTAK_TOTP_SECRET_KEY"),
+        "mpin": os.environ.get("KOTAK_MPIN") or decrypt_secret(keys.get("mpin")),
+        "totp_secret_key": os.environ.get("KOTAK_TOTP_SECRET_KEY") or decrypt_secret(keys.get("totp_secret_key")),
     }
     gateway = QuantGNeoGateway(config=config)
     _KOTAK_GATEWAYS[user_id] = gateway
@@ -5702,7 +5730,8 @@ async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user))
     tick_manager = getattr(app.state, "tick_manager", None)
     if tick_manager:
         tick_manager.stop_for_user(user["id"])
-    return {"connected": True, "kite_user_id": session.get("user_id"), "expires_at": expires_at}
+    ticker = await _start_user_ticker(user["id"]) if tick_manager else {"started": False, "reason": "tick_manager_missing"}
+    return {"connected": True, "kite_user_id": session.get("user_id"), "expires_at": expires_at, "ticker": ticker}
 
 
 @api.get("/zerodha/status")
@@ -6233,9 +6262,25 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
         try:
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
             for user_row in users:
-                kite, _ = await get_user_kite(user_row["id"])
+                user_id = user_row["id"]
+                kite, _ = await get_user_kite(user_id)
                 if kite:
-                    await _sync_kite_order_statuses(user_row["id"], kite)
+                    await _sync_kite_order_statuses(user_id, kite)
+                    tick_manager = getattr(app.state, "tick_manager", None)
+                    if tick_manager:
+                        tick_status = tick_manager.status_info(user_id)
+                        last_tick = tick_status.get("last_tick_at")
+                        stale = True
+                        if last_tick:
+                            try:
+                                last_dt = datetime.fromisoformat(last_tick)
+                                stale = (datetime.now(timezone.utc) - last_dt).total_seconds() > 180
+                            except Exception:
+                                stale = True
+                        if not tick_status.get("auth_failed") and not tick_status.get("connecting") and (
+                            not tick_status.get("connected") or stale
+                        ):
+                            await _start_user_ticker(user_id)
         except Exception as e:
             logger.warning(f"broker reconciliation error: {e}")
         slept = 0

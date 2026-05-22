@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -69,6 +70,9 @@ class QuantGNeoGateway:
             return
         if not self._consumer_key:
             self._set_error("KOTAK_CONSUMER_KEY is missing")
+            return
+        if self._neo_fin_key and not re.fullmatch(r"[A-Za-z]+", str(self._neo_fin_key)):
+            self._set_error("KOTAK_NEO_FIN_KEY / NeoFinKey must contain only letters A-Z/a-z; no numbers, spaces, or symbols")
             return
 
         try:

@@ -5,7 +5,7 @@ import os
 import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
-from threading import Lock
+from threading import Lock, Timer
 from typing import Any, Dict, List, Optional
 
 try:
@@ -19,8 +19,11 @@ _TICK_INTERVAL_MINUTES = 5
 _MAX_BARS = 400
 _KITE_WS_ROOT = "wss://ws.kite.trade"
 _KITE_CONNECT_TIMEOUT_SEC = int(os.environ.get("KITE_WS_CONNECT_TIMEOUT_SEC", "60"))
+_KITE_OPEN_HANDSHAKE_TIMEOUT_SEC = int(os.environ.get("KITE_WS_OPEN_HANDSHAKE_TIMEOUT_SEC", "45"))
+_KITE_CLOSE_HANDSHAKE_TIMEOUT_SEC = int(os.environ.get("KITE_WS_CLOSE_HANDSHAKE_TIMEOUT_SEC", "5"))
 _KITE_RECONNECT_MAX_TRIES = int(os.environ.get("KITE_WS_RECONNECT_MAX_TRIES", "120"))
 _KITE_RECONNECT_MAX_DELAY = int(os.environ.get("KITE_WS_RECONNECT_MAX_DELAY_SEC", "10"))
+_KITE_FORCED_RESTART_DELAY_SEC = float(os.environ.get("KITE_WS_FORCED_RESTART_DELAY_SEC", "3"))
 
 
 def _mask_secret(value: str, visible: int = 4) -> str:
@@ -38,7 +41,17 @@ def _auth_failure_text(value: Any) -> bool:
 
 def _handshake_timeout_text(value: Any) -> bool:
     text = str(value or "").lower()
-    return "opening handshake" in text or "handshake timeout" in text
+    return (
+        "opening handshake" in text
+        or "handshake timeout" in text
+        or "close handshake" in text
+        or "closed uncleanly" in text
+    )
+
+
+def _recoverable_ws_text(code: Any, reason: Any) -> bool:
+    text = f"{code} {reason}".lower()
+    return _handshake_timeout_text(text) or "1006" in text or "connection was closed uncleanly" in text
 
 
 def _safe_ws_response(response: Any) -> Dict[str, Any]:
@@ -72,6 +85,22 @@ def _bucket_time(dt: datetime, interval: int) -> datetime:
     dt = dt.astimezone(timezone.utc).replace(second=0, microsecond=0)
     minute = (dt.minute // interval) * interval
     return dt.replace(minute=minute)
+
+
+class QuantGKiteTicker(KiteTicker if KiteTicker is not None else object):
+    """KiteTicker with longer Autobahn opening/closing handshake timers.
+
+    Kite's `connect_timeout` covers the TCP connect. Autobahn separately uses
+    a short websocket opening-handshake timeout, which is the failure that
+    surfaces as code 1006 in production logs.
+    """
+
+    def _create_connection(self, url, **kwargs):  # type: ignore[override]
+        super()._create_connection(url, **kwargs)
+        factory = getattr(self, "factory", None)
+        if factory is not None:
+            factory.openHandshakeTimeout = _KITE_OPEN_HANDSHAKE_TIMEOUT_SEC
+            factory.closeHandshakeTimeout = _KITE_CLOSE_HANDSHAKE_TIMEOUT_SEC
 
 
 class TickCandleBuilder:
@@ -158,6 +187,9 @@ class KiteRealtimeTicker:
         self._auth_failed = False
         self._reconnect_attempts = 0
         self._last_auth_response: Optional[Dict[str, Any]] = None
+        self._last_api_key: Optional[str] = None
+        self._last_access_token: Optional[str] = None
+        self._restart_timer: Optional[Timer] = None
 
     def _parse_tick(self, tick: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         token = int(tick.get("instrument_token") or 0)
@@ -235,6 +267,9 @@ class KiteRealtimeTicker:
         self._auth_failed = _auth_failure_text(code) or _auth_failure_text(reason)
         if self._auth_failed:
             self._last_error = f"auth_failed: {code}: {reason}; reconnect Zerodha on Broker Keys"
+        elif _recoverable_ws_text(code, reason):
+            self._last_error = f"{code}: {reason}; websocket handshake/transport failure, rebuilding ticker"
+            self._schedule_forced_restart("close")
         logger.info(f"Kite realtime websocket closed: {code} {reason}")
 
     def _on_error(self, ws, code, reason) -> None:
@@ -244,8 +279,9 @@ class KiteRealtimeTicker:
         self._auth_failed = _auth_failure_text(code) or _auth_failure_text(reason)
         if self._auth_failed:
             self._last_error = f"auth_failed: {self._last_error}; reconnect Zerodha on Broker Keys"
-        elif _handshake_timeout_text(reason):
-            self._last_error = f"{self._last_error}; websocket handshake timeout, restart ticker if it does not reconnect"
+        elif _recoverable_ws_text(code, reason):
+            self._last_error = f"{self._last_error}; websocket handshake/transport failure, rebuilding ticker"
+            self._schedule_forced_restart("error")
         logger.warning(f"Kite realtime websocket error: {code} {reason}")
 
     def _on_reconnect(self, ws, attempts_count: int) -> None:
@@ -257,7 +293,34 @@ class KiteRealtimeTicker:
         self._connecting = False
         self._started = False
         self._last_error = self._last_error or "websocket reconnect attempts exhausted"
+        if not self._auth_failed:
+            self._schedule_forced_restart("noreconnect")
         logger.warning("Kite realtime websocket reconnect attempts exhausted")
+
+    def _schedule_forced_restart(self, reason: str) -> None:
+        with self._lock:
+            if self._auth_failed or not self._last_api_key or not self._last_access_token or not self._subscribed_tokens:
+                return
+            if self._restart_timer and self._restart_timer.is_alive():
+                return
+            delay = max(0.5, _KITE_FORCED_RESTART_DELAY_SEC)
+            timer = Timer(delay, self._forced_restart, args=(reason,))
+            timer.daemon = True
+            self._restart_timer = timer
+            timer.start()
+        logger.warning("Kite realtime scheduled forced restart after %ss due to %s", delay, reason)
+
+    def _forced_restart(self, reason: str) -> None:
+        with self._lock:
+            api_key = self._last_api_key
+            access_token = self._last_access_token
+            token_to_symbol = dict(self._token_to_symbol)
+            self._restart_timer = None
+        if not api_key or not access_token or not token_to_symbol:
+            return
+        logger.warning("Kite realtime forcing websocket rebuild due to %s", reason)
+        self.stop()
+        self.start(api_key, access_token, token_to_symbol)
 
     def start(self, api_key: str, access_token: str, token_to_symbol: Dict[int, str]) -> None:
         if KiteTicker is None:
@@ -267,6 +330,8 @@ class KiteRealtimeTicker:
         with self._lock:
             if not token_to_symbol:
                 return
+            self._last_api_key = api_key
+            self._last_access_token = access_token
             self._token_to_symbol.update(token_to_symbol)
             new_tokens = [t for t in token_to_symbol if t not in self._subscribed_tokens]
             self._subscribed_tokens = sorted({*self._subscribed_tokens, *token_to_symbol.keys()})
@@ -288,7 +353,12 @@ class KiteRealtimeTicker:
             try:
                 self._auth_failed = False
                 self._reconnect_attempts = 0
-                self._ticker = KiteTicker(
+                if self._ticker is not None:
+                    try:
+                        self._ticker.close()
+                    except Exception:
+                        pass
+                self._ticker = QuantGKiteTicker(
                     api_key,
                     access_token,
                     root=_KITE_WS_ROOT,
@@ -331,6 +401,12 @@ class KiteRealtimeTicker:
 
     def stop(self) -> None:
         with self._lock:
+            if self._restart_timer is not None:
+                try:
+                    self._restart_timer.cancel()
+                except Exception:
+                    pass
+                self._restart_timer = None
             if self._ticker is not None:
                 try:
                     self._ticker.close()

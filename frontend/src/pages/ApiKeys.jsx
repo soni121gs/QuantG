@@ -6,7 +6,15 @@ import { toast } from "sonner";
 
 export default function ApiKeys() {
   const [keys, setKeys] = useState([]);
-  const [form, setForm] = useState({ broker: "zerodha", api_key: "", api_secret: "", user_id_at_broker: "" });
+  const [form, setForm] = useState({
+    broker: "zerodha",
+    api_key: "",
+    api_secret: "",
+    user_id_at_broker: "",
+    mobile_number: "",
+    mpin: "",
+    totp_secret_key: "",
+  });
   const [saving, setSaving] = useState(false);
   const [zStatus, setZStatus] = useState({ connected: false });
   const [kotakStatus, setKotakStatus] = useState({ connected: false });
@@ -48,7 +56,7 @@ export default function ApiKeys() {
     try {
       await api.post("/broker/keys", form);
       toast.success("Keys saved securely");
-      setForm({ ...form, api_key: "", api_secret: "" });
+      setForm({ ...form, api_key: "", api_secret: "", mobile_number: "", mpin: "", totp_secret_key: "" });
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Save failed");
@@ -133,8 +141,15 @@ export default function ApiKeys() {
           </select>
         </div>
         <Input label={form.broker === "kotak_neo" ? "Consumer Key" : form.broker === "upstox" ? "API Key / Client ID" : "API Key"} value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
-        <Input label={form.broker === "kotak_neo" ? "Consumer Secret / Neo Fin Key" : form.broker === "upstox" ? "API Secret" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
-        <Input label="Client ID (optional)" value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
+        <Input label={form.broker === "kotak_neo" ? "Neo Fin Key (letters only)" : form.broker === "upstox" ? "API Secret" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
+        <Input label={form.broker === "kotak_neo" ? "UCC / Client ID" : "Client ID (optional)"} value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
+        {form.broker === "kotak_neo" && (
+          <div className="grid md:grid-cols-3 gap-3">
+            <Input label="Mobile Number" value={form.mobile_number} onChange={(v) => setForm({ ...form, mobile_number: v })} testid="input-kotak-mobile" />
+            <Input label="MPIN" value={form.mpin} onChange={(v) => setForm({ ...form, mpin: v })} type="password" testid="input-kotak-mpin" />
+            <Input label="TOTP Secret" value={form.totp_secret_key} onChange={(v) => setForm({ ...form, totp_secret_key: v })} type="password" testid="input-kotak-totp" />
+          </div>
+        )}
         <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
         </button>
@@ -197,7 +212,7 @@ export default function ApiKeys() {
               <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Kotak Neo credentials above to prepare the broker connection.</div>
             )}
             <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
-              SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Env: {kotakStatus.env_ready ? "ready" : `missing ${(kotakStatus.missing_env || []).join(", ") || "TOTP/MPIN/mobile"}`} · {kotakStatus.reason || "ready"}
+              SDK: {kotakStatus.sdk_available ? "available" : "not installed"} · Credentials: {kotakStatus.env_ready ? "ready" : `missing ${(kotakStatus.missing_env || []).join(", ") || "TOTP/MPIN/mobile"}`} · {kotakStatus.reason || "ready"}
             </div>
           </div>
           <div className="flex gap-2">
