@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, EmailStr
 import kite_helper
 import kotak_helper
 import upstox_helper
-from kotak_gateway import QuantGNeoGateway
+from kotak_gateway import KotakNeoGateway
 import options_helper
 import backtrader_runner
 import strategy_runner
@@ -78,7 +78,7 @@ _RATE_LIMIT_LOCK = asyncio.Lock()
 _RATE_LIMIT_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
-_KOTAK_GATEWAYS: Dict[str, QuantGNeoGateway] = {}
+_KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
@@ -5049,7 +5049,7 @@ async def get_user_kite(user_id: str):
 async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
-    neo_fin_key = decrypt_secret(keys.get("api_secret")) if keys else None
+    consumer_secret = decrypt_secret(keys.get("api_secret")) if keys else None
     status = kotak_helper.status_from_keys(keys, consumer_key)
     gateway = _KOTAK_GATEWAYS.get(user_id)
     if gateway:
@@ -5057,52 +5057,54 @@ async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
         gateway_error = gw_status.get("last_error")
         status.update({
             "connected": bool(gw_status.get("authenticated")),
+            "authenticated": bool(gw_status.get("authenticated")),
+            "state": gw_status.get("state"),
             "gateway": gw_status,
             "reason": None if gw_status.get("authenticated") else (gateway_error or status.get("reason")),
         })
     mobile_number = os.environ.get("KOTAK_MOBILE_NUMBER") or (decrypt_secret(keys.get("mobile_number")) if keys else None)
-    mpin = os.environ.get("KOTAK_MPIN") or (decrypt_secret(keys.get("mpin")) if keys else None)
+    password = os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN") or (decrypt_secret(keys.get("mpin")) if keys else None)
     totp_secret_key = os.environ.get("KOTAK_TOTP_SECRET_KEY") or (decrypt_secret(keys.get("totp_secret_key")) if keys else None)
     required_values = {
+        "KOTAK_CONSUMER_SECRET": os.environ.get("KOTAK_CONSUMER_SECRET") or consumer_secret,
         "KOTAK_MOBILE_NUMBER": mobile_number,
         "KOTAK_UCC": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "KOTAK_MPIN": mpin,
+        "KOTAK_PASSWORD_OR_MPIN": password,
         "KOTAK_TOTP_SECRET_KEY": totp_secret_key,
     }
     missing_env = [k for k, value in required_values.items() if not value]
-    neo_fin_key_valid = bool(not neo_fin_key or re.fullmatch(r"[A-Za-z]+", str(neo_fin_key)))
     status["env_ready"] = not missing_env
     status["missing_env"] = missing_env
-    status["neo_fin_key_saved"] = bool(neo_fin_key or os.environ.get("KOTAK_NEO_FIN_KEY"))
-    status["neo_fin_key_valid"] = neo_fin_key_valid
-    if not neo_fin_key_valid:
-        status["reason"] = "neo_fin_key_must_be_alphabetical_only"
+    status["consumer_secret_saved"] = bool(consumer_secret or os.environ.get("KOTAK_CONSUMER_SECRET"))
     status["credentials_source"] = {
+        "consumer_secret": "env" if os.environ.get("KOTAK_CONSUMER_SECRET") else ("saved" if consumer_secret else "missing"),
         "mobile_number": "env" if os.environ.get("KOTAK_MOBILE_NUMBER") else ("saved" if mobile_number else "missing"),
         "ucc": "env" if os.environ.get("KOTAK_UCC") else ("saved" if (keys or {}).get("user_id_at_broker") else "missing"),
-        "mpin": "env" if os.environ.get("KOTAK_MPIN") else ("saved" if mpin else "missing"),
+        "password_or_mpin": "env" if (os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN")) else ("saved" if password else "missing"),
         "totp_secret_key": "env" if os.environ.get("KOTAK_TOTP_SECRET_KEY") else ("saved" if totp_secret_key else "missing"),
     }
     return status
 
 
-async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[QuantGNeoGateway]:
+async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[KotakNeoGateway]:
     if not fresh and user_id in _KOTAK_GATEWAYS:
         return _KOTAK_GATEWAYS[user_id]
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
     consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
-    neo_fin_key = decrypt_secret(keys.get("api_secret")) if keys else None
+    consumer_secret = decrypt_secret(keys.get("api_secret")) if keys else None
     if not consumer_key:
         return None
     config = {
         "consumer_key": consumer_key,
-        "neo_fin_key": os.environ.get("KOTAK_NEO_FIN_KEY") or neo_fin_key,
+        "consumer_secret": os.environ.get("KOTAK_CONSUMER_SECRET") or consumer_secret,
         "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER") or decrypt_secret(keys.get("mobile_number")),
+        "username": os.environ.get("KOTAK_USERNAME") or os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
         "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "mpin": os.environ.get("KOTAK_MPIN") or decrypt_secret(keys.get("mpin")),
+        "password": os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN") or decrypt_secret(keys.get("mpin")),
+        "mpin": os.environ.get("KOTAK_MPIN") or os.environ.get("KOTAK_PASSWORD") or decrypt_secret(keys.get("mpin")),
         "totp_secret_key": os.environ.get("KOTAK_TOTP_SECRET_KEY") or decrypt_secret(keys.get("totp_secret_key")),
     }
-    gateway = QuantGNeoGateway(config=config)
+    gateway = KotakNeoGateway(config=config)
     _KOTAK_GATEWAYS[user_id] = gateway
     return gateway
 
@@ -5745,6 +5747,21 @@ async def kotak_status(user=Depends(get_current_user)):
     return await get_user_kotak_status(user["id"])
 
 
+@api.get("/broker/kotak/status")
+async def broker_kotak_status(user=Depends(get_current_user)):
+    status = await get_user_kotak_status(user["id"])
+    gateway = status.get("gateway") or {}
+    return {
+        "authenticated": bool(status.get("authenticated") or status.get("connected")),
+        "state": status.get("state") or gateway.get("state") or "DISCONNECTED",
+        "connected": bool(status.get("connected")),
+        "ready": bool(gateway.get("ready")),
+        "reason": status.get("reason"),
+        "last_error": gateway.get("last_error"),
+        "status": status,
+    }
+
+
 @api.get("/kotak/diagnostics")
 async def kotak_diagnostics(user=Depends(get_current_user)):
     status = await get_user_kotak_status(user["id"])
@@ -5761,12 +5778,24 @@ async def kotak_diagnostics(user=Depends(get_current_user)):
 
 @api.post("/kotak/login")
 async def kotak_login(user=Depends(get_current_user)):
-    gateway = await get_user_kotak_gateway(user["id"], fresh=True)
+    gateway = await get_user_kotak_gateway(user["id"])
     if not gateway:
-        raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key on Broker Keys and set Kotak env vars first.")
-    result = await asyncio.to_thread(gateway.authenticate)
+        raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key, Consumer Secret, mobile, MPIN/password, and TOTP secret first.")
+    status = gateway.status()
+    result = await asyncio.to_thread(gateway.reconnect if status.get("state") in {"READY", "FAILED"} else gateway.authenticate)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Kotak login failed"))
+    return {"ok": True, "status": gateway.status()}
+
+
+@api.post("/kotak/reconnect")
+async def kotak_reconnect(user=Depends(get_current_user)):
+    gateway = await get_user_kotak_gateway(user["id"])
+    if not gateway:
+        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
+    result = await asyncio.to_thread(gateway.reconnect)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Kotak reconnect failed"))
     return {"ok": True, "status": gateway.status()}
 
 
@@ -6374,6 +6403,7 @@ async def startup():
         )
 
     app.state.tick_manager = RealtimeTickManager()
+    app.state.kotak_gateways = _KOTAK_GATEWAYS
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,

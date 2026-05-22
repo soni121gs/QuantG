@@ -7,7 +7,7 @@ not place orders until the account-specific login/session flow is verified.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger("quantg.kotak")
 
@@ -50,14 +50,3 @@ def status_from_keys(keys: Optional[Dict[str, Any]], consumer_key: Optional[str]
         "reason": "ready_to_connect",
         "client_id": keys.get("user_id_at_broker"),
     }
-
-
-def make_client(consumer_key: str, access_token: Optional[str] = None, neo_fin_key: Optional[str] = None):
-    if NeoAPI is None:
-        raise RuntimeError("neo_api_client is not installed")
-    return NeoAPI(
-        environment="prod",
-        consumer_key=consumer_key,
-        access_token=access_token,
-        neo_fin_key=neo_fin_key,
-    )

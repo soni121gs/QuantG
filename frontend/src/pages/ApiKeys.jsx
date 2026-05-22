@@ -141,12 +141,12 @@ export default function ApiKeys() {
           </select>
         </div>
         <Input label={form.broker === "kotak_neo" ? "Consumer Key" : form.broker === "upstox" ? "API Key / Client ID" : "API Key"} value={form.api_key} onChange={(v) => setForm({ ...form, api_key: v })} testid="api-key-input" />
-        <Input label={form.broker === "kotak_neo" ? "Neo Fin Key (letters only)" : form.broker === "upstox" ? "API Secret" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
+        <Input label={form.broker === "kotak_neo" ? "Consumer Secret" : form.broker === "upstox" ? "API Secret" : "API Secret"} value={form.api_secret} onChange={(v) => setForm({ ...form, api_secret: v })} type="password" testid="api-secret-input" />
         <Input label={form.broker === "kotak_neo" ? "UCC / Client ID" : "Client ID (optional)"} value={form.user_id_at_broker} onChange={(v) => setForm({ ...form, user_id_at_broker: v })} testid="input-client-id" />
         {form.broker === "kotak_neo" && (
           <div className="grid md:grid-cols-3 gap-3">
             <Input label="Mobile Number" value={form.mobile_number} onChange={(v) => setForm({ ...form, mobile_number: v })} testid="input-kotak-mobile" />
-            <Input label="MPIN" value={form.mpin} onChange={(v) => setForm({ ...form, mpin: v })} type="password" testid="input-kotak-mpin" />
+            <Input label="MPIN / Password" value={form.mpin} onChange={(v) => setForm({ ...form, mpin: v })} type="password" testid="input-kotak-mpin" />
             <Input label="TOTP Secret" value={form.totp_secret_key} onChange={(v) => setForm({ ...form, totp_secret_key: v })} type="password" testid="input-kotak-totp" />
           </div>
         )}
