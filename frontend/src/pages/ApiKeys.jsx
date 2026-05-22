@@ -18,6 +18,7 @@ export default function ApiKeys() {
   const [saving, setSaving] = useState(false);
   const [zStatus, setZStatus] = useState({ connected: false });
   const [kotakStatus, setKotakStatus] = useState({ connected: false });
+  const [kotakOtp, setKotakOtp] = useState("");
   const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -86,11 +87,22 @@ export default function ApiKeys() {
 
   const kotakLogin = async () => {
     try {
-      await api.post("/kotak/login");
+      await api.post("/kotak/login", { current_otp: kotakOtp.trim() || undefined });
       toast.success("Kotak Neo session connected");
+      setKotakOtp("");
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Kotak login failed");
+    }
+  };
+
+  const kotakRepair = async () => {
+    try {
+      await api.post("/kotak/repair");
+      toast.success("Kotak gateway reset. Enter fresh OTP and connect.");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Kotak repair failed");
     }
   };
 
@@ -147,7 +159,7 @@ export default function ApiKeys() {
           <div className="grid md:grid-cols-3 gap-3">
             <Input label="Mobile Number" value={form.mobile_number} onChange={(v) => setForm({ ...form, mobile_number: v })} testid="input-kotak-mobile" />
             <Input label="MPIN / Password" value={form.mpin} onChange={(v) => setForm({ ...form, mpin: v })} type="password" testid="input-kotak-mpin" />
-            <Input label="TOTP Secret" value={form.totp_secret_key} onChange={(v) => setForm({ ...form, totp_secret_key: v })} type="password" testid="input-kotak-totp" />
+            <Input label="TOTP Setup Secret" value={form.totp_secret_key} onChange={(v) => setForm({ ...form, totp_secret_key: v })} type="password" testid="input-kotak-totp" />
           </div>
         )}
         <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
@@ -222,6 +234,10 @@ export default function ApiKeys() {
                 <button onClick={kotakLogout} className="border border-[var(--qd-border)] hover:border-[var(--qd-loss)] text-[var(--qd-loss)] px-3 py-2 text-xs font-mono uppercase rounded-sm">Disconnect</button>
               </>
             )}
+            <input value={kotakOtp} onChange={(e) => setKotakOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="Current OTP" className="w-28 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-xs text-white font-mono rounded-sm" data-testid="kotak-current-otp" />
+            <button onClick={kotakRepair} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+              Repair
+            </button>
             <button onClick={kotakLogin} disabled={!kotakStatus.keys_saved || !kotakStatus.sdk_available || !kotakStatus.env_ready} className="bg-[var(--qd-profit)] disabled:opacity-40 text-black hover:opacity-85 px-5 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2">
               <ExternalLink size={14} /> Connect Kotak
             </button>

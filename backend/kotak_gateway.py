@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import inspect
+import re
 import threading
 from datetime import datetime, timezone
 from enum import Enum
@@ -128,7 +129,7 @@ class KotakNeoGateway:
                 f"Installed Kotak SDK rejected constructor args {sorted(kwargs.keys())}: {self._friendly_error(exc)}"
             )
 
-    def authenticate(self) -> Dict[str, Any]:
+    def authenticate(self, current_otp: Optional[str] = None) -> Dict[str, Any]:
         """Run login -> TOTP -> session_2fa before any trading/data call."""
         if self._client is None:
             return self._failure("NeoAPI client is not initialized. Check SDK install and consumer credentials.")
@@ -147,7 +148,7 @@ class KotakNeoGateway:
             return self._failure("pyotp is not installed")
 
         try:
-            otp = pyotp.TOTP(str(self._totp_secret_key)).now()
+            otp = self._current_totp(current_otp)
             logger.info("Kotak Neo login step 1 started mobile=%s", self._mask(str(self._mobile_number)))
             login_response = self._run_login_step(otp)
             login_error = self._response_error(login_response)
@@ -173,6 +174,19 @@ class KotakNeoGateway:
             return {"ok": True, "login": login_response, "session_2fa": two_fa_response, "status": self.status()}
         except Exception as exc:
             return self._failure(f"Authentication failed: {self._friendly_error(exc)}")
+
+    def _current_totp(self, current_otp: Optional[str] = None) -> str:
+        if current_otp:
+            raw_otp = str(current_otp).strip().replace(" ", "")
+            if not re.fullmatch(r"\d{6}", raw_otp):
+                raise ValueError("Current OTP must be exactly 6 digits")
+            logger.info("Kotak Neo using current OTP supplied for this login request")
+            return raw_otp
+        raw = str(self._totp_secret_key or "").strip().replace(" ", "")
+        if re.fullmatch(r"\d{6}", raw):
+            logger.warning("Kotak Neo using one-time 6-digit OTP from saved TOTP field; replace it with the setup secret for automatic reconnects")
+            return raw
+        return pyotp.TOTP(raw).now()
 
     def _run_login_step(self, otp: str) -> Any:
         """Run whichever first login method the installed Kotak SDK exposes."""
@@ -236,7 +250,7 @@ class KotakNeoGateway:
             + ", ".join(auth_methods or ["none"])
         )
 
-    def reconnect(self) -> Dict[str, Any]:
+    def reconnect(self, current_otp: Optional[str] = None) -> Dict[str, Any]:
         """Safely re-run login on the existing SDK client after session expiry."""
         if self._client is None:
             previous_error = self._last_error
@@ -252,7 +266,36 @@ class KotakNeoGateway:
             self._authenticated = False
             self._subscribed_tokens = []
             self._state = KotakGatewayState.CLIENT_CREATED
-        return self.authenticate()
+        return self.authenticate(current_otp=current_otp)
+
+    def clear_error(self) -> Dict[str, Any]:
+        with self._lock:
+            self._last_error = None
+            if self._client is None:
+                self._state = KotakGatewayState.DISCONNECTED
+                self._authenticated = False
+            elif self._state == KotakGatewayState.FAILED:
+                self._state = KotakGatewayState.CLIENT_CREATED
+                self._authenticated = False
+        return {"ok": True, "status": self.status()}
+
+    def diagnostics(self) -> Dict[str, Any]:
+        status = self.status()
+        error = status.get("last_error") or ""
+        lower = str(error).lower()
+        actions: List[str] = []
+        if "invalid totp" in lower or "10506" in lower:
+            actions.append("Enter the fresh 6-digit OTP from Kotak/Authenticator in Current OTP, then click Connect Kotak immediately.")
+            actions.append("If using a saved TOTP secret, re-register TOTP in Kotak Neo Trade API and save the setup secret, not the 6-digit code.")
+        if not status.get("initialized"):
+            actions.append("Use Repair/Clear, verify SDK is installed, then reconnect.")
+        if "whitelist" in lower or "static ip" in lower:
+            actions.append("Whitelist the VPS static IP 82.180.145.183 in Kotak Neo Trade API.")
+        if "subscription" in lower:
+            actions.append("Activate or renew Kotak Neo Trade API subscription.")
+        if not actions and not status.get("ready"):
+            actions.append("Click Connect Kotak. If it fails, use Repair/Clear and reconnect with a fresh OTP.")
+        return {"ok": True, "status": status, "actions": actions}
 
     def place_order(
         self,
@@ -701,6 +744,8 @@ class KotakNeoGateway:
             return "Kotak Trade API subscription is not active for this account or key. Activate/renew the Kotak Neo Trade API subscription, then reconnect."
         if "complete the 2fa" in lower or "2fa" in lower:
             return "Kotak session is not fully authenticated. Click Connect Kotak again to complete login and TOTP 2FA."
+        if "invalid totp" in lower or "10506" in lower:
+            return "Kotak rejected the TOTP. Enter a fresh 6-digit OTP in Current OTP and click Connect Kotak immediately, or save the correct TOTP setup secret."
         if "token" in lower and ("expired" in lower or "invalid" in lower):
             return "Kotak session token expired or is invalid. Reconnect Kotak."
         if "neo api client is not initialized" in lower:

@@ -272,6 +272,10 @@ class KotakSubscribeReq(BaseModel):
     instruments: List[Dict[str, str]]
 
 
+class KotakLoginReq(BaseModel):
+    current_otp: Optional[str] = None
+
+
 class ChatReq(BaseModel):
     session_id: str = "default"
     message: str
@@ -5779,11 +5783,13 @@ async def kotak_diagnostics(user=Depends(get_current_user)):
         "order_sync": order_sync,
         "supported_segments": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"],
         "commodity_note": "For MCX, use the exact Kotak trading symbol from scrip search, for example a current GOLD/CRUDEOIL futures symbol.",
+        "gateway_diagnostics": gateway.diagnostics() if gateway else None,
     }
 
 
 @api.post("/kotak/login")
-async def kotak_login(user=Depends(get_current_user)):
+async def kotak_login(req: KotakLoginReq = None, user=Depends(get_current_user)):
+    req = req or KotakLoginReq()
     existing = _KOTAK_GATEWAYS.get(user["id"])
     existing_status = existing.status() if existing else {}
     gateway = await get_user_kotak_gateway(
@@ -5793,21 +5799,49 @@ async def kotak_login(user=Depends(get_current_user)):
     if not gateway:
         raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key, Consumer Secret, mobile, MPIN/password, and TOTP secret first.")
     status = gateway.status()
-    result = await asyncio.to_thread(gateway.reconnect if status.get("state") in {"READY", "FAILED"} else gateway.authenticate)
+    if status.get("state") in {"READY", "FAILED"}:
+        result = await asyncio.to_thread(gateway.reconnect, req.current_otp)
+    else:
+        result = await asyncio.to_thread(gateway.authenticate, req.current_otp)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Kotak login failed"))
     return {"ok": True, "status": gateway.status()}
 
 
 @api.post("/kotak/reconnect")
-async def kotak_reconnect(user=Depends(get_current_user)):
+async def kotak_reconnect(req: KotakLoginReq = None, user=Depends(get_current_user)):
+    req = req or KotakLoginReq()
     gateway = await get_user_kotak_gateway(user["id"])
     if not gateway:
         raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
-    result = await asyncio.to_thread(gateway.reconnect)
+    result = await asyncio.to_thread(gateway.reconnect, req.current_otp)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Kotak reconnect failed"))
     return {"ok": True, "status": gateway.status()}
+
+
+@api.post("/kotak/error/clear")
+async def kotak_clear_error(user=Depends(get_current_user)):
+    gateway = _KOTAK_GATEWAYS.get(user["id"])
+    if gateway:
+        return await asyncio.to_thread(gateway.clear_error)
+    return {"ok": True, "status": await get_user_kotak_status(user["id"])}
+
+
+@api.post("/kotak/repair")
+async def kotak_repair(user=Depends(get_current_user)):
+    gateway = _KOTAK_GATEWAYS.pop(user["id"], None)
+    if gateway:
+        try:
+            await asyncio.to_thread(gateway.logout)
+        except Exception as exc:
+            logger.warning("Kotak repair logout skipped: %s", exc)
+    new_gateway = await get_user_kotak_gateway(user["id"], fresh=True)
+    return {
+        "ok": True,
+        "message": "Kotak gateway reset. Enter a fresh OTP and click Connect Kotak.",
+        "status": new_gateway.status() if new_gateway else await get_user_kotak_status(user["id"]),
+    }
 
 
 @api.post("/kotak/logout")
