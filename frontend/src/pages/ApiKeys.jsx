@@ -285,8 +285,12 @@ export default function ApiKeys() {
         </div>
       </div>
 
-      <div className="qd-card p-5" data-testid="upstox-card">
-        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Upstox</h2>
+      <div className="qd-card p-5 border-l-4 border-l-[var(--qd-cyan)] cyber-glow-cyan" data-testid="upstox-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3">
+          <ShieldCheck size={16} className="text-[var(--qd-cyan)]" /> 
+          Upstox 
+          <span className="text-[9px] font-mono uppercase bg-gradient-to-r from-[var(--qd-cyan)] to-[var(--qd-accent)] text-[#030407] px-2 py-0.5 rounded font-extrabold tracking-wider">Primary</span>
+        </h2>
         <div className="text-sm">
           {upstoxStatus.keys_saved ? (
             <div className="text-[var(--qd-profit)] flex items-center gap-2"><CheckCircle2 size={14} /> Credentials saved for <span className="font-mono">{upstoxStatus.client_id || "Upstox"}</span></div>
@@ -299,8 +303,8 @@ export default function ApiKeys() {
         </div>
       </div>
 
-      <div className="qd-card p-5" data-testid="upstox-connect-card">
-        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} /> Connect Upstox OAuth</h2>
+      <div className="qd-card p-5 border-l-4 border-l-[var(--qd-cyan)] cyber-glow-cyan" data-testid="upstox-connect-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><ShieldCheck size={16} className="text-[var(--qd-cyan)]" /> Connect Upstox OAuth</h2>
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm">
             <div className={upstoxStatus.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-2)]"}>

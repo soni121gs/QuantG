@@ -61,7 +61,7 @@ if len(JWT_SECRET.encode()) < 32:
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
-APP_VERSION = "10.0"
+APP_VERSION = "11.0"
 
 app = FastAPI(title="QuantG Algo Trading API", version=APP_VERSION)
 api = APIRouter(prefix="/api")
@@ -2450,6 +2450,9 @@ def _public_base_url(request: Optional[Request] = None) -> str:
         proto = (request.headers.get("x-forwarded-proto") or str(request.url.scheme) or "https").split(",")[0].strip()
         host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
         if host:
+            # Force HTTPS for non-localhost/private IP connections to ensure strict HTTPS for broker callbacks
+            if not host.startswith(("localhost", "127.0.0.1", "192.168.", "10.", "172.")):
+                proto = "https"
             return f"{proto}://{host}"
     return "https://www.quantgtrade.com"
 
@@ -6872,7 +6875,7 @@ async def upstox_login(request: Request, user=Depends(get_current_user)):
     if not gateway:
         raise HTTPException(status_code=400, detail="Upstox gateway could not be initialized.")
     gateway.redirect_uri = redirect_uri
-    state = secrets.token_urlsafe(24)
+    state = _secrets.token_urlsafe(24)
     await db.broker_oauth_states.insert_one({
         "state": state,
         "broker": "upstox",

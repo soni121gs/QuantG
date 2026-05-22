@@ -1,7 +1,7 @@
 {
   "short_name": "QuantG",
   "name": "QuantG — Algo Trading Terminal",
-  "description": "QuantG v10.0 algorithmic trading terminal with multi-broker controls, Python strategies, and AI bot.",
+  "description": "QuantG v11.0 algorithmic trading terminal with multi-broker controls, Python strategies, and AI bot.",
   "icons": [
     {
       "src": "/icon-192.png",
