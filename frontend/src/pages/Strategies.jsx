@@ -41,13 +41,12 @@ const sourceLabel = (source) => {
 };
 
 const filters = [
-  { id: "all", label: "All" },
-  { id: "options", label: "Options" },
-  { id: "futures", label: "Futures" },
+  { id: "all", label: "All Systems" },
+  { id: "hft", label: "HFT / Upstox" },
   { id: "buying", label: "Option Buying" },
   { id: "selling", label: "Option Selling" },
-  { id: "commodity", label: "Oil and Gas" },
-  { id: "live", label: "Live" },
+  { id: "commodity", label: "MCX Commodities" },
+  { id: "live", label: "Live Auto-Traders" },
 ];
 
 const noticeFor = (s) => {
@@ -67,16 +66,28 @@ export default function Strategies() {
   const [testResult, setTestResult] = useState(null);
   const [selectedFilter, setSelectedFilter] = useState("all");
   const [loading, setLoading] = useState(false);
+  const [sortBy, setSortBy] = useState("score");
+
+  // Broker states
+  const [zStatus, setZStatus] = useState({ connected: false });
+  const [kotakStatus, setKotakStatus] = useState({ connected: false });
+  const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [strategiesRes, scoresRes] = await Promise.all([
+      const [strategiesRes, scoresRes, zRes, kRes, uRes] = await Promise.all([
         api.get("/strategies"),
         api.get("/ai/strategy-scores").catch(() => ({ data: { scores: [] } })),
+        api.get("/zerodha/status").catch(() => ({ data: { connected: false } })),
+        api.get("/kotak/status").catch(() => ({ data: { connected: false } })),
+        api.get("/upstox/status").catch(() => ({ data: { connected: false } })),
       ]);
       setList(strategiesRes.data || []);
       setScores(Object.fromEntries((scoresRes.data?.scores || []).map((row) => [row.strategy_id, row])));
+      setZStatus(zRes.data || { connected: false });
+      setKotakStatus(kRes.data || { connected: false });
+      setUpstoxStatus(uRes.data || { connected: false });
     } finally {
       setLoading(false);
     }
@@ -89,20 +100,50 @@ export default function Strategies() {
   }, [load]);
 
   const filtered = useMemo(() => {
-    if (selectedFilter === "all") return list;
-    if (selectedFilter === "options") return list.filter((s) => s.asset_class === "options");
-    if (selectedFilter === "futures") return list.filter((s) => s.asset_class === "futures");
-    if (selectedFilter === "buying") return list.filter((s) => s.strategy_type === "Option Buying");
-    if (selectedFilter === "selling") return list.filter((s) => s.strategy_type === "Option Selling");
-    if (selectedFilter === "commodity") return list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX");
-    if (selectedFilter === "live") return list.filter((s) => s.status === "live");
-    return list;
-  }, [list, selectedFilter]);
+    let result = [...list];
+    if (selectedFilter === "hft") {
+      result = list.filter((s) =>
+        s.name?.toLowerCase().includes("upstox") ||
+        s.name?.toLowerCase().includes("hft") ||
+        s.description?.toLowerCase().includes("hft") ||
+        s.description?.toLowerCase().includes("upstox")
+      );
+    } else if (selectedFilter === "buying") {
+      result = list.filter((s) => s.strategy_type === "Option Buying");
+    } else if (selectedFilter === "selling") {
+      result = list.filter((s) => s.strategy_type === "Option Selling");
+    } else if (selectedFilter === "commodity") {
+      result = list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX");
+    } else if (selectedFilter === "live") {
+      result = list.filter((s) => s.status === "live");
+    }
+
+    // Apply sorting
+    if (sortBy === "score") {
+      result.sort((a, b) => {
+        const scoreA = scores[a.id]?.score ?? a.ai_confidence_score ?? 0;
+        const scoreB = scores[b.id]?.score ?? b.ai_confidence_score ?? 0;
+        return scoreB - scoreA;
+      });
+    } else if (sortBy === "capital") {
+      result.sort((a, b) => (a.required_capital ?? 0) - (b.required_capital ?? 0));
+    } else if (sortBy === "signals") {
+      result.sort((a, b) => (b.signals_fired ?? 0) - (a.signals_fired ?? 0));
+    } else if (sortBy === "scans") {
+      result.sort((a, b) => (b.evaluations ?? 0) - (a.evaluations ?? 0));
+    }
+
+    return result;
+  }, [list, selectedFilter, sortBy, scores]);
 
   const counts = useMemo(() => ({
     all: list.length,
-    options: list.filter((s) => s.asset_class === "options").length,
-    futures: list.filter((s) => s.asset_class === "futures").length,
+    hft: list.filter((s) =>
+      s.name?.toLowerCase().includes("upstox") ||
+      s.name?.toLowerCase().includes("hft") ||
+      s.description?.toLowerCase().includes("hft") ||
+      s.description?.toLowerCase().includes("upstox")
+    ).length,
     buying: list.filter((s) => s.strategy_type === "Option Buying").length,
     selling: list.filter((s) => s.strategy_type === "Option Selling").length,
     commodity: list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX").length,
@@ -197,31 +238,105 @@ export default function Strategies() {
         </div>
       </section>
 
-      <section className="qd-card p-3">
+      <section className="qd-card p-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between bg-black/40 backdrop-blur-md border border-[var(--qd-border)] shadow-xl rounded-md">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 pr-1 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)]">
-            <Filter size={13} /> Filter
+          <div className="flex items-center gap-2 pr-1 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">
+            <Filter size={14} className="text-[var(--qd-accent)]" /> Categories
           </div>
           {filters.map((item) => (
             <button
               key={item.id}
               onClick={() => setSelectedFilter(item.id)}
-              className={`rounded border px-3 py-2 font-mono text-xs uppercase tracking-wider ${
+              className={`rounded px-3 py-1.5 font-mono text-xs uppercase tracking-wider transition-all duration-300 ${
                 selectedFilter === item.id
-                  ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-white"
-                  : "border-[var(--qd-border)] text-[var(--qd-text-2)] hover:text-white"
+                  ? "bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.4)] border border-indigo-400/35"
+                  : "bg-white/[0.02] border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:text-white hover:border-indigo-500/50 hover:bg-white/[0.05]"
               }`}
               data-testid={`filter-${item.id}`}
             >
-              {item.label} <span className="text-[var(--qd-text-3)]">({counts[item.id]})</span>
+              {item.label} <span className="text-[var(--qd-text-3)] font-bold">({counts[item.id]})</span>
             </button>
           ))}
         </div>
+
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">Sort By</span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="bg-black/60 border border-[var(--qd-border)] hover:border-indigo-500/50 text-white px-3 py-1.5 text-xs font-mono rounded cursor-pointer outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+            data-testid="sort-selector"
+          >
+            <option value="score">AI Confidence Score</option>
+            <option value="capital">Capital Required</option>
+            <option value="signals">Signals Fired</option>
+            <option value="scans">Scans Count</option>
+          </select>
+        </div>
       </section>
 
-      {!filtered.length ? (
-        <div className="qd-card p-16 text-center">
-          <Plus className="mx-auto mb-3 text-[var(--qd-text-3)]" />
+      {!list.length ? (
+        <div className="qd-card p-8 md:p-12 max-w-4xl mx-auto bg-black/45 backdrop-blur-xl border border-indigo-500/20 rounded-lg shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-72 h-72 bg-indigo-600/10 rounded-full blur-[100px]" />
+          <div className="absolute bottom-0 left-0 w-72 h-72 bg-cyan-600/10 rounded-full blur-[100px]" />
+          
+          <div className="text-center relative z-10">
+            <Zap className="mx-auto mb-4 text-indigo-400 animate-pulse" size={48} />
+            <h2 className="font-head text-2xl font-bold text-white mb-2">No Option Strategies Found</h2>
+            <p className="text-sm text-[var(--qd-text-2)] max-w-lg mx-auto mb-8">
+              Initialize your QuantG terminal with the standard HFT & low-latency option-trading presets tailored specifically for Upstox, Zerodha, and Kotak.
+            </p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left mb-8">
+              <div className="bg-white/[0.01] border border-white/5 rounded-lg p-4 hover:border-indigo-500/30 transition-all">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap size={14} className="text-orange-400" />
+                  <span className="font-mono text-xs font-semibold text-white">Upstox HFT Low-Latency Scalper</span>
+                </div>
+                <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
+                  Tick-based EMA crossover and ATR compression setups with direct order routing to `api-hft.upstox.com`.
+                </p>
+              </div>
+              <div className="bg-white/[0.01] border border-white/5 rounded-lg p-4 hover:border-indigo-500/30 transition-all">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap size={14} className="text-orange-400" />
+                  <span className="font-mono text-xs font-semibold text-white">Upstox HFT Multi-Leg Neutral Straddle</span>
+                </div>
+                <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
+                  Options multi-leg delta-neutral entry/exit preset utilizing historical price band squeezes.
+                </p>
+              </div>
+              <div className="bg-white/[0.01] border border-white/5 rounded-lg p-4 hover:border-indigo-500/30 transition-all">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap size={14} className="text-indigo-400" />
+                  <span className="font-mono text-xs font-semibold text-white">Bank Nifty Volatility Breakout HFT</span>
+                </div>
+                <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
+                  Fast Bank Nifty breakout model monitoring sudden volume surges and ATR threshold violations.
+                </p>
+              </div>
+              <div className="bg-white/[0.01] border border-white/5 rounded-lg p-4 hover:border-indigo-500/30 transition-all">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap size={14} className="text-cyan-400" />
+                  <span className="font-mono text-xs font-semibold text-white">NIFTY Low-Latency Scalper</span>
+                </div>
+                <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
+                  High-frequency options buying relying on short-term VWAP standard deviation envelope breakouts.
+                </p>
+              </div>
+            </div>
+            
+            <button
+              onClick={installPresets}
+              className="inline-flex items-center gap-2 rounded bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 px-6 py-3 font-mono text-sm font-semibold uppercase tracking-wider text-white shadow-lg active:scale-95 transition-all"
+            >
+              <Zap size={16} /> Seed Default Presets
+            </button>
+          </div>
+        </div>
+      ) : !filtered.length ? (
+        <div className="qd-card p-16 text-center bg-black/30 border border-white/5 rounded-lg">
+          <Filter className="mx-auto mb-3 text-[var(--qd-text-3)]" />
           <p className="text-sm text-[var(--qd-text-2)]">No strategies match this filter.</p>
         </div>
       ) : (
@@ -238,6 +353,9 @@ export default function Strategies() {
               manualOrder={manualOrder}
               exitAll={exitAll}
               load={load}
+              zStatus={zStatus}
+              kotakStatus={kotakStatus}
+              upstoxStatus={upstoxStatus}
             />
           ))}
         </div>
@@ -248,7 +366,7 @@ export default function Strategies() {
   );
 }
 
-function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, exitAll, load }) {
+function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, exitAll, load, zStatus, kotakStatus, upstoxStatus }) {
   const live = s.status === "live";
   const paused = s.status === "paused";
   const notice = noticeFor(s);
@@ -320,19 +438,73 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     }
   };
 
+  const isHft = s.name?.toLowerCase().includes("hft") || s.name?.toLowerCase().includes("upstox") || s.description?.toLowerCase().includes("hft") || s.description?.toLowerCase().includes("upstox");
+
+  const speedLabel = () => {
+    if (s.name?.toLowerCase().includes("hft") || s.description?.toLowerCase().includes("hft")) {
+      return "⚡ HFT (1-Sec Tick)";
+    }
+    if (s.name?.toLowerCase().includes("scalper") || s.description?.toLowerCase().includes("scalper")) {
+      return "⚡ Scalper (30-Sec)";
+    }
+    if (s.last_data_source && s.last_data_source.includes("5minute")) {
+      return "⏱️ Intraday (5-Min)";
+    }
+    return "📈 Swing (Daily)";
+  };
+
+  const getBrokerStatus = () => {
+    if (s.name?.toLowerCase().includes("upstox") || s.description?.toLowerCase().includes("upstox")) {
+      return { name: "Upstox HFT", connected: upstoxStatus?.connected };
+    }
+    if (s.asset_class === "commodity" || s.instrument_group === "MCX" || s.name?.toLowerCase().includes("commodity")) {
+      return { name: "Kotak Neo", connected: kotakStatus?.connected };
+    }
+    return { name: "Zerodha", connected: zStatus?.connected };
+  };
+
+  const broker = getBrokerStatus();
+
   return (
-    <article className="qd-card flex min-h-[390px] flex-col p-4" data-testid={`strategy-${s.id}`}>
-      <div className="flex items-start justify-between gap-3">
+    <article 
+      className={`qd-card flex min-h-[410px] flex-col p-5 transition-all duration-300 relative overflow-hidden ${
+        isHft 
+          ? "border-indigo-500/40 bg-gradient-to-br from-black/60 to-indigo-950/20 hover:border-indigo-400/80 shadow-[0_0_25px_rgba(99,102,241,0.06)]" 
+          : "hover:border-white/10"
+      }`} 
+      data-testid={`strategy-${s.id}`}
+    >
+      {isHft && (
+        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-indigo-500/10 via-cyan-500/5 to-transparent pointer-events-none rounded-bl-full animate-pulse" />
+      )}
+      
+      <div className="flex items-start justify-between gap-3 relative z-10">
         <div className="min-w-0">
-          <div className="qd-section-title">{s.instrument_group || "NSE"} / {s.kind}</div>
+          {isHft && (
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/20 to-indigo-500/20 border border-amber-500/35 text-amber-300 font-mono text-[9px] uppercase tracking-wider font-semibold animate-pulse mb-1.5 w-max">
+              <Zap size={9} className="fill-amber-300 animate-bounce" /> Upstox v2 HFT
+            </div>
+          )}
+          <div className="qd-section-title flex items-center gap-1.5">
+            <span>{s.instrument_group || "NSE"} / {s.kind}</span>
+            <span className="w-1 h-1 rounded-full bg-[var(--qd-text-3)]" />
+            <span className="text-[var(--qd-text-2)]">{speedLabel()}</span>
+          </div>
           <h2 className="mt-1 line-clamp-2 font-head text-lg font-semibold text-white">{s.name}</h2>
         </div>
-        <StatusBadge status={s.status} />
+        <div className="flex flex-col items-end gap-1.5">
+          <StatusBadge status={s.status} />
+          <div className="flex items-center gap-1.5 font-mono text-[9px] text-[var(--qd-text-3)]">
+            <span>{broker.name}</span>
+            <span className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${broker.connected ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] animate-pulse" : "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]"}`} />
+            <span className="text-[8px] tracking-wider uppercase">{broker.connected ? "online" : "offline"}</span>
+          </div>
+        </div>
       </div>
 
-      <p className="mt-3 min-h-[40px] text-sm leading-relaxed text-[var(--qd-text-2)]">{s.description || "No description"}</p>
+      <p className="mt-3 min-h-[40px] text-sm leading-relaxed text-[var(--qd-text-2)] relative z-10">{s.description || "No description"}</p>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
+      <div className="mt-4 grid grid-cols-2 gap-3 relative z-10">
         <Metric label="Total Capital Required" value={money(s.required_capital)} />
         <Metric label="Strategy Type" value={s.strategy_type || "Option Buying"} />
         <Metric label="Asset" value={s.asset_class === "commodity" ? "Oil and Gas" : s.asset_class || "equity"} />

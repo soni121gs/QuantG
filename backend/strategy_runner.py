@@ -59,13 +59,20 @@ def _safe_run(code: str, data: List[dict]) -> List[dict]:
         return []
 
 
-def _validate_signal(signal: Dict[str, Any], data: List[dict]) -> Dict[str, Any]:
+def _validate_signal(signal: Dict[str, Any], data: List[dict], strategy: Dict[str, Any] = None) -> Dict[str, Any]:
     try:
         trend = MarketTrendAnalyzer.analyze(data, lookback=min(50, max(20, len(data))))
-        validation = FakeSignalFilter.validate(signal, data, trend)
-        validation["threshold"] = SIGNAL_CONFIDENCE_MIN
+        is_hft = False
+        if strategy:
+            name = str(strategy.get("name") or "").lower()
+            desc = str(strategy.get("description") or "").lower()
+            if "hft" in name or "hft" in desc or "scalper" in name or "scalper" in desc:
+                is_hft = True
+        validation = FakeSignalFilter.validate(signal, data, trend, is_hft=is_hft)
+        threshold = 35.0 if is_hft else SIGNAL_CONFIDENCE_MIN
+        validation["threshold"] = threshold
         validation["trend"] = trend
-        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= SIGNAL_CONFIDENCE_MIN
+        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= threshold
         return validation
     except Exception as e:
         logger.warning(f"signal validation failed: {e}")
@@ -249,7 +256,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set, "last_signals_count": signals_count},
                                                     "$inc": inc_set})
                     continue
-                signal_validation = _validate_signal(last_sig, data)
+                signal_validation = _validate_signal(last_sig, data, s)
                 if not signal_validation.get("is_valid"):
                     reason = "; ".join(signal_validation.get("reasons") or [])
                     await db.strategies.update_one(

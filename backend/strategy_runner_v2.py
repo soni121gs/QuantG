@@ -282,12 +282,20 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()},
                         }, {"_id": 0}).sort("created_at", -1).to_list(5)
                         
+                        # Resolve if HFT
+                        is_hft = False
+                        name = str(s.get("name") or "").lower()
+                        desc = str(s.get("description") or "").lower()
+                        if "hft" in name or "hft" in desc or "scalper" in name or "scalper" in desc:
+                            is_hft = True
+                        
                         # Validate signal
                         validation = FakeSignalFilter.validate(
                             signal=last_sig,
                             data=data,
                             trend_info=_current_trend_info,
                             recent_signals=[{"action": o.get("side")} for o in recent_signals],
+                            is_hft=is_hft,
                         )
                         
                         # Log validation

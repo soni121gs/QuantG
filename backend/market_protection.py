@@ -243,6 +243,7 @@ class FakeSignalFilter:
         data: List[Dict[str, Any]],
         trend_info: Dict[str, Any],
         recent_signals: List[Dict[str, Any]] = None,
+        is_hft: bool = False,
     ) -> Dict[str, Any]:
         """
         Validate a signal and assign confidence score
@@ -267,8 +268,9 @@ class FakeSignalFilter:
                 confidence += 25
                 reasons.append("Signal aligned with bullish trend")
             elif trend == "BEARISH":
-                confidence -= 30
-                reasons.append("BUY signal against bearish trend (reversal attempt)")
+                penalty = 12 if is_hft else 30
+                confidence -= penalty
+                reasons.append(f"BUY signal against bearish trend (reversal attempt){' [HFT Shift Applied]' if is_hft else ''}")
             else:
                 confidence += 5
                 reasons.append("Signal in neutral trend")
@@ -277,8 +279,9 @@ class FakeSignalFilter:
                 confidence += 25
                 reasons.append("Signal aligned with bearish trend")
             elif trend == "BULLISH":
-                confidence -= 30
-                reasons.append("SELL signal against bullish trend (reversal attempt)")
+                penalty = 12 if is_hft else 30
+                confidence -= penalty
+                reasons.append(f"SELL signal against bullish trend (reversal attempt){' [HFT Shift Applied]' if is_hft else ''}")
             else:
                 confidence += 5
                 reasons.append("Signal in neutral trend")
@@ -286,8 +289,9 @@ class FakeSignalFilter:
         # Check 2: Reversal risk - if trend is risky, lower confidence for opposite-side signals
         if reversal_risk > 0.7:
             if (action == "BUY" and trend == "BEARISH") or (action == "SELL" and trend == "BULLISH"):
-                confidence -= 20
-                reasons.append(f"High reversal risk ({reversal_risk*100:.0f}%)")
+                penalty = 10 if is_hft else 20
+                confidence -= penalty
+                reasons.append(f"High reversal risk ({reversal_risk*100:.0f}%){' [HFT Shift Applied]' if is_hft else ''}")
         
         # Check 3: Recent whipsaw detection
         if len(recent_signals) > 0:
@@ -296,8 +300,9 @@ class FakeSignalFilter:
                 # Opposite direction - check if it's too recent
                 bars_since = (len(data) - data.index(signal)) if signal in data else 5
                 if bars_since < 3:
-                    confidence -= 25
-                    reasons.append(f"Whipsaw: opposite signal {bars_since} bars ago")
+                    penalty = 15 if is_hft else 25
+                    confidence -= penalty
+                    reasons.append(f"Whipsaw: opposite signal {bars_since} bars ago{' [HFT Shift Applied]' if is_hft else ''}")
         
         # Check 4: Price action confirmation (check recent candles for strength)
         if len(data) > 0:
@@ -306,11 +311,13 @@ class FakeSignalFilter:
             downtrend = sum(1 for c in last_3_candles if c.get('close', 0) < c.get('open', 0))
             
             if action == "BUY" and downtrend >= 2:
-                confidence -= 15
-                reasons.append("Recent downtrend candles")
+                penalty = 8 if is_hft else 15
+                confidence -= penalty
+                reasons.append(f"Recent downtrend candles{' [HFT Shift Applied]' if is_hft else ''}")
             elif action == "SELL" and uptrend >= 2:
-                confidence -= 15
-                reasons.append("Recent uptrend candles")
+                penalty = 8 if is_hft else 15
+                confidence -= penalty
+                reasons.append(f"Recent uptrend candles{' [HFT Shift Applied]' if is_hft else ''}")
 
         # Check 5: Multi-timeframe confirmation
         higher_tf = trend_info.get("higher_timeframe") or {}
@@ -320,8 +327,9 @@ class FakeSignalFilter:
                 confidence += 12
                 reasons.append(f"Higher timeframe confirms {higher_tf.get('trend')}")
             else:
-                confidence -= 18
-                reasons.append(f"Higher timeframe disagrees ({higher_tf.get('trend')})")
+                penalty = 10 if is_hft else 18
+                confidence -= penalty
+                reasons.append(f"Higher timeframe disagrees ({higher_tf.get('trend')}){' [HFT Shift Applied]' if is_hft else ''}")
 
         # Check 6: VWAP confirmation
         vwap_distance = trend_info.get("vwap_distance_pct")
@@ -333,23 +341,32 @@ class FakeSignalFilter:
                 confidence += 8
                 reasons.append("Price holding near/below VWAP")
             else:
-                confidence -= 10
-                reasons.append("VWAP confirmation missing")
+                penalty = 5 if is_hft else 10
+                confidence -= penalty
+                reasons.append(f"VWAP confirmation missing{' [HFT Shift Applied]' if is_hft else ''}")
 
         # Check 7: ATR/volume regime
         atr_pct = float(trend_info.get("atr_pct") or 0)
         volume_ratio = float(trend_info.get("volume_ratio") or 1)
         if atr_pct > 0 and atr_pct < 0.08:
-            confidence -= 12
-            reasons.append("ATR too low; range may be flat")
+            if is_hft:
+                confidence += 8
+                reasons.append("Micro-ATR compression verified (Optimal for HFT scalp execution)")
+            else:
+                confidence -= 12
+                reasons.append("ATR too low; range may be flat")
         elif atr_pct > 1.8:
-            confidence -= 10
-            reasons.append("ATR very high; whipsaw risk")
+            penalty = 5 if is_hft else 10
+            confidence -= penalty
+            reasons.append(f"ATR very high; whipsaw risk{' [HFT Shift Applied]' if is_hft else ''}")
+            
         if volume_ratio >= 1.2:
-            confidence += 8
-            reasons.append("Volume expansion confirms move")
+            bonus = 15 if is_hft else 8
+            confidence += bonus
+            reasons.append(f"Volume expansion confirms move{' [HFT Impulse Bonus]' if is_hft else ''}")
         elif volume_ratio < 0.65:
-            confidence -= 8
+            penalty = 4 if is_hft else 8
+            confidence -= penalty
             reasons.append("Low volume signal")
 
         # Check 8: Option-chain participation if supplied by data provider
@@ -359,8 +376,9 @@ class FakeSignalFilter:
                 confidence += 10
                 reasons.append("Option OI bias confirms signal")
             else:
-                confidence -= 12
-                reasons.append("Option OI bias disagrees")
+                penalty = 6 if is_hft else 12
+                confidence -= penalty
+                reasons.append(f"Option OI bias disagrees{' [HFT Shift Applied]' if is_hft else ''}")
         
         # Check 9: Support/Resistance bounce
         current_price = data[-1].get('close', 0) if data else 0
@@ -378,13 +396,13 @@ class FakeSignalFilter:
         confidence = max(0, min(100, confidence))
         
         # Decision
-        is_valid = confidence >= 40  # 40% confidence threshold
+        is_valid = confidence >= (35 if is_hft else 40)  # Lower standard threshold for high-speed systems
         
         return {
             "is_valid": is_valid,
             "confidence": round(confidence, 1),
             "reasons": reasons,
-            "filtered": confidence < 40,  # True if filtered out
+            "filtered": not is_valid,  # True if filtered out
         }
 
 

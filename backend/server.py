@@ -675,43 +675,85 @@ async def health():
 # ============== Routes: AI Bot ==============
 def _quantbot_reply(message: str) -> str:
     text = message.lower()
-    if "rsi" in text or "macd" in text:
+    if "upstox" in text or "hft" in text or "latency" in text:
         return (
-            "RSI measures overbought/oversold momentum, while MACD measures trend momentum.\n"
-            "- RSI is bounded from 0 to 100 and is useful for mean-reversion filters.\n"
-            "- MACD compares moving averages and is useful for trend confirmation.\n"
-            "- Combine either signal with stops, sizing, and paper testing first."
+            "⚡ **QuantG Upstox API v2 HFT Gateway & HFT Optimization**\n\n"
+            "- **Low-Latency Order Routing:** When live, HFT orders are automatically routed to Upstox's high-speed endpoint (`api-hft.upstox.com`) with `hft=True` to bypass standard latency overhead.\n"
+            "- **Adaptive HFT Signal Scoring:** The AI Bot (`FakeSignalFilter`) automatically applies custom HFT scoring when the strategy name or description contains 'HFT' or 'scalper':\n"
+            "  * **Lower Threshold:** Signal validation threshold is lowered to **35%** (down from 40%).\n"
+            "  * **ATR Compression Reward:** Micro-ATR contractions (ATR < 0.08%) are rewarded with **+8 points** (instead of the standard -12 flat-range penalty) to identify breakout compression.\n"
+            "  * **Countertrend Entry Penalty Reduction:** Reduced to **-12 points** (from -30) to allow fast countertrend scalps.\n"
+            "  * **Volume Confirmation Bonus:** Boosting volume expansion setups to **+15 points** (from +8).\n"
+            "- **Actionable Advice:** Keep HFT strategies restricted to high-liquidity underlyings like NIFTY and BANKNIFTY options, and ensure a risk cooldown of at least 15-30 minutes is active."
         )
-    if "bollinger" in text:
+    if "zerodha" in text or "rate limit" in text or "kite" in text or "tick" in text:
         return (
-            "A simple Bollinger squeeze idea:\n"
-            "1. Calculate 20-period SMA and standard deviation.\n"
-            "2. Mark squeeze when band width is below its recent percentile.\n"
-            "3. Buy after price closes above the upper band with momentum confirmation.\n"
-            "4. Exit on a middle-band break or fixed risk stop."
+            "📊 **Zerodha Kite & Runtime Performance Guidelines**\n\n"
+            "- **Rate Limits:** Zerodha Kite allows ~100 API calls/minute. Running too many strategies on tight timeframes will trigger 429 rate limit exceptions.\n"
+            "- **Hardware & Execution Bounds:** On standard terminal setups (e.g. 4 cores, 4GB RAM):\n"
+            "  * **Limit:** Run a maximum of **2 to 3 live strategies** concurrently.\n"
+            "  * **Ticks:** Keep the tick evaluation interval at **30 seconds** (do not go below 15s).\n"
+            "  * **Diversity:** Distribute strategies across different symbols (NIFTY, BANKNIFTY, MCX Crude) and timeframes to minimize overlapping API calls."
         )
-    if "risk" in text or "portfolio" in text:
+    if "kotak" in text or "mcx" in text or "commodity" in text or "gas" in text or "oil" in text:
         return (
-            "Keep the system survivable: risk 0.5% to 1% per trade, cap daily loss, avoid oversized option lots, and stop trading after two or three consecutive losses. Paper trade the exact rules before switching live mode on."
+            "🛢️ **Kotak Neo & MCX Commodities Integration**\n\n"
+            "- **Commodity Options & Futures:** QuantG supports MCX commodities (Crude Oil, Natural Gas) via the Kotak Neo gateway.\n"
+            "- **Symbol Formatting:** Always use exact Kotak-compliant MCX symbols (e.g., `CRUDEOIL26MAYFUT` or `NATURALGAS26MAYFUT`).\n"
+            "- **Risk Management:** Commodity margins are high. Double-check your capital allocation bounds in the strategy card's 'Risk & Exit Bounds' before switching live trading on."
         )
-    if "momentum" in text or "nifty" in text:
+    if "filter" in text or "fake" in text or "bot" in text or "accuracy" in text or "score" in text:
         return (
-            "NIFTY momentum template: trade only after the first 15 minutes, require price above VWAP and a rising 20 EMA, enter on pullback continuation, and exit on VWAP loss or a fixed R multiple."
+            "🤖 **AI Signal Validation Bot (FakeSignalFilter)**\n\n"
+            "The validation engine processes trade signals through 9 distinct telemetry layers to assign a 0-100% confidence score:\n"
+            "1. **Trend Alignment:** Compares signal action with 8/21 EMA trend bias (+25 for alignment, -30 for fight, -12 for HFT fight).\n"
+            "2. **Reversal Risk:** Evaluates Bollinger Bands and RSI overbought/oversold limits (cuts confidence up to -20 if entering high-risk zone).\n"
+            "3. **Whipsaw Detection:** Inspects the last 3 candles for rapid directional flips (penalizes consecutive opposite entries).\n"
+            "4. **Price Action Confirmation:** Checks recent candle bars for body strength relative to the trade direction.\n"
+            "5. **Multi-Timeframe Confirmation:** Calculates direction bias using a consolidated group of 3 periods.\n"
+            "6. **VWAP Hold:** Checks if the price holds near/above VWAP for BUYs, or near/below VWAP for SELLs (+8 points).\n"
+            "7. **ATR/Volume Regime:** Evaluates market volatility and rewards high-volume moves (+8 pts standard, +15 HFT expansion).\n"
+            "8. **Options OI Bias:** Integrates option chain Open Interest (OI) support to confirm trade participation (+10 points).\n"
+            "9. **Support & Resistance Bounce:** Increases score by +15 points if the entry is within 0.5% of local Support (BUY) or Resistance (SELL)."
         )
-    if "python" in text or "code" in text or "strategy" in text:
+    if "python" in text or "code" in text or "strategy" in text or "structure" in text:
         return (
-            "Here is the structure QuantG expects:\n\n"
-            "def run(data):\n"
+            "🐍 **QuantG Compliant Python Strategy Structure**\n\n"
+            "Every Python strategy must expose exactly a `run(data)` function and return a list of signals:\n\n"
+            "```python\ndef run(data):\n"
+            "    # data is a list of dicts: [{'open': 24000, 'high': 24050, 'low': 23980, 'close': 24020, 'volume': 5000, 'date': '2026-05-22T09:15:00+05:30'}]\n"
             "    signals = []\n"
             "    closes = [row['close'] for row in data]\n"
-            "    if len(closes) > 20 and closes[-1] > sum(closes[-20:]) / 20:\n"
-            "        signals.append({'action': 'BUY'})\n"
-            "    return signals\n\n"
-            "Keep the logic deterministic and test it in paper mode before live execution."
+            "    if len(closes) < 20:\n"
+            "        return signals\n\n"
+            "    # Calculate indicators\n"
+            "    ma = sum(closes[-20:]) / 20\n"
+            "    if closes[-1] > ma and closes[-2] <= ma:\n"
+            "        # BUY signal must include exact date and action\n"
+            "        signals.append({'date': data[-1]['date'], 'action': 'BUY'})\n"
+            "    return signals\n```\n"
+            "*Sandbox Safeguard:* Do not import external modules, write to files, perform networking, or call broker APIs directly inside the script."
+        )
+    if "risk" in text or "limits" in text or "portfolio" in text or "capital" in text:
+        return (
+            "🛡️ **QuantG Risk & Capital Protection Suite**\n\n"
+            "QuantG embeds institutional risk bounds which are synchronized dynamically from the frontend strategy card:\n"
+            "- **Target Profit (TP%):** Automatic profit booking threshold.\n"
+            "- **Stop Loss (SL%):** Capital protection exit threshold.\n"
+            "- **Trailing Stop Loss:** Step-based trail trigger & adjustment.\n"
+            "- **Cooldown (Mins):** Mandates a pause between trades to avoid revenge trading.\n"
+            "- **Max Trades/Day:** Caps daily activity to prevent runaway loop losses.\n"
+            "- **Daily Loss Limit (INR):** Stops the strategy instantly if cumulative loss exceeds the bound."
         )
     return (
-        "I can help with strategy ideas, Python strategy structure, Zerodha workflow, and risk rules. "
-        "Tell me the symbol, timeframe, entry idea, exit rule, and max risk per trade."
+        "👋 **QuantBot v11.0 Live Assistant**\n\n"
+        "I am fully updated on the QuantG terminal architecture! Ask me about:\n"
+        "- `Upstox HFT` (low-latency order routing, adaptive `is_hft` validation scoring)\n"
+        "- `Zerodha Kite` (performance guides, API rate limits, hardware thresholds)\n"
+        "- `Kotak Neo MCX` (commodity option symbols, Crude Oil / Natural Gas setups)\n"
+        "- `AI Signal Validation` (the 9 layers of `FakeSignalFilter` and scoring rules)\n"
+        "- `Python Strategy Code` (standard `run(data)` syntax and deterministic sandbox design)\n"
+        "- `Risk Bounds` (custom SL/TP, Trailing stops, cooldowns, daily loss limits)"
     )
 
 
@@ -728,16 +770,34 @@ def _google_ai_reply_sync(message: str, recent_messages: Optional[List[Dict[str,
             history_text += f"{role}: {content[:1200]}\n"
 
     prompt = f"""
-You are QuantBot inside QuantG, a personal Indian algo-trading terminal.
+You are QuantBot inside QuantG, a personal Indian algo-trading terminal. You are extremely accurate, highly up-to-date, and completely context-aware of the system's exact specifications.
 
-Safety and scope:
-- Give educational and implementation help only.
-- Never claim profit is guaranteed.
-- Never tell the user to bypass broker, exchange, or app risk controls.
-- Never say you placed, modified, or cancelled an order.
-- For live trading advice, emphasize paper testing, position sizing, liquidity, slippage, and daily loss limits.
-- If writing QuantG strategy code, return deterministic Python with `def run(data):` and signals shaped like `{{'date': data[i]['date'], 'action': 'BUY'}}`.
-- Keep answers concise and practical for NIFTY, BANKNIFTY, SENSEX, MCX crude oil, MCX natural gas, Zerodha, Kotak Neo, and QuantG workflows.
+### QUANTG TERMINAL ARCHITECTURE & CORE CAPABILITIES
+1. **Supported Brokers & Routing:**
+   - **Zerodha Kite:** Standard REST/WebSocket ticker integration. Rate-limited to ~100 calls/min. Recommended limits: max 2-3 concurrent live strategies, scanning every 30 seconds.
+   - **Kotak Neo:** Standard integration supporting Equity/F&O and MCX Commodities. Commodity symbol format requires exact Kotak-compliant structures (e.g., `CRUDEOIL26MAYFUT`, `NATURALGAS26MAYFUT`).
+   - **Upstox API v2 HFT Gateway:** Configured to run on high-speed order execution pipelines at `api-hft.upstox.com` in live mode when `hft=True` is provided (e.g. standard for HFT option scalp presets).
+2. **Fake Signal Filter (AI Validation Bot) & Scoring Rules:**
+   - Evaluates signals using a 9-layer scoring model (0-100% confidence score, standard threshold is **40%**, HFT threshold is **35%**).
+   - **HFT Scoring Mode:** Engaged automatically if strategy name or description contains "HFT" or "scalper".
+     * **Bypasses low-ATR penalties:** Standard swing strategies penalize flat ranges (ATR < 0.08% gets -12). HFT mode recognizes this as compression before breakouts and rewards **+8 points**.
+     * **Reduces trend fight penalties:** Reduces trend fights to **-12 points** (down from -30) to facilitate micro-trend scalps.
+     * **Boosts volume confirmations:** Volume expansion setups trigger **+15 points** confirmation bonus (up from +8).
+     * **Lowers absolute validation threshold:** 35% validation minimum to accommodate lightning-fast executions.
+   - **Standard Scoring Telemetry Layers:** Trend alignment (EMA 8/21), reversal risk (RSI & Bollinger limits), whipsaw checks (opposite signal in last 3 bars), candle body strength, multi-timeframe consolidated bias, VWAP hold confirmation (+8), volume ratio (>1.2x gets volume expansion bonus), options OI chain bias, and Support/Resistance bounces (+15 if close to S/R).
+3. **Hardware Boundaries & Stability Rules:**
+   - Designed for low-resource environments (4 logical processors, 4GB RAM laptops). Recommended limits: max 2-3 concurrent strategies, 30s scanning interval, keep backend/MongoDB RAM under 150MB each.
+4. **Python Strategy Code Standard:**
+   - Must define `def run(data):` returning a list of dicts: `[{"date": data[i]["date"], "action": "BUY"}]` (or "SELL").
+   - Strictly deterministic, sandboxed, no file writes, no direct broker execution, no external imports.
+5. **Dynamic Risk Bounds:**
+   - Standard exit and risk settings (TP%, SL%, trailing stop triggers, cooldown minutes, max trades per day, daily loss limits in INR) are fully editable in the visual card and applied by the QuantG engine.
+
+### RESPONSE GUIDELINES
+- Speak as a knowledgeable, highly professional quant assistant.
+- Give educational and implementation help only. Never promise guaranteed profit.
+- Ground all advice in the specific parameters, brokers, limits, and rules of QuantG.
+- Keep responses concise, structured, and easy to read.
 
 Recent chat:
 {history_text or "None"}
@@ -1646,7 +1706,164 @@ COMMODITY_VOLATILITY_STRADDLE_CODE = """def run(data):
     return []
 """
 
+UPSTOX_HFT_SCALPER_CODE = """def run(data):
+    # Upstox low-latency options scalping algorithm.
+    # Evaluates fast tick structures and momentum changes.
+    if len(data) < 15:
+        return []
+    
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Fast micro-EMA shift detection (3 tick vs 7 tick)
+    ema3 = sum(closes[-3:]) / 3
+    ema7 = sum(closes[-7:]) / 7
+    
+    # Tick price velocity
+    velocity = closes[-1] - closes[-3]
+    
+    # Recent ATR filter
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-5, len(data))]
+    atr = sum(tr) / len(tr)
+    
+    # Volume impulse filter
+    avg_vol = sum(vols[-8:-1]) / 7
+    vol_expansion = vols[-1] / max(1, avg_vol)
+    
+    # Scalping triggers optimized for low latency Upstox HFT API
+    if ema3 > ema7 and velocity > atr * 0.4 and vol_expansion > 1.2:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'HFT Momentum Upward Shift'}]
+    if ema3 < ema7 and velocity < -atr * 0.4 and vol_expansion > 1.2:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'HFT Momentum Downward Shift'}]
+        
+    return []
+"""
+
+UPSTOX_HFT_DELTA_NEUTRAL_CODE = """def run(data):
+    # Upstox low-latency multi-leg options delta-neutral scalping template.
+    # Enter delta-neutral straddles/strangles during compression and exit on expansion.
+    if len(data) < 30:
+        return []
+        
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    
+    # Compression metric: recent trading band vs historical band
+    recent_band = max(highs[-8:]) - min(lows[-8:])
+    hist_band = max(highs[-25:]) - min(lows[-25:])
+    
+    # Fast volatility threshold check
+    is_compressed = recent_band < hist_band * 0.4
+    
+    # Delta-neutral entry trigger
+    if is_compressed:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'HFT Compression Entry'}]
+        
+    # Exit trigger: volatility breakout
+    is_expanding = recent_band > hist_band * 0.75
+    if is_expanding:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'HFT Expansion Exit'}]
+        
+    return []
+"""
+
+BANKNIFTY_HFT_BREAKOUT_CODE = """def run(data):
+    # Bank Nifty high-frequency option breakout algorithm.
+    # Capitalizes on instant momentum shifts using high-volume ATR breakouts.
+    if len(data) < 25:
+        return []
+        
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Fast range calculations
+    prev_high = max(highs[-6:-1])
+    prev_low = min(lows[-6:-1])
+    
+    # ATR range filter
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-10, len(data))]
+    atr = sum(tr) / len(tr)
+    
+    # Volumetric pressure (volume weighting close position)
+    avg_vol = sum(vols[-10:-1]) / 9
+    vol_surge = vols[-1] > avg_vol * 1.3
+    
+    # High-speed breakout check
+    if closes[-1] > prev_high and vol_surge and (closes[-1] - closes[-2]) > atr * 0.5:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'BANKNIFTY HFT Breakout High'}]
+    if closes[-1] < prev_low and vol_surge and (closes[-2] - closes[-1]) > atr * 0.5:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'BANKNIFTY HFT Breakdown Low'}]
+        
+    return []
+"""
+
+NIFTY_LOW_LATENCY_SCALPER_CODE = """def run(data):
+    # NIFTY tick-based low latency option buying system.
+    # Uses VWAP crossover velocity and standard deviation envelopes.
+    if len(data) < 30:
+        return []
+        
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Fast VWAP approximation
+    typical = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(data))]
+    vwap = sum(typical[i] * vols[i] for i in range(len(data)-10, len(data))) / sum(vols[-10:])
+    
+    # Standard deviation envelope
+    mean_close = sum(closes[-10:]) / 10
+    variance = sum((x - mean_close) ** 2 for x in closes[-10:]) / 10
+    std_dev = variance ** 0.5
+    
+    # Low-latency scalper triggers
+    if closes[-1] > vwap + (std_dev * 1.5):
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'VWAP Speed Expansion Buy'}]
+    if closes[-1] < vwap - (std_dev * 1.5):
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'VWAP Speed Breakdown Sell'}]
+        
+    return []
+"""
+
 STANDARD_STRATEGY_CATALOG = [
+    {
+        "name": "Upstox HFT Low-Latency Scalper",
+        "description": "Tick-based micro-EMA momentum scalping utilizing Upstox API v2 HFT endpoints.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
+        "python_code": UPSTOX_HFT_SCALPER_CODE,
+    },
+    {
+        "name": "Upstox HFT Multi-Leg Straddle",
+        "description": "Low-latency delta-neutral strangle/straddle positioning under compression. Powered by Upstox v2.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
+        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
+        "python_code": UPSTOX_HFT_DELTA_NEUTRAL_CODE,
+    },
+    {
+        "name": "Bank Nifty Volatility Breakout HFT",
+        "description": "High-frequency Bank Nifty index option entries triggered by instant ATR momentum surges.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
+        "python_code": BANKNIFTY_HFT_BREAKOUT_CODE,
+    },
+    {
+        "name": "NIFTY Low-Latency Scalper",
+        "description": "Low-latency option scalper driven by high-speed standard deviation VWAP envelope breaches.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
+        "python_code": NIFTY_LOW_LATENCY_SCALPER_CODE,
+    },
     {
         "name": "NIFTY VWAP Trend Breakout",
         "description": "Directional NIFTY option buying with VWAP, SMA, ATR, and time filters.",
@@ -3082,7 +3299,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         last_sig = signals[-1]
         action = (last_sig.get("action") or "").upper()
         if action in ("BUY", "SELL"):
-            signal_validation = _validate_trade_signal(last_sig, data)
+            signal_validation = _validate_trade_signal(last_sig, data, row)
             if not signal_validation.get("is_valid"):
                 placed_error = (
                     f"Signal filtered: confidence {signal_validation.get('confidence')} "
@@ -3167,14 +3384,21 @@ def _safe_run_python(code: str, data: List[dict]) -> List[dict]:
     return safe_run_strategy(code, data)
 
 
-def _validate_trade_signal(signal: Dict[str, Any], data: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _validate_trade_signal(signal: Dict[str, Any], data: List[Dict[str, Any]], strategy: Dict[str, Any] = None) -> Dict[str, Any]:
     """Score the latest signal against trend, candle confirmation, and whipsaw risk."""
     try:
         trend = MarketTrendAnalyzer.analyze(data, lookback=min(50, max(20, len(data))))
-        validation = FakeSignalFilter.validate(signal, data, trend)
-        validation["threshold"] = SIGNAL_CONFIDENCE_MIN
+        is_hft = False
+        if strategy:
+            name = str(strategy.get("name") or "").lower()
+            desc = str(strategy.get("description") or "").lower()
+            if "hft" in name or "hft" in desc or "scalper" in name or "scalper" in desc:
+                is_hft = True
+        validation = FakeSignalFilter.validate(signal, data, trend, is_hft=is_hft)
+        threshold = 35.0 if is_hft else SIGNAL_CONFIDENCE_MIN
+        validation["threshold"] = threshold
         validation["trend"] = trend
-        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= SIGNAL_CONFIDENCE_MIN
+        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= threshold
         return validation
     except Exception as e:
         logger.warning(f"signal validation failed: {e}")
