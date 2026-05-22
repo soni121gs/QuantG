@@ -5102,6 +5102,7 @@ async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[
     config = {
         "consumer_key": consumer_key,
         "consumer_secret": os.environ.get("KOTAK_CONSUMER_SECRET") or consumer_secret,
+        "neo_fin_key": os.environ.get("KOTAK_NEO_FIN_KEY"),
         "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER") or decrypt_secret(keys.get("mobile_number")),
         "username": os.environ.get("KOTAK_USERNAME") or os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
         "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),

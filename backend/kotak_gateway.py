@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 import threading
 from datetime import datetime, timezone
 from enum import Enum
@@ -42,6 +43,7 @@ class KotakNeoGateway:
     Required config/env:
     - consumer_key / KOTAK_CONSUMER_KEY
     - consumer_secret / KOTAK_CONSUMER_SECRET
+    - neo_fin_key / KOTAK_NEO_FIN_KEY for SDK builds that require it
     - mobile_number / KOTAK_MOBILE_NUMBER
     - password / KOTAK_PASSWORD, or mpin / KOTAK_MPIN
     - totp_secret_key / KOTAK_TOTP_SECRET_KEY
@@ -53,6 +55,7 @@ class KotakNeoGateway:
         self._environment = self._get("environment", environment) or "prod"
         self._consumer_key = self._get("consumer_key", env="KOTAK_CONSUMER_KEY")
         self._consumer_secret = self._get("consumer_secret", env="KOTAK_CONSUMER_SECRET")
+        self._neo_fin_key = self._get("neo_fin_key", env="KOTAK_NEO_FIN_KEY")
         self._mobile_number = self._get("mobile_number", env="KOTAK_MOBILE_NUMBER")
         self._username = self._get("username", env="KOTAK_USERNAME") or self._get("ucc", env="KOTAK_UCC")
         self._password = self._get("password", env="KOTAK_PASSWORD") or self._get("mpin", env="KOTAK_MPIN")
@@ -83,7 +86,6 @@ class KotakNeoGateway:
             name
             for name, value in {
                 "consumer_key": self._consumer_key,
-                "consumer_secret": self._consumer_secret,
             }.items()
             if not value
         ]
@@ -102,28 +104,29 @@ class KotakNeoGateway:
             self._set_error(f"NeoAPI initialization failed: {self._friendly_error(exc)}")
 
     def _build_sdk_client(self):
-        """Create NeoAPI once, tolerating small SDK constructor differences."""
-        attempts = [
-            {
-                "consumer_key": str(self._consumer_key),
-                "consumer_secret": str(self._consumer_secret),
-                "environment": self._environment,
-                "access_token": None,
-            },
-            {
-                "consumer_key": str(self._consumer_key),
-                "consumer_secret": str(self._consumer_secret),
-                "environment": self._environment,
-            },
-        ]
-        errors: List[str] = []
-        for kwargs in attempts:
-            try:
-                return NeoAPI(**kwargs)
-            except TypeError as exc:
-                errors.append(self._friendly_error(exc))
-                continue
-        raise RuntimeError("; ".join(errors) or "NeoAPI constructor rejected QuantG credentials")
+        """Create NeoAPI once using the constructor supported by installed SDK."""
+        try:
+            params = set(inspect.signature(NeoAPI.__init__).parameters)
+        except Exception:
+            params = set()
+        kwargs: Dict[str, Any] = {}
+        if not params or "consumer_key" in params:
+            kwargs["consumer_key"] = str(self._consumer_key)
+        if "consumer_secret" in params and self._consumer_secret:
+            kwargs["consumer_secret"] = str(self._consumer_secret)
+        if "environment" in params:
+            kwargs["environment"] = self._environment
+        if "access_token" in params:
+            kwargs["access_token"] = None
+        if "neo_fin_key" in params and self._neo_fin_key:
+            kwargs["neo_fin_key"] = str(self._neo_fin_key)
+        logger.info("Kotak Neo SDK constructor args=%s", sorted(kwargs.keys()))
+        try:
+            return NeoAPI(**kwargs)
+        except TypeError as exc:
+            raise RuntimeError(
+                f"Installed Kotak SDK rejected constructor args {sorted(kwargs.keys())}: {self._friendly_error(exc)}"
+            )
 
     def authenticate(self) -> Dict[str, Any]:
         """Run login -> TOTP -> session_2fa before any trading/data call."""
