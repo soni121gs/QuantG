@@ -523,6 +523,9 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         <Metric label="Strategy Type" value={s.strategy_type || "Option Buying"} />
         <Metric label="Asset" value={s.asset_class === "commodity" ? "Oil and Gas" : s.asset_class || "equity"} />
         <Metric label="Data" value={sourceLabel(s.last_data_source)} tone={s.last_data_live ? "text-[var(--qd-profit)]" : ""} />
+        <div className="col-span-2 border-t border-[rgba(255,255,255,0.06)] pt-2.5 mt-0.5">
+          <Metric label="AI Market Suitability" value={s.market_suitability || "Any Market Condition"} tone="text-indigo-400 font-bold font-mono" />
+        </div>
       </div>
 
       <div className="mt-4 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3">

@@ -181,6 +181,7 @@ class StrategyReq(BaseModel):
     status: str = "draft"  # draft | live | paused
     broker: Optional[str] = "upstox"
     mode: Optional[str] = "paper"
+    market_suitability: Optional[str] = "Any Market Condition"
 
 
 class StrategyOut(BaseModel):
@@ -211,6 +212,7 @@ class StrategyOut(BaseModel):
     last_error: Optional[str] = None
     broker: Optional[str] = "upstox"
     mode: Optional[str] = "paper"
+    market_suitability: Optional[str] = "Any Market Condition"
 
 
 
@@ -1531,120 +1533,284 @@ LEGACY_OPTION_STRATEGIES = DEFAULT_OPTION_STRATEGIES
 
 
 TREND_CONTINUATION_CODE = """def run(data):
-    if len(data) < 80:
-        return []
-    last = data[-1]
-    today = str(last['date'])[:10]
-    clock = str(last['date'])[11:16]
-    if clock < '09:45' or clock > '14:45':
-        return []
-    closes = [float(d['close']) for d in data]
-    highs = [float(d.get('high', d['close'])) for d in data]
-    lows = [float(d.get('low', d['close'])) for d in data]
-    sma20 = sum(closes[-20:]) / 20
-    sma50 = sum(closes[-50:]) / 50
-    prev_high = max(highs[-11:-1])
-    prev_low = min(lows[-11:-1])
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
-    atr = sum(tr) / len(tr)
-    body = abs(closes[-1] - closes[-2])
-    if str(data[-2]['date'])[:10] != today:
-        return []
-    if closes[-1] > prev_high and sma20 > sma50 and closes[-1] > sma20 and body > atr * 0.35:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if closes[-1] < prev_low and sma20 < sma50 and closes[-1] < sma20 and body > atr * 0.35:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
-"""
-
-OPENING_RANGE_VWAP_CODE = """def run(data):
-    today_bars = [d for d in data if str(d['date'])[:10] == str(data[-1]['date'])[:10]]
-    if len(today_bars) < 5:
-        return []
-    last = today_bars[-1]
-    clock = str(last['date'])[11:16]
-    if clock < '09:35' or clock > '11:15':
-        return []
-    opening = today_bars[:3]
-    range_high = max(float(d.get('high', d['close'])) for d in opening)
-    range_low = min(float(d.get('low', d['close'])) for d in opening)
-    closes = [float(d['close']) for d in today_bars]
-    highs = [float(d.get('high', d['close'])) for d in today_bars]
-    lows = [float(d.get('low', d['close'])) for d in today_bars]
-    vols = [max(1, int(d.get('volume', 1))) for d in today_bars]
-    typical_value = sum(((highs[i] + lows[i] + closes[i]) / 3) * vols[i] for i in range(len(today_bars)))
-    vwap = typical_value / max(1, sum(vols))
-    avg_vol = sum(vols[:-1]) / max(1, len(vols) - 1)
-    if closes[-1] > range_high and closes[-1] > vwap and vols[-1] > avg_vol * 1.05:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if closes[-1] < range_low and closes[-1] < vwap and vols[-1] > avg_vol * 1.05:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
-"""
-
-VWAP_PULLBACK_CODE = """def run(data):
-    today_bars = [d for d in data if str(d['date'])[:10] == str(data[-1]['date'])[:10]]
-    if len(today_bars) < 15:
-        return []
-    last = today_bars[-1]
-    clock = str(last['date'])[11:16]
-    if clock < '10:00' or clock > '14:30':
-        return []
-    closes = [float(d['close']) for d in today_bars]
-    highs = [float(d.get('high', d['close'])) for d in today_bars]
-    lows = [float(d.get('low', d['close'])) for d in today_bars]
-    vols = [max(1, int(d.get('volume', 1))) for d in today_bars]
-    typical_value = sum(((highs[i] + lows[i] + closes[i]) / 3) * vols[i] for i in range(len(today_bars)))
-    vwap = typical_value / max(1, sum(vols))
-    ma20 = sum(closes[-20:]) / min(20, len(closes))
-    ma20_prev = sum(closes[-21:-1]) / min(20, len(closes) - 1)
-    prev_high = max(highs[-6:-1])
-    prev_low = min(lows[-6:-1])
-    if ma20 > ma20_prev and closes[-2] <= vwap and closes[-1] > vwap and closes[-1] > prev_high:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if ma20 < ma20_prev and closes[-2] >= vwap and closes[-1] < vwap and closes[-1] < prev_low:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
-"""
-
-ATR_VOLUME_BREAKOUT_CODE = """def run(data):
-    if len(data) < 70:
-        return []
-    last = data[-1]
-    clock = str(last['date'])[11:16]
-    if clock < '10:15' or clock > '14:40':
+    if len(data) < 55:
         return []
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
-    atr = sum(tr) / len(tr)
-    recent_range = sum(highs[i] - lows[i] for i in range(len(data)-8, len(data)-2)) / 6
-    prev_high = max(highs[-13:-1])
-    prev_low = min(lows[-13:-1])
-    avg_vol = sum(vols[-21:-1]) / 20
-    if recent_range < atr * 0.85 and vols[-1] > avg_vol * 1.15 and closes[-1] > prev_high:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if recent_range < atr * 0.85 and vols[-1] > avg_vol * 1.15 and closes[-1] < prev_low:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
+    
+    def calc_sma(values, period):
+        return [sum(values[i-period+1:i+1])/period if i >= period-1 else values[i] for i in range(len(values))]
+        
+    sma20 = calc_sma(closes, 20)
+    sma50 = calc_sma(closes, 50)
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data))]
+    atr = calc_sma(tr, 14)
+    
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
+    
+    for i in range(50, len(data)):
+        clock = str(data[i]['date'])[11:16]
+        if clock < '09:45' or clock > '14:45':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Time Exit'})
+                position = "NONE"
+            continue
+        close = closes[i]
+        high = highs[i]
+        low = lows[i]
+        prev_high = max(highs[i-11:i])
+        prev_low = min(lows[i-11:i])
+        body = abs(close - closes[i-1])
+        
+        bullish_entry = close > prev_high and sma20[i] > sma50[i] and close > sma20[i] and body > atr[i] * 0.35
+        bearish_entry = close < prev_low and sma20[i] < sma50[i] and close < sma20[i] and body > atr[i] * 0.35
+        
+        if position == "LONG":
+            highest_price = max(highest_price, high)
+            pnl = (close - entry_price) / entry_price * 100
+            dd = (highest_price - close) / entry_price * 100
+            if close < sma20[i] or pnl <= -0.4 or pnl >= 1.0 or (highest_price > entry_price * 1.003 and dd >= 0.25):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Trend Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, low)
+            pnl = (entry_price - close) / entry_price * 100
+            dd = (close - lowest_price) / entry_price * 100
+            if close > sma20[i] or pnl <= -0.4 or pnl >= 1.0 or (lowest_price < entry_price * 0.997 and dd >= 0.25):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Trend Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Trend Buy'})
+                position = "LONG"
+                entry_price = close
+                highest_price = high
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Trend Sell'})
+                position = "SHORT"
+                entry_price = close
+                lowest_price = low
+    return signals
+"""
+
+OPENING_RANGE_VWAP_CODE = """def run(data):
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    today = str(data[-1]['date'])[:10]
+    today_indices = [i for i, d in enumerate(data) if str(d['date'])[:10] == today]
+    if len(today_indices) < 5:
+        return []
+        
+    start_idx = today_indices[0]
+    opening_bars = today_indices[:3]
+    range_high = max(highs[i] for i in opening_bars)
+    range_low = min(lows[i] for i in opening_bars)
+    
+    cum_pv = 0.0
+    cum_vol = 0.0
+    vwap = [closes[i] for i in range(len(data))]
+    for i in today_indices:
+        typical = (highs[i] + lows[i] + closes[i]) / 3
+        cum_pv += typical * vols[i]
+        cum_vol += vols[i]
+        vwap[i] = cum_pv / max(1, cum_vol)
+        
+    for i in today_indices[3:]:
+        clock = str(data[i]['date'])[11:16]
+        if clock > '15:10':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Market Close Exit'})
+                position = "NONE"
+            continue
+            
+        close = closes[i]
+        vol = vols[i]
+        avg_vol = sum(vols[start_idx:i]) / max(1, i - start_idx)
+        
+        bullish_entry = close > range_high and close > vwap[i] and vol > avg_vol * 1.05
+        bearish_entry = close < range_low and close < vwap[i] and vol > avg_vol * 1.05
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            if close < vwap[i] or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'ORB Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            if close > vwap[i] or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'ORB Short Exit'})
+                position = "NONE"
+        else:
+            if clock < '11:15':
+                if bullish_entry:
+                    signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'ORB Buy'})
+                    position = "LONG"
+                    entry_price = close
+                elif bearish_entry:
+                    signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'ORB Sell'})
+                    position = "SHORT"
+                    entry_price = close
+    return signals
+"""
+
+VWAP_PULLBACK_CODE = """def run(data):
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    today = str(data[-1]['date'])[:10]
+    today_indices = [i for i, d in enumerate(data) if str(d['date'])[:10] == today]
+    if len(today_indices) < 15:
+        return []
+        
+    start_idx = today_indices[0]
+    cum_pv = 0.0
+    cum_vol = 0.0
+    vwap = [closes[i] for i in range(len(data))]
+    for i in today_indices:
+        typical = (highs[i] + lows[i] + closes[i]) / 3
+        cum_pv += typical * vols[i]
+        cum_vol += vols[i]
+        vwap[i] = cum_pv / max(1, cum_vol)
+        
+    def calc_sma(values, period):
+        return [sum(values[j-period+1:j+1])/period if j >= period-1 else values[j] for j in range(len(values))]
+        
+    ma20 = calc_sma(closes, 20)
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in today_indices[5:]:
+        clock = str(data[i]['date'])[11:16]
+        if clock < '10:00' or clock > '14:30':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Time Exit'})
+                position = "NONE"
+            continue
+            
+        close = closes[i]
+        prev_high = max(highs[i-6:i])
+        prev_low = min(lows[i-6:i])
+        
+        bullish_entry = ma20[i] > ma20[i-1] and closes[i-1] <= vwap[i-1] and close > vwap[i] and close > prev_high
+        bearish_entry = ma20[i] < ma20[i-1] and closes[i-1] >= vwap[i-1] and close < vwap[i] and close < prev_low
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            if close < vwap[i] or pnl <= -0.3 or pnl >= 0.7:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Pullback Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            if close > vwap[i] or pnl <= -0.3 or pnl >= 0.7:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Pullback Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Pullback Buy'})
+                position = "LONG"
+                entry_price = close
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Pullback Sell'})
+                position = "SHORT"
+                entry_price = close
+    return signals
+"""
+
+ATR_VOLUME_BREAKOUT_CODE = """def run(data):
+    if len(data) < 70:
+        return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    def calc_sma(values, period):
+        return [sum(values[j-period+1:j+1])/period if j >= period-1 else values[j] for j in range(len(values))]
+        
+    tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(len(data))]
+    atr = calc_sma(tr, 14)
+    
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
+    
+    for i in range(50, len(data)):
+        clock = str(data[i]['date'])[11:16]
+        if clock < '10:15' or clock > '14:40':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Time Exit'})
+                position = "NONE"
+            continue
+            
+        close = closes[i]
+        high = highs[i]
+        low = lows[i]
+        recent_range = sum(highs[j] - lows[j] for j in range(i-8, i-2)) / 6
+        prev_high = max(highs[i-13:i])
+        prev_low = min(lows[i-13:i])
+        avg_vol = sum(vols[i-21:i]) / 20
+        
+        bullish_entry = recent_range < atr[i] * 0.85 and vols[i] > avg_vol * 1.15 and close > prev_high
+        bearish_entry = recent_range < atr[i] * 0.85 and vols[i] > avg_vol * 1.15 and close < prev_low
+        
+        if position == "LONG":
+            highest_price = max(highest_price, high)
+            pnl = (close - entry_price) / entry_price * 100
+            dd = (highest_price - close) / entry_price * 100
+            if close < prev_high - atr[i] or pnl <= -0.4 or pnl >= 1.0 or (highest_price > entry_price * 1.003 and dd >= 0.25):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'ATR Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, low)
+            pnl = (entry_price - close) / entry_price * 100
+            dd = (close - lowest_price) / entry_price * 100
+            if close > prev_low + atr[i] or pnl <= -0.4 or pnl >= 1.0 or (lowest_price < entry_price * 0.997 and dd >= 0.25):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'ATR Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'ATR Buy'})
+                position = "LONG"
+                entry_price = close
+                highest_price = high
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'ATR Sell'})
+                position = "SHORT"
+                entry_price = close
+                lowest_price = low
+    return signals
 """
 
 RSI_REVERSAL_CODE = """def run(data):
     if len(data) < 60:
         return []
-    last = data[-1]
-    clock = str(last['date'])[11:16]
-    if clock < '10:00' or clock > '14:15':
-        return []
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
-    def calc_rsi(end, period):
-        gains = 0
-        losses = 0
-        for j in range(end - period + 1, end + 1):
+    
+    def calc_rsi(end_idx, period=14):
+        gains = 0.0
+        losses = 0.0
+        for j in range(end_idx - period + 1, end_idx + 1):
             change = closes[j] - closes[j-1]
             if change > 0:
                 gains += change
@@ -1654,16 +1820,53 @@ RSI_REVERSAL_CODE = """def run(data):
         avg_loss = losses / period if losses else 0.0001
         rs = avg_gain / avg_loss
         return 100 - (100 / (1 + rs))
-    rsi_now = calc_rsi(len(closes) - 1, 14)
-    rsi_prev = calc_rsi(len(closes) - 2, 14)
-    sma50 = sum(closes[-50:]) / 50
-    prev_high = max(highs[-5:-1])
-    prev_low = min(lows[-5:-1])
-    if rsi_prev < 32 and rsi_now > 38 and closes[-1] > prev_high and closes[-1] > sma50:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if rsi_prev > 68 and rsi_now < 62 and closes[-1] < prev_low and closes[-1] < sma50:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
+        
+    rsi = [calc_rsi(i) if i >= 14 else 50.0 for i in range(len(closes))]
+    
+    def calc_sma(values, period):
+        return [sum(values[j-period+1:j+1])/period if j >= period-1 else values[j] for j in range(len(values))]
+        
+    sma50 = calc_sma(closes, 50)
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(50, len(data)):
+        clock = str(data[i]['date'])[11:16]
+        if clock < '10:00' or clock > '14:15':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Time Exit'})
+                position = "NONE"
+            continue
+            
+        close = closes[i]
+        prev_high = max(highs[i-5:i])
+        prev_low = min(lows[i-5:i])
+        
+        bullish_entry = rsi[i-1] < 32 and rsi[i] > 38 and close > prev_high and close > sma50[i]
+        bearish_entry = rsi[i-1] > 68 and rsi[i] < 62 and close < prev_low and close < sma50[i]
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            if rsi[i] > 70 or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'RSI Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            if rsi[i] < 30 or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'RSI Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'RSI Buy'})
+                position = "LONG"
+                entry_price = close
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'RSI Sell'})
+                position = "SHORT"
+                entry_price = close
+    return signals
 """
 
 DEFAULT_OPTION_STRATEGIES = [
@@ -1672,222 +1875,340 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "Trades only confirmed NIFTY trend breakouts with SMA, ATR, and time filters.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": TREND_CONTINUATION_CODE,
+        "market_suitability": "Strong Trending & Sustained Breakout",
     },
     {
         "name": "NIFTY Opening Range VWAP",
         "description": "Uses current-day opening range only, confirmed by VWAP and volume.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": OPENING_RANGE_VWAP_CODE,
+        "market_suitability": "Morning Breakouts & High Volatility Open",
     },
     {
         "name": "NIFTY VWAP Pullback Continuation",
         "description": "Waits for a pullback to VWAP, then continuation through a short swing.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": VWAP_PULLBACK_CODE,
+        "market_suitability": "Trending Pullbacks & Re-entries",
     },
     {
         "name": "NIFTY ATR Volume Expansion",
         "description": "Trades post-compression moves only when ATR and volume confirm expansion.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": ATR_VOLUME_BREAKOUT_CODE,
+        "market_suitability": "Post-Compression Low Vol Squeezes",
     },
     {
         "name": "NIFTY RSI Reversal With Trend",
         "description": "Countertrend entry only after RSI recovery and reclaim of a short swing.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": RSI_REVERSAL_CODE,
+        "market_suitability": "Trend Retracements & Swing Pullbacks",
     },
     {
         "name": "SENSEX VWAP Trend Breakout",
         "description": "Trades only confirmed SENSEX trend breakouts with SMA, ATR, and time filters.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": TREND_CONTINUATION_CODE,
+        "market_suitability": "Strong Trending & Sustained Breakout",
     },
     {
         "name": "SENSEX Opening Range VWAP",
         "description": "Uses current-day SENSEX opening range only, confirmed by VWAP and volume.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": OPENING_RANGE_VWAP_CODE,
+        "market_suitability": "Morning Breakouts & High Volatility Open",
     },
     {
         "name": "SENSEX VWAP Pullback Continuation",
         "description": "Waits for SENSEX pullback to VWAP, then continuation through a short swing.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": VWAP_PULLBACK_CODE,
+        "market_suitability": "Trending Pullbacks & Re-entries",
     },
     {
         "name": "SENSEX ATR Volume Expansion",
         "description": "Trades post-compression SENSEX moves only when ATR and volume confirm.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": ATR_VOLUME_BREAKOUT_CODE,
+        "market_suitability": "Post-Compression Low Vol Squeezes",
     },
     {
         "name": "SENSEX RSI Reversal With Trend",
         "description": "SENSEX reversal entry only after RSI recovery and swing confirmation.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "python_code": RSI_REVERSAL_CODE,
+        "market_suitability": "Trend Retracements & Swing Pullbacks",
     },
 ]
 
 COMMODITY_MOMENTUM_BREAKOUT_CODE = """def run(data):
     if len(data) < 55:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
-    sma20 = sum(closes[-20:]) / 20
-    sma50 = sum(closes[-50:]) / 50
-    prev_high = max(highs[-12:-1])
-    prev_low = min(lows[-12:-1])
-    avg_vol = sum(vols[-21:-1]) / 20
-    if closes[-1] > prev_high and sma20 > sma50 and vols[-1] > avg_vol * 1.1:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    if closes[-1] < prev_low and sma20 < sma50 and vols[-1] > avg_vol * 1.1:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
+    
+    def calc_sma(values, period):
+        return [sum(values[j-period+1:j+1])/period if j >= period-1 else values[j] for j in range(len(values))]
+        
+    sma20 = calc_sma(closes, 20)
+    sma50 = calc_sma(closes, 50)
+    
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
+    
+    for i in range(50, len(data)):
+        close = closes[i]
+        high = highs[i]
+        low = lows[i]
+        prev_high = max(highs[i-12:i])
+        prev_low = min(lows[i-12:i])
+        avg_vol = sum(vols[i-21:i]) / 20
+        
+        bullish_entry = close > prev_high and sma20[i] > sma50[i] and vols[i] > avg_vol * 1.1
+        bearish_entry = close < prev_low and sma20[i] < sma50[i] and vols[i] > avg_vol * 1.1
+        
+        if position == "LONG":
+            highest_price = max(highest_price, high)
+            pnl = (close - entry_price) / entry_price * 100
+            dd = (highest_price - close) / entry_price * 100
+            if close < sma20[i] or pnl <= -0.5 or pnl >= 1.2 or (highest_price > entry_price * 1.004 and dd >= 0.35):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Comm Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, low)
+            pnl = (entry_price - close) / entry_price * 100
+            dd = (close - lowest_price) / entry_price * 100
+            if close > sma20[i] or pnl <= -0.5 or pnl >= 1.2 or (lowest_price < entry_price * 0.996 and dd >= 0.35):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Comm Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Comm Buy'})
+                position = "LONG"
+                entry_price = close
+                highest_price = high
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Comm Sell'})
+                position = "SHORT"
+                entry_price = close
+                lowest_price = low
+    return signals
 """
 
 COMMODITY_RANGE_SELLING_CODE = """def run(data):
     if len(data) < 45:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
-    recent_range = max(highs[-20:]) - min(lows[-20:])
-    wider_range = max(highs[-40:]) - min(lows[-40:])
-    drift = abs(closes[-1] - closes[-10]) / max(1, closes[-10])
-    if wider_range and recent_range < wider_range * 0.55 and drift < 0.015:
-        return [{'date': last['date'], 'action': 'SELL'}]
-    return []
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(40, len(data)):
+        recent_range = max(highs[i-20:i+1]) - min(lows[i-20:i+1])
+        wider_range = max(highs[i-40:i+1]) - min(lows[i-40:i+1])
+        drift = abs(closes[i] - closes[i-10]) / max(1, closes[i-10])
+        
+        bearish_entry = wider_range > 0 and recent_range < wider_range * 0.55 and drift < 0.015
+        
+        if position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if pnl <= -0.4 or pnl >= 0.8 or drift > 0.025:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Comm Range Cover'})
+                position = "NONE"
+        else:
+            if bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Comm Range Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
 """
 
 COMMODITY_VOLATILITY_STRADDLE_CODE = """def run(data):
     if len(data) < 35:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-14, len(data))]
-    atr = sum(tr) / len(tr)
-    compression = sum(highs[i] - lows[i] for i in range(len(data)-8, len(data))) / 8
-    if compression < atr * 0.75:
-        return [{'date': last['date'], 'action': 'BUY'}]
-    return []
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(25, len(data)):
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-14, i+1)]
+        atr = sum(tr) / len(tr)
+        compression = sum(highs[j] - lows[j] for j in range(i-8, i+1)) / 8
+        
+        breakout_entry = compression < atr * 0.75
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if pnl <= -0.35 or pnl >= 0.9 or compression > atr * 1.1:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Straddle Exit'})
+                position = "NONE"
+        else:
+            if breakout_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Straddle Entry'})
+                position = "LONG"
+                entry_price = closes[i]
+    return signals
 """
 
 UPSTOX_HFT_SCALPER_CODE = """def run(data):
-    # Upstox low-latency options scalping algorithm.
-    # Evaluates fast tick structures and momentum changes.
-    if len(data) < 15:
+    if len(data) < 20:
         return []
-    
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Fast micro-EMA shift detection (3 tick vs 7 tick)
-    ema3 = sum(closes[-3:]) / 3
-    ema7 = sum(closes[-7:]) / 7
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
     
-    # Tick price velocity
-    velocity = closes[-1] - closes[-3]
-    
-    # Recent ATR filter
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-5, len(data))]
-    atr = sum(tr) / len(tr)
-    
-    # Volume impulse filter
-    avg_vol = sum(vols[-8:-1]) / 7
-    vol_expansion = vols[-1] / max(1, avg_vol)
-    
-    # Scalping triggers optimized for low latency Upstox HFT API
-    if ema3 > ema7 and velocity > atr * 0.4 and vol_expansion > 1.2:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'HFT Momentum Upward Shift'}]
-    if ema3 < ema7 and velocity < -atr * 0.4 and vol_expansion > 1.2:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'HFT Momentum Downward Shift'}]
+    for i in range(15, len(data)):
+        ema3 = sum(closes[i-3:i+1]) / 4
+        ema7 = sum(closes[i-7:i+1]) / 8
+        velocity = closes[i] - closes[i-3]
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-5, i+1)]
+        atr = sum(tr) / len(tr)
+        avg_vol = sum(vols[i-8:i]) / 7
+        vol_expansion = vols[i] / max(1, avg_vol)
         
-    return []
+        bullish_entry = ema3 > ema7 and velocity > atr * 0.4 and vol_expansion > 1.25
+        bearish_entry = ema3 < ema7 and velocity < -atr * 0.4 and vol_expansion > 1.25
+        
+        if position == "LONG":
+            highest_price = max(highest_price, highs[i])
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            dd = (highest_price - closes[i]) / entry_price * 100
+            if ema3 < ema7 or pnl <= -0.25 or pnl >= 0.55 or (highest_price > entry_price * 1.002 and dd >= 0.18):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'HFT Scalp Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, lows[i])
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            dd = (closes[i] - lowest_price) / entry_price * 100
+            if ema3 > ema7 or pnl <= -0.25 or pnl >= 0.55 or (lowest_price < entry_price * 0.998 and dd >= 0.18):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'HFT Scalp Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'HFT Scalp Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+                highest_price = highs[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'HFT Scalp Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+                lowest_price = lows[i]
+    return signals
 """
 
 UPSTOX_HFT_DELTA_NEUTRAL_CODE = """def run(data):
-    # Upstox low-latency multi-leg options delta-neutral scalping template.
-    # Enter delta-neutral straddles/strangles during compression and exit on expansion.
     if len(data) < 30:
         return []
-        
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     
-    # Compression metric: recent trading band vs historical band
-    recent_band = max(highs[-8:]) - min(lows[-8:])
-    hist_band = max(highs[-25:]) - min(lows[-25:])
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    # Fast volatility threshold check
-    is_compressed = recent_band < hist_band * 0.4
-    
-    # Delta-neutral entry trigger
-    if is_compressed:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'HFT Compression Entry'}]
+    for i in range(25, len(data)):
+        recent_band = max(highs[i-8:i+1]) - min(lows[i-8:i+1])
+        hist_band = max(highs[i-25:i+1]) - min(lows[i-25:i+1])
         
-    # Exit trigger: volatility breakout
-    is_expanding = recent_band > hist_band * 0.75
-    if is_expanding:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'HFT Expansion Exit'}]
+        is_compressed = recent_band < hist_band * 0.4
+        is_expanding = recent_band > hist_band * 0.75
         
-    return []
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if is_expanding or pnl <= -0.5 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'HFT Strangle Neutral Exit'})
+                position = "NONE"
+        else:
+            if is_compressed:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'HFT Strangle Neutral Entry'})
+                position = "LONG"
+                entry_price = closes[i]
+    return signals
 """
 
 BANKNIFTY_HFT_BREAKOUT_CODE = """def run(data):
-    # Bank Nifty high-frequency option breakout algorithm.
-    # Capitalizes on instant momentum shifts using high-volume ATR breakouts.
     if len(data) < 25:
         return []
-        
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Fast range calculations
-    prev_high = max(highs[-6:-1])
-    prev_low = min(lows[-6:-1])
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
     
-    # ATR range filter
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-10, len(data))]
-    atr = sum(tr) / len(tr)
-    
-    # Volumetric pressure (volume weighting close position)
-    avg_vol = sum(vols[-10:-1]) / 9
-    vol_surge = vols[-1] > avg_vol * 1.3
-    
-    # High-speed breakout check
-    if closes[-1] > prev_high and vol_surge and (closes[-1] - closes[-2]) > atr * 0.5:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'BANKNIFTY HFT Breakout High'}]
-    if closes[-1] < prev_low and vol_surge and (closes[-2] - closes[-1]) > atr * 0.5:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'BANKNIFTY HFT Breakdown Low'}]
+    for i in range(20, len(data)):
+        prev_high = max(highs[i-6:i])
+        prev_low = min(lows[i-6:i])
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-10, i+1)]
+        atr = sum(tr) / len(tr)
+        avg_vol = sum(vols[i-10:i]) / 9
+        vol_surge = vols[i] > avg_vol * 1.3
         
-    return []
+        bullish_entry = closes[i] > prev_high and vol_surge and (closes[i] - closes[i-1]) > atr * 0.5
+        bearish_entry = closes[i] < prev_low and vol_surge and (closes[i-1] - closes[i]) > atr * 0.5
+        
+        if position == "LONG":
+            highest_price = max(highest_price, highs[i])
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            dd = (highest_price - closes[i]) / entry_price * 100
+            if closes[i] < (prev_high + prev_low) / 2 or pnl <= -0.35 or pnl >= 0.75 or (highest_price > entry_price * 1.003 and dd >= 0.22):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BN Breakout Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, lows[i])
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            dd = (closes[i] - lowest_price) / entry_price * 100
+            if closes[i] > (prev_high + prev_low) / 2 or pnl <= -0.35 or pnl >= 0.75 or (lowest_price < entry_price * 0.997 and dd >= 0.22):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BN Breakdown Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BN Breakout Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+                highest_price = highs[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BN Breakdown Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+                lowest_price = lows[i]
+    return signals
 """
 
 NIFTY_HFT_MICRO_SCALPER_CODE = """def run(data):
-    # NIFTY micro-scalping strategy designed for high-frequency low-capital trading.
-    # Uses fast 3-period vs 8-period EMA crossover with short-term volume surges.
     if len(data) < 20:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Calculate EMA 3 and EMA 8
     def calc_ema(values, period):
         k = 2.0 / (period + 1)
         ema = [values[0]]
@@ -1898,27 +2219,53 @@ NIFTY_HFT_MICRO_SCALPER_CODE = """def run(data):
     ema3 = calc_ema(closes, 3)
     ema8 = calc_ema(closes, 8)
     
-    # Check for volume spike relative to last 5 bars average
-    avg_vol = sum(vols[-6:-1]) / 5
-    vol_spike = vols[-1] > avg_vol * 1.5
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
     
-    if ema3[-1] > ema8[-1] and ema3[-2] <= ema8[-2] and vol_spike:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'NIFTY Fast EMA Bullish Cross'}]
-    if ema3[-1] < ema8[-1] and ema3[-2] >= ema8[-2] and vol_spike:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'NIFTY Fast EMA Bearish Cross'}]
+    for i in range(15, len(data)):
+        avg_vol = sum(vols[i-6:i]) / 5
+        vol_spike = vols[i] > avg_vol * 1.5
+        bullish_cross = ema3[i] > ema8[i] and ema3[i-1] <= ema8[i-1]
+        bearish_cross = ema3[i] < ema8[i] and ema3[i-1] >= ema8[i-1]
         
-    return []
+        if position == "LONG":
+            highest_price = max(highest_price, highs[i])
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            dd = (highest_price - closes[i]) / entry_price * 100
+            if bearish_cross or pnl <= -0.3 or pnl >= 0.65 or (highest_price > entry_price * 1.003 and dd >= 0.2):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Nifty Scalp Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, lows[i])
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            dd = (closes[i] - lowest_price) / entry_price * 100
+            if bullish_cross or pnl <= -0.3 or pnl >= 0.65 or (lowest_price < entry_price * 0.997 and dd >= 0.2):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Nifty Scalp Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_cross and vol_spike:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Nifty Scalp Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+                highest_price = highs[i]
+            elif bearish_cross and vol_spike:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Nifty Scalp Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+                lowest_price = lows[i]
+    return signals
 """
 
 SENSEX_HFT_MOMENTUM_SCALPER_CODE = """def run(data):
-    # SENSEX tick-level low-capital momentum scalp setup.
-    # Capitalizes on quick breakout sweeps using RSI(5) recovery and fast EMA crossovers.
-    if len(data) < 15:
+    if len(data) < 20:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
     
-    # EMA 5 and EMA 12
     def calc_ema(values, period):
         k = 2.0 / (period + 1)
         ema = [values[0]]
@@ -1929,200 +2276,334 @@ SENSEX_HFT_MOMENTUM_SCALPER_CODE = """def run(data):
     ema5 = calc_ema(closes, 5)
     ema12 = calc_ema(closes, 12)
     
-    # Fast RSI 5
-    gains = []
-    losses = []
-    for i in range(1, len(closes)):
-        diff = closes[i] - closes[i-1]
-        gains.append(max(0, diff))
-        losses.append(max(0, -diff))
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
     
-    avg_gain = sum(gains[-5:]) / 5
-    avg_loss = sum(losses[-5:]) / 5
-    rs = avg_gain / (avg_loss if avg_loss > 0 else 0.0001)
-    rsi5 = 100 - (100 / (1 + rs))
-    
-    if ema5[-1] > ema12[-1] and rsi5 > 55 and rsi5 < 75:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'SENSEX Momentum Breakout'}]
-    if ema5[-1] < ema12[-1] and rsi5 < 45 and rsi5 > 25:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'SENSEX Momentum Breakdown'}]
+    for i in range(15, len(data)):
+        gains = []
+        losses = []
+        for j in range(i-5, i+1):
+            diff = closes[j] - closes[j-1]
+            gains.append(max(0, diff))
+            losses.append(max(0, -diff))
+        avg_gain = sum(gains) / 6
+        avg_loss = sum(losses) / 6
+        rs = avg_gain / (avg_loss if avg_loss > 0 else 0.0001)
+        rsi5 = 100 - (100 / (1 + rs))
         
-    return []
+        bullish_entry = ema5[i] > ema12[i] and rsi5 > 55 and rsi5 < 75
+        bearish_entry = ema5[i] < ema12[i] and rsi5 < 45 and rsi5 > 25
+        
+        if position == "LONG":
+            highest_price = max(highest_price, highs[i])
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            dd = (highest_price - closes[i]) / entry_price * 100
+            if ema5[i] < ema12[i] or rsi5 > 80 or pnl <= -0.3 or pnl >= 0.7 or (highest_price > entry_price * 1.003 and dd >= 0.22):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Sensex Scalp Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, lows[i])
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            dd = (closes[i] - lowest_price) / entry_price * 100
+            if ema5[i] > ema12[i] or rsi5 < 20 or pnl <= -0.3 or pnl >= 0.7 or (lowest_price < entry_price * 0.997 and dd >= 0.22):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Sensex Scalp Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Sensex Scalp Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+                highest_price = highs[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Sensex Scalp Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+                lowest_price = lows[i]
+    return signals
 """
 
 CRUDEOIL_HFT_LOW_CAPITAL_SCALPER_CODE = """def run(data):
-    # Crude Oil low-capital HFT strategy for options scalping.
-    # Identifies short-term breakouts based on volume-weighted price rate-of-change.
-    if len(data) < 10:
+    if len(data) < 15:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    roc = (closes[-1] - closes[-3]) / closes[-3] * 100
-    avg_vol = sum(vols[-5:]) / 5
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    if roc > 0.15 and vols[-1] > avg_vol * 1.3:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude HFT ROC Bullish Breakout'}]
-    if roc < -0.15 and vols[-1] > avg_vol * 1.3:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude HFT ROC Bearish Breakdown'}]
+    for i in range(10, len(data)):
+        roc = (closes[i] - closes[i-3]) / closes[i-3] * 100
+        avg_vol = sum(vols[i-5:i]) / 5
         
-    return []
+        bullish_entry = roc > 0.15 and vols[i] > avg_vol * 1.3
+        bearish_entry = roc < -0.15 and vols[i] > avg_vol * 1.3
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if roc < -0.05 or pnl <= -0.4 or pnl >= 0.9:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude ROC Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if roc > 0.05 or pnl <= -0.4 or pnl >= 0.9:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude ROC Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude ROC Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude ROC Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
 """
 
 NATURALGAS_HFT_MICRO_SCALPER_CODE = """def run(data):
-    # Natural Gas high-frequency micro-scalping strategy.
-    # Targets rapid mean-reversion setups using narrow Bollinger Bands squeeze breakout.
-    if len(data) < 20:
+    if len(data) < 25:
         return []
-    last = data[-1]
     closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
     
-    mean = sum(closes[-15:]) / 15
-    variance = sum((x - mean) ** 2 for x in closes[-15:]) / 15
-    std = variance ** 0.5
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    upper = mean + 1.2 * std
-    lower = mean - 1.2 * std
-    
-    if closes[-1] > upper and closes[-2] <= upper:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Natural Gas Volatility Breakout CE'}]
-    if closes[-1] < lower and closes[-2] >= lower:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Natural Gas Volatility Breakout PE'}]
+    for i in range(20, len(data)):
+        mean = sum(closes[i-14:i+1]) / 15
+        variance = sum((x - mean) ** 2 for x in closes[i-14:i+1]) / 15
+        std = variance ** 0.5
         
-    return []
+        upper = mean + 1.2 * std
+        lower = mean - 1.2 * std
+        
+        bullish_entry = closes[i] > upper and closes[i-1] <= upper
+        bearish_entry = closes[i] < lower and closes[i-1] >= lower
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if closes[i] < mean or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NG Band Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if closes[i] > mean or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NG Band Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NG Band Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NG Band Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
 """
 
 NIFTY_LOW_LATENCY_SCALPER_CODE = """def run(data):
-
-    # NIFTY tick-based low latency option buying system.
-    # Uses VWAP crossover velocity and standard deviation envelopes.
     if len(data) < 30:
         return []
-        
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Fast VWAP approximation
-    typical = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(data))]
-    vwap = sum(typical[i] * vols[i] for i in range(len(data)-10, len(data))) / sum(vols[-10:])
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    # Standard deviation envelope
-    mean_close = sum(closes[-10:]) / 10
-    variance = sum((x - mean_close) ** 2 for x in closes[-10:]) / 10
-    std_dev = variance ** 0.5
-    
-    # Low-latency scalper triggers
-    if closes[-1] > vwap + (std_dev * 1.5):
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'VWAP Speed Expansion Buy'}]
-    if closes[-1] < vwap - (std_dev * 1.5):
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'VWAP Speed Breakdown Sell'}]
+    for i in range(25, len(data)):
+        typical = [(highs[j] + lows[j] + closes[j]) / 3 for j in range(i-10, i+1)]
+        v_sub = vols[i-10:i+1]
+        vwap = sum(typical[j] * v_sub[j] for j in range(11)) / sum(v_sub)
         
-    return []
+        mean_close = sum(closes[i-9:i+1]) / 10
+        variance = sum((x - mean_close) ** 2 for x in closes[i-9:i+1]) / 10
+        std_dev = variance ** 0.5
+        
+        bullish_entry = closes[i] > vwap + (std_dev * 1.5)
+        bearish_entry = closes[i] < vwap - (std_dev * 1.5)
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if closes[i] < vwap or pnl <= -0.3 or pnl >= 0.7:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Nifty LL Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if closes[i] > vwap or pnl <= -0.3 or pnl >= 0.7:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Nifty LL Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Nifty LL Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Nifty LL Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
 """
 
 CRUDEOIL_HFT_SCALPER_CODE = """def run(data):
-    # MCX Crude Oil low-latency micro-trend option scalping algorithm.
-    # Exploits rapid momentum shifts using fast EMA crossover and high-frequency volume confirmation.
-    if len(data) < 15:
+    if len(data) < 20:
         return []
-    
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Fast micro-EMA shift (3 tick vs 8 tick)
-    ema3 = sum(closes[-3:]) / 3
-    ema8 = sum(closes[-8:]) / 8
+    position = "NONE"
+    entry_price = 0.0
+    highest_price = 0.0
+    lowest_price = 0.0
+    signals = []
     
-    # Price velocity over recent periods
-    velocity = closes[-1] - closes[-3]
-    
-    # Intraday ATR range for volatility scaling
-    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-8, len(data))]
-    atr = sum(tr) / len(tr)
-    
-    # Volume spike to confirm genuine breakout
-    avg_vol = sum(vols[-10:-1]) / 9
-    vol_surge = vols[-1] / max(1, avg_vol)
-    
-    # Upstox HFT optimized entry execution rules
-    if ema3 > ema8 and velocity > atr * 0.45 and vol_surge > 1.25:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil HFT Trend Surge'}]
-    if ema3 < ema8 and velocity < -atr * 0.45 and vol_surge > 1.25:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil HFT Trend Decline'}]
+    for i in range(15, len(data)):
+        ema3 = sum(closes[i-3:i+1]) / 4
+        ema8 = sum(closes[i-8:i+1]) / 9
+        velocity = closes[i] - closes[i-3]
+        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-8, i+1)]
+        atr = sum(tr) / len(tr)
+        avg_vol = sum(vols[i-10:i]) / 9
+        vol_surge = vols[i] / max(1, avg_vol)
         
-    return []
+        bullish_entry = ema3 > ema8 and velocity > atr * 0.45 and vol_surge > 1.25
+        bearish_entry = ema3 < ema8 and velocity < -atr * 0.45 and vol_surge > 1.25
+        
+        if position == "LONG":
+            highest_price = max(highest_price, highs[i])
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            dd = (highest_price - closes[i]) / entry_price * 100
+            if ema3 < ema8 or pnl <= -0.4 or pnl >= 0.95 or (highest_price > entry_price * 1.003 and dd >= 0.28):
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude HFT Scalp Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            lowest_price = min(lowest_price, lows[i])
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            dd = (closes[i] - lowest_price) / entry_price * 100
+            if ema3 > ema8 or pnl <= -0.4 or pnl >= 0.95 or (lowest_price < entry_price * 0.997 and dd >= 0.28):
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude HFT Scalp Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude HFT Scalp Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+                highest_price = highs[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude HFT Scalp Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+                lowest_price = lows[i]
+    return signals
 """
 
 CRUDEOIL_HFT_VOLATILITY_CODE = """def run(data):
-    # High-frequency volatility breakout system targeting instant range expansion in Crude Oil options.
-    if len(data) < 25:
+    if len(data) < 30:
         return []
-        
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     vols = [max(1, int(d.get('volume', 1))) for d in data]
     
-    # Compression metric: recent trading band vs historical band
-    recent_band = max(highs[-6:]) - min(lows[-6:])
-    hist_band = max(highs[-20:]) - min(lows[-20:])
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    # Dynamic volatility threshold
-    is_compressed = recent_band < hist_band * 0.45
-    
-    # Breakout of the micro-channel
-    channel_high = max(highs[-5:-1])
-    channel_low = min(lows[-5:-1])
-    
-    avg_vol = sum(vols[-8:-1]) / 7
-    vol_surge = vols[-1] > avg_vol * 1.3
-    
-    if is_compressed and closes[-1] > channel_high and vol_surge:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil HFT Breakout High'}]
-    if is_compressed and closes[-1] < channel_low and vol_surge:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil HFT Breakout Low'}]
+    for i in range(20, len(data)):
+        recent_band = max(highs[i-6:i+1]) - min(lows[i-6:i+1])
+        hist_band = max(highs[i-20:i+1]) - min(lows[i-20:i+1])
         
-    return []
+        is_compressed = recent_band < hist_band * 0.45
+        channel_high = max(highs[i-5:i])
+        channel_low = min(lows[i-5:i])
+        avg_vol = sum(vols[i-8:i]) / 7
+        vol_surge = vols[i] > avg_vol * 1.3
+        
+        bullish_entry = is_compressed and closes[i] > channel_high and vol_surge
+        bearish_entry = is_compressed and closes[i] < channel_low and vol_surge
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if closes[i] < channel_low or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude Vol Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if closes[i] > channel_high or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude Vol Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude Vol Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude Vol Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
 """
 
 CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
-    # HFT mean reversion strategy for Crude Oil options trading.
-    # Exploits short-term overextended micro-swings using Bollinger Band exhaustion.
-    if len(data) < 20:
+    if len(data) < 25:
         return []
-        
-    last = data[-1]
     closes = [float(d['close']) for d in data]
     highs = [float(d.get('high', d['close'])) for d in data]
     lows = [float(d.get('low', d['close'])) for d in data]
     
-    # 15-period SMA & Standard Deviation for BB
-    sma15 = sum(closes[-15:]) / 15
-    variance = sum((c - sma15) ** 2 for c in closes[-15:]) / 15
-    std_dev = variance ** 0.5
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
     
-    upper_band = sma15 + (std_dev * 2.0)
-    lower_band = sma15 - (std_dev * 2.0)
-    
-    # Fast micro-RSI (5-period) for speed detection
-    deltas = [closes[i] - closes[i-1] for i in range(len(closes)-5, len(closes))]
-    gains = sum(d for d in deltas if d > 0) / 5
-    losses = sum(-d for d in deltas if d < 0) / 5
-    rs = gains / max(0.0001, losses)
-    rsi5 = 100 - (100 / (1 + rs))
-    
-    if closes[-1] > upper_band and rsi5 > 80:
-        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil BB Overbought'}]
-    if closes[-1] < lower_band and rsi5 < 20:
-        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil BB Oversold'}]
+    for i in range(20, len(data)):
+        sma15 = sum(closes[i-14:i+1]) / 15
+        variance = sum((c - sma15) ** 2 for c in closes[i-14:i+1]) / 15
+        std_dev = variance ** 0.5
+        
+        upper_band = sma15 + (std_dev * 2.0)
+        lower_band = sma15 - (std_dev * 2.0)
+        
+        deltas = [closes[j] - closes[j-1] for j in range(i-4, i+1)]
+        gains = sum(d for d in deltas if d > 0) / 5
+        losses = sum(-d for d in deltas if d < 0) / 5
+        rs = gains / max(0.0001, losses)
+        rsi5 = 100 - (100 / (1 + rs))
+        
+        bullish_entry = closes[i] < lower_band and rsi5 < 20
+        bearish_entry = closes[i] > upper_band and rsi5 > 80
+        
+        if position == "LONG":
+            pnl = (closes[i] - entry_price) / entry_price * 100
+            if closes[i] > sma15 or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude MR Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - closes[i]) / entry_price * 100
+            if closes[i] < sma15 or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude MR Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude MR Buy'})
+                position = "LONG"
+                entry_price = closes[i]
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude MR Sell'})
+                position = "SHORT"
+                entry_price = closes[i]
+    return signals
+"""d'}]
         
     return []
 """
@@ -2134,6 +2615,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": UPSTOX_HFT_SCALPER_CODE,
+        "market_suitability": "High Volatility & Rapid Trend Shifts",
     },
     {
         "name": "Upstox HFT Multi-Leg Straddle",
@@ -2141,6 +2623,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "BANKNIFTY", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
         "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
         "python_code": UPSTOX_HFT_DELTA_NEUTRAL_CODE,
+        "market_suitability": "Sideways Range-bound (Volatility Squeeze)",
     },
     {
         "name": "Bank Nifty Volatility Breakout HFT",
@@ -2148,6 +2631,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
         "python_code": BANKNIFTY_HFT_BREAKOUT_CODE,
+        "market_suitability": "High Momentum Breakouts & Sweeps",
     },
     {
         "name": "NIFTY Low-Latency Scalper",
@@ -2155,6 +2639,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": NIFTY_LOW_LATENCY_SCALPER_CODE,
+        "market_suitability": "Mean Reverting & Overextended Oscillations",
     },
     {
         "name": "NIFTY VWAP Trend Breakout",
@@ -2162,6 +2647,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
         "python_code": TREND_CONTINUATION_CODE,
+        "market_suitability": "Strong Trending & Sustained Breakout",
     },
     {
         "name": "NIFTY Opening Range VWAP",
@@ -2169,6 +2655,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
         "python_code": OPENING_RANGE_VWAP_CODE,
+        "market_suitability": "Morning Breakouts & High Volatility Open",
     },
     {
         "name": "SENSEX VWAP Trend Breakout",
@@ -2176,6 +2663,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
         "python_code": TREND_CONTINUATION_CODE,
+        "market_suitability": "Strong Trending & Sustained Breakout",
     },
     {
         "name": "SENSEX RSI Reversal With Trend",
@@ -2183,6 +2671,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
         "python_code": RSI_REVERSAL_CODE,
+        "market_suitability": "Trend Retracements & Swing Pullbacks",
     },
     {
         "name": "Crude Oil Momentum Breakout",
@@ -2190,6 +2679,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
         "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
+        "market_suitability": "Highly Volatile & Momentum Trends",
     },
     {
         "name": "Crude Oil Iron Condor Range",
@@ -2197,6 +2687,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
         "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
         "python_code": COMMODITY_RANGE_SELLING_CODE,
+        "market_suitability": "Sideways Range-bound / Flat Markets",
     },
     {
         "name": "Natural Gas Momentum Breakout",
@@ -2204,6 +2695,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 55000.0, "instrument_group": "MCX",
         "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
+        "market_suitability": "Highly Volatile & Momentum Trends",
     },
     {
         "name": "Natural Gas Volatility Straddle",
@@ -2211,6 +2703,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 70000.0, "instrument_group": "MCX",
         "python_code": COMMODITY_VOLATILITY_STRADDLE_CODE,
+        "market_suitability": "Low-Volatility Compression Before Breakout",
     },
     {
         "name": "Crude Oil HFT Micro-Trend Scalper",
@@ -2218,6 +2711,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
         "python_code": CRUDEOIL_HFT_SCALPER_CODE,
+        "market_suitability": "Fast Dynamic Swings & Volatility Sweeps",
     },
     {
         "name": "Crude Oil HFT Volatility Breakout",
@@ -2225,6 +2719,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
         "python_code": CRUDEOIL_HFT_VOLATILITY_CODE,
+        "market_suitability": "Volatility Expansion Following Squeeze",
     },
     {
         "name": "Crude Oil HFT Mean Reversion",
@@ -2232,6 +2727,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
         "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
         "python_code": CRUDEOIL_HFT_MEAN_REVERSION_CODE,
+        "market_suitability": "Overbought / Oversold Range Exhaustion",
     },
     {
         "name": "NIFTY HFT Micro-Trend Scalper",
@@ -2239,6 +2735,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
         "python_code": NIFTY_HFT_MICRO_SCALPER_CODE,
+        "market_suitability": "Intraday Scalping & Momentum Swings",
     },
     {
         "name": "SENSEX HFT Momentum Scalper",
@@ -2246,6 +2743,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "BFO",
         "python_code": SENSEX_HFT_MOMENTUM_SCALPER_CODE,
+        "market_suitability": "High Velocity Swings & Trend Breaks",
     },
     {
         "name": "Crude Oil HFT Low-Capital Scalper",
@@ -2253,6 +2751,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 20000.0, "instrument_group": "MCX",
         "python_code": CRUDEOIL_HFT_LOW_CAPITAL_SCALPER_CODE,
+        "market_suitability": "High Momentum Velocity Breakouts",
     },
     {
         "name": "Natural Gas HFT Micro-Trend Scalper",
@@ -2260,6 +2759,7 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "MCX",
         "python_code": NATURALGAS_HFT_MICRO_SCALPER_CODE,
+        "market_suitability": "Range Breakout & Compression Squeezes",
     },
 ]
 
@@ -2317,6 +2817,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "instrument_group": instrument_group,
         "broker": "upstox" if ("Upstox" in template["name"] or "HFT" in template["name"]) else "zerodha",
         "mode": "paper",
+        "market_suitability": template.get("market_suitability", "Any Market Condition"),
         "visual_config": {
             "symbol": underlying,
             "exchange": "MCX" if is_commodity else instrument_group,
@@ -2417,6 +2918,7 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     clean["instrument_group"] = _strategy_instrument_group(clean)
     clean["broker"] = row.get("broker") or "upstox"
     clean["mode"] = row.get("mode") or "paper"
+    clean["market_suitability"] = row.get("market_suitability") or "Any Market Condition"
     return StrategyOut(**clean)
 
 
@@ -3344,6 +3846,7 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
         "status": req.status,
         "broker": (req.broker or "upstox").strip().lower(),
         "mode": (req.mode or "paper").strip().lower(),
+        "market_suitability": req.market_suitability or "Any Market Condition",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_pnl": None,
     }
