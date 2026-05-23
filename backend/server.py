@@ -8171,6 +8171,7 @@ async def get_profile(user=Depends(get_current_user)):
         "id": user["id"],
         "email": user["email"],
         "created_at": user["created_at"],
+        "role": user.get("role", "trader"),
         "version": APP_VERSION,
         **settings,
         "zerodha": kite_status,

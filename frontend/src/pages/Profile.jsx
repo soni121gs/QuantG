@@ -172,8 +172,9 @@ export default function Profile() {
       {/* Session info */}
       <div className="qd-card p-5" data-testid="session-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Activity size={16} /> Session</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <Stat label="User ID" value={p.id.slice(0, 8) + "…"} mono />
+          <Stat label="Role" value={p.role ? p.role.toUpperCase() : "TRADER"} mono tone={p.role === "owner" ? "warn" : "normal"} />
           <Stat label="Created" value={new Date(p.created_at).toLocaleDateString()} mono />
           <Stat label="Mode" value={form.paper_mode ? "PAPER" : "LIVE"} mono tone={form.paper_mode ? "warn" : "loss"} />
         </div>

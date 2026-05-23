@@ -148,19 +148,32 @@ export default function Layout({ children }) {
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
               {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
             </span>
-            <button
-              type="button"
-              className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1.5 px-2 py-1 border border-transparent hover:border-[var(--qd-border)] rounded-sm"
-              onClick={() => {
-                logout();
-                navigate("/login");
-              }}
-              data-testid="logout-btn"
-              aria-label="Logout"
-            >
-              <span className="hidden md:inline truncate max-w-[140px]">{user?.email}</span>
-              <LogOut size={14} />
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="hidden lg:flex flex-col items-end leading-none font-mono">
+                <span className="text-[10px] text-[var(--qd-text-2)]">{user?.email}</span>
+                {user?.role && (
+                  <span className={`text-[8px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
+                    user.role === "owner" 
+                      ? "bg-[rgba(255,159,10,0.08)] text-[var(--qd-warn)] border-[var(--qd-warn)]/30" 
+                      : "bg-indigo-500/10 text-indigo-300 border-indigo-500/20"
+                  }`}>
+                    {user.role}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1.5 px-2 py-1 border border-transparent hover:border-[var(--qd-border)] rounded-sm"
+                onClick={() => {
+                  logout();
+                  navigate("/login");
+                }}
+                data-testid="logout-btn"
+                aria-label="Logout"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
           </div>
         </div>
       </header>
