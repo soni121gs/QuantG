@@ -175,6 +175,59 @@ class UpstoxGateway:
             "expiry_date": expiry_date,
         })
 
+    def get_historical_candles(
+        self,
+        instrument_key: str,
+        interval: str = "day",
+        days: int = 60,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Fetch historical candles from Upstox and return them in standard QuantG format."""
+        from datetime import timedelta
+        upstox_interval = interval
+        if interval == "minute":
+            upstox_interval = "1minute"
+        elif interval == "5minute":
+            upstox_interval = "5minute"
+        elif interval == "30minute":
+            upstox_interval = "30minute"
+            
+        now = datetime.now()
+        to_date_str = now.strftime("%Y-%m-%d")
+        from_date_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        path = f"/v2/historical-candle/{instrument_key}/{upstox_interval}/{to_date_str}/{from_date_str}"
+        try:
+            res = self._request("GET", path)
+            if not isinstance(res, dict) or res.get("status") != "success":
+                logger.warning(f"Upstox historical candles failed for {instrument_key}: {res}")
+                return None
+            
+            data = res.get("data", {})
+            candles = data.get("candles", []) or []
+            
+            # Upstox returns newest first; reverse to oldest first
+            out = []
+            for c in reversed(candles):
+                if len(c) >= 5:
+                    d_str = c[0]
+                    if "T" in d_str:
+                        date_val = d_str.split("+")[0].replace("T", " ")[:16]
+                    else:
+                        date_val = d_str
+                    out.append({
+                        "date": date_val,
+                        "close": float(c[4] or 0),
+                        "open": float(c[1] or 0),
+                        "high": float(c[2] or 0),
+                        "low": float(c[3] or 0),
+                        "volume": int(c[5] or 0) if len(c) > 5 else 0,
+                    })
+            return out
+        except Exception as e:
+            logger.warning(f"Upstox historical candles failed for {instrument_key}: {e}")
+            return None
+
+
     def get_market_quote(self, instrument_keys: Iterable[str]) -> Dict[str, Any]:
         keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
         if not keys:

@@ -595,7 +595,29 @@ async def _fetch_strategy_history(
         except Exception as e:
             logger.warning(f"Realtime tick service start failed: {e}")
 
+    settings = await get_user_settings(user_id)
+    data_broker = settings.get("data_broker", "zerodha")
+
+    if data_broker == "upstox":
+        upstox_gw = await get_user_upstox_gateway(user_id)
+        if upstox_gw and upstox_gw.connected:
+            exchange = "MCX" if sym_upper in {"CRUDEOIL", "NATURALGAS"} or "MCX" in sym_upper or sym_upper.endswith("FUT") else "NSE"
+            token = _upstox_instrument_token(exchange, sym_upper)
+            if token:
+                # Ensure we start tracking in background
+                upstox_gw.start_market_data_ws([token])
+                # Fetch candles
+                live_data = await asyncio.to_thread(upstox_gw.get_historical_candles, token, interval, days)
+                if live_data and len(live_data) > min_intraday_bars:
+                    return {
+                        "data": live_data,
+                        "source": f"upstox-{interval}:{sym_upper}",
+                        "is_live": True,
+                        "interval": interval,
+                    }
+
     if kite:
+
         token = None
         source_kind = "equity"
         if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
@@ -1114,12 +1136,57 @@ async def watchlist(user=Depends(get_current_user)):
 async def commodity_watchlist(user=Depends(get_current_user)):
     """MCX commodity feed for crude oil and natural gas.
 
-    Kotak Neo ticks are preferred when authenticated. Mock rows stay explicit so
+    Kotak Neo or Upstox ticks are preferred when authenticated. Mock rows stay explicit so
     the UI can distinguish demo context from broker data.
     """
     settings = await get_user_settings(user["id"])
-    gateway = _KOTAK_GATEWAYS.get(user["id"]) if settings.get("data_broker") == "kotak_neo" else None
+    data_broker = settings.get("data_broker", "zerodha")
     rows = []
+
+    if data_broker == "upstox":
+        upstox_gw = await get_user_upstox_gateway(user["id"])
+        if upstox_gw and upstox_gw.connected:
+            # Resolve commodity tokens
+            keys = []
+            for s in COMMODITY_SYMBOLS:
+                token = _upstox_instrument_token("MCX", s["symbol"])
+                if token:
+                    keys.append(token)
+            if keys:
+                upstox_gw.start_market_data_ws(keys)
+                
+            for i, s in enumerate(COMMODITY_SYMBOLS):
+                token = _upstox_instrument_token("MCX", s["symbol"])
+                tick = upstox_gw.latest_tick(token) if token else None
+                if tick and tick.get("ltp"):
+                    price = float(tick["ltp"])
+                    change = round(price - s["base"], 2)
+                    pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
+                    rows.append({
+                        "symbol": s["symbol"],
+                        "name": s["name"],
+                        "exchange": s["exchange"],
+                        "price": price,
+                        "change": change,
+                        "pct": pct,
+                        "source": "upstox",
+                        "feed": "upstox-mcx",
+                        "tick_time": tick.get("received_at"),
+                    })
+                    continue
+                lp = live_price(s["base"], i + 100)
+                rows.append({
+                    "symbol": s["symbol"],
+                    "name": s["name"],
+                    "exchange": s["exchange"],
+                    **lp,
+                    "source": "upstox_pending",
+                    "feed": "upstox-mcx-mock",
+                })
+            return rows
+
+    # Default to Kotak Neo or mock
+    gateway = _KOTAK_GATEWAYS.get(user["id"]) if settings.get("data_broker") == "kotak_neo" else None
     for i, s in enumerate(COMMODITY_SYMBOLS):
         tick = gateway.latest_tick_by_symbol(s["symbol"]) if gateway and gateway.status().get("authenticated") else None
         if tick and tick.get("ltp"):
@@ -1148,6 +1215,7 @@ async def commodity_watchlist(user=Depends(get_current_user)):
             "feed": "mock-mcx",
         })
     return rows
+
 
 
 @api.get("/market/quote/{symbol}")
@@ -1835,6 +1903,109 @@ NIFTY_LOW_LATENCY_SCALPER_CODE = """def run(data):
     return []
 """
 
+CRUDEOIL_HFT_SCALPER_CODE = """def run(data):
+    # MCX Crude Oil low-latency micro-trend option scalping algorithm.
+    # Exploits rapid momentum shifts using fast EMA crossover and high-frequency volume confirmation.
+    if len(data) < 15:
+        return []
+    
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Fast micro-EMA shift (3 tick vs 8 tick)
+    ema3 = sum(closes[-3:]) / 3
+    ema8 = sum(closes[-8:]) / 8
+    
+    # Price velocity over recent periods
+    velocity = closes[-1] - closes[-3]
+    
+    # Intraday ATR range for volatility scaling
+    tr = [max(highs[i], closes[i-1]) - min(lows[i], closes[i-1]) for i in range(len(data)-8, len(data))]
+    atr = sum(tr) / len(tr)
+    
+    # Volume spike to confirm genuine breakout
+    avg_vol = sum(vols[-10:-1]) / 9
+    vol_surge = vols[-1] / max(1, avg_vol)
+    
+    # Upstox HFT optimized entry execution rules
+    if ema3 > ema8 and velocity > atr * 0.45 and vol_surge > 1.25:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil HFT Trend Surge'}]
+    if ema3 < ema8 and velocity < -atr * 0.45 and vol_surge > 1.25:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil HFT Trend Decline'}]
+        
+    return []
+"""
+
+CRUDEOIL_HFT_VOLATILITY_CODE = """def run(data):
+    # High-frequency volatility breakout system targeting instant range expansion in Crude Oil options.
+    if len(data) < 25:
+        return []
+        
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Compression metric: recent trading band vs historical band
+    recent_band = max(highs[-6:]) - min(lows[-6:])
+    hist_band = max(highs[-20:]) - min(lows[-20:])
+    
+    # Dynamic volatility threshold
+    is_compressed = recent_band < hist_band * 0.45
+    
+    # Breakout of the micro-channel
+    channel_high = max(highs[-5:-1])
+    channel_low = min(lows[-5:-1])
+    
+    avg_vol = sum(vols[-8:-1]) / 7
+    vol_surge = vols[-1] > avg_vol * 1.3
+    
+    if is_compressed and closes[-1] > channel_high and vol_surge:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil HFT Breakout High'}]
+    if is_compressed and closes[-1] < channel_low and vol_surge:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil HFT Breakout Low'}]
+        
+    return []
+"""
+
+CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
+    # HFT mean reversion strategy for Crude Oil options trading.
+    # Exploits short-term overextended micro-swings using Bollinger Band exhaustion.
+    if len(data) < 20:
+        return []
+        
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    
+    # 15-period SMA & Standard Deviation for BB
+    sma15 = sum(closes[-15:]) / 15
+    variance = sum((c - sma15) ** 2 for c in closes[-15:]) / 15
+    std_dev = variance ** 0.5
+    
+    upper_band = sma15 + (std_dev * 2.0)
+    lower_band = sma15 - (std_dev * 2.0)
+    
+    # Fast micro-RSI (5-period) for speed detection
+    deltas = [closes[i] - closes[i-1] for i in range(len(closes)-5, len(closes))]
+    gains = sum(d for d in deltas if d > 0) / 5
+    losses = sum(-d for d in deltas if d < 0) / 5
+    rs = gains / max(0.0001, losses)
+    rsi5 = 100 - (100 / (1 + rs))
+    
+    if closes[-1] > upper_band and rsi5 > 80:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude Oil BB Overbought'}]
+    if closes[-1] < lower_band and rsi5 < 20:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude Oil BB Oversold'}]
+        
+    return []
+"""
+
 STANDARD_STRATEGY_CATALOG = [
     {
         "name": "Upstox HFT Low-Latency Scalper",
@@ -1919,6 +2090,27 @@ STANDARD_STRATEGY_CATALOG = [
         "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 70000.0, "instrument_group": "MCX",
         "python_code": COMMODITY_VOLATILITY_STRADDLE_CODE,
+    },
+    {
+        "name": "Crude Oil HFT Micro-Trend Scalper",
+        "description": "Exploits rapid MCX options trend momentum utilizing fast EMA shifts and volume confirmations.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOIL_HFT_SCALPER_CODE,
+    },
+    {
+        "name": "Crude Oil HFT Volatility Breakout",
+        "description": "Enters Call/Put positions on high-frequency MCX Crude range compression breakout signals.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOIL_HFT_VOLATILITY_CODE,
+    },
+    {
+        "name": "Crude Oil HFT Mean Reversion",
+        "description": "Low-latency commodity mean reversion driven by Bollinger Band exhaustion and fast RSI.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
+        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOIL_HFT_MEAN_REVERSION_CODE,
     },
 ]
 
@@ -2684,6 +2876,26 @@ def _upstox_redirect_uri(request: Optional[Request] = None, keys: Optional[Dict[
     return f"{_public_base_url(request)}/api/broker/upstox/callback"
 
 
+def _mcx_active_future_symbol(symbol: str, dt: Optional[datetime] = None) -> str:
+    dt = dt or (datetime.now(timezone.utc) + IST_OFFSET)
+    day = dt.day
+    month_offset = 0
+    # Past the 18th of the month, shift to next month contract for MCX commodities
+    if day > 18:
+        month_offset = 1
+    
+    target_date = dt
+    if month_offset > 0:
+        # Move to next month safely
+        target_date = dt + timedelta(days=15)
+        if target_date.month == dt.month:
+            target_date = dt + timedelta(days=32)
+            
+    yy = target_date.strftime("%y")
+    mmm = target_date.strftime("%b").upper()
+    return f"{symbol.upper()}{yy}{mmm}FUT"
+
+
 def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_token: Any = None) -> Optional[str]:
     token = str(instrument_token or "").strip()
     if "|" in token:
@@ -2694,9 +2906,15 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     exch = (exchange or "NSE").upper()
     if exch in {"NSE", "BSE"}:
         return UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
+    if exch == "MCX":
+        if len(symbol) > 10 and symbol.endswith("FUT"):
+            return f"MCX_FO|{symbol}"
+        active_sym = _mcx_active_future_symbol(symbol)
+        return f"MCX_FO|{active_sym}"
     if "|" in symbol and "_" in symbol.split("|", 1)[0]:
         return symbol
     return None
+
 
 
 async def _upstox_watchlist_rows(user_id: str) -> List[Dict[str, Any]]:
@@ -6400,7 +6618,6 @@ async def live_readiness(user=Depends(get_current_user)):
         "id": "broker_keys",
         "label": "Required broker credentials saved",
         "ok": required_keys_ok,
-        "hint": "Save on Broker Keys → Step 1" if not keys else None,
     })
     kite, status = await get_user_kite(user["id"])
     checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
@@ -6447,57 +6664,80 @@ async def live_readiness(user=Depends(get_current_user)):
         "detail": f"Max position ₹{settings['max_position_size']:.0f} · Daily loss cap ₹{settings['max_daily_loss']:.0f}",
         "hint": "Configure on Profile" if (settings.get("max_position_size", 0) <= 0 or settings.get("max_daily_loss", 0) <= 0) else None,
     })
+
+    # Find if user has MCX strategies
+    strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
+    has_mcx = any(
+        s.get("instrument_group") == "MCX"
+        or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+        or "MCX" in str(s.get("symbol")).upper()
+        for s in strategies
+    )
+
     # NSE market hours: 9:15 AM – 3:30 PM IST, Mon–Fri
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
     minutes_now = ist_now.hour * 60 + ist_now.minute
-    market_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
     checks.append({
         "id": "market_hours",
         "label": "NSE market open",
-        "ok": market_open,
+        "ok": nse_open,
         "detail": ist_now.strftime("%a %H:%M IST"),
-        "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not market_open else None,
+        "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not nse_open else None,
     })
+
+    mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
+    if has_mcx:
+        checks.append({
+            "id": "mcx_market_hours",
+            "label": "MCX market open",
+            "ok": mcx_open,
+            "detail": ist_now.strftime("%a %H:%M IST"),
+            "hint": "MCX trades 09:00 – 23:30 IST, Mon–Fri" if not mcx_open else None,
+        })
+
     tick_manager = getattr(app.state, "tick_manager", None)
     tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
     tick_auth_failed = bool(tick_status.get("auth_failed"))
     kotak_gateway_status = kotak_status.get("gateway") or {}
-    selected_tick_ok = (
-        bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed)
-        if data_broker == "zerodha"
-        else bool(kotak_gateway_status.get("authenticated") and kotak_gateway_status.get("ticks", 0) > 0)
-    )
+
+    if data_broker == "zerodha":
+        selected_tick_ok = bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed)
+    elif data_broker == "upstox":
+        selected_tick_ok = bool(upstox_status.get("connected"))
+    else:  # kotak_neo
+        selected_tick_ok = bool(kotak_gateway_status.get("authenticated") and kotak_gateway_status.get("ticks", 0) > 0)
+
     checks.append({
         "id": "tick_feed",
         "label": "Realtime selected tick feed",
         "ok": selected_tick_ok,
         "detail": (
-            "auth failed; reconnect Zerodha"
-            if tick_auth_failed
-            else
-            f"connected, last tick {tick_status.get('last_tick_at')}"
-            if tick_status.get("connected")
-            else "connecting"
-            if tick_status.get("connecting")
-            else tick_status.get("last_error") or "not connected"
+            f"upstox connected" if data_broker == "upstox" and selected_tick_ok else
+            "auth failed; reconnect Zerodha" if data_broker == "zerodha" and tick_auth_failed else
+            f"connected, last tick {tick_status.get('last_tick_at')}" if data_broker == "zerodha" and tick_status.get("connected") else
+            "connecting" if data_broker == "zerodha" and tick_status.get("connecting") else
+            f"kotak connected, ticks {kotak_gateway_status.get('ticks', 0)}" if data_broker == "kotak_neo" and selected_tick_ok else
+            "not connected"
         ),
         "hint": (
-            "Click Connect to Zerodha on Broker Keys to create a fresh Kite session."
-            if tick_auth_failed
+            "Connect Upstox on Broker Keys to start the market feed."
+            if data_broker == "upstox" and not selected_tick_ok
+            else "Click Connect to Zerodha on Broker Keys to create a fresh Kite session."
+            if data_broker == "zerodha" and tick_auth_failed
             else "Fetch a strategy or watchlist with a live Kite session to start the websocket feed."
-            if not tick_status.get("connected")
+            if data_broker == "zerodha" and not tick_status.get("connected")
+            else "Connect Kotak on Broker Keys and subscribe tokens."
+            if data_broker == "kotak_neo" and not selected_tick_ok
             else None
         ),
     })
-    # Note: "trading mode" is intentionally NOT a check — clicking confirm in the
-    # pre-flight modal IS the action that flips paper→live. Including it as a
-    # check creates a circular dependency the user can never resolve.
-    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "tick_feed"})
-    # Warnings (not blockers)
+
+    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours", "tick_feed"})
     return {
         "ready": overall_ready,
-        "market_open": market_open,
+        "market_open": nse_open or mcx_open if has_mcx else nse_open,
         "current_mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
         "checks": checks,
     }
@@ -6556,8 +6796,30 @@ def _build_recovery_plan(
             "endpoint": endpoint,
         })
 
-    if mode_live and not market_open:
-        add("info", "Market is closed", "Live MARKET orders are blocked outside NSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
+    # MCX and NSE timing checks
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    is_weekday = ist_now.weekday() < 5
+    minutes_now = ist_now.hour * 60 + ist_now.minute
+    nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
+    
+    # Check if they have commodity strategies
+    has_mcx = any(
+        s.get("instrument_group") == "MCX"
+        or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+        for s in errored
+    ) or (execution_broker == "upstox" and not nse_open and mcx_open)
+
+    if mode_live:
+        if has_mcx:
+            if not nse_open and not mcx_open:
+                add("info", "All markets closed", "Live MARKET orders are blocked outside trading hours.", "Wait for market open or use PAPER.")
+            elif not nse_open and mcx_open:
+                add("info", "NSE market is closed", "NSE orders are blocked. MCX commodities are open.", "Trade MCX commodities or use PAPER.")
+        else:
+            if not nse_open:
+                add("info", "Market is closed", "Live MARKET orders are blocked outside NSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
+
     if execution_broker == "zerodha" and not kite_status.get("connected"):
         add("critical", "Execution broker disconnected", kite_status.get("reason") or "Zerodha session is not active.", "Reconnect Zerodha on Broker Keys.")
     if execution_broker == "kotak_neo" and not kotak_status.get("connected"):
@@ -6575,10 +6837,11 @@ def _build_recovery_plan(
     if errored:
         add("warning", "Strategies have blocking errors", f"{len(errored)} strategy error(s) need attention.", "Open Strategy Errors below; clear only after fixing.", "/ops/strategies/clear-errors")
     for check in readiness.get("checks") or []:
-        if check.get("id") in {"market_hours", "tick_feed"}:
+        if check.get("id") in {"market_hours", "mcx_market_hours", "tick_feed"}:
             continue
         if not check.get("ok"):
             add("critical", check.get("label") or "Readiness failed", check.get("detail") or check.get("hint") or "A required live check failed.", check.get("hint") or "Fix readiness check.")
+
 
     weights = {"critical": 30, "warning": 15, "info": 5}
     score = max(0, 100 - sum(weights.get(item["severity"], 5) for item in issues))
