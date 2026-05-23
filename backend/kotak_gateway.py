@@ -741,6 +741,11 @@ class KotakNeoGateway:
             for key in ("Error", "Error Message", "error", "errMsg", "errorMessage", "message", "Message"):
                 value = payload.get(key)
                 if value not in (None, "", [], {}):
+                    # Ignore successful status messages that are false-positive errors
+                    if key in ("message", "Message") and isinstance(value, str):
+                        val_lower = value.lower()
+                        if any(ok_word in val_lower for ok_word in ("success", "placed", "fetched", "completed", "ok", "active", "successful", "valid")):
+                            continue
                     return self._friendly_error(value)
             status = str(payload.get("stat") or payload.get("status") or payload.get("State") or "").upper()
             if status in {"NOT_OK", "FAIL", "FAILED", "ERROR", "REJECTED"}:

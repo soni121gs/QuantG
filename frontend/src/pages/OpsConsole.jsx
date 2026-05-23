@@ -86,6 +86,11 @@ export default function OpsConsole() {
   const rateLimits = data?.rate_limits || {};
   const prefs = data?.broker_preferences || {};
 
+  // Active broker flags to determine status panel rendering
+  const isZerodhaActive = prefs.data_broker === "zerodha" || prefs.execution_broker === "zerodha";
+  const isKotakActive = prefs.data_broker === "kotak_neo" || prefs.execution_broker === "kotak_neo";
+  const isUpstoxActive = prefs.data_broker === "upstox" || prefs.execution_broker === "upstox";
+
   // Calculate Margin Metrics
   const availCash = fundsData?.available_cash || 0;
   const usedMargin = fundsData?.used_margin || 0;
@@ -139,9 +144,22 @@ export default function OpsConsole() {
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
         <MetricCard label="Mode" value={data?.mode || "PAPER"} tone={data?.mode === "LIVE" ? "loss" : "warn"} isPulse={data?.mode === "LIVE"} />
         <MetricCard label="Market" value={data?.market?.status || "CLOSED"} tone={data?.market?.open ? "profit" : "warn"} />
-        <MetricCard label="Zerodha" value={zerodha.connected ? "Active" : "Down"} tone={zerodha.connected ? "profit" : "warn"} />
-        <MetricCard label="Kotak Neo" value={kotak.connected ? "Ready" : "Offline"} tone={kotak.connected ? "profit" : "warn"} />
-        <MetricCard label="Upstox API" value={upstox.connected ? "Connected" : "Offline"} tone={upstox.connected ? "profit" : "warn"} isPulse={upstox.connected} />
+        <MetricCard 
+          label="Zerodha" 
+          value={!isZerodhaActive ? "Inactive" : (zerodha.connected ? "Active" : "Down")} 
+          tone={!isZerodhaActive ? "normal" : (zerodha.connected ? "profit" : "warn")} 
+        />
+        <MetricCard 
+          label="Kotak Neo" 
+          value={!isKotakActive ? "Inactive" : (kotak.connected ? "Ready" : "Offline")} 
+          tone={!isKotakActive ? "normal" : (kotak.connected ? "profit" : "warn")} 
+        />
+        <MetricCard 
+          label="Upstox API" 
+          value={!isUpstoxActive ? "Inactive" : (upstox.connected ? "Connected" : "Offline")} 
+          tone={!isUpstoxActive ? "normal" : (upstox.connected ? "profit" : "warn")} 
+          isPulse={isUpstoxActive && upstox.connected} 
+        />
         <MetricCard label="Active Tickers" value={ticker.connected ? "CONNECTED" : "DISCONNECTED"} tone={ticker.connected ? "profit" : "warn"} />
         <MetricCard label="Live Strats" value={counts.live_strategies ?? 0} tone={counts.live_strategies ? "profit" : "normal"} />
         <MetricCard label="Blocked Strats" value={counts.errored_strategies ?? 0} tone={counts.errored_strategies ? "loss" : "profit"} isPulse={!!counts.errored_strategies} />
@@ -327,21 +345,27 @@ export default function OpsConsole() {
             </h2>
             
             <div className="space-y-3 font-mono text-xs">
-              <ChecklistItem 
-                label="Zerodha Ticker" 
-                checked={zerodhaTicker.connected} 
-                details={`${zerodhaTicker.subscribed_tokens ?? 0} tokens active`} 
-              />
-              <ChecklistItem 
-                label="Kotak Neo Ticker" 
-                checked={kotakTicker.connected} 
-                details={`${kotakTicker.ticks ?? 0} ticks ingested`} 
-              />
-              <ChecklistItem 
-                label="Upstox Feed" 
-                checked={upstox.connected} 
-                details={upstox.connected ? "Ingestion online" : "Auth missing"} 
-              />
+              {(!prefs.data_broker || prefs.data_broker === "zerodha") && (
+                <ChecklistItem 
+                  label="Zerodha Ticker" 
+                  checked={zerodhaTicker.connected} 
+                  details={`${zerodhaTicker.subscribed_tokens ?? 0} tokens active`} 
+                />
+              )}
+              {(!prefs.data_broker || prefs.data_broker === "kotak_neo") && (
+                <ChecklistItem 
+                  label="Kotak Neo Ticker" 
+                  checked={kotakTicker.connected} 
+                  details={`${kotakTicker.ticks ?? 0} ticks ingested`} 
+                />
+              )}
+              {(!prefs.data_broker || prefs.data_broker === "upstox") && (
+                <ChecklistItem 
+                  label="Upstox Feed" 
+                  checked={upstox.connected} 
+                  details={upstox.connected ? "Ingestion online" : "Auth missing"} 
+                />
+              )}
               <ChecklistItem 
                 label="SQLite Write Lock" 
                 checked={true} 
