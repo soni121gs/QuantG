@@ -153,3 +153,37 @@ async def ops_clear_strategy_errors(req: OpsActionReq = None, user=Depends(get_c
         {"$unset": {"last_error": "", "last_signal_validation": ""}},
     )
     return {"ok": True, "updated_strategies": res.modified_count}
+
+
+@router.get("/pending-users")
+async def get_pending_users(user=Depends(get_current_user)):
+    if user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Access denied: Owner role required.")
+    pending = await db.users.find({"approved": False, "role": {"$ne": "owner"}}, {"_id": 0, "password_hash": 0}).to_list(100)
+    return pending
+
+
+@router.post("/users/{user_id}/approve")
+async def approve_user(user_id: str, user=Depends(get_current_user)):
+    if user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Access denied: Owner role required.")
+    res = await db.users.update_one({"id": user_id}, {"$set": {"approved": True, "status": "approved"}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Seed default strategies for the newly approved trader
+    from server import seed_default_strategies_for_user
+    await seed_default_strategies_for_user(user_id)
+    
+    return {"ok": True, "message": "User account approved and default strategies initialized."}
+
+
+@router.post("/users/{user_id}/reject")
+async def reject_user(user_id: str, user=Depends(get_current_user)):
+    if user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Access denied: Owner role required.")
+    res = await db.users.delete_one({"id": user_id, "role": {"$ne": "owner"}})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found or cannot be rejected")
+    return {"ok": True, "message": "User registration rejected and deleted."}
+

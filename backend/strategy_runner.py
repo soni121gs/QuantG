@@ -187,6 +187,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 # not against an unrelated equity symbol like RELIANCE. The
                 # equity `symbol` field is only used in equity mode.
                 vc = s.get("visual_config") or {}
+
                 opt_cfg_early = (vc or {}).get("options") or {}
                 if opt_cfg_early.get("enabled"):
                     symbol = (opt_cfg_early.get("underlying") or "NIFTY").upper()
@@ -194,7 +195,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     symbol = (vc.get("symbol") or "RELIANCE").upper()
                 # last 60 daily candles for context
                 try:
-                    history = await get_price_history(s["user_id"], symbol, days=60)
+                    history = await get_price_history(s["user_id"], symbol, days=60, strategy=s)
                 except Exception as e:
                     logger.warning(f"price history failed for {symbol}: {e}")
                     await db.strategies.update_one({"id": s["id"]},
@@ -285,12 +286,13 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
                             otm_points=int(opt_cfg.get("otm_points") or 0),
                             expiry_offset=int(opt_cfg.get("expiry_offset") or 0),
+                            strategy=s,
                         )
                         if not option_contract:
                             await db.strategies.update_one(
                                 {"id": s["id"]},
                                 {"$set": {**eval_set,
-                                          "last_error": "Options resolution failed (markets closed / no Kite session?)",
+                                          "last_error": "Options resolution failed (markets closed / no session?)",
                                           "last_signals_count": signals_count},
                                  "$inc": inc_set})
                             continue

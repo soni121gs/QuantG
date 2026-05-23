@@ -390,6 +390,8 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     time_exit_minutes: risk.time_exit_minutes ?? "",
     indicator_exit_enabled: risk.indicator_exit_enabled ?? false,
     exit_mode: risk.exit_mode ?? "SQUARE_OFF",
+    broker: s.broker ?? "upstox",
+    mode: s.mode ?? "paper",
   });
 
   useEffect(() => {
@@ -407,6 +409,8 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       time_exit_minutes: freshRisk.time_exit_minutes ?? "",
       indicator_exit_enabled: freshRisk.indicator_exit_enabled ?? false,
       exit_mode: freshRisk.exit_mode ?? "SQUARE_OFF",
+      broker: s.broker ?? "upstox",
+      mode: s.mode ?? "paper",
     });
   }, [s]);
 
@@ -427,6 +431,8 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         time_exit_minutes: form.time_exit_minutes !== "" ? parseInt(form.time_exit_minutes) : null,
         indicator_exit_enabled: !!form.indicator_exit_enabled,
         exit_mode: form.exit_mode,
+        broker: form.broker,
+        mode: form.mode,
       };
       await api.put(`/strategies/${s.id}/runtime-settings`, payload);
       toast.success("Strategy risk settings synced successfully");
@@ -491,6 +497,14 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             <span className="text-[var(--qd-text-2)]">{speedLabel()}</span>
           </div>
           <h2 className="mt-1 line-clamp-2 font-head text-lg font-semibold text-white">{s.name}</h2>
+          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+            <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-rose-300 animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-cyan-300"}`}>
+              {s.mode === "live" ? "● PRODUCTION LIVE" : "● PAPER SIMULATED"}
+            </span>
+            <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-white">
+              BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
+            </span>
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1.5">
           <StatusBadge status={s.status} />
@@ -674,6 +688,33 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
                   <option value="SQUARE_OFF">SQUARE OFF</option>
                   <option value="REVERSE">REVERSE</option>
                   <option value="NONE">NONE</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Broker & Mode deployment configuration overrides */}
+            <div className="grid grid-cols-2 gap-2 border-t border-white/5 pt-2.5">
+              <div>
+                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
+                <select 
+                  value={form.broker} 
+                  onChange={(e) => setForm({ ...form, broker: e.target.value })}
+                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="upstox">Upstox (HFT Enabled)</option>
+                  <option value="zerodha">Zerodha (Kite)</option>
+                  <option value="kotak_neo">Kotak Neo</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Deployment Mode</label>
+                <select 
+                  value={form.mode} 
+                  onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="paper">Paper Trading (Simulated)</option>
+                  <option value="live">Live Trading (Production)</option>
                 </select>
               </div>
             </div>

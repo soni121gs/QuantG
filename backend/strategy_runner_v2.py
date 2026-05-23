@@ -208,7 +208,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 
                 # Fetch price history
                 try:
-                    history = await get_price_history(s["user_id"], symbol, days=60)
+                    history = await get_price_history(s["user_id"], symbol, days=60, strategy=s)
                 except Exception as e:
                     logger.warning(f"price history failed for {symbol}: {e}")
                     await db.strategies.update_one({"id": s["id"]},
@@ -370,6 +370,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
                             otm_points=int(opt_cfg.get("otm_points") or 0),
                             expiry_offset=int(opt_cfg.get("expiry_offset") or 0),
+                            strategy=s,
                         )
                         if not option_contract:
                             await db.strategies.update_one(

@@ -179,6 +179,8 @@ class StrategyReq(BaseModel):
     required_capital: Optional[float] = None
     instrument_group: Optional[str] = None
     status: str = "draft"  # draft | live | paused
+    broker: Optional[str] = "upstox"
+    mode: Optional[str] = "paper"
 
 
 class StrategyOut(BaseModel):
@@ -207,6 +209,9 @@ class StrategyOut(BaseModel):
     last_data_source: Optional[str] = None
     last_data_live: Optional[bool] = None
     last_error: Optional[str] = None
+    broker: Optional[str] = "upstox"
+    mode: Optional[str] = "paper"
+
 
 
 class BacktestReq(BaseModel):
@@ -665,7 +670,7 @@ async def _fetch_strategy_history(
                     }
 
     if allow_mock:
-        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None)
+        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None) or next((s for s in COMMODITY_SYMBOLS if s["symbol"] == sym_upper), None)
         if sym:
             if interval == "day":
                 return {
@@ -1873,7 +1878,123 @@ BANKNIFTY_HFT_BREAKOUT_CODE = """def run(data):
     return []
 """
 
+NIFTY_HFT_MICRO_SCALPER_CODE = """def run(data):
+    # NIFTY micro-scalping strategy designed for high-frequency low-capital trading.
+    # Uses fast 3-period vs 8-period EMA crossover with short-term volume surges.
+    if len(data) < 20:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    # Calculate EMA 3 and EMA 8
+    def calc_ema(values, period):
+        k = 2.0 / (period + 1)
+        ema = [values[0]]
+        for val in values[1:]:
+            ema.append(val * k + ema[-1] * (1 - k))
+        return ema
+        
+    ema3 = calc_ema(closes, 3)
+    ema8 = calc_ema(closes, 8)
+    
+    # Check for volume spike relative to last 5 bars average
+    avg_vol = sum(vols[-6:-1]) / 5
+    vol_spike = vols[-1] > avg_vol * 1.5
+    
+    if ema3[-1] > ema8[-1] and ema3[-2] <= ema8[-2] and vol_spike:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'NIFTY Fast EMA Bullish Cross'}]
+    if ema3[-1] < ema8[-1] and ema3[-2] >= ema8[-2] and vol_spike:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'NIFTY Fast EMA Bearish Cross'}]
+        
+    return []
+"""
+
+SENSEX_HFT_MOMENTUM_SCALPER_CODE = """def run(data):
+    # SENSEX tick-level low-capital momentum scalp setup.
+    # Capitalizes on quick breakout sweeps using RSI(5) recovery and fast EMA crossovers.
+    if len(data) < 15:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    
+    # EMA 5 and EMA 12
+    def calc_ema(values, period):
+        k = 2.0 / (period + 1)
+        ema = [values[0]]
+        for val in values[1:]:
+            ema.append(val * k + ema[-1] * (1 - k))
+        return ema
+        
+    ema5 = calc_ema(closes, 5)
+    ema12 = calc_ema(closes, 12)
+    
+    # Fast RSI 5
+    gains = []
+    losses = []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        gains.append(max(0, diff))
+        losses.append(max(0, -diff))
+    
+    avg_gain = sum(gains[-5:]) / 5
+    avg_loss = sum(losses[-5:]) / 5
+    rs = avg_gain / (avg_loss if avg_loss > 0 else 0.0001)
+    rsi5 = 100 - (100 / (1 + rs))
+    
+    if ema5[-1] > ema12[-1] and rsi5 > 55 and rsi5 < 75:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'SENSEX Momentum Breakout'}]
+    if ema5[-1] < ema12[-1] and rsi5 < 45 and rsi5 > 25:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'SENSEX Momentum Breakdown'}]
+        
+    return []
+"""
+
+CRUDEOIL_HFT_LOW_CAPITAL_SCALPER_CODE = """def run(data):
+    # Crude Oil low-capital HFT strategy for options scalping.
+    # Identifies short-term breakouts based on volume-weighted price rate-of-change.
+    if len(data) < 10:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    vols = [max(1, int(d.get('volume', 1))) for d in data]
+    
+    roc = (closes[-1] - closes[-3]) / closes[-3] * 100
+    avg_vol = sum(vols[-5:]) / 5
+    
+    if roc > 0.15 and vols[-1] > avg_vol * 1.3:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Crude HFT ROC Bullish Breakout'}]
+    if roc < -0.15 and vols[-1] > avg_vol * 1.3:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Crude HFT ROC Bearish Breakdown'}]
+        
+    return []
+"""
+
+NATURALGAS_HFT_MICRO_SCALPER_CODE = """def run(data):
+    # Natural Gas high-frequency micro-scalping strategy.
+    # Targets rapid mean-reversion setups using narrow Bollinger Bands squeeze breakout.
+    if len(data) < 20:
+        return []
+    last = data[-1]
+    closes = [float(d['close']) for d in data]
+    
+    mean = sum(closes[-15:]) / 15
+    variance = sum((x - mean) ** 2 for x in closes[-15:]) / 15
+    std = variance ** 0.5
+    
+    upper = mean + 1.2 * std
+    lower = mean - 1.2 * std
+    
+    if closes[-1] > upper and closes[-2] <= upper:
+        return [{'date': last['date'], 'action': 'BUY', 'reason': 'Natural Gas Volatility Breakout CE'}]
+    if closes[-1] < lower and closes[-2] >= lower:
+        return [{'date': last['date'], 'action': 'SELL', 'reason': 'Natural Gas Volatility Breakout PE'}]
+        
+    return []
+"""
+
 NIFTY_LOW_LATENCY_SCALPER_CODE = """def run(data):
+
     # NIFTY tick-based low latency option buying system.
     # Uses VWAP crossover velocity and standard deviation envelopes.
     if len(data) < 30:
@@ -2112,6 +2233,34 @@ STANDARD_STRATEGY_CATALOG = [
         "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
         "python_code": CRUDEOIL_HFT_MEAN_REVERSION_CODE,
     },
+    {
+        "name": "NIFTY HFT Micro-Trend Scalper",
+        "description": "Low-capital high-frequency option scalper using 3/8 period EMA crossovers with volume confirmations.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
+        "python_code": NIFTY_HFT_MICRO_SCALPER_CODE,
+    },
+    {
+        "name": "SENSEX HFT Momentum Scalper",
+        "description": "Directional low-capital SENSEX option scalper triggered by fast RSI(5) momentum shifts.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "BFO",
+        "python_code": SENSEX_HFT_MOMENTUM_SCALPER_CODE,
+    },
+    {
+        "name": "Crude Oil HFT Low-Capital Scalper",
+        "description": "Volume-weighted MCX Crude Oil option scalp model optimized for rapid ROC momentum moves.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 20000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOIL_HFT_LOW_CAPITAL_SCALPER_CODE,
+    },
+    {
+        "name": "Natural Gas HFT Micro-Trend Scalper",
+        "description": "High-frequency Natural Gas options scalper targeting tight Bollinger Band compression breakouts.",
+        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "MCX",
+        "python_code": NATURALGAS_HFT_MICRO_SCALPER_CODE,
+    },
 ]
 
 _seed_templates_by_name = {
@@ -2166,6 +2315,8 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "strategy_type": strategy_type,
         "required_capital": required_capital,
         "instrument_group": instrument_group,
+        "broker": "upstox" if ("Upstox" in template["name"] or "HFT" in template["name"]) else "zerodha",
+        "mode": "paper",
         "visual_config": {
             "symbol": underlying,
             "exchange": "MCX" if is_commodity else instrument_group,
@@ -2179,6 +2330,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "evaluations": 0,
         "signals_fired": 0,
     }
+
 
 
 def _strategy_asset_class(row: Dict[str, Any]) -> str:
@@ -2263,7 +2415,10 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     clean["strategy_type"] = _strategy_type(clean)
     clean["required_capital"] = _strategy_required_capital(clean)
     clean["instrument_group"] = _strategy_instrument_group(clean)
+    clean["broker"] = row.get("broker") or "upstox"
+    clean["mode"] = row.get("mode") or "paper"
     return StrategyOut(**clean)
+
 
 
 async def seed_default_strategies_for_user(user_id: str) -> int:
@@ -3187,12 +3342,15 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
         "required_capital": req.required_capital,
         "instrument_group": req.instrument_group,
         "status": req.status,
+        "broker": (req.broker or "upstox").strip().lower(),
+        "mode": (req.mode or "paper").strip().lower(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_pnl": None,
     }
     await db.strategies.insert_one(doc)
     _sync_option_ledger_strategy(doc)
     return _strategy_out(doc)
+
 
 
 @api.get("/strategies", response_model=List[StrategyOut])
@@ -3391,13 +3549,23 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
             risk[key] = value
     risk["max_lot"] = 1
     visual_config["risk"] = risk
+    
+    update_fields = {"visual_config": visual_config}
+    if req.broker is not None:
+        update_fields["broker"] = req.broker.strip().lower()
+        row["broker"] = req.broker.strip().lower()
+    if req.mode is not None:
+        update_fields["mode"] = req.mode.strip().lower()
+        row["mode"] = req.mode.strip().lower()
+        
     await db.strategies.update_one(
         {"id": sid, "user_id": user["id"]},
-        {"$set": {"visual_config": visual_config}},
+        {"$set": update_fields},
     )
     row["visual_config"] = visual_config
     _sync_option_ledger_strategy(row)
-    return {"ok": True, "max_lot": 1, "risk": risk}
+    return {"ok": True, "max_lot": 1, "risk": risk, "broker": row.get("broker"), "mode": row.get("mode")}
+
 
 
 class ManualOrderReq(BaseModel):
@@ -5048,7 +5216,16 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     if order_type == "LIMIT" and price is None:
         raise HTTPException(status_code=400, detail="LIMIT orders require a price")
 
-    settings = await get_user_settings(user_id)
+    settings = dict(await get_user_settings(user_id))
+    strategy_id = await _strategy_source_id(source)
+    if strategy_id:
+        strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
+        if strat:
+            if strat.get("mode") in ("paper", "live"):
+                settings["paper_mode"] = strat.get("mode") == "paper"
+            if strat.get("broker"):
+                settings["execution_broker"] = strat.get("broker")
+
     paper = bool(settings.get("paper_mode", True))
     execution_broker = settings.get("execution_broker", "zerodha")
     if not paper and execution_broker not in {"zerodha", "kotak_neo", "kotak", "upstox"}:
@@ -5110,7 +5287,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             instrument_key=instrument_key,
         )
         intent.quantity = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or intent.quantity)
-        if not paper:
+        if not paper and execution_broker == "zerodha":
             kite, _ = await get_user_kite(user_id)
             await _assert_broker_has_position_quantity(user_id, kite, instr.exchange, instr.tradingsymbol, int(intent.quantity))
 
@@ -6347,7 +6524,156 @@ async def orders_ws(websocket: WebSocket):
         return
 
 
+async def _resolve_option_for_strategy(
+    user_id: str,
+    strategy_row: Dict[str, Any],
+    underlying: str,
+    signal_action: str,
+    strike_mode: str,
+    otm_points: int = 0,
+    expiry_offset: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """Resolves an index option contract dynamically based on the strategy's broker & mode.
+    Bypasses Zerodha dependency for Upstox / Paper trading.
+    """
+    underlying = underlying.upper()
+    settings = await get_user_settings(user_id)
+    strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
+    is_paper = strategy_mode == "paper"
+    execution_broker = strategy_row.get("broker") or settings.get("execution_broker", "zerodha")
+
+    # For paper trading, generate simulated/mock options contract to remove Zerodha session requirement
+    if is_paper:
+        latest_ticks = option_ledger.latest_ticks([underlying])
+        tick = latest_ticks.get(underlying)
+        spot = float(tick["ltp"]) if tick else (24850.40 if underlying == "NIFTY" else 81460.20)
+        
+        interval = options_helper.STRIKE_INTERVALS.get(underlying, 100)
+        atm = options_helper.round_to_strike(spot, interval)
+        
+        opt_type = "CE"
+        if "BUY" in strike_mode:
+            opt_type = "CE" if signal_action == "BUY" else "PE"
+        else: # ATM_SELL
+            opt_type = "PE" if signal_action == "BUY" else "CE"
+            
+        if opt_type == "CE":
+            strike = atm + otm_points
+        else:
+            strike = atm - otm_points
+        strike = options_helper.round_to_strike(strike, interval)
+        
+        lot_size = options_helper.LOT_SIZES.get(underlying, 50)
+        
+        # Formulate a standard mock tradingsymbol
+        expiry_dt = datetime.now() + timedelta(days=(7 - datetime.now().weekday() + 3) % 7)
+        expiry_str = expiry_dt.strftime("%y%m%d")
+        tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
+        
+        return {
+            "tradingsymbol": tradingsymbol,
+            "exchange": "NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO",
+            "instrument_token": 999999 + int(strike),
+            "lot_size": lot_size,
+            "strike": strike,
+            "expiry": expiry_dt.date().isoformat(),
+            "underlying": underlying,
+            "option_type": opt_type,
+            "spot": spot,
+            "atm_strike": atm,
+            "transaction_type": "BUY" if "BUY" in strike_mode else "SELL",
+        }
+
+    # Live resolution
+    if execution_broker == "zerodha":
+        kite, _ = await get_user_kite(user_id)
+        if not kite:
+            return None
+        return options_helper.resolve_for_signal(
+            kite,
+            underlying=underlying,
+            signal_action=signal_action,
+            strike_mode=strike_mode,
+            otm_points=otm_points,
+            expiry_offset_weeks=expiry_offset,
+        )
+        
+    elif execution_broker == "upstox":
+        upstox_gw = await get_user_upstox_gateway(user_id)
+        if not upstox_gw or not upstox_gw.connected:
+            return None
+            
+        # Fetch spot LTP from Upstox
+        upstox_keys = {
+            "NIFTY": "NSE_INDEX|Nifty 50",
+            "SENSEX": "BSE_INDEX|SENSEX"
+        }
+        spot = 24850.40
+        if underlying in upstox_keys:
+            try:
+                res = await asyncio.to_thread(upstox_gw.get_market_quote, [upstox_keys[underlying]])
+                node = res.get("data", {}).get(upstox_keys[underlying]) or {}
+                spot_ltp = node.get("last_price") or node.get("ltp")
+                if spot_ltp:
+                    spot = float(spot_ltp)
+            except Exception as e:
+                logger.warning(f"Failed to fetch Upstox spot price: {e}")
+                
+        interval = options_helper.STRIKE_INTERVALS.get(underlying, 100)
+        atm = options_helper.round_to_strike(spot, interval)
+        opt_type = "CE"
+        if "BUY" in strike_mode:
+            opt_type = "CE" if signal_action == "BUY" else "PE"
+        else: # ATM_SELL
+            opt_type = "PE" if signal_action == "BUY" else "CE"
+            
+        if opt_type == "CE":
+            strike = atm + otm_points
+        else:
+            strike = atm - otm_points
+        strike = options_helper.round_to_strike(strike, interval)
+        
+        expiry_dt = datetime.now() + timedelta(days=(7 - datetime.now().weekday() + 3) % 7)
+        instrument_token = None
+        tradingsymbol = None
+        try:
+            spot_key = upstox_keys.get(underlying, "NSE_INDEX|Nifty 50")
+            chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, expiry_dt.date().isoformat())
+            if chain and chain.get("status") == "success":
+                data = chain.get("data", []) or []
+                for node in data:
+                    opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
+                    if opt_node and int(opt_node.get("strike_price") or 0) == strike:
+                        instrument_token = opt_node.get("instrument_key")
+                        tradingsymbol = opt_node.get("trading_symbol")
+                        break
+        except Exception as e:
+            logger.warning(f"Upstox option chain lookup failed: {e}")
+            
+        if not instrument_token:
+            expiry_str = expiry_dt.strftime("%y%m%d")
+            tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
+            instrument_token = f"NSE_FO|{tradingsymbol}"
+            
+        return {
+            "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
+            "exchange": "NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO",
+            "instrument_token": instrument_token,
+            "upstox_instrument_token": instrument_token,
+            "lot_size": options_helper.LOT_SIZES.get(underlying, 50),
+            "strike": strike,
+            "expiry": expiry_dt.date().isoformat(),
+            "underlying": underlying,
+            "option_type": opt_type,
+            "spot": spot,
+            "atm_strike": atm,
+            "transaction_type": "BUY" if "BUY" in strike_mode else "SELL",
+        }
+    return None
+
+
 @api.get("/v1/dashboard/telemetry")
+
 async def dashboard_telemetry(user=Depends(get_current_user)):
     """Per-strategy dashboard payload backed by the SQLite runtime ledger."""
     rows = await db.strategies.find(
@@ -7901,8 +8227,35 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
             # Broker position sync and live tick capture.
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
             broker_symbols_by_user: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            
+            recorded_nifty = False
+            recorded_sensex = False
+
             for user_row in users:
                 user_id = user_row["id"]
+                
+                # Check Upstox live spot prices first if connected
+                upstox_gw = await get_user_upstox_gateway(user_id)
+                if upstox_gw and upstox_gw.connected:
+                    upstox_keys = {
+                        "NIFTY": "NSE_INDEX|Nifty 50",
+                        "SENSEX": "BSE_INDEX|SENSEX"
+                    }
+                    try:
+                        quotes = await asyncio.to_thread(upstox_gw.get_market_quote, list(upstox_keys.values()))
+                        data_node = quotes.get("data", {}) or {}
+                        for idx_sym, upstox_key in upstox_keys.items():
+                            node = data_node.get(upstox_key) or {}
+                            spot_ltp = node.get("last_price") or node.get("ltp")
+                            if spot_ltp:
+                                option_ledger.record_market_tick(idx_sym, float(spot_ltp), "upstox")
+                                if idx_sym == "NIFTY":
+                                    recorded_nifty = True
+                                elif idx_sym == "SENSEX":
+                                    recorded_sensex = True
+                    except Exception as e:
+                        logger.warning(f"Upstox index spot quote failed in monitor loop: {e}")
+
                 kite, _ = await get_user_kite(user_id)
                 if not kite:
                     continue
@@ -7918,6 +8271,30 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                     node = ltp_resp.get(key) or {}
                     if node.get("last_price"):
                         option_ledger.record_market_tick(idx_symbol, float(node["last_price"]), "zerodha")
+                        if idx_symbol == "NIFTY":
+                            recorded_nifty = True
+                        elif idx_symbol == "SENSEX":
+                            recorded_sensex = True
+
+            # Simulated random walk fallback so index/commodity telemetry is never stuck on "Waiting..."
+            import random
+            if not recorded_nifty:
+                last_nifty = option_ledger.latest_ticks(["NIFTY"]).get("NIFTY")
+                last_price = float(last_nifty["ltp"]) if last_nifty else 24850.40
+                new_price = round(last_price + random.uniform(-2.5, 2.5), 2)
+                option_ledger.record_market_tick("NIFTY", new_price, "simulated")
+            if not recorded_sensex:
+                last_sensex = option_ledger.latest_ticks(["SENSEX"]).get("SENSEX")
+                last_price = float(last_sensex["ltp"]) if last_sensex else 81460.20
+                new_price = round(last_price + random.uniform(-8.0, 8.0), 2)
+                option_ledger.record_market_tick("SENSEX", new_price, "simulated")
+                
+            for comm_symbol, base_price in [("CRUDEOIL", 6550.0), ("NATURALGAS", 215.0)]:
+                last_comm = option_ledger.latest_ticks([comm_symbol]).get(comm_symbol)
+                last_price = float(last_comm["ltp"]) if last_comm else base_price
+                step_range = 1.0 if comm_symbol == "CRUDEOIL" else 0.1
+                new_price = round(last_price + random.uniform(-step_range, step_range), 2)
+                option_ledger.record_market_tick(comm_symbol, new_price, "simulated")
 
             now_ist = datetime.now(timezone.utc) + IST_OFFSET
             squareoff_due = now_ist.weekday() < 5 and (now_ist.hour, now_ist.minute) >= (15, 15)
@@ -8086,28 +8463,31 @@ async def startup():
     # Background strategy runner — uses REAL Kite candles when user is connected,
     # falls back to MOCK 5-min intraday candles only when no broker session.
     # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
-    async def _price_history(user_id: str, symbol: str, days: int = 60):
+    async def _price_history(user_id: str, symbol: str, days: int = 60, strategy: Optional[dict] = None):
         settings = await get_user_settings(user_id)
+        strategy_mode = (strategy or {}).get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
+        allow_mock = strategy_mode == "paper"
         return await _fetch_strategy_history(
             user_id,
             symbol,
             days=days,
             interval="5minute",
-            allow_mock=bool(settings.get("paper_mode", True)),
-        ) | {"paper_mode": bool(settings.get("paper_mode", True))}
+            allow_mock=allow_mock,
+        ) | {"paper_mode": allow_mock}
 
     # Resolver for index option contracts — runner uses this when a strategy
     # has visual_config.options.enabled. Requires a live Kite session.
     async def _resolve_option(user_id: str, underlying: str, signal_action: str,
                               strike_mode: str, otm_points: int = 0,
-                              expiry_offset: int = 0):
-        kite, _ = await get_user_kite(user_id)
-        if not kite:
-            return None
-        return options_helper.resolve_for_signal(
-            kite, underlying=underlying, signal_action=signal_action,
-            strike_mode=strike_mode, otm_points=otm_points,
-            expiry_offset_weeks=expiry_offset,
+                              expiry_offset: int = 0, strategy: Optional[dict] = None):
+        return await _resolve_option_for_strategy(
+            user_id,
+            strategy or {},
+            underlying,
+            signal_action,
+            strike_mode,
+            otm_points,
+            expiry_offset
         )
 
     app.state.tick_manager = RealtimeTickManager()

@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import { 
   Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, 
   Wifi, Power, Play, SquareArrowOutUpRight, Key, CheckCircle2, 
-  XCircle, Zap, Shield, HardDrive, CircleDollarSign, ArrowUpRight 
+  XCircle, Zap, Shield, HardDrive, CircleDollarSign, ArrowUpRight, User
 } from "lucide-react";
 import { api } from "../lib/api";
 import { toast } from "sonner";
+import { useAuth } from "../contexts/AuthContext";
 
 const fmt = (value) => {
   if (!value) return "-";
@@ -17,10 +18,43 @@ const fmt = (value) => {
 };
 
 export default function OpsConsole() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [fundsData, setFundsData] = useState(null);
   const [busy, setBusy] = useState("");
   const [simulatedLatency, setSimulatedLatency] = useState(12);
+  const [pendingUsers, setPendingUsers] = useState([]);
+
+  const loadPendingUsers = async () => {
+    if (user?.role !== "owner") return;
+    try {
+      const r = await api.get("/ops/pending-users");
+      setPendingUsers(r.data);
+    } catch (e) {
+      console.error("Failed to load pending users", e);
+    }
+  };
+
+  const handleApprove = async (userId, name) => {
+    try {
+      await api.post(`/ops/users/${userId}/approve`);
+      toast.success(`Approved registry entry for ${name}. Strategies seeded!`);
+      loadPendingUsers();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Approval failed");
+    }
+  };
+
+  const handleReject = async (userId, name) => {
+    if (!window.confirm(`Are you sure you want to reject and delete the registration request from ${name}?`)) return;
+    try {
+      await api.post(`/ops/users/${userId}/reject`);
+      toast.success(`Rejected and removed registry request from ${name}`);
+      loadPendingUsers();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Rejection failed");
+    }
+  };
 
   const load = async () => {
     try {
@@ -39,9 +73,13 @@ export default function OpsConsole() {
 
   useEffect(() => {
     load().catch(() => {});
-    const t = setInterval(() => load().catch(() => {}), 4000);
+    loadPendingUsers().catch(() => {});
+    const t = setInterval(() => {
+      load().catch(() => {});
+      loadPendingUsers().catch(() => {});
+    }, 4000);
     return () => clearInterval(t);
-  }, []);
+  }, [user]);
 
   const run = async (key, url, confirmText) => {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -139,6 +177,70 @@ export default function OpsConsole() {
           </button>
         </div>
       </div>
+
+      {/* OWNER APPROVALS DESK */}
+      {user?.role === "owner" && pendingUsers.length > 0 && (
+        <div className="qd-card p-6 border-[var(--qd-cyan)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-cyan)]/5 rounded-full blur-[100px] pointer-events-none" />
+          <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
+            <div className="flex items-center gap-2">
+              <Shield className="text-[var(--qd-cyan)] animate-pulse" size={20} />
+              <h2 className="text-lg font-head font-extrabold text-white">Owner's Registration Desk</h2>
+              <span className="text-xs font-mono bg-[var(--qd-cyan)]/15 border border-[var(--qd-cyan)]/30 text-[var(--qd-cyan)] px-2 py-0.5 rounded-full font-bold animate-pulse">
+                {pendingUsers.length} PENDING
+              </span>
+            </div>
+            <span className="text-xs font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
+              Awaiting Verification
+            </span>
+          </div>
+
+          <div className="qd-table-wrap relative z-10">
+            <table className="w-full text-left text-xs font-mono border-collapse">
+              <thead>
+                <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                  <th className="py-2.5">TRADER NAME</th>
+                  <th className="py-2.5">EMAIL ADDRESS</th>
+                  <th className="py-2.5">REQUEST DATE</th>
+                  <th className="py-2.5">ROLE</th>
+                  <th className="py-2.5 text-right">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingUsers.map((p) => (
+                  <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <td className="py-3 text-white font-semibold flex items-center gap-1.5">
+                      <User size={12} className="text-[var(--qd-text-3)]" />
+                      {p.name}
+                    </td>
+                    <td className="py-3 text-[var(--qd-text-2)]">{p.email}</td>
+                    <td className="py-3 text-[var(--qd-text-3)]">{fmt(p.created_at)}</td>
+                    <td className="py-3">
+                      <span className="px-1.5 py-0.5 text-[10px] bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 rounded uppercase font-bold">
+                        {p.role}
+                      </span>
+                    </td>
+                    <td className="py-3 text-right space-x-2">
+                      <button
+                        onClick={() => handleApprove(p.id, p.name)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-emerald-950 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all shadow-md shadow-emerald-500/10"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => handleReject(p.id, p.name)}
+                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white text-red-400 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
+                      >
+                        Reject
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* SYSTEM STATUS RIBBON */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">

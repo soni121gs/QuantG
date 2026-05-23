@@ -103,6 +103,8 @@ async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depen
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.get("approved", True) and user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Your registration is pending approval by the owner.")
     return user
 
 
@@ -121,6 +123,8 @@ class UserOut(BaseModel):
     name: str
     role: str
     created_at: str
+    approved: Optional[bool] = True
+    status: Optional[str] = "approved"
 
 
 class TokenOut(BaseModel):
@@ -162,3 +166,5 @@ class StrategyRuntimeSettingsReq(BaseModel):
     time_exit_minutes: Optional[int] = None
     indicator_exit_enabled: Optional[bool] = None
     exit_mode: Optional[str] = None
+    broker: Optional[str] = None
+    mode: Optional[str] = None
