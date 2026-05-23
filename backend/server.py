@@ -2603,9 +2603,6 @@ CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
                 position = "SHORT"
                 entry_price = closes[i]
     return signals
-"""d'}]
-        
-    return []
 """
 
 STANDARD_STRATEGY_CATALOG = [
