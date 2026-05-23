@@ -517,7 +517,13 @@ class KotakNeoGateway:
             self._set_error(f"WebSocket message handling failed: {self._friendly_error(exc)}")
 
     def on_error(self, error: Any) -> None:
-        self._set_error(f"WebSocket error: {self._friendly_error(error)}")
+        readable = self._friendly_error(error)
+        logger.warning(f"Kotak Neo WebSocket warning/disconnect: {readable}")
+        # Do not destroy the authenticated session on transient websocket drops.
+        # This keeps the main REST gateway active and ready for orders.
+        with self._lock:
+            self._last_error = f"WebSocket warning: {readable}"
+
 
     def latest_tick(self, instrument_token: str) -> Optional[Dict[str, Any]]:
         with self._lock:
