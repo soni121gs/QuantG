@@ -146,7 +146,8 @@ def test_order_paper_mode(H):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["mode"] == "paper"
-    assert d["status"] == "COMPLETE"
+    assert d["status"] == "FILLED"
+    assert d.get("legacy_status") == "COMPLETE"
     assert d["symbol"] == "INFY"
 
 

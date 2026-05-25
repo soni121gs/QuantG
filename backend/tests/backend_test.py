@@ -150,7 +150,8 @@ def test_place_order_and_position(auth_headers):
     # BUY
     r = requests.post(f"{API}/orders", json={"symbol": "INFY", "side": "BUY", "qty": 5}, headers=auth_headers, timeout=10)
     assert r.status_code == 200
-    assert r.json()["status"] == "COMPLETE"
+    assert r.json()["status"] == "FILLED"
+    assert r.json().get("legacy_status") == "COMPLETE"
 
     r = requests.get(f"{API}/positions", headers=auth_headers, timeout=10)
     assert r.status_code == 200

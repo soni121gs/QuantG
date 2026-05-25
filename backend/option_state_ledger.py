@@ -66,7 +66,7 @@ class OptionStateLedger:
     def __init__(self, db_path: str | os.PathLike[str], pool_size: int = 4):
         self.db_path = db_path
         # Synchronous MongoDB Client using environment credentials
-        mongo_uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+        mongo_uri = os.environ.get("MONGO_URI") or os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
         default_db = os.environ.get("DB_NAME", "quantg")
         
         path_str = str(db_path)
@@ -95,6 +95,7 @@ class OptionStateLedger:
             self.db.option_risk_settings.create_index("strategy_id", unique=True)
             self.db.option_daily_pnl.create_index([("trade_date", 1), ("strategy_id", 1)], unique=True)
             self.db.option_market_ticks.create_index([("symbol", 1), ("_id", -1)])
+            self.db.option_trade_journal.create_index([("strategy_id", 1), ("exit_time", -1)])
             logger.info("MongoDB option state ledger collections & indexes verified successfully")
 
     def close(self) -> None:
@@ -302,7 +303,9 @@ class OptionStateLedger:
                 trail_step_pct=float(state.get("trail_step_pct", 0.10)),
                 position_side=side,
             )
-            capped_quantity = min(quantity, max(1, int(state.get("max_lots", 1))))
+            # Quantity is stored as actual contracts, not lots. Max-lot
+            # enforcement happens before order construction.
+            capped_quantity = max(1, int(quantity))
 
             self.db.option_open_positions.update_one(
                 {"strategy_id": strategy_id},

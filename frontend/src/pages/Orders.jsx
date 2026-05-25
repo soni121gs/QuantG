@@ -4,7 +4,9 @@ import { useExecutionState } from "../hooks/useExecutionState";
 import { ShoppingCart, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
-const OPEN_STATUSES = ["OPEN", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
+const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
+const FILLED_STATUSES = ["FILLED", "CLOSED", "COMPLETE"];
+const REJECTED_STATUSES = ["CANCELLED", "REJECTED", "FAILED"];
 
 export default function Orders() {
   const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 4000 });
@@ -34,9 +36,9 @@ export default function Orders() {
     const status = o.execution_status || o.status;
     if (filter === "ALL") return true;
     if (filter === "OPEN") return OPEN_STATUSES.includes(status);
-    if (filter === "COMPLETE") return status === "COMPLETE";
-    if (filter === "CANCELLED") return ["CANCELLED", "REJECTED"].includes(status);
-    if (filter === "FAILED") return status === "FAILED";
+    if (filter === "COMPLETE") return FILLED_STATUSES.includes(status);
+    if (filter === "CANCELLED") return REJECTED_STATUSES.includes(status);
+    if (filter === "FAILED") return status === "FAILED" || status === "REJECTED";
     return true;
   });
 
@@ -139,9 +141,9 @@ export default function Orders() {
               {f} {f !== "ALL" && `· ${orders.filter((o) => {
                 const status = o.execution_status || o.status;
                 if (f === "OPEN") return OPEN_STATUSES.includes(status);
-                if (f === "COMPLETE") return status === "COMPLETE";
-                if (f === "FAILED") return status === "FAILED";
-                return ["CANCELLED", "REJECTED"].includes(status);
+                if (f === "COMPLETE") return FILLED_STATUSES.includes(status);
+                if (f === "FAILED") return status === "FAILED" || status === "REJECTED";
+                return REJECTED_STATUSES.includes(status);
               }).length}`}
             </button>
           ))}
@@ -175,8 +177,8 @@ export default function Orders() {
                   <td className="px-4 py-2.5 text-[var(--qd-loss)]">{o.stop_loss != null ? formatINR(o.stop_loss) : "—"}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.take_profit != null ? formatINR(o.take_profit) : "—"}</td>
                   <td className={`px-4 py-2.5 ${
-                    status === "COMPLETE" ? "text-[var(--qd-profit)]" :
-                    status === "FAILED" || ["CANCELLED", "REJECTED"].includes(status) ? "text-[var(--qd-loss)]" :
+                    FILLED_STATUSES.includes(status) ? "text-[var(--qd-profit)]" :
+                    REJECTED_STATUSES.includes(status) ? "text-[var(--qd-loss)]" :
                     "text-[var(--qd-warn)]"
                   }`} title={o.status_message || ""}>{status}</td>
                 </tr>

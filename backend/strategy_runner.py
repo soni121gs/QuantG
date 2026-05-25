@@ -22,6 +22,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 
+from pymongo import ReturnDocument
+
 from safe_exec import safe_run_strategy
 from market_protection import MarketTrendAnalyzer, FakeSignalFilter
 
@@ -121,7 +123,7 @@ async def _acquire_lock(db) -> bool:
     expires_at = now + timedelta(seconds=LOCK_TTL_SECONDS)
     try:
         # 1. Try to take an expired/abandoned lock or refresh our own
-        res = await db.runner_locks.update_one(
+        row = await db.runner_locks.find_one_and_update(
             {
                 "_id": LOCK_ID,
                 "$or": [
@@ -130,8 +132,9 @@ async def _acquire_lock(db) -> bool:
                 ],
             },
             {"$set": {"owner": POD_ID, "expires_at": expires_at, "renewed_at": now}},
+            return_document=ReturnDocument.AFTER,
         )
-        if res.matched_count == 1:
+        if row:
             return True
         # 2. No existing lock at all — try to create one. If another pod creates
         #    it first we'll hit a duplicate-key error which we treat as "not us".
@@ -317,6 +320,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
 
                 # Trigger order using injected fn — it applies paper_mode + risk limits
                 try:
+                    target_symbol = option_contract["tradingsymbol"] if option_contract else symbol
+                    idem_seed = f"strategy:{s['id']}:{last_sig_date}:{action}:{target_symbol}"
                     place_kwargs: Dict[str, Any] = dict(
                         user_id=s["user_id"],
                         symbol=symbol,
@@ -325,11 +330,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         order_type="MARKET",
                         product=None,
                         source=f"strategy:{s['id']}",
+                        idempotency_key=idem_seed,
                     )
                     if option_contract:
                         place_kwargs["option_contract"] = option_contract
                     await place_order_fn(**place_kwargs)
-                    log_target = option_contract["tradingsymbol"] if option_contract else symbol
+                    log_target = target_symbol
                     await db.strategies.update_one(
                         {"id": s["id"]},
                         {"$set": {**eval_set,

@@ -7,19 +7,12 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from execution_bridge import normalize_order_row, segment_from_exchange
+from order_lifecycle import ORDER_ACTIVE_STATUSES, ORDER_TERMINAL_STATUSES, LEGACY_OPEN_STATUSES, LEGACY_TERMINAL_STATUSES
 
 logger = logging.getLogger("quantg.execution_state")
 
-OPEN_ORDER_STATUSES = {
-    "OPEN",
-    "PENDING",
-    "PENDING_BROKER",
-    "TRIGGER PENDING",
-    "MODIFY PENDING",
-    "VALIDATION PENDING",
-    "PUT ORDER REQ RECEIVED",
-}
-TERMINAL_ORDER_STATUSES = {"COMPLETE", "CANCELLED", "REJECTED", "FAILED", "STALE", "BROKER_NOT_FOUND"}
+OPEN_ORDER_STATUSES = set(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
+TERMINAL_ORDER_STATUSES = set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES | {"FAILED"})
 
 
 class ExecutionStateManager:

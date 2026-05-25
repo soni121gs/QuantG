@@ -25,6 +25,7 @@ import { useExecutionState } from "../hooks/useExecutionState";
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
 const toneClass = (value) => ((value ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]");
+const filledOrder = (status) => ["FILLED", "CLOSED", "COMPLETE"].includes((status || "").toUpperCase());
 
 const Field = ({ label, value, tone }) => (
   <div className="min-w-0">
@@ -608,7 +609,7 @@ export default function Dashboard() {
                         <td className={`px-3 py-2 font-bold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                         <td className="px-3 py-2 text-[var(--qd-text-2)]">{o.qty}</td>
                         <td className="px-3 py-2 text-[var(--qd-text-3)]">{money(o.price)}</td>
-                        <td className="px-3 py-2"><StatusPill tone={o.status === "COMPLETE" ? "good" : "warn"}>{o.status}</StatusPill></td>
+                        <td className="px-3 py-2"><StatusPill tone={filledOrder(o.status) ? "good" : "warn"}>{o.status}</StatusPill></td>
                       </tr>
                     ))}
                   </tbody>
@@ -693,7 +694,7 @@ export default function Dashboard() {
                             <td className={`px-3 py-2 font-bold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                             <td className="px-3 py-2 text-[var(--qd-text-2)]">{o.qty}</td>
                             <td className="px-3 py-2 text-[var(--qd-text-3)]">{money(o.price)}</td>
-                            <td className="px-3 py-2"><StatusPill tone={o.status === "COMPLETE" ? "good" : "warn"}>{o.status}</StatusPill></td>
+                            <td className="px-3 py-2"><StatusPill tone={filledOrder(o.status) ? "good" : "warn"}>{o.status}</StatusPill></td>
                           </tr>
                         ))}
                       </tbody>

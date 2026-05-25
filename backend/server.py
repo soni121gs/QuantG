@@ -26,6 +26,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
 
@@ -45,6 +46,23 @@ from market_protection import MarketTrendAnalyzer, FakeSignalFilter, OrderExecut
 from daily_strategy_reporter import DailyStrategyReporter
 from realtime_ticks import RealtimeTickManager
 from safe_exec import safe_run_strategy
+from order_lifecycle import (
+    ORDER_NEW,
+    ORDER_PLACED,
+    ORDER_OPEN,
+    ORDER_PARTIAL_FILL,
+    ORDER_FILLED,
+    ORDER_CANCELLED,
+    ORDER_REJECTED,
+    ORDER_CLOSED,
+    ORDER_ACTIVE_STATUSES,
+    ORDER_TERMINAL_STATUSES,
+    LEGACY_OPEN_STATUSES,
+    LEGACY_FILLED_STATUSES,
+    LEGACY_TERMINAL_STATUSES,
+    canonical_order_status,
+    is_order_active,
+)
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
@@ -239,6 +257,7 @@ class OrderReq(BaseModel):
     exchange: str = "NSE"
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    idempotency_key: Optional[str] = Field(default=None, max_length=160)
 
 
 class InstrumentRef(BaseModel):
@@ -3036,6 +3055,7 @@ async def _reserve_strategy_position(
             "instrument_key": instrument_key,
             "trading_symbol": trading_symbol,
             "created_at": now,
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
         }
         for lock_id in lock_ids
     ]
@@ -4531,7 +4551,7 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
     orders = await db.orders.find({
         "user_id": user_id,
         "created_at": {"$gte": today_start},
-        "status": "COMPLETE",
+        "status": {"$in": [ORDER_FILLED, ORDER_CLOSED, "COMPLETE"]},
     }, {"_id": 0}).to_list(500)
     realised = sum(float(o.get("realised_pnl") or 0) for o in orders)
     if realised <= -abs(max_loss):
@@ -4549,7 +4569,7 @@ async def _check_trade_count_guard(user_id: str, max_trades: int) -> None:
     trades = await db.orders.count_documents({
         "user_id": user_id,
         "created_at": {"$gte": today_start},
-        "status": {"$nin": ["REJECTED", "CANCELLED", "STALE", "BROKER_NOT_FOUND"]},
+        "status": {"$nin": [ORDER_REJECTED, ORDER_CANCELLED, "REJECTED", "CANCELLED", "STALE", "BROKER_NOT_FOUND"]},
     })
     if trades >= int(max_trades):
         raise HTTPException(
@@ -4583,11 +4603,11 @@ def _new_execution_tag(strategy_id: Optional[str] = None) -> str:
 
 
 def _open_order_statuses() -> set:
-    return {"OPEN", "PENDING", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"}
+    return set(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
 
 
 def _closed_order_statuses() -> set:
-    return {"COMPLETE", "CANCELLED", "REJECTED", "STALE", "BROKER_NOT_FOUND"}
+    return set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES)
 
 
 async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
@@ -4986,13 +5006,354 @@ async def _persist_failed_order(
     return doc
 
 
+def _clean_order_response(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not doc:
+        return {}
+    out = dict(doc)
+    out.pop("_id", None)
+    out.pop("user_id", None)
+    out.pop("placement_owner", None)
+    out.pop("placement_lock_until", None)
+    out.pop("paper_fill_apply_owner", None)
+    out.pop("paper_fill_apply_lock_until", None)
+    out.pop("paper_fill_apply_started_at", None)
+    out.setdefault("broker_order_id", None)
+    return out
+
+
+def _scoped_idempotency_key(user_id: str, raw_key: Optional[str]) -> str:
+    raw = str(raw_key or "").strip()
+    if not raw:
+        raw = f"auto:{uuid.uuid4().hex}"
+    digest = hashlib.sha256(f"{user_id}:{raw}".encode("utf-8")).hexdigest()
+    return f"idem:{digest}"
+
+
+async def _append_order_event(order_id: str, user_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        await db.order_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "order_id": order_id,
+            "user_id": user_id,
+            "event_type": event_type,
+            "payload": payload or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        logger.warning("order event append failed order=%s event=%s: %s", order_id, event_type, exc)
+
+
+async def _insert_order_intent(order_doc: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    """Insert an order intent once per idempotency key.
+
+    Returns (doc, inserted). On duplicate-key conflict the already-persisted
+    order is returned and the caller must not place a second broker order.
+    """
+    try:
+        await db.orders.insert_one(order_doc)
+        await _append_order_event(order_doc["id"], order_doc["user_id"], "ORDER_INTENT_PERSISTED", {
+            "status": order_doc.get("status"),
+            "idempotency_key": order_doc.get("idempotency_key"),
+            "mode": order_doc.get("mode"),
+        })
+        return dict(order_doc), True
+    except DuplicateKeyError:
+        lease_now = datetime.now(timezone.utc).isoformat()
+        existing = await db.orders.find_one_and_update(
+            {
+                "user_id": order_doc["user_id"],
+                "idempotency_key": order_doc.get("idempotency_key"),
+                "mode": "live",
+                "status": ORDER_NEW,
+                "broker_order_id": {"$in": [None, ""]},
+                "$or": [
+                    {"placement_lock_until": {"$lt": lease_now}},
+                    {"placement_lock_until": {"$exists": False}},
+                    {"placement_lock_until": None},
+                ],
+            },
+            {"$set": {
+                "placement_owner": order_doc.get("placement_owner"),
+                "placement_lock_until": order_doc.get("placement_lock_until"),
+                "updated_at": lease_now,
+            }},
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
+        )
+        if existing:
+            return existing, True
+        existing = await db.orders.find_one(
+            {"user_id": order_doc["user_id"], "idempotency_key": order_doc.get("idempotency_key")},
+            {"_id": 0},
+        )
+        if existing:
+            return existing, False
+        raise
+
+
+async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = await db.orders.find_one_and_update(
+        {"id": order_id, "user_id": user_id},
+        {"$set": {
+            "status": ORDER_REJECTED,
+            "legacy_status": "REJECTED",
+            "execution_status": ORDER_REJECTED,
+            "status_message": message,
+            "error_message": message,
+            "updated_at": now,
+        }, "$unset": {"placement_owner": "", "placement_lock_until": ""}},
+        projection={"_id": 0},
+        return_document=ReturnDocument.AFTER,
+    )
+    await _append_order_event(order_id, user_id, "ORDER_REJECTED", {"message": message})
+    return row or {}
+
+
+async def _mark_order_submitted(order_id: str, user_id: str, submit: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    broker_order_id = submit.get("broker_order_id") or submit.get("order_id")
+    if broker_order_id is not None:
+        broker_order_id = str(broker_order_id)
+    broker_status = submit.get("broker_status")
+    canonical = canonical_order_status(broker_status or ORDER_PLACED)
+    if canonical == ORDER_NEW:
+        canonical = ORDER_PLACED
+    try:
+        row = await db.orders.find_one_and_update(
+            {"id": order_id, "user_id": user_id},
+            {"$set": {
+                "status": canonical,
+                "legacy_status": "PENDING_BROKER",
+                "execution_status": canonical,
+                "broker_status": broker_status,
+                "broker_order_id": broker_order_id,
+                "execution_attempts": int(submit.get("attempts") or 1),
+                "execution_recovered": bool(submit.get("recovered")),
+                "broker_response": submit.get("raw") or submit.get("broker_order") or submit,
+                "updated_at": now,
+            }, "$unset": {"placement_owner": "", "placement_lock_until": ""}},
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
+        )
+        await _append_order_event(order_id, user_id, "ORDER_PLACED", {
+            "broker_order_id": broker_order_id,
+            "broker_status": broker_status,
+            "status": canonical,
+        })
+        return row or {}
+    except DuplicateKeyError:
+        existing = await db.orders.find_one(
+            {"user_id": user_id, "broker_order_id": broker_order_id},
+            {"_id": 0},
+        )
+        if existing:
+            return existing
+        raise
+
+
+def _paper_delta(intent_name: str, quantity: int) -> int:
+    return int(quantity) if intent_name in {"OPEN_LONG", "CLOSE_SHORT"} else -int(quantity)
+
+
+async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: float) -> Dict[str, Any]:
+    """Apply a paper fill exactly once and write immutable fill/trade records."""
+    order_id = order_doc["id"]
+    user_id = order_doc["user_id"]
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    apply_owner = uuid.uuid4().hex
+    apply_lock_until = (now_dt + timedelta(seconds=60)).isoformat()
+    locked = await db.orders.find_one_and_update(
+        {
+            "id": order_id,
+            "user_id": user_id,
+            "mode": "paper",
+            "paper_fill_applied": {"$ne": True},
+            "$or": [
+                {"paper_fill_apply_lock_until": {"$lt": now}},
+                {"paper_fill_apply_lock_until": {"$exists": False}},
+                {"paper_fill_apply_lock_until": None},
+            ],
+        },
+        {"$set": {
+            "paper_fill_apply_owner": apply_owner,
+            "paper_fill_apply_lock_until": apply_lock_until,
+            "paper_fill_apply_started_at": now,
+        }},
+        projection={"_id": 0},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not locked:
+        existing = await db.orders.find_one({"id": order_id, "user_id": user_id}, {"_id": 0})
+        return existing or order_doc
+
+    intent_doc = locked.get("order_intent") or {}
+    intent_name = str(intent_doc.get("intent") or "").upper()
+    qty = int(locked.get("qty") or locked.get("quantity") or 0)
+    delta = _paper_delta(intent_name, qty)
+    symbol = locked["symbol"]
+    brokerage = float(locked.get("brokerage") or _simulate_paper_brokerage(fill_price, qty))
+    expected = float(locked.get("expected_price") or locked.get("requested_price") or fill_price or 0)
+    slippage = round(abs(float(fill_price or 0) - expected) * qty, 2) if expected > 0 else 0.0
+
+    pos = await db.positions.find_one({"user_id": user_id, "symbol": symbol})
+    before_qty = int((pos or {}).get("qty") or 0)
+    before_avg = float((pos or {}).get("avg_price") or 0)
+    after_qty = before_qty + delta
+    qty_closed = 0
+    gross_realised = 0.0
+    after_avg = float(fill_price or 0)
+
+    if before_qty == 0 or before_qty * delta > 0:
+        total_qty = abs(before_qty) + abs(delta)
+        after_avg = round(((abs(before_qty) * before_avg) + (abs(delta) * fill_price)) / total_qty, 2) if total_qty else fill_price
+    else:
+        qty_closed = min(abs(before_qty), abs(delta))
+        gross_realised = round((fill_price - before_avg) * qty_closed, 2) if before_qty > 0 else round((before_avg - fill_price) * qty_closed, 2)
+        if after_qty == 0:
+            after_avg = 0.0
+        elif abs(delta) > abs(before_qty):
+            after_avg = float(fill_price or 0)
+        else:
+            after_avg = before_avg
+
+    net_realised = round(gross_realised - brokerage, 2) if qty_closed else 0.0
+
+    if after_qty == 0:
+        await db.positions.delete_one({"user_id": user_id, "symbol": symbol})
+    elif pos:
+        await db.positions.update_one(
+            {"_id": pos["_id"]},
+            {"$set": {
+                "qty": after_qty,
+                "avg_price": round(after_avg, 2),
+                "updated_at": now,
+                "asset_type": locked.get("asset_type"),
+                "exchange": locked.get("exchange"),
+                "strategy_id": locked.get("strategy_id"),
+            }},
+        )
+    else:
+        await db.positions.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "symbol": symbol,
+            "qty": after_qty,
+            "avg_price": round(after_avg, 2),
+            "created_at": now,
+            "updated_at": now,
+            "asset_type": locked.get("asset_type"),
+            "exchange": locked.get("exchange"),
+            "strategy_id": locked.get("strategy_id"),
+        })
+
+    fill_doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "user_id": user_id,
+        "strategy_id": locked.get("strategy_id"),
+        "symbol": symbol,
+        "side": locked.get("side"),
+        "qty": qty,
+        "fill_price": float(fill_price or 0),
+        "brokerage": brokerage,
+        "slippage": slippage,
+        "gross_realised_pnl": gross_realised,
+        "realised_pnl": net_realised,
+        "position_before_qty": before_qty,
+        "position_after_qty": after_qty,
+        "avg_price_before": before_avg,
+        "avg_price_after": round(after_avg, 2),
+        "filled_at": now,
+        "mode": "paper",
+    }
+    try:
+        await db.trade_fills.insert_one(fill_doc)
+    except DuplicateKeyError:
+        pass
+    if qty_closed:
+        try:
+            await db.trades.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "strategy_id": locked.get("strategy_id"),
+                "entry_symbol": symbol,
+                "exit_order_id": order_id,
+                "qty": qty_closed,
+                "exit_price": float(fill_price or 0),
+                "gross_realised_pnl": gross_realised,
+                "realised_pnl": net_realised,
+                "brokerage": brokerage,
+                "slippage": slippage,
+                "closed_at": now,
+                "mode": "paper",
+            })
+        except DuplicateKeyError:
+            pass
+
+    updated = await db.orders.find_one_and_update(
+        {"id": order_id, "user_id": user_id},
+        {"$set": {
+            "status": ORDER_FILLED,
+            "legacy_status": "COMPLETE",
+            "execution_status": ORDER_FILLED,
+            "filled_qty": qty,
+            "pending_qty": 0,
+            "price": float(fill_price or 0),
+            "gross_realised_pnl": gross_realised,
+            "realised_pnl": net_realised,
+            "brokerage": brokerage,
+            "slippage": slippage,
+            "paper_fill_applied": True,
+            "updated_at": now,
+        }, "$unset": {
+            "paper_fill_apply_owner": "",
+            "paper_fill_apply_lock_until": "",
+            "paper_fill_apply_started_at": "",
+        }},
+        projection={"_id": 0},
+        return_document=ReturnDocument.AFTER,
+    )
+    await _append_order_event(order_id, user_id, "PAPER_FILL_APPLIED", {
+        "fill_price": float(fill_price or 0),
+        "qty": qty,
+        "realised_pnl": net_realised,
+        "position_before_qty": before_qty,
+        "position_after_qty": after_qty,
+    })
+    return updated or locked
+
+
+async def _recover_pending_paper_fills(limit: int = 500) -> int:
+    """Finish paper fills that were persisted before a restart/crash."""
+    rows = await db.orders.find(
+        {
+            "mode": "paper",
+            "paper_fill_applied": {"$ne": True},
+            "status": {"$in": [ORDER_NEW, ORDER_FILLED]},
+        },
+        {"_id": 0},
+    ).sort("created_at", 1).limit(limit).to_list(length=limit)
+    recovered = 0
+    for row in rows:
+        try:
+            updated = await _apply_paper_fill_to_position(row, float(row.get("price") or row.get("expected_price") or 0))
+            if updated.get("paper_fill_applied"):
+                recovered += 1
+        except Exception as exc:
+            logger.warning("pending paper fill recovery failed order=%s: %s", row.get("id"), exc)
+    return recovered
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
                             option_contract: Optional[Dict[str, Any]] = None,
                             exchange: str = "NSE",
                             stop_loss: Optional[float] = None,
-                            take_profit: Optional[float] = None) -> dict:
+                            take_profit: Optional[float] = None,
+                            idempotency_key: Optional[str] = None) -> dict:
     side = (side or "").upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
@@ -5051,6 +5412,24 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 detail=f"Order value INR {intent.quantity * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
             )
 
+    if idempotency_key:
+        existing_idem = await db.orders.find_one(
+            {"user_id": user_id, "idempotency_key": _scoped_idempotency_key(user_id, idempotency_key)},
+            {"_id": 0},
+        )
+        if existing_idem and not (
+            existing_idem.get("mode") == "live"
+            and existing_idem.get("status") == ORDER_NEW
+            and not existing_idem.get("broker_order_id")
+            and str(existing_idem.get("placement_lock_until") or "") < datetime.now(timezone.utc).isoformat()
+        ):
+            if existing_idem.get("mode") == "paper" and not existing_idem.get("paper_fill_applied"):
+                existing_idem = await _apply_paper_fill_to_position(
+                    existing_idem,
+                    float(existing_idem.get("price") or existing_idem.get("expected_price") or 0),
+                )
+            return _clean_order_response(existing_idem)
+
     instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
     position_reservation = None
     exit_position_record = None
@@ -5080,92 +5459,44 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     resolved_product = (product or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))).upper()
     execution_tag = _new_execution_tag(strategy_id)
     broker_order_id = None
-    execution_attempts = 0
-    execution_recovered = False
     fill_price = price if price is not None else fill_price_hint
     if paper:
         fill_price = price if order_type == "LIMIT" and price is not None else _simulate_paper_fill_price(fill_price_hint or 1.0, _intent_side(intent.intent))
-    else:
-        try:
-            submit = await _submit_order_intent(
-                user_id,
-                intent,
-                order_type=order_type,
-                product=resolved_product,
-                price=price,
-                tag=execution_tag,
-            )
-            broker_order_id = submit.get("broker_order_id") or submit.get("order_id")
-            execution_attempts = int(submit.get("attempts") or 1)
-            execution_recovered = bool(submit.get("recovered"))
-            if not broker_order_id:
-                raise RuntimeError(f"{instr.broker} accepted no broker_order_id for {instr.tradingsymbol}; cannot track PENDING_BROKER state.")
-        except Exception as exc:
-            await _cancel_strategy_reservation(position_reservation, str(exc))
-            if strategy_id:
-                option_ledger.release_failed_open(strategy_id)
-            failed_doc = await _persist_failed_order(
-                user_id=user_id,
-                intent=intent,
-                order_type=order_type,
-                product=resolved_product,
-                price=price,
-                source=source,
-                strategy_id=strategy_id,
-                error_message=str(exc),
-                resolution=resolution,
-                option_contract=option_contract,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=f"Broker rejected order: {exc}",
-                headers={"X-Order-Id": failed_doc.get("id", "")},
-            )
-
-    order_realised_pnl = 0.0
-    if paper:
-        # Try to find the existing position in positions collection to determine if this order reduces/closes it
-        existing_pos = await db.positions.find_one({"user_id": user_id, "symbol": instr.tradingsymbol})
-        if existing_pos and existing_pos.get("qty"):
-            current_qty = int(existing_pos["qty"])
-            order_qty = int(intent.quantity)
-            order_side = _intent_side(intent.intent)
-            
-            # Close/reduction happens when order side is opposite of position side
-            is_close = (current_qty > 0 and order_side == "SELL") or (current_qty < 0 and order_side == "BUY")
-            if is_close:
-                qty_closed = min(abs(current_qty), order_qty)
-                entry_price_val = float(existing_pos.get("avg_price") or 0)
-                if current_qty > 0: # LONG exit
-                    order_realised_pnl = round((float(fill_price or 0) - entry_price_val) * qty_closed, 2)
-                else: # SHORT exit
-                    order_realised_pnl = round((entry_price_val - float(fill_price or 0)) * qty_closed, 2)
 
     now = datetime.now(timezone.utc).isoformat()
+    placement_owner = uuid.uuid4().hex
+    scoped_idempotency = _scoped_idempotency_key(user_id, idempotency_key)
     order_doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
+        "idempotency_key": scoped_idempotency,
+        "client_idempotency_key": str(idempotency_key or ""),
         "symbol": instr.tradingsymbol,
         "side": _intent_side(intent.intent),
         "qty": int(intent.quantity),
-        "filled_qty": int(intent.quantity) if paper else None,
-        "pending_qty": 0 if paper else int(intent.quantity),
-        "status_message": "Filled successfully (Paper Mode)" if paper else None,
-        "realised_pnl": order_realised_pnl,
+        "filled_qty": 0,
+        "pending_qty": int(intent.quantity),
+        "status_message": "Paper fill pending local accounting" if paper else "Order intent persisted before broker submission",
+        "gross_realised_pnl": 0.0,
+        "realised_pnl": 0.0,
         "order_type": order_type,
+        "requested_price": float(price or 0),
+        "expected_price": float(fill_price_hint or price or 0),
         "price": float(fill_price or 0),
         "brokerage": _simulate_paper_brokerage(float(fill_price or 0), int(intent.quantity)) if paper else 0.0,
+        "slippage": 0.0,
         "product": resolved_product,
-        "status": "COMPLETE" if paper else "PENDING_BROKER",
+        "status": ORDER_NEW,
+        "legacy_status": "PENDING_LOCAL" if paper else "PENDING_BROKER",
         "mode": "paper" if paper else "live",
         "broker": "paper" if paper else _runtime_broker_name(instr.broker),
-        "broker_order_id": broker_order_id,
         "execution_tag": execution_tag if not paper else None,
-        "execution_attempts": execution_attempts,
-        "execution_recovered": execution_recovered,
+        "execution_attempts": 0,
+        "execution_recovered": False,
         "source": source,
         "strategy_id": strategy_id,
         "created_at": now,
+        "updated_at": now,
         "exchange": instr.exchange,
         "asset_type": "option" if instr.segment == "OPTIONS" else ("commodity" if instr.segment == "COMMODITY" else "equity"),
         "order_intent": intent.model_dump(),
@@ -5173,8 +5504,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "segment": instr.segment,
         "stop_loss": intent.stop_loss,
         "take_profit": intent.take_profit,
-        "execution_status": "COMPLETE" if paper else "PENDING_BROKER",
+        "execution_status": ORDER_NEW,
+        "paper_fill_applied": False if paper else None,
     }
+    if broker_order_id:
+        order_doc["broker_order_id"] = str(broker_order_id)
+    if not paper:
+        order_doc["placement_owner"] = placement_owner
+        order_doc["placement_lock_until"] = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
     if option_contract:
         order_doc.update({
             "underlying": option_contract.get("underlying"),
@@ -5186,7 +5523,38 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "lots": resolution.get("lots"),
             "lot_size": resolution.get("lot_size"),
         })
-    await db.orders.insert_one(order_doc)
+    order_doc, inserted = await _insert_order_intent(order_doc)
+    execution_tag = order_doc.get("execution_tag") or execution_tag
+    if not inserted:
+        if order_doc.get("mode") == "paper" and not order_doc.get("paper_fill_applied"):
+            order_doc = await _apply_paper_fill_to_position(order_doc, float(order_doc.get("price") or fill_price or 0))
+        await _cancel_strategy_reservation(position_reservation, "duplicate-idempotency-key")
+        return _clean_order_response(order_doc)
+
+    if not paper:
+        try:
+            submit = await _submit_order_intent(
+                user_id,
+                intent,
+                order_type=order_type,
+                product=resolved_product,
+                price=price,
+                tag=execution_tag,
+            )
+            broker_order_id = submit.get("broker_order_id") or submit.get("order_id")
+            if not broker_order_id:
+                raise RuntimeError(f"{instr.broker} accepted no broker_order_id for {instr.tradingsymbol}; cannot track PLACED state.")
+            order_doc = await _mark_order_submitted(order_doc["id"], user_id, submit)
+        except Exception as exc:
+            await _cancel_strategy_reservation(position_reservation, str(exc))
+            if strategy_id:
+                option_ledger.release_failed_open(strategy_id)
+            order_doc = await _mark_order_rejected(order_doc["id"], user_id, str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Broker rejected order: {exc}",
+                headers={"X-Order-Id": order_doc.get("id", "")},
+            )
 
     if strategy_id and _intent_is_entry(intent.intent):
         await _activate_strategy_position(
@@ -5222,12 +5590,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 symbol=instr.tradingsymbol,
                 option_type=order_doc.get("option_type") or ("EQ" if instr.segment == "EQUITY" else instr.segment),
                 entry_price=float(fill_price or 0),
-                quantity=max(1, int(resolution.get("lots") or 1)),
+                quantity=max(1, int(intent.quantity)),
                 position_side=ledger_side,
                 broker_confirmed=True,
             )
             if not decision.accepted:
                 await _cancel_strategy_reservation(position_reservation, decision.reason)
+                order_doc = await _mark_order_rejected(order_doc["id"], user_id, f"Strategy entry blocked: {decision.reason}")
                 raise HTTPException(status_code=409, detail=f"Strategy entry blocked: {decision.reason}")
 
     if strategy_id and _intent_is_exit(intent.intent):
@@ -5237,35 +5606,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             option_ledger.close_position(strategy_id=strategy_id, exit_price=float(fill_price or 0), exit_reason=source)
 
     if paper:
-        pos = await db.positions.find_one({"user_id": user_id, "symbol": instr.tradingsymbol})
-        delta = int(intent.quantity) if intent.intent in {"OPEN_LONG", "CLOSE_SHORT"} else -int(intent.quantity)
-        if pos:
-            new_qty = int(pos["qty"]) + delta
-            if new_qty == 0:
-                await db.positions.delete_one({"_id": pos["_id"]})
-            else:
-                avg = (
-                    (float(pos["avg_price"]) * int(pos["qty"]) + float(fill_price or 0) * int(intent.quantity)) / (int(pos["qty"]) + int(intent.quantity))
-                    if delta > 0 and (int(pos["qty"]) + int(intent.quantity))
-                    else float(pos["avg_price"])
-                )
-                await db.positions.update_one({"_id": pos["_id"]}, {"$set": {"qty": new_qty, "avg_price": round(avg, 2)}})
-        else:
-            await db.positions.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "symbol": instr.tradingsymbol,
-                "qty": delta,
-                "avg_price": float(fill_price or 0),
-                "created_at": now,
-                "asset_type": order_doc["asset_type"],
-                "exchange": instr.exchange,
-                "strategy_id": strategy_id,
-            })
+        order_doc = await _apply_paper_fill_to_position(order_doc, float(fill_price or 0))
 
-    order_doc.pop("_id", None)
-    order_doc.pop("user_id", None)
-    return order_doc
+    return _clean_order_response(order_doc)
 
 
 @api.post("/orders")
@@ -5276,6 +5619,7 @@ async def place_order(req: OrderReq, user=Depends(get_current_user)):
         exchange=req.exchange,
         stop_loss=req.stop_loss,
         take_profit=req.take_profit,
+        idempotency_key=req.idempotency_key,
     )
 
 
@@ -5320,25 +5664,18 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
         abs_qty = abs(qty)
         try:
             if paper:
-                await db.orders.insert_one({
-                    "id": str(uuid.uuid4()),
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                    "side": side,
-                    "qty": abs_qty,
-                    "filled_qty": abs_qty,
-                    "pending_qty": 0,
-                    "order_type": "MARKET",
-                    "price": float(p.get("ltp") or p.get("avg_price") or 0),
-                    "product": p.get("product") or settings.get("default_product", "MIS"),
-                    "status": "COMPLETE",
-                    "mode": "paper",
-                    "source": "squareoff-all",
-                    "created_at": now,
-                    "realised_pnl": float(p.get("pnl") or 0),
-                })
-                await db.positions.delete_one({"user_id": user["id"], "symbol": symbol})
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper"})
+                res = await _place_order_core(
+                    user_id=user["id"],
+                    symbol=symbol,
+                    side=side,
+                    qty=abs_qty,
+                    order_type="MARKET",
+                    product=p.get("product") or settings.get("default_product", "MIS"),
+                    source="squareoff-all",
+                    exchange=p.get("exchange") or "NSE",
+                    idempotency_key=f"squareoff-all:{symbol}:{now}",
+                )
+                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
             else:
                 if any(s["symbol"] == str(symbol).upper() for s in SYMBOLS):
                     res = await _place_order_core(
@@ -5394,7 +5731,9 @@ def _broker_order_row(o: Dict[str, Any]) -> Dict[str, Any]:
         "price": float(o.get("average_price") or o.get("price") or 0),
         "order_type": o.get("order_type"),
         "product": o.get("product"),
-        "status": o.get("status"),
+        "status": canonical_order_status(o.get("status"), filled_qty=o.get("filled_quantity"), pending_qty=o.get("pending_quantity")),
+        "legacy_status": o.get("status"),
+        "broker_status": o.get("status"),
         "status_message": o.get("status_message"),
         "mode": "live",
         "source": "broker",
@@ -5414,6 +5753,7 @@ async def _advance_pending_order_from_broker(
     if not broker_order_id or not status:
         return {"orders": 0, "positions": 0}
     normalized = str(status).upper()
+    canonical = canonical_order_status(normalized, filled_qty=filled_qty)
     local_orders = await db.orders.find(
         {"user_id": user_id, "broker_order_id": str(broker_order_id)},
         {"_id": 0},
@@ -5428,7 +5768,7 @@ async def _advance_pending_order_from_broker(
         instrument = intent_doc.get("instrument") or order.get("instrument") or {}
         is_entry = intent_name in {"OPEN_LONG", "OPEN_SHORT"}
         is_exit = intent_name in {"CLOSE_LONG", "CLOSE_SHORT"}
-        if normalized == "COMPLETE":
+        if canonical == ORDER_FILLED:
             changed_orders += 1
             if strategy_id and is_entry:
                 pos_set = {
@@ -5453,7 +5793,7 @@ async def _advance_pending_order_from_broker(
                 decision = option_ledger.confirm_position_fill(
                     strategy_id=strategy_id,
                     entry_price=float(avg_price or order.get("price") or 0),
-                    quantity=max(1, int(order.get("lots") or 1)),
+                    quantity=max(1, int(filled_qty or order.get("filled_qty") or order.get("qty") or 1)),
                     position_side=ledger_side,
                     create_if_missing=True,
                 )
@@ -5469,7 +5809,7 @@ async def _advance_pending_order_from_broker(
                     await _close_strategy_position_record(pos, exit_price=exit_price, reason="broker-exit-complete")
                     option_ledger.close_position(strategy_id=pos.get("strategy_id"), exit_price=exit_price, exit_reason="broker-exit-complete")
                     changed_positions += 1
-        elif normalized in {"CANCELLED", "REJECTED"}:
+        elif canonical in {ORDER_CANCELLED, ORDER_REJECTED}:
             changed_orders += 1
             if strategy_id and is_entry:
                 res = await db.strategy_positions.update_many(
@@ -5479,7 +5819,7 @@ async def _advance_pending_order_from_broker(
                         "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
                     },
                     {
-                        "$set": {"status": normalized, "updated_at": now, "broker_status_message": status_message or normalized},
+                        "$set": {"status": canonical, "legacy_status": normalized, "updated_at": now, "broker_status_message": status_message or normalized},
                         "$unset": {"active_instrument_key": "", "active_strategy_key": ""},
                     },
                 )
@@ -5498,6 +5838,21 @@ async def _advance_pending_order_from_broker(
 
 
 _LAST_USER_BROKER_SYNC: Dict[str, float] = {}
+
+async def _record_broker_sync_state(user_id: str, broker: str, result: Dict[str, Any]) -> None:
+    try:
+        await db.broker_sync_state.update_one(
+            {"user_id": user_id, "broker": broker},
+            {"$set": {
+                "user_id": user_id,
+                "broker": broker,
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "result": result,
+            }},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("broker sync state write failed user=%s broker=%s: %s", user_id, broker, exc)
 
 def _check_and_update_sync_throttle(user_id: str, broker: str, ttl: float = 5.0) -> bool:
     now = time.monotonic()
@@ -5533,10 +5888,14 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
         status = o.get("status")
         if not broker_order_id or not status:
             continue
+        filled_quantity = o.get("filled_quantity")
+        pending_quantity = o.get("pending_quantity")
         set_doc = {
-            "status": status,
-            "filled_qty": o.get("filled_quantity"),
-            "pending_qty": o.get("pending_quantity"),
+            "status": canonical_order_status(status, filled_qty=filled_quantity, pending_qty=pending_quantity),
+            "legacy_status": status,
+            "broker_status": status,
+            "filled_qty": filled_quantity,
+            "pending_qty": pending_quantity,
             "status_message": o.get("status_message"),
             "updated_at": now,
         }
@@ -5556,7 +5915,7 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
             filled_qty=int(o.get("filled_quantity") or 0),
             status_message=o.get("status_message"),
         )
-        if status == "COMPLETE":
+        if set_doc["status"] == ORDER_FILLED:
             pos_set = {
                 "status": "FILLED",
                 "average_buy_price": avg_price or set_doc.get("price") or 0,
@@ -5580,7 +5939,7 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
                     exit_price=float(o.get("average_price") or o.get("price") or pos.get("average_buy_price") or 0),
                     reason="broker-exit-complete",
                 )
-        elif status in {"CANCELLED", "REJECTED"}:
+        elif set_doc["status"] in {ORDER_CANCELLED, ORDER_REJECTED}:
             await db.strategy_positions.update_many(
                 {"user_id": user_id, "entry_broker_order_id": broker_order_id, "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"$set": {"status": status, "updated_at": now, "broker_status_message": o.get("status_message")},
@@ -5594,6 +5953,7 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
                 await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, o.get("status_message") or status)
     result = {"checked": len(live_orders), "updated": updated}
     _ORDER_SYNC_CACHE[user_id] = {"cached_at": time.monotonic(), "result": result}
+    await _record_broker_sync_state(user_id, "zerodha", result)
     return result
 
 
@@ -5616,16 +5976,17 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
     stale_before = now - timedelta(minutes=10)
     rows = await db.orders.find({
         "user_id": user_id,
-        "status": {"$in": ["OPEN", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"]},
+        "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)},
         "broker": {"$in": ["zerodha", None]},
     }, {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1, "strategy_id": 1}).to_list(500)
     for row in rows:
         broker_order_id = row.get("broker_order_id")
         status = broker_status.get(broker_order_id)
-        if status in {"COMPLETE", "CANCELLED", "REJECTED"}:
+        canonical = canonical_order_status(status)
+        if canonical in ORDER_TERMINAL_STATUSES:
             res = await db.orders.update_one(
                 {"user_id": user_id, "id": row["id"]},
-                {"$set": {"status": status, "updated_at": now.isoformat()}},
+                {"$set": {"status": canonical, "legacy_status": status, "broker_status": status, "updated_at": now.isoformat()}},
             )
             fixed += res.modified_count
             continue
@@ -5649,7 +6010,9 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
             res = await db.orders.update_one(
                 {"user_id": user_id, "id": row["id"]},
                 {"$set": {
-                    "status": stale_status,
+                    "status": ORDER_REJECTED,
+                    "legacy_status": stale_status,
+                    "broker_status": stale_status,
                     "status_message": message,
                     "visibility": "hidden",
                     "updated_at": now.isoformat(),
@@ -5763,7 +6126,9 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
             "status_message": status,
         }
         if status:
-            set_doc["status"] = status
+            set_doc["status"] = canonical_order_status(status, filled_qty=row.get("filled_qty"), pending_qty=row.get("pending_qty"))
+            set_doc["legacy_status"] = status
+            set_doc["broker_status"] = status
         if row.get("filled_qty") not in (None, ""):
             try:
                 set_doc["filled_qty"] = int(float(row.get("filled_qty")))
@@ -5794,7 +6159,7 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
             filled_qty=int(set_doc.get("filled_qty") or 0) if set_doc.get("filled_qty") not in (None, "") else None,
             status_message=str(row.get("status") or status or ""),
         )
-        if status == "COMPLETE":
+        if set_doc.get("status") == ORDER_FILLED:
             avg_price = float(set_doc.get("price") or 0)
             filled_qty = set_doc.get("filled_qty")
             pos_set = {"status": "FILLED", "updated_at": now}
@@ -5813,10 +6178,10 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
             ).to_list(20)
             for pos in exit_positions:
                 await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
-        elif status in {"CANCELLED", "REJECTED"}:
+        elif set_doc.get("status") in {ORDER_CANCELLED, ORDER_REJECTED}:
             await db.strategy_positions.update_many(
                 {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": {"status": status, "updated_at": now, "broker_status_message": row.get("status")},
+                {"$set": {"status": set_doc.get("status"), "legacy_status": status, "updated_at": now, "broker_status_message": row.get("status")},
                  "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
             )
             exit_positions = await db.strategy_positions.find(
@@ -5825,7 +6190,9 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
             ).to_list(20)
             for pos in exit_positions:
                 await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
-    return {"checked": len(updates), "updated": updated, "report_checked": report_count}
+    result = {"checked": len(updates), "updated": updated, "report_checked": report_count}
+    await _record_broker_sync_state(user_id, "kotak_neo", result)
+    return result
 
 
 async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
@@ -5852,7 +6219,9 @@ async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
             "status_message": _upstox_first(item, ["status_message", "status_message_raw"]) or status,
         }
         if status:
-            set_doc["status"] = status
+            set_doc["status"] = canonical_order_status(status)
+            set_doc["legacy_status"] = status
+            set_doc["broker_status"] = status
         for source_key, target_key in (
             ("filled_quantity", "filled_qty"),
             ("pending_quantity", "pending_qty"),
@@ -5877,7 +6246,7 @@ async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
             filled_qty=int(set_doc.get("filled_qty") or 0) if set_doc.get("filled_qty") not in (None, "") else None,
             status_message=str(set_doc.get("status_message") or status or ""),
         )
-        if status == "COMPLETE":
+        if set_doc.get("status") == ORDER_FILLED:
             avg_price = float(set_doc.get("price") or 0)
             filled_qty = set_doc.get("filled_qty")
             pos_set = {"status": "FILLED", "updated_at": now}
@@ -5896,10 +6265,10 @@ async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
             ).to_list(20)
             for pos in exit_positions:
                 await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
-        elif status in {"CANCELLED", "REJECTED"}:
+        elif set_doc.get("status") in {ORDER_CANCELLED, ORDER_REJECTED}:
             await db.strategy_positions.update_many(
                 {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": {"status": status, "updated_at": now, "broker_status_message": set_doc.get("status_message")},
+                {"$set": {"status": set_doc.get("status"), "legacy_status": status, "updated_at": now, "broker_status_message": set_doc.get("status_message")},
                  "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
             )
             exit_positions = await db.strategy_positions.find(
@@ -5908,7 +6277,9 @@ async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
             ).to_list(20)
             for pos in exit_positions:
                 await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
-    return {"checked": len(items), "updated": updated}
+    result = {"checked": len(items), "updated": updated}
+    await _record_broker_sync_state(user_id, "upstox", result)
+    return result
 
 
 async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Dict[str, Any]]:
@@ -6227,7 +6598,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
     open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
     loss_limit = float(settings.get("max_daily_loss") or 0)
     gross_order_value = round(sum(abs(float(o.get("price") or 0) * int(o.get("qty") or 0)) for o in orders), 2)
-    trades_used = len([o for o in orders if o.get("status") not in {"REJECTED", "CANCELLED"}])
+    trades_used = len([o for o in orders if canonical_order_status(o.get("status")) not in {ORDER_REJECTED, ORDER_CANCELLED}])
     max_trades = int(settings.get("max_trades_per_day") or 0)
     return {
         "date": day,
@@ -6250,7 +6621,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
 @api.get("/trade-journal")
 async def trade_journal(user=Depends(get_current_user)):
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    completed = [r for r in rows if r.get("status") == "COMPLETE"]
+    completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
     wins = len([r for r in completed if float(r.get("realised_pnl") or 0) > 0])
     losses = len([r for r in completed if float(r.get("realised_pnl") or 0) < 0])
     total_pnl = round(sum(float(r.get("realised_pnl") or 0) for r in completed), 2)
@@ -6281,7 +6652,7 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
             {"user_id": user["id"], "strategy_id": s["id"]},
             {"_id": 0},
         ).sort("created_at", -1).to_list(200)
-        completed = [o for o in live_orders if o.get("status") == "COMPLETE"]
+        completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
         live_pnl = round(sum(float(o.get("realised_pnl") or 0) for o in completed), 2)
         live_wins = len([o for o in completed if float(o.get("realised_pnl") or 0) > 0])
         live_losses = len([o for o in completed if float(o.get("realised_pnl") or 0) < 0])
@@ -7205,7 +7576,7 @@ async def ops_diagnostics(user):
         for s in strategies
         if _is_strategy_blocking_error(s.get("last_error"))
     ][:20]
-    orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": ["OPEN", "PENDING", "PENDING_BROKER"]}})
+    orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)}})
     positions_count = await db.positions.count_documents({"user_id": user["id"]})
     readiness = await live_readiness(user=user)
     recovery_plan = _build_recovery_plan(
@@ -8383,12 +8754,21 @@ async def startup():
         ("broker_keys", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("strategies", "user_id", {}),
         ("orders", [("user_id", 1), ("created_at", -1)], {}),
+        ("orders", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
+        ("orders", [("user_id", 1), ("strategy_id", 1), ("created_at", -1)], {}),
         ("orders", "idempotency_key", {"unique": True, "sparse": True}),
         ("strategy_positions", [("user_id", 1), ("strategy_id", 1), ("status", 1)], {}),
         ("strategy_positions", "active_instrument_key", {"unique": True, "sparse": True}),
         ("strategy_positions", "active_strategy_key", {"unique": True, "sparse": True}),
         ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
         ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
+        ("trade_fills", "order_id", {"unique": True}),
+        ("trade_fills", [("user_id", 1), ("filled_at", -1)], {}),
+        ("trades", [("user_id", 1), ("closed_at", -1)], {}),
+        ("order_events", [("order_id", 1), ("created_at", 1)], {}),
+        ("order_events", [("user_id", 1), ("created_at", -1)], {}),
+        ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
+        ("system_config", "_id", {}),
     ]
     for coll, key, opts in indexes:
         try:
@@ -8406,6 +8786,24 @@ async def startup():
         logger.info("Created unique partial index for live broker orders successfully.")
     except Exception as e:
         logger.warning(f"Failed to create live broker orders partial index: {e}")
+
+    for coll, key, opts in [
+        ("runner_locks", "expires_at", {"expireAfterSeconds": 0}),
+        ("strategy_position_locks", "expires_at", {"expireAfterSeconds": 0}),
+        ("option_trade_journal", [("strategy_id", 1), ("exit_time", -1)], {}),
+        ("option_market_ticks", [("symbol", 1), ("tick_time", -1)], {}),
+    ]:
+        try:
+            await db[coll].create_index(key, **opts)
+        except Exception as e:
+            logger.warning(f"index create on {coll} skipped: {e}")
+
+    try:
+        recovered_fills = await _recover_pending_paper_fills()
+        if recovered_fills:
+            logger.warning("Recovered %s pending paper fills after startup.", recovered_fills)
+    except Exception as e:
+        logger.warning(f"pending paper fill recovery skipped: {e}")
 
     # Add any missing built-in presets for every user. This is additive by name:
     # it keeps custom/old strategies intact and only inserts missing v10 presets.
