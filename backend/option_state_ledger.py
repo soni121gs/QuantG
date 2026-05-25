@@ -77,7 +77,16 @@ class OptionStateLedger:
         else:
             self.db_name = default_db
             
-        self.client = MongoClient(mongo_uri)
+        try:
+            self.client = MongoClient(mongo_uri, serverSelectionTimeoutMS=1500)
+            self.client.admin.command('ping')
+        except Exception:
+            if "localhost" not in mongo_uri and "127.0.0.1" not in mongo_uri:
+                fallback_uri = "mongodb://localhost:27017"
+                logger.warning("MongoDB host %s is not reachable; falling back to localhost", mongo_uri)
+                self.client = MongoClient(fallback_uri)
+            else:
+                self.client = MongoClient(mongo_uri)
         
         # If it's a test database, drop it first to ensure clean, isolated slate!
         if self.db_name.endswith("_test"):
