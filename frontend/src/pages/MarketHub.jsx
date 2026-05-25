@@ -19,21 +19,21 @@ export default function MarketHub() {
 
   const load = useCallback(async () => {
     const [h, r, j, c, cmp, f, ind] = await Promise.all([
-      api.get("/broker/health"),
-      api.get("/risk/dashboard"),
-      api.get("/trade-journal"),
-      api.get(`/option-chain/${underlying}`),
-      api.get("/strategies/live-backtest-comparison"),
-      api.get("/market/feed-comparison"),
-      api.get(`/market/indicators/${underlying}`),
+      api.get("/broker/health").catch(err => { console.error("health failed", err); return { data: null }; }),
+      api.get("/risk/dashboard").catch(err => { console.error("risk failed", err); return { data: null }; }),
+      api.get("/trade-journal").catch(err => { console.error("journal failed", err); return { data: null }; }),
+      api.get(`/option-chain/${underlying}`).catch(err => { console.error("chain failed", err); return { data: null }; }),
+      api.get("/strategies/live-backtest-comparison").catch(err => { console.error("comparison failed", err); return { data: null }; }),
+      api.get("/market/feed-comparison").catch(err => { console.error("feed failed", err); return { data: null }; }),
+      api.get(`/market/indicators/${underlying}`).catch(err => { console.error("indicators failed", err); return { data: null }; }),
     ]);
-    setHealth(h.data);
-    setRisk(r.data);
-    setJournal(j.data);
-    setChain(c.data);
-    setComparison(cmp.data);
-    setFeed(f.data);
-    setIndicators(ind.data);
+    if (h.data) setHealth(h.data);
+    if (r.data) setRisk(r.data);
+    if (j.data) setJournal(j.data);
+    if (c.data) setChain(c.data);
+    if (cmp.data) setComparison(cmp.data);
+    if (f.data) setFeed(f.data);
+    if (ind.data) setIndicators(ind.data);
   }, [underlying]);
 
   useEffect(() => {
@@ -143,9 +143,10 @@ export default function MarketHub() {
               Auto-pick
             </button>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <FeedCard name="Zerodha" data={feed?.zerodha} />
             <FeedCard name="Kotak Neo" data={feed?.kotak_neo} />
+            <FeedCard name="Upstox" data={feed?.upstox} />
           </div>
           <div className="mt-3 text-xs font-mono text-[var(--qd-text-2)]">
             Recommended: <span className="text-white">{BROKER_LABELS[feed?.recommended_data_broker] || feed?.recommended_data_broker || "-"}</span>

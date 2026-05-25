@@ -575,6 +575,7 @@ async def _fetch_strategy_history(
     interval: str = "5minute",
     min_intraday_bars: int = 20,
     allow_mock: bool = True,
+    strategy: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Fetch strategy candles with explicit source metadata.
 
@@ -603,7 +604,8 @@ async def _fetch_strategy_history(
             logger.warning(f"Realtime tick service start failed: {e}")
 
     settings = await get_user_settings(user_id)
-    data_broker = settings.get("data_broker", "zerodha")
+    strategy_broker = (strategy or {}).get("broker")
+    data_broker = strategy_broker or settings.get("data_broker", "zerodha")
 
     if data_broker == "upstox":
         upstox_gw = await get_user_upstox_gateway(user_id)
@@ -8425,25 +8427,47 @@ async def market_feed_comparison(user=Depends(get_current_user)):
     zerodha_tick = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     kotak = await get_user_kotak_status(user["id"])
     kotak_gateway = kotak.get("gateway") or {}
+    upstox = await get_user_upstox_status(user["id"])
+    upstox_gateway = upstox.get("gateway") or {}
 
     zerodha_last = zerodha_tick.get("last_tick_at")
     kotak_last = kotak_gateway.get("last_tick_at")
+    upstox_last = upstox_gateway.get("last_tick_at")
+    
     zerodha_age = _age_ms(zerodha_last)
     kotak_age = _age_ms(kotak_last)
+    upstox_age = _age_ms(upstox_last)
+    
     zerodha_healthy = bool(zerodha_tick.get("connected") and zerodha_last and (zerodha_age is None or zerodha_age < 15000))
     kotak_healthy = bool(kotak_gateway.get("authenticated") and kotak_gateway.get("ticks", 0) > 0 and kotak_last and (kotak_age is None or kotak_age < 15000))
+    upstox_healthy = bool(upstox.get("connected") and upstox_gateway.get("ticks", 0) > 0 and upstox_last and (upstox_age is None or upstox_age < 15000))
+
+    candidates = []
+    if zerodha_healthy:
+        candidates.append(("zerodha", zerodha_age if zerodha_age is not None else 999999))
+    if kotak_healthy:
+        candidates.append(("kotak_neo", kotak_age if kotak_age is not None else 999999))
+    if upstox_healthy:
+        candidates.append(("upstox", upstox_age if upstox_age is not None else 999999))
 
     recommended = settings.get("data_broker", "zerodha")
     reason = "Keep configured data broker until a healthier live feed is observed."
-    if zerodha_healthy and kotak_healthy:
-        if kotak_age is not None and zerodha_age is not None and kotak_age + 250 < zerodha_age:
-            recommended, reason = "kotak_neo", "Kotak ticks are fresher right now."
+    
+    if candidates:
+        candidates.sort(key=lambda x: x[1])
+        best_broker, _ = candidates[0]
+        
+        preferred = settings.get("data_broker", "zerodha")
+        pref_healthy = (preferred == "zerodha" and zerodha_healthy) or \
+                       (preferred == "kotak_neo" and kotak_healthy) or \
+                       (preferred == "upstox" and upstox_healthy)
+                       
+        if pref_healthy:
+            recommended = preferred
+            reason = f"Your configured data broker ({recommended}) is healthy and online."
         else:
-            recommended, reason = "zerodha", "Zerodha ticks are as fresh or fresher right now."
-    elif kotak_healthy:
-        recommended, reason = "kotak_neo", "Kotak has fresh ticks and Zerodha is stale/unavailable."
-    elif zerodha_healthy:
-        recommended, reason = "zerodha", "Zerodha has fresh ticks and Kotak is stale/unavailable."
+            recommended = best_broker
+            reason = f"{recommended.replace('_', ' ').title()} has fresh ticks and configured broker is stale/unavailable."
 
     return {
         "configured_data_broker": settings.get("data_broker", "zerodha"),
@@ -8468,6 +8492,16 @@ async def market_feed_comparison(user=Depends(get_current_user)):
             "last_error": kotak_gateway.get("last_error") or kotak.get("reason"),
             "healthy": kotak_healthy,
         },
+        "upstox": {
+            "connected": bool(upstox.get("connected")),
+            "authenticated": bool(upstox.get("authenticated")),
+            "last_tick_at": upstox_last,
+            "age_ms": upstox_age,
+            "subscribed_tokens": upstox_gateway.get("subscribed_tokens", 0),
+            "ticks": upstox_gateway.get("ticks", 0),
+            "last_error": upstox_gateway.get("last_error") or upstox.get("reason"),
+            "healthy": upstox_healthy,
+        },
     }
 
 
@@ -8475,7 +8509,7 @@ async def market_feed_comparison(user=Depends(get_current_user)):
 async def market_auto_data_broker(user=Depends(get_current_user)):
     comparison = await market_feed_comparison(user=user)
     broker = comparison.get("recommended_data_broker")
-    if broker not in {"zerodha", "kotak_neo"}:
+    if broker not in {"zerodha", "kotak_neo", "upstox"}:
         raise HTTPException(status_code=400, detail="No healthy live data broker is available yet.")
     await db.users.update_one({"id": user["id"]}, {"$set": {"data_broker": broker}})
     comparison["updated"] = True
@@ -8974,6 +9008,7 @@ async def startup():
             days=days,
             interval="5minute",
             allow_mock=allow_mock,
+            strategy=strategy,
         ) | {"paper_mode": allow_mock}
 
     # Resolver for index option contracts — runner uses this when a strategy

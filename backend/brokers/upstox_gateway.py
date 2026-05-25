@@ -50,6 +50,8 @@ class UpstoxGateway:
         self._ws_running = False
         self._ws_thread = None
         self._lock = threading.RLock()
+        self.ticks = 0
+        self.last_tick_at: Optional[str] = None
 
     @property
     def connected(self) -> bool:
@@ -73,6 +75,10 @@ class UpstoxGateway:
             "missing_env": missing,
             "last_error": self.last_error,
             "last_request_at": self.last_request_at,
+            "ticks": self.ticks,
+            "last_tick_at": self.last_tick_at,
+            "subscribed_tokens": len(self._subscribed_tokens),
+            "ws_running": self._ws_running,
         }
 
     def build_login_url(self, *, state: Optional[str] = None, redirect_uri: Optional[str] = None) -> str:
@@ -236,6 +242,8 @@ class UpstoxGateway:
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             received_at = datetime.now(timezone.utc).isoformat()
             with self._lock:
+                self.ticks += len(res["data"])
+                self.last_tick_at = received_at
                 for token, node in res["data"].items():
                     if isinstance(node, dict):
                         ltp = node.get("last_price") or node.get("ltp")
