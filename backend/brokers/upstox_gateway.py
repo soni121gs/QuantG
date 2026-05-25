@@ -33,6 +33,7 @@ class UpstoxGateway:
         api_secret: Optional[str] = None,
         redirect_uri: Optional[str] = None,
         timeout: Optional[float] = None,
+        sandbox: bool = False,
     ) -> None:
         import threading
         self.access_token = access_token or os.environ.get("UPSTOX_ACCESS_TOKEN")
@@ -43,6 +44,13 @@ class UpstoxGateway:
         self.last_error: Optional[str] = None
         self.last_request_at: Optional[str] = None
         self.last_order_response: Optional[Any] = None
+        self.sandbox = sandbox or os.environ.get("UPSTOX_SANDBOX", "").lower() in ("true", "1", "yes")
+
+        # Dynamic endpoints to support Sandbox vs Live
+        self.api_base_url = "https://api-sandbox.upstox.com" if self.sandbox else "https://api.upstox.com"
+        self.hft_base_url = "https://api-sandbox.upstox.com" if self.sandbox else "https://api-hft.upstox.com"
+        self.auth_dialog_url = "https://api-sandbox.upstox.com/v2/login/authorization/dialog" if self.sandbox else "https://api.upstox.com/v2/login/authorization/dialog"
+        self.token_url = "https://api-sandbox.upstox.com/v2/login/authorization/token" if self.sandbox else "https://api.upstox.com/v2/login/authorization/token"
         
         self._ticks_by_token: Dict[str, Dict[str, Any]] = {}
         self._ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
@@ -94,7 +102,7 @@ class UpstoxGateway:
         }
         if state:
             params["state"] = state
-        return f"{self.AUTH_DIALOG_URL}?{urlencode(params)}"
+        return f"{self.auth_dialog_url}?{urlencode(params)}"
 
     def exchange_code(self, *, code: str, redirect_uri: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key or not self.api_secret:
@@ -103,7 +111,7 @@ class UpstoxGateway:
         if not final_redirect_uri:
             raise ValueError("Upstox redirect URI is required")
         response = requests.post(
-            self.TOKEN_URL,
+            self.token_url,
             headers={"accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
             data={
                 "code": code,
@@ -354,7 +362,7 @@ class UpstoxGateway:
     def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
         if not self.access_token:
             raise RuntimeError("Upstox access token is missing. Complete OAuth login first.")
-        base = self.HFT_BASE_URL if hft else self.API_BASE_URL
+        base = self.hft_base_url if hft else self.api_base_url
         headers = kwargs.pop("headers", {}) or {}
         algo_name = os.environ.get("UPSTOX_ALGO_NAME", "QuantGAlgo")
         headers.update({

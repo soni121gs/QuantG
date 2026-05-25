@@ -158,6 +158,7 @@ class BrokerKeyReq(BaseModel):
     mpin: Optional[str] = None
     totp_secret_key: Optional[str] = None
     redirect_uri: Optional[str] = None
+    is_sandbox: Optional[bool] = False
 
 
 class BrokerKeyOut(BaseModel):
@@ -1031,6 +1032,7 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
         if not redirect_uri:
             redirect_uri = "https://www.quantgtrade.com/api/broker/upstox/callback"
         doc["redirect_uri"] = redirect_uri
+        doc["is_sandbox"] = bool(req.is_sandbox)
         _UPSTOX_GATEWAYS.pop(user["id"], None)
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": broker},
@@ -6395,6 +6397,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "missing_env": missing,
         "reason": None if access_token else ("no_token" if api_key else "no_keys"),
         "gateway": gateway_status or None,
+        "is_sandbox": bool(keys.get("is_sandbox")) if keys else False,
     })
     return status
 
@@ -6414,6 +6417,7 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
         api_secret=api_secret,
         access_token=access_token,
         redirect_uri=redirect_uri,
+        sandbox=bool(keys.get("is_sandbox")) if keys else False,
     )
     _UPSTOX_GATEWAYS[user_id] = gateway
     return gateway

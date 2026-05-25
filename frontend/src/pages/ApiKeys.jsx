@@ -15,6 +15,7 @@ export default function ApiKeys() {
     mpin: "",
     totp_secret_key: "",
     redirect_uri: "",
+    is_sandbox: false,
   });
   const [upstoxRedirectUri, setUpstoxRedirectUri] = useState("");
   const [saving, setSaving] = useState(false);
@@ -82,7 +83,7 @@ export default function ApiKeys() {
       }
       await api.post("/broker/keys", payload);
       toast.success("Keys saved securely");
-      setForm({ ...form, api_key: "", api_secret: "", mobile_number: "", mpin: "", totp_secret_key: "" });
+      setForm({ ...form, api_key: "", api_secret: "", mobile_number: "", mpin: "", totp_secret_key: "", is_sandbox: false });
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Save failed");
@@ -202,6 +203,20 @@ export default function ApiKeys() {
             <Input label="TOTP Setup Secret" value={form.totp_secret_key} onChange={(v) => setForm({ ...form, totp_secret_key: v })} type="password" testid="input-kotak-totp" />
           </div>
         )}
+        {form.broker === "upstox" && (
+          <div className="flex items-center gap-2 py-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] p-3 rounded-sm">
+            <input
+              type="checkbox"
+              id="is_sandbox"
+              checked={form.is_sandbox || false}
+              onChange={(e) => setForm({ ...form, is_sandbox: e.target.checked })}
+              className="accent-[var(--qd-cyan)] w-4 h-4 cursor-pointer"
+            />
+            <label htmlFor="is_sandbox" className="text-sm font-mono text-white cursor-pointer select-none">
+              Use Upstox Sandbox Mode (Mock Trading)
+            </label>
+          </div>
+        )}
         <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
         </button>
@@ -290,6 +305,9 @@ export default function ApiKeys() {
           <ShieldCheck size={16} className="text-[var(--qd-cyan)]" /> 
           Upstox 
           <span className="text-[9px] font-mono uppercase bg-gradient-to-r from-[var(--qd-cyan)] to-[var(--qd-accent)] text-[#030407] px-2 py-0.5 rounded font-extrabold tracking-wider">Primary</span>
+          {upstoxStatus.is_sandbox && (
+            <span className="text-[9px] font-mono uppercase bg-amber-500 text-black px-2 py-0.5 rounded font-extrabold tracking-wider ml-1">Sandbox (Mock)</span>
+          )}
         </h2>
         <div className="text-sm">
           {upstoxStatus.keys_saved ? (
@@ -298,7 +316,7 @@ export default function ApiKeys() {
             <div className="text-[var(--qd-text-2)] flex items-center gap-2"><XCircle size={14} /> Not configured. Save Upstox credentials above to prepare the broker connection.</div>
           )}
           <div className="text-xs font-mono text-[var(--qd-text-3)] mt-1">
-            SDK: {upstoxStatus.sdk_available ? "available" : "not installed"} · OAuth, market data, and live routing remain disabled until verified.
+            SDK: {upstoxStatus.sdk_available ? "available" : "not installed"} · Environment: <span className={upstoxStatus.is_sandbox ? "text-amber-400 font-bold" : "text-[var(--qd-cyan)] font-bold"}>{upstoxStatus.is_sandbox ? "SANDBOX (Mock Trading)" : "PRODUCTION (Live Market)"}</span> · OAuth, market data, and live routing remain disabled until verified.
           </div>
         </div>
       </div>
