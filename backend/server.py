@@ -5564,7 +5564,10 @@ async def _resolve_order_fill_hint(user_id: str, intent: OrderIntent, price: Opt
             spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
             return round(float(spot) * 0.02, 2)
         ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False, execution_broker=execution_broker)
-        return float(ltp or 0)
+        if ltp is not None and float(ltp) > 0:
+            return float(ltp)
+        spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
+        return round(float(spot) * 0.02, 2)
     if not paper:
         ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False, execution_broker=execution_broker)
         if ltp is not None:
@@ -7599,6 +7602,11 @@ def _is_strategy_blocking_error(message: Optional[str]) -> bool:
         "New BUY blocked",
         "Duplicate BUY blocked",
         "Re-entry blocked",
+        "Live LTP unavailable",
+        "Insufficient funds",
+        "insufficient funds",
+        "margin",
+        "Margin",
     )
     return not any(text.startswith(prefix) or prefix in text for prefix in non_blocking)
 

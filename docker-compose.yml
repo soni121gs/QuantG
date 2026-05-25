@@ -38,7 +38,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.static
       args:
         REACT_APP_API_BASE: /api
     container_name: quantg-frontend

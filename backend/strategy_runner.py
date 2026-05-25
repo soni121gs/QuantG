@@ -40,6 +40,11 @@ NON_ERROR_ENTRY_BLOCKS = (
     "Duplicate BUY blocked",
     "Re-entry blocked",
     "already has active",
+    "Live LTP unavailable",
+    "Insufficient funds",
+    "insufficient funds",
+    "margin",
+    "Margin",
 )
 
 
@@ -89,18 +94,23 @@ def _validate_signal(signal: Dict[str, Any], data: List[dict], strategy: Dict[st
 def _entry_block_reason(exc: Exception) -> str | None:
     status_code = getattr(exc, "status_code", None)
     detail = str(getattr(exc, "detail", "") or exc)
-    if status_code not in (None, 409):
+    if status_code not in (None, 400, 409):
         return None
-    if not any(prefix in detail for prefix in (
+    if not any(prefix in detail or prefix in str(exc) for prefix in (
         "Option entry blocked:",
         "Strategy entry blocked:",
         "Instrument already has active strategy position:",
         "Strategy already has active position",
         "Instrument/strategy already reserved",
+        "Live LTP unavailable",
+        "Insufficient funds",
+        "insufficient funds",
+        "margin",
+        "Margin",
     )):
         return None
     for reason in NON_ERROR_ENTRY_BLOCKS:
-        if reason in detail:
+        if reason in detail or reason in str(exc):
             return reason
     return None
 
