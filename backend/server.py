@@ -1295,240 +1295,194 @@ DEFAULT_STRATEGY_RISK = {
 
 DEFAULT_OPTION_STRATEGIES = [
     {
-        "name": "NIFTY Momentum EMA",
-        "description": "Long ATM NIFTY options on strong EMA trend shifts. Good for directional momentum moves.",
-        "underlying": "NIFTY",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
+        "name": "NIFTY Intraday Theta Straddle",
+        "description": "Automated delta-neutral intraday straddle writing. Sells ATM NIFTY Call & Put options at 9:20 AM to capture maximum time decay (Theta) and auto-closes at 3:15 PM.",
+        "underlying": "NIFTY", "strike_mode": "ATM_SELL", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    fast, slow = 8, 21
-    signals = []
-    ema_fast = []
-    ema_slow = []
-    for i in range(len(closes)):
-        ema_fast.append(sum(closes[max(0, i-fast+1):i+1]) / min(fast, i+1))
-        ema_slow.append(sum(closes[max(0, i-slow+1):i+1]) / min(slow, i+1))
-        if i == 0:
-            continue
-        if ema_fast[i] > ema_slow[i] and ema_fast[i-1] <= ema_slow[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif ema_fast[i] < ema_slow[i] and ema_fast[i-1] >= ema_slow[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-    return signals
-""",
-    },
-    {
-        "name": "NIFTY RSI Reversion",
-        "description": "Trade NIFTY options on oversold and overbought RSI levels with trend confirmation.",
-        "underlying": "NIFTY",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    period = 14
-    signals = []
-    for i in range(len(closes)):
-        if i < period: continue
-        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-period+1, i+1))
-        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-period+1, i+1))
-        avg_gain = gains / period
-        avg_loss = losses / period if losses else 0.0001
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        if rsi < 30:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif rsi > 70:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-    return signals
-""",
-    },
-    {
-        "name": "NIFTY Opening Range Breakout",
-        "description": "Capture opening range breakouts on NIFTY using the first 3 five-minute bars.",
-        "underlying": "NIFTY",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    if len(data) < 10:
-        return []
-    range_high = max(d['high'] for d in data[:3])
-    range_low = min(d['low'] for d in data[:3])
-    signals = []
-    for i in range(3, len(data)):
-        if data[i]['close'] > range_high:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-            break
-        if data[i]['close'] < range_low:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-            break
-    return signals
-""",
-    },
-    {
-        "name": "NIFTY ATR Trend",
-        "description": "Long NIFTY options when momentum expands beyond ATR-based trend thresholds.",
-        "underlying": "NIFTY",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    highs = [d['high'] for d in data]
-    lows = [d['low'] for d in data]
-    lookback = 14
+    if len(data) < 20: return []
     signals = []
     for i in range(len(data)):
-        if i < lookback: continue
-        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-lookback+1, i+1)]
-        atr = sum(tr) / lookback
-        body = closes[i] - closes[i-1]
-        if body > atr * 0.4:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif body < -atr * 0.4:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-    return signals
-""",
-    },
-    {
-        "name": "NIFTY Trend Recheck",
-        "description": "Wait for pullbacks into a rising trend before taking NIFTY options exposure.",
-        "underlying": "NIFTY",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    ma20 = [sum(closes[max(0, i-19):i+1]) / min(20, i+1) for i in range(len(closes))]
-    signals = []
-    for i in range(5, len(data)):
-        if closes[i] > ma20[i] and closes[i-1] < ma20[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif closes[i] < ma20[i] and closes[i-1] > ma20[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-    return signals
-""",
-    },
-    {
-        "name": "SENSEX Momentum EMA",
-        "description": "Buy SENSEX options on crossovers that signal trend continuation.",
-        "underlying": "SENSEX",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    fast, slow = 8, 21
-    signals = []
-    ema_fast = []
-    ema_slow = []
-    for i in range(len(closes)):
-        ema_fast.append(sum(closes[max(0, i-fast+1):i+1]) / min(fast, i+1))
-        ema_slow.append(sum(closes[max(0, i-slow+1):i+1]) / min(slow, i+1))
-        if i == 0:
+        dt = data[i]['date']
+        try:
+            time_part = dt.split(" ")[1][:5]
+        except Exception:
             continue
-        if ema_fast[i] > ema_slow[i] and ema_fast[i-1] <= ema_slow[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif ema_fast[i] < ema_slow[i] and ema_fast[i-1] >= ema_slow[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+        if time_part == "09:20":
+            signals.append({'date': dt, 'action': 'SELL', 'reason': 'Straddle Entry'})
+        elif time_part == "15:15":
+            signals.append({'date': dt, 'action': 'BUY', 'reason': 'EOD Exit'})
     return signals
 """,
+        "market_suitability": "Sideways Range-bound (Theta Harvesting)",
     },
     {
-        "name": "SENSEX RSI Reversion",
-        "description": "Enter SENSEX option trades when RSI reaches extreme levels and momentum shifts.",
-        "underlying": "SENSEX",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
+        "name": "BANKNIFTY Weekly Income Strangle",
+        "description": "Shorts BANKNIFTY Call & Put options 100 points out-of-the-money (OTM) at 9:20 AM. High probability weekly premium harvesting.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
+        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    period = 14
-    signals = []
-    for i in range(len(closes)):
-        if i < period: continue
-        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-period+1, i+1))
-        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-period+1, i+1))
-        avg_gain = gains / period
-        avg_loss = losses / period if losses else 0.0001
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        if rsi < 30:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif rsi > 70:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-    return signals
-""",
-    },
-    {
-        "name": "SENSEX Opening Range",
-        "description": "Take early SENSEX option positions on opening range breakout or breakdown.",
-        "underlying": "SENSEX",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    if len(data) < 10:
-        return []
-    range_high = max(d['high'] for d in data[:3])
-    range_low = min(d['low'] for d in data[:3])
-    signals = []
-    for i in range(3, len(data)):
-        if data[i]['close'] > range_high:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-            break
-        if data[i]['close'] < range_low:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
-            break
-    return signals
-""",
-    },
-    {
-        "name": "SENSEX ATR Trend",
-        "description": "Jump into SENSEX options when intraday ATR momentum expands strongly.",
-        "underlying": "SENSEX",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
-        "python_code": """def run(data):
-    closes = [d['close'] for d in data]
-    highs = [d['high'] for d in data]
-    lows = [d['low'] for d in data]
-    lookback = 14
+    if len(data) < 20: return []
     signals = []
     for i in range(len(data)):
-        if i < lookback: continue
-        tr = [max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-lookback+1, i+1)]
-        atr = sum(tr) / lookback
-        body = closes[i] - closes[i-1]
-        if body > atr * 0.4:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif body < -atr * 0.4:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+        dt = data[i]['date']
+        try:
+            time_part = dt.split(" ")[1][:5]
+        except Exception:
+            continue
+        if time_part == "09:20":
+            signals.append({'date': dt, 'action': 'SELL', 'reason': 'Strangle Entry'})
+        elif time_part == "15:15":
+            signals.append({'date': dt, 'action': 'BUY', 'reason': 'EOD Exit'})
     return signals
 """,
+        "market_suitability": "Sideways Range-bound (Theta Harvesting)",
     },
     {
-        "name": "SENSEX Trend Recheck",
-        "description": "Wait for SENSEX pullbacks into trend support before scaling into options.",
-        "underlying": "SENSEX",
-        "strike_mode": "ATM_BUY",
-        "otm_points": 0,
-        "lots": 1,
+        "name": "NIFTY VWAP Trend Breakout",
+        "description": "Directional index option buying triggered by volume-backed VWAP breakouts on NIFTY 5-minute charts.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
+    if len(data) < 40: return []
     closes = [d['close'] for d in data]
-    ma20 = [sum(closes[max(0, i-19):i+1]) / min(20, i+1) for i in range(len(closes))]
+    highs = [d.get('high', d['close']) for d in data]
+    lows = [d.get('low', d['close']) for d in data]
+    volumes = [float(d.get('volume') or 0) for d in data]
+    
+    weighted = 0.0
+    total_vol = 0.0
+    vwap = []
+    for h, l, c, v in zip(highs, lows, closes, volumes):
+        weighted += ((h + l + c) / 3.0) * max(1.0, v)
+        total_vol += max(1.0, v)
+        vwap.append(weighted / total_vol)
+        
     signals = []
-    for i in range(5, len(data)):
-        if closes[i] > ma20[i] and closes[i-1] < ma20[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'BUY'})
-        elif closes[i] < ma20[i] and closes[i-1] > ma20[i-1]:
-            signals.append({'date': data[i]['date'], 'action': 'SELL'})
+    for i in range(20, len(data)):
+        if closes[i] > vwap[i] and closes[i-1] <= vwap[i-1] and volumes[i] > sum(volumes[max(0, i-20):i])/20 * 1.2:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'VWAP Bullish Breakout'})
+        elif closes[i] < vwap[i] and closes[i-1] >= vwap[i-1] and volumes[i] > sum(volumes[max(0, i-20):i])/20 * 1.2:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'VWAP Bearish Breakout'})
     return signals
 """,
+        "market_suitability": "Strong Trending & Sustained Breakout",
+    },
+    {
+        "name": "SENSEX Swing RSI Pullback",
+        "description": "Swing trading pullback entries on SENSEX triggered by extreme RSI levels overbought/oversold recoveries.",
+        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "BFO",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [d['close'] for d in data]
+    period = 14
+    rsi = [50.0] * len(closes)
+    for i in range(period, len(closes)):
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-period+1, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-period+1, i+1)) or 0.0001
+        rs = gains / losses
+        rsi[i] = 100 - (100 / (1 + rs))
+        
+    signals = []
+    for i in range(period + 1, len(data)):
+        if rsi[i] > 30 and rsi[i-1] <= 30:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'RSI Oversold Pullback'})
+        elif rsi[i] < 70 and rsi[i-1] >= 70:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'RSI Overbought Reversal'})
+    return signals
+""",
+        "market_suitability": "Trend Retracements & Swing Pullbacks",
+    },
+    {
+        "name": "Crude Oil Momentum Breakout",
+        "description": "MCX Crude Oil directional option buying triggered by high-volume breakouts of 12-bar price channels.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
+        "python_code": """def run(data):
+    if len(data) < 20: return []
+    closes = [d['close'] for d in data]
+    highs = [d.get('high', d['close']) for d in data]
+    lows = [d.get('low', d['close']) for d in data]
+    
+    signals = []
+    for i in range(12, len(data)):
+        prev_high = max(highs[i-12:i])
+        prev_low = min(lows[i-12:i])
+        if closes[i] > prev_high:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude Channel Breakout'})
+        elif closes[i] < prev_low:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude Channel breakdown'})
+    return signals
+""",
+        "market_suitability": "Highly Volatile & Momentum Trends",
+    },
+    {
+        "name": "Natural Gas Volatility Compression",
+        "description": "MCX Natural Gas options breakouts triggered by Bollinger Band volatility squeezes.",
+        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 55000.0, "instrument_group": "MCX",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [d['close'] for d in data]
+    
+    signals = []
+    for i in range(20, len(data)):
+        chunk = closes[i-20:i]
+        sma = sum(chunk) / 20
+        variance = sum((x - sma) ** 2 for x in chunk) / 20
+        std = (variance) ** 0.5
+        upper = sma + 2 * std
+        lower = sma - 2 * std
+        width = (upper - lower) / sma
+        
+        if width < 0.02:
+            if closes[i] > upper:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BB Squeeze Breakout UP'})
+            elif closes[i] < lower:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BB Squeeze Breakout DOWN'})
+    return signals
+""",
+        "market_suitability": "Volatility Expansion Following Squeeze",
+    },
+    {
+        "name": "Crude Oil Mini Intraday Scalper",
+        "description": "Fast-moving low-capital Crude Oil Mini (CRUDEOILM) option buying scalps using 3/8 EMA crossovers.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
+        "python_code": """def run(data):
+    if len(data) < 20: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(8, len(data)):
+        ema3 = sum(closes[max(0, i-2):i+1]) / min(3, i+1)
+        ema8 = sum(closes[max(0, i-7):i+1]) / min(8, i+1)
+        if ema3 > ema8 and closes[i] > closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Mini EMA Scalp Buy'})
+        elif ema3 < ema8 and closes[i] < closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Mini EMA Scalp Sell'})
+    return signals
+""",
+        "market_suitability": "Fast Dynamic Swings & Volatility Sweeps",
+    },
+    {
+        "name": "NIFTY Micro-Lot Trend Follower",
+        "description": "Low-capital NIFTY ATM option buying trend-follower. Capital required: 10,000.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(20, len(data)):
+        sma20 = sum(closes[i-20:i]) / 20
+        if closes[i] > sma20 and closes[i-1] <= sma20:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Micro Trend BUY'})
+        elif closes[i] < sma20 and closes[i-1] >= sma20:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Micro Trend SELL'})
+    return signals
+""",
+        "market_suitability": "Intraday Trend Following",
     },
 ]
 
@@ -2075,78 +2029,7 @@ CRUDEOILM_VOLATILITY_SCALPER_CODE = """def run(data):
 """
 
 
-DEFAULT_OPTION_STRATEGIES = [
-    {
-        "name": "NIFTY VWAP Trend Breakout",
-        "description": "Trades only confirmed NIFTY trend breakouts with SMA, ATR, and time filters.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": TREND_CONTINUATION_CODE,
-        "market_suitability": "Strong Trending & Sustained Breakout",
-    },
-    {
-        "name": "NIFTY Opening Range VWAP",
-        "description": "Uses current-day opening range only, confirmed by VWAP and volume.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": OPENING_RANGE_VWAP_CODE,
-        "market_suitability": "Morning Breakouts & High Volatility Open",
-    },
-    {
-        "name": "NIFTY VWAP Pullback Continuation",
-        "description": "Waits for a pullback to VWAP, then continuation through a short swing.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": VWAP_PULLBACK_CODE,
-        "market_suitability": "Trending Pullbacks & Re-entries",
-    },
-    {
-        "name": "NIFTY ATR Volume Expansion",
-        "description": "Trades post-compression moves only when ATR and volume confirm expansion.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": ATR_VOLUME_BREAKOUT_CODE,
-        "market_suitability": "Post-Compression Low Vol Squeezes",
-    },
-    {
-        "name": "NIFTY RSI Reversal With Trend",
-        "description": "Countertrend entry only after RSI recovery and reclaim of a short swing.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": RSI_REVERSAL_CODE,
-        "market_suitability": "Trend Retracements & Swing Pullbacks",
-    },
-    {
-        "name": "SENSEX VWAP Trend Breakout",
-        "description": "Trades only confirmed SENSEX trend breakouts with SMA, ATR, and time filters.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": TREND_CONTINUATION_CODE,
-        "market_suitability": "Strong Trending & Sustained Breakout",
-    },
-    {
-        "name": "SENSEX Opening Range VWAP",
-        "description": "Uses current-day SENSEX opening range only, confirmed by VWAP and volume.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": OPENING_RANGE_VWAP_CODE,
-        "market_suitability": "Morning Breakouts & High Volatility Open",
-    },
-    {
-        "name": "SENSEX VWAP Pullback Continuation",
-        "description": "Waits for SENSEX pullback to VWAP, then continuation through a short swing.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": VWAP_PULLBACK_CODE,
-        "market_suitability": "Trending Pullbacks & Re-entries",
-    },
-    {
-        "name": "SENSEX ATR Volume Expansion",
-        "description": "Trades post-compression SENSEX moves only when ATR and volume confirm.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": ATR_VOLUME_BREAKOUT_CODE,
-        "market_suitability": "Post-Compression Low Vol Squeezes",
-    },
-    {
-        "name": "SENSEX RSI Reversal With Trend",
-        "description": "SENSEX reversal entry only after RSI recovery and swing confirmation.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "python_code": RSI_REVERSAL_CODE,
-        "market_suitability": "Trend Retracements & Swing Pullbacks",
-    },
-]
+DEFAULT_OPTION_STRATEGIES = []
 
 COMMODITY_MOMENTUM_BREAKOUT_CODE = """def run(data):
     if len(data) < 55:
@@ -2811,184 +2694,7 @@ CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
     return signals
 """
 
-STANDARD_STRATEGY_CATALOG = [
-    {
-        "name": "Upstox HFT Low-Latency Scalper",
-        "description": "Tick-based micro-EMA momentum scalping utilizing Upstox API v2 HFT endpoints.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
-        "python_code": UPSTOX_HFT_SCALPER_CODE,
-        "market_suitability": "High Volatility & Rapid Trend Shifts",
-    },
-    {
-        "name": "Upstox HFT Multi-Leg Straddle",
-        "description": "Low-latency delta-neutral strangle/straddle positioning under compression. Powered by Upstox v2.",
-        "underlying": "BANKNIFTY", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
-        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
-        "python_code": UPSTOX_HFT_DELTA_NEUTRAL_CODE,
-        "market_suitability": "Sideways Range-bound (Volatility Squeeze)",
-    },
-    {
-        "name": "Bank Nifty Volatility Breakout HFT",
-        "description": "High-frequency Bank Nifty index option entries triggered by instant ATR momentum surges.",
-        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
-        "python_code": BANKNIFTY_HFT_BREAKOUT_CODE,
-        "market_suitability": "High Momentum Breakouts & Sweeps",
-    },
-    {
-        "name": "NIFTY Low-Latency Scalper",
-        "description": "Low-latency option scalper driven by high-speed standard deviation VWAP envelope breaches.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
-        "python_code": NIFTY_LOW_LATENCY_SCALPER_CODE,
-        "market_suitability": "Mean Reverting & Overextended Oscillations",
-    },
-    {
-        "name": "NIFTY VWAP Trend Breakout",
-        "description": "Directional NIFTY option buying with VWAP, SMA, ATR, and time filters.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
-        "python_code": TREND_CONTINUATION_CODE,
-        "market_suitability": "Strong Trending & Sustained Breakout",
-    },
-    {
-        "name": "NIFTY Opening Range VWAP",
-        "description": "Directional NIFTY option buying after opening range breakouts confirmed by VWAP and volume.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 35000.0, "instrument_group": "NFO",
-        "python_code": OPENING_RANGE_VWAP_CODE,
-        "market_suitability": "Morning Breakouts & High Volatility Open",
-    },
-    {
-        "name": "SENSEX VWAP Trend Breakout",
-        "description": "Directional SENSEX option buying with trend, volatility, and time-of-day filters.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
-        "python_code": TREND_CONTINUATION_CODE,
-        "market_suitability": "Strong Trending & Sustained Breakout",
-    },
-    {
-        "name": "SENSEX RSI Reversal With Trend",
-        "description": "SENSEX option buying only after RSI recovery aligns with swing and SMA confirmation.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 45000.0, "instrument_group": "BFO",
-        "python_code": RSI_REVERSAL_CODE,
-        "market_suitability": "Trend Retracements & Swing Pullbacks",
-    },
-    {
-        "name": "Crude Oil Momentum Breakout",
-        "description": "MCX crude oil option buying for volume-backed trend breakouts.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
-        "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
-        "market_suitability": "Highly Volatile & Momentum Trends",
-    },
-    {
-        "name": "Crude Oil Iron Condor Range",
-        "description": "MCX crude oil option selling template for consolidation and range-bound volatility.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
-        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
-        "python_code": COMMODITY_RANGE_SELLING_CODE,
-        "market_suitability": "Sideways Range-bound / Flat Markets",
-    },
-    {
-        "name": "Natural Gas Momentum Breakout",
-        "description": "MCX natural gas option buying for directional expansion after compression.",
-        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 55000.0, "instrument_group": "MCX",
-        "python_code": COMMODITY_MOMENTUM_BREAKOUT_CODE,
-        "market_suitability": "Highly Volatile & Momentum Trends",
-    },
-    {
-        "name": "Natural Gas Volatility Straddle",
-        "description": "MCX natural gas option buying template for low-volatility setups before expansion.",
-        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 70000.0, "instrument_group": "MCX",
-        "python_code": COMMODITY_VOLATILITY_STRADDLE_CODE,
-        "market_suitability": "Low-Volatility Compression Before Breakout",
-    },
-    {
-        "name": "Crude Oil HFT Micro-Trend Scalper",
-        "description": "Exploits rapid MCX options trend momentum utilizing fast EMA shifts and volume confirmations.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOIL_HFT_SCALPER_CODE,
-        "market_suitability": "Fast Dynamic Swings & Volatility Sweeps",
-    },
-    {
-        "name": "Crude Oil HFT Volatility Breakout",
-        "description": "Enters Call/Put positions on high-frequency MCX Crude range compression breakout signals.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 65000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOIL_HFT_VOLATILITY_CODE,
-        "market_suitability": "Volatility Expansion Following Squeeze",
-    },
-    {
-        "name": "Crude Oil HFT Mean Reversion",
-        "description": "Low-latency commodity mean reversion driven by Bollinger Band exhaustion and fast RSI.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
-        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOIL_HFT_MEAN_REVERSION_CODE,
-        "market_suitability": "Overbought / Oversold Range Exhaustion",
-    },
-    {
-        "name": "NIFTY HFT Micro-Trend Scalper",
-        "description": "Low-capital high-frequency option scalper using 3/8 period EMA crossovers with volume confirmations.",
-        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
-        "python_code": NIFTY_HFT_MICRO_SCALPER_CODE,
-        "market_suitability": "Intraday Scalping & Momentum Swings",
-    },
-    {
-        "name": "SENSEX HFT Momentum Scalper",
-        "description": "Directional low-capital SENSEX option scalper triggered by fast RSI(5) momentum shifts.",
-        "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "BFO",
-        "python_code": SENSEX_HFT_MOMENTUM_SCALPER_CODE,
-        "market_suitability": "High Velocity Swings & Trend Breaks",
-    },
-    {
-        "name": "Crude Oil HFT Low-Capital Scalper",
-        "description": "Volume-weighted MCX Crude Oil option scalp model optimized for rapid ROC momentum moves.",
-        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 20000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOIL_HFT_LOW_CAPITAL_SCALPER_CODE,
-        "market_suitability": "High Momentum Velocity Breakouts",
-    },
-    {
-        "name": "Natural Gas HFT Micro-Trend Scalper",
-        "description": "High-frequency Natural Gas options scalper targeting tight Bollinger Band compression breakouts.",
-        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "MCX",
-        "python_code": NATURALGAS_HFT_MICRO_SCALPER_CODE,
-        "market_suitability": "Range Breakout & Compression Squeezes",
-    },
-    {
-        "name": "Crude Oil Mini EMA Momentum",
-        "description": "Low-capital Crude Oil Mini option buying strategy driven by EMA momentum crossovers.",
-        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOILM_EMA_MOMENTUM_CODE,
-        "market_suitability": "Strong Intraday Trends & Volatility Crossovers",
-    },
-    {
-        "name": "Crude Oil Mini RSI Reversion",
-        "description": "Low-capital Crude Oil Mini option buying using quick RSI oversold recovery with EMA trend confirmation.",
-        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOILM_RSI_REVERSION_CODE,
-        "market_suitability": "Oversold Pullbacks & Reversals",
-    },
-    {
-        "name": "Crude Oil Mini Volatility Scalper",
-        "description": "Low-capital Crude Oil Mini option buying capturing breakouts from Bollinger Band compression squeezes.",
-        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
-        "python_code": CRUDEOILM_VOLATILITY_SCALPER_CODE,
-        "market_suitability": "Volatility Squeezes & Range Breakouts",
-    },
-]
+STANDARD_STRATEGY_CATALOG = []
 
 _seed_templates_by_name = {
     template["name"]: template
@@ -2997,6 +2703,7 @@ _seed_templates_by_name = {
 DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
 LEGACY_DEFAULT_STRATEGY_NAMES = {
+    # 17 legacy default strategy names
     "NIFTY Momentum EMA",
     "NIFTY RSI Reversion",
     "NIFTY Opening Range Breakout",
@@ -3013,6 +2720,38 @@ LEGACY_DEFAULT_STRATEGY_NAMES = {
     "SENSEX Opening Range VWAP",
     "SENSEX VWAP Pullback Continuation",
     "SENSEX ATR Volume Expansion",
+    "SENSEX RSI Reversal With Trend",
+    
+    # 10 duplicate options templates
+    "NIFTY VWAP Trend Breakout",
+    "NIFTY Opening Range VWAP",
+    "NIFTY VWAP Pullback Continuation",
+    "NIFTY ATR Volume Expansion",
+    "NIFTY RSI Reversal With Trend",
+    "SENSEX VWAP Trend Breakout",
+    "SENSEX Opening Range VWAP",
+    "SENSEX VWAP Pullback Continuation",
+    "SENSEX ATR Volume Expansion",
+    "SENSEX RSI Reversal With Trend",
+    
+    # HFT templates
+    "Upstox HFT Low-Latency Scalper",
+    "Upstox HFT Multi-Leg Straddle",
+    "Bank Nifty Volatility Breakout HFT",
+    "NIFTY Low-Latency Scalper",
+    "Crude Oil Iron Condor Range",
+    "Natural Gas Momentum Breakout",
+    "Natural Gas Volatility Straddle",
+    "Crude Oil HFT Micro-Trend Scalper",
+    "Crude Oil HFT Volatility Breakout",
+    "Crude Oil HFT Mean Reversion",
+    "NIFTY HFT Micro-Trend Scalper",
+    "SENSEX HFT Momentum Scalper",
+    "Crude Oil HFT Low-Capital Scalper",
+    "Natural Gas HFT Micro-Trend Scalper",
+    "Crude Oil Mini EMA Momentum",
+    "Crude Oil Mini RSI Reversion",
+    "Crude Oil Mini Volatility Scalper",
 }
 
 
@@ -3151,6 +2890,17 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
 
 
 async def seed_default_strategies_for_user(user_id: str) -> int:
+    try:
+        # Dynamically delete any legacy strategy templates for this user first!
+        delete_res = await db.strategies.delete_many({
+            "user_id": user_id,
+            "name": {"$in": list(LEGACY_DEFAULT_STRATEGY_NAMES)}
+        })
+        if delete_res.deleted_count > 0:
+            logger.info(f"Wiped {delete_res.deleted_count} legacy strategies for user {user_id}")
+    except Exception as e:
+        logger.warning(f"Error wiping legacy strategies for user {user_id}: {e}")
+
     existing = await db.strategies.find({"user_id": user_id}, {"_id": 0, "name": 1}).to_list(500)
     existing_names = {row.get("name") for row in existing}
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
@@ -3434,7 +3184,11 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
     now = datetime.now(timezone.utc).isoformat()
     qty = int(position.get("open_quantity") or position.get("quantity") or 0)
     entry = float(position.get("average_buy_price") or 0)
-    pnl = round((float(exit_price or 0) - entry) * qty, 2)
+    pos_side = position.get("position_side") or "LONG"
+    if pos_side == "SHORT":
+        pnl = round((entry - float(exit_price or 0)) * qty, 2)
+    else:
+        pnl = round((float(exit_price or 0) - entry) * qty, 2)
     await db.strategy_positions.update_one(
         {"id": position["id"], "user_id": position["user_id"]},
         {"$set": {
@@ -4919,6 +4673,319 @@ def _is_order_market_open(exchange: str, now_utc: Optional[datetime] = None) -> 
     return _is_nse_market_open(now_utc)
 
 
+# ---------------------------------------------------------------------------
+# Intent classification helpers
+# ---------------------------------------------------------------------------
+
+def _intent_is_entry(intent_str: str) -> bool:
+    """Return True if the intent represents opening a new position."""
+    return intent_str in ("OPEN_LONG", "OPEN_SHORT")
+
+
+def _intent_is_exit(intent_str: str) -> bool:
+    """Return True if the intent represents closing an existing position."""
+    return intent_str in ("CLOSE_LONG", "CLOSE_SHORT")
+
+
+def _intent_side(intent_str: str) -> str:
+    """Map an OrderIntent intent string to a broker-facing BUY/SELL side."""
+    return "BUY" if intent_str in ("OPEN_LONG", "CLOSE_SHORT") else "SELL"
+
+
+def _runtime_broker_name(broker_raw: str) -> str:
+    """Normalise internal broker identifiers to the display-ready name."""
+    mapping = {
+        "zerodha": "zerodha",
+        "kotak_neo": "kotak_neo",
+        "kotak": "kotak_neo",
+        "upstox": "upstox",
+    }
+    return mapping.get((broker_raw or "").lower(), broker_raw or "zerodha")
+
+
+# ---------------------------------------------------------------------------
+# _build_order_intent  –  resolve symbol / option_contract into OrderIntent
+# ---------------------------------------------------------------------------
+
+async def _build_order_intent(
+    *,
+    user_id: str,
+    symbol: str,
+    side: str,
+    qty: Optional[int],
+    source: str,
+    exchange: str,
+    settings: Dict[str, Any],
+    option_contract: Optional[Dict[str, Any]] = None,
+    price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Resolve raw order parameters into an ``OrderIntent`` with a concrete
+    ``InstrumentRef``.  Returns a dict ``{"intent": OrderIntent, ...}``
+    including optional ``lot_size`` / ``lots`` metadata for options.
+    """
+    execution_broker = settings.get("execution_broker", "zerodha")
+    exchange = (exchange or "NSE").upper()
+    symbol_upper = symbol.upper().strip()
+
+    # ----- option contract path -----
+    if option_contract and option_contract.get("tradingsymbol"):
+        tsym = str(option_contract["tradingsymbol"]).upper().strip()
+        seg = "OPTIONS"
+        opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
+        token = str(option_contract.get("instrument_token") or tsym)
+        asset_class = "OPTION_SHORT" if side == "SELL" else "OPTION_LONG"
+
+        lot_size = int(option_contract.get("lot_size") or options_helper.LOT_SIZES.get((option_contract.get("underlying") or "").upper(), 1))
+        lots = max(1, int(qty or 1))
+        final_qty = lots * lot_size
+
+        instr = InstrumentRef(
+            broker=execution_broker,
+            segment=seg,
+            exchange=opt_exchange,
+            tradingsymbol=tsym,
+            instrument_token=token,
+            asset_class=asset_class,
+        )
+
+        # Determine intent
+        strategy_id = await _strategy_source_id(source)
+        intent_str = _infer_intent(side, strategy_id, user_id, instr, asset_class)
+
+        intent = OrderIntent(
+            instrument=instr,
+            quantity=final_qty,
+            intent=intent_str,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        return {"intent": intent, "lot_size": lot_size, "lots": lots}
+
+    # ----- equity / futures / commodity path -----
+    segment = "EQUITY"
+    asset_class = "DIRECT"
+    if exchange in ("NFO", "BFO"):
+        segment = "FUTURES"
+    elif exchange == "MCX":
+        segment = "COMMODITY"
+    elif exchange in ("CDS",):
+        segment = "FUTURES"
+
+    token = symbol_upper
+    if execution_broker == "upstox":
+        resolved = _upstox_instrument_token(exchange, symbol_upper)
+        if resolved:
+            token = resolved
+
+    final_qty = int(qty or settings.get("default_qty", 1))
+
+    instr = InstrumentRef(
+        broker=execution_broker,
+        segment=segment,
+        exchange=exchange,
+        tradingsymbol=symbol_upper,
+        instrument_token=token,
+        asset_class=asset_class,
+    )
+
+    strategy_id = await _strategy_source_id(source)
+    intent_str = _infer_intent(side, strategy_id, user_id, instr, asset_class)
+
+    intent = OrderIntent(
+        instrument=instr,
+        quantity=final_qty,
+        intent=intent_str,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+    )
+    return {"intent": intent}
+
+
+def _infer_intent(
+    side: str,
+    strategy_id: Optional[str],
+    user_id: str,
+    instr: "InstrumentRef",
+    asset_class: str,
+) -> str:
+    """Infer OPEN_LONG / CLOSE_LONG / OPEN_SHORT / CLOSE_SHORT from side
+    and asset class.  For short-selling options the mapping inverts."""
+    if asset_class == "OPTION_SHORT":
+        return "OPEN_SHORT" if side == "SELL" else "CLOSE_SHORT"
+    return "OPEN_LONG" if side == "BUY" else "CLOSE_LONG"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_order_fill_hint  –  best-effort LTP for pre-trade risk checks
+# ---------------------------------------------------------------------------
+
+async def _resolve_order_fill_hint(
+    user_id: str,
+    intent: "OrderIntent",
+    limit_price: Optional[float],
+    paper: bool,
+    option_contract: Optional[Dict[str, Any]],
+    *,
+    execution_broker: str = "zerodha",
+) -> float:
+    """Return a best-effort fill price hint for position-size and risk checks.
+
+    Uses the explicit ``limit_price`` when provided, otherwise queries
+    ``_current_ltp_for_symbol``.  Falls back to 0.0 (caller decides whether
+    to block the order).
+    """
+    if limit_price is not None and limit_price > 0:
+        return float(limit_price)
+
+    # Try option premium LTP from option_contract
+    if option_contract and option_contract.get("ltp"):
+        return float(option_contract["ltp"])
+
+    instr = intent.instrument
+    try:
+        ltp = await _current_ltp_for_symbol(
+            user_id,
+            instr.tradingsymbol,
+            instr.exchange,
+            allow_mock=paper,
+            execution_broker=execution_broker,
+        )
+        if ltp and ltp > 0:
+            return float(ltp)
+    except Exception as exc:
+        logger.warning("fill-hint LTP lookup failed for %s: %s", instr.tradingsymbol, exc)
+
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
+# _submit_order_intent  –  dispatch live order to the correct broker adapter
+# ---------------------------------------------------------------------------
+
+async def _submit_order_intent(
+    user_id: str,
+    intent: "OrderIntent",
+    *,
+    order_type: str,
+    product: str,
+    price: Optional[float],
+    tag: str,
+) -> Dict[str, Any]:
+    """Route a live order to the broker adapter identified by
+    ``intent.instrument.broker`` and return the broker response dict."""
+    instr = intent.instrument
+    broker = (instr.broker or "zerodha").lower()
+    side = _intent_side(intent.intent)
+    qty = int(intent.quantity)
+
+    if broker in ("kotak_neo", "kotak"):
+        return await _place_kotak_order(
+            user_id,
+            trading_symbol=instr.tradingsymbol,
+            exchange=instr.exchange,
+            side=side,
+            quantity=qty,
+            order_type=order_type,
+            product=product,
+            price=price,
+            tag=tag,
+        )
+
+    if broker == "upstox":
+        upstox_token = instr.instrument_token
+        if not upstox_token or "|" not in upstox_token:
+            resolved = _upstox_instrument_token(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+            if resolved:
+                upstox_token = resolved
+        if not upstox_token:
+            raise RuntimeError(f"Cannot resolve Upstox instrument token for {instr.exchange}:{instr.tradingsymbol}")
+        return await _place_upstox_order(
+            user_id,
+            instrument_token=upstox_token,
+            side=side,
+            quantity=qty,
+            order_type=order_type,
+            product=product,
+            price=price,
+            tag=tag,
+        )
+
+    # Default: Zerodha / Kite
+    kite, _ = await get_user_kite(user_id)
+    if not kite:
+        raise RuntimeError("Zerodha Kite is not connected. Please complete the login flow first.")
+    return await _place_kite_order_with_recovery(
+        kite,
+        tradingsymbol=instr.tradingsymbol,
+        exchange=instr.exchange,
+        transaction_type=side,
+        quantity=qty,
+        order_type=order_type,
+        product=product,
+        price=price,
+        tag=tag,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _persist_failed_order  –  save a record of a broker-rejected order
+# ---------------------------------------------------------------------------
+
+async def _persist_failed_order(
+    *,
+    user_id: str,
+    intent: "OrderIntent",
+    order_type: str,
+    product: str,
+    price: Optional[float],
+    source: str,
+    strategy_id: Optional[str],
+    error_message: str,
+    resolution: Dict[str, Any],
+    option_contract: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Persist a failed order document so the user can see what went wrong."""
+    instr = intent.instrument
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "symbol": instr.tradingsymbol,
+        "side": _intent_side(intent.intent),
+        "qty": int(intent.quantity),
+        "order_type": order_type,
+        "price": float(price or 0),
+        "product": product,
+        "status": "REJECTED",
+        "mode": "live",
+        "broker": _runtime_broker_name(instr.broker),
+        "source": source,
+        "strategy_id": strategy_id,
+        "exchange": instr.exchange,
+        "segment": instr.segment,
+        "error_message": error_message,
+        "order_intent": intent.model_dump(),
+        "created_at": now,
+        "execution_status": "REJECTED",
+    }
+    if option_contract:
+        doc.update({
+            "underlying": option_contract.get("underlying"),
+            "option_type": option_contract.get("option_type"),
+            "strike": option_contract.get("strike"),
+            "expiry": option_contract.get("expiry"),
+            "instrument_token": option_contract.get("instrument_token"),
+            "lot_size": resolution.get("lot_size"),
+            "lots": resolution.get("lots"),
+        })
+    await db.orders.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
@@ -5055,6 +5122,25 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 headers={"X-Order-Id": failed_doc.get("id", "")},
             )
 
+    order_realised_pnl = 0.0
+    if paper:
+        # Try to find the existing position in positions collection to determine if this order reduces/closes it
+        existing_pos = await db.positions.find_one({"user_id": user_id, "symbol": instr.tradingsymbol})
+        if existing_pos and existing_pos.get("qty"):
+            current_qty = int(existing_pos["qty"])
+            order_qty = int(intent.quantity)
+            order_side = _intent_side(intent.intent)
+            
+            # Close/reduction happens when order side is opposite of position side
+            is_close = (current_qty > 0 and order_side == "SELL") or (current_qty < 0 and order_side == "BUY")
+            if is_close:
+                qty_closed = min(abs(current_qty), order_qty)
+                entry_price_val = float(existing_pos.get("avg_price") or 0)
+                if current_qty > 0: # LONG exit
+                    order_realised_pnl = round((float(fill_price or 0) - entry_price_val) * qty_closed, 2)
+                else: # SHORT exit
+                    order_realised_pnl = round((entry_price_val - float(fill_price or 0)) * qty_closed, 2)
+
     now = datetime.now(timezone.utc).isoformat()
     order_doc = {
         "id": str(uuid.uuid4()),
@@ -5064,8 +5150,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "qty": int(intent.quantity),
         "filled_qty": int(intent.quantity) if paper else None,
         "pending_qty": 0 if paper else int(intent.quantity),
-        "status_message": None,
-        "realised_pnl": 0.0,
+        "status_message": "Filled successfully (Paper Mode)" if paper else None,
+        "realised_pnl": order_realised_pnl,
         "order_type": order_type,
         "price": float(fill_price or 0),
         "brokerage": _simulate_paper_brokerage(float(fill_price or 0), int(intent.quantity)) if paper else 0.0,
@@ -6832,11 +6918,17 @@ async def live_readiness(user=Depends(get_current_user)):
         ),
     })
 
+    market_open = nse_open or mcx_open if has_mcx else nse_open
+    paper_mode = bool(settings.get("paper_mode", True))
+    
     overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours", "tick_feed"})
+    if not paper_mode and not market_open:
+        overall_ready = False
+        
     return {
         "ready": overall_ready,
-        "market_open": nse_open or mcx_open if has_mcx else nse_open,
-        "current_mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
+        "market_open": market_open,
+        "current_mode": "PAPER" if paper_mode else "LIVE",
         "checks": checks,
     }
 
@@ -7993,6 +8085,31 @@ async def get_profile(user=Depends(get_current_user)):
 @api.put("/profile")
 async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
+    if "paper_mode" in update and update["paper_mode"] is False:
+        # Find if user has MCX strategies
+        strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
+        has_mcx = any(
+            s.get("instrument_group") == "MCX"
+            or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+            or "MCX" in str(s.get("symbol")).upper()
+            for s in strategies
+        )
+        
+        # Check market hours
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        is_weekday = ist_now.weekday() < 5
+        minutes_now = ist_now.hour * 60 + ist_now.minute
+        nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+        mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
+        
+        market_open = nse_open or (mcx_open if has_mcx else False)
+        if not market_open:
+            market_name = "NSE or MCX" if has_mcx else "NSE"
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Live mode activation is blocked because the {market_name} market is currently closed."
+            )
+
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")
     if "default_qty" in update and update["default_qty"] <= 0:
@@ -8236,6 +8353,28 @@ async def startup():
         option_ledger=option_ledger,
     )
     app.state.execution_state = execution_state_manager
+
+    # Dynamic lot sizes & strike intervals loading from MongoDB system_config
+    try:
+        config = await db.system_config.find_one({"_id": "exchange_rules"})
+        if config:
+            if "lot_sizes" in config:
+                options_helper.LOT_SIZES.update(config["lot_sizes"])
+            if "strike_intervals" in config:
+                options_helper.STRIKE_INTERVALS.update(config["strike_intervals"])
+            logger.info("Loaded system configuration (lot sizes, strike intervals) from MongoDB.")
+        else:
+            default_config = {
+                "_id": "exchange_rules",
+                "lot_sizes": options_helper.LOT_SIZES,
+                "strike_intervals": options_helper.STRIKE_INTERVALS,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.system_config.insert_one(default_config)
+            logger.info("Seeded default exchange rules system config to MongoDB.")
+    except Exception as e:
+        logger.warning(f"Failed to load or seed system_config from MongoDB: {e}")
+
     # Index creation is best-effort — must NEVER block app startup.
     # On Atlas, an index may already exist with different options, or there may be
     # duplicates from a previous app version. We log and continue.
@@ -8244,6 +8383,7 @@ async def startup():
         ("broker_keys", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("strategies", "user_id", {}),
         ("orders", [("user_id", 1), ("created_at", -1)], {}),
+        ("orders", "idempotency_key", {"unique": True, "sparse": True}),
         ("strategy_positions", [("user_id", 1), ("strategy_id", 1), ("status", 1)], {}),
         ("strategy_positions", "active_instrument_key", {"unique": True, "sparse": True}),
         ("strategy_positions", "active_strategy_key", {"unique": True, "sparse": True}),
@@ -8255,6 +8395,17 @@ async def startup():
             await db[coll].create_index(key, **opts)
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
+
+    # Create partial unique index for live broker order tracking
+    try:
+        await db.orders.create_index(
+            [("broker_order_id", 1)],
+            unique=True,
+            partialFilterExpression={"mode": "live", "broker_order_id": {"$exists": True}}
+        )
+        logger.info("Created unique partial index for live broker orders successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to create live broker orders partial index: {e}")
 
     # Add any missing built-in presets for every user. This is additive by name:
     # it keeps custom/old strategies intact and only inserts missing v10 presets.
