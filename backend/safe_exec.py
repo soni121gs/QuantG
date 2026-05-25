@@ -73,6 +73,13 @@ def _validate_ast(code: str) -> None:
             raise ValueError(f"Call to '{node.func.id}' is not allowed")
 
 
+import sys
+import time
+import os
+
+class ExecutionTimeout(Exception):
+    pass
+
 def safe_run_strategy(code: str, data: List[dict]) -> List[dict]:
     """Validate and run a user strategy. Returns the `signals` list it produces.
 
@@ -90,10 +97,27 @@ def safe_run_strategy(code: str, data: List[dict]) -> List[dict]:
     fn = env.get("run")
     if not callable(fn):
         raise ValueError("Strategy must define a `run(data)` function")
+
+    # Set up trace timeout
+    start_time = time.monotonic()
+    timeout = float(os.environ.get("STRATEGY_TIMEOUT_SEC", "2.0"))
+
+    def timeout_trace(frame, event, arg):
+        if time.monotonic() - start_time > timeout:
+            raise ExecutionTimeout(f"Strategy execution exceeded maximum safe time limit of {timeout}s.")
+        return timeout_trace
+
+    old_trace = sys.gettrace()
+    sys.settrace(timeout_trace)
     try:
         result = fn(data) or []
+    except ExecutionTimeout as exc:
+        raise ValueError(str(exc)) from None
     except Exception as e:
         raise ValueError(f"Strategy runtime error: {e}") from None
+    finally:
+        sys.settrace(old_trace)
+
     if not isinstance(result, list):
         raise ValueError("`run(data)` must return a list of {date, action} dicts")
     return result

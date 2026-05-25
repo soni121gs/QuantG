@@ -2,13 +2,47 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, List
+import asyncio
+import time
 
 from pydantic import BaseModel, Field, field_validator
 
 import kite_helper
 
 logger = logging.getLogger("quantg.execution_bridge")
+
+
+class BrokerOrderRateLimiter:
+    def __init__(self, max_per_sec: int = 10, max_per_min: int = 400) -> None:
+        self._lock = asyncio.Lock()
+        self._history: List[float] = []
+        self._max_per_sec = max_per_sec
+        self._max_per_min = max_per_min
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                self._history = [t for t in self._history if now - t < 60.0]
+                last_sec = [t for t in self._history if now - t < 1.0]
+                if len(last_sec) < self._max_per_sec and len(self._history) < self._max_per_min:
+                    self._history.append(now)
+                    return
+                sleep_time = 0.05
+                if len(last_sec) >= self._max_per_sec:
+                    sleep_time = max(sleep_time, 1.0 - (now - last_sec[0]))
+                if len(self._history) >= self._max_per_min:
+                    sleep_time = max(sleep_time, 60.0 - (now - self._history[0]))
+                await asyncio.sleep(sleep_time)
+
+
+_BROKER_LIMITERS = {
+    "zerodha": BrokerOrderRateLimiter(10, 400),
+    "upstox": BrokerOrderRateLimiter(10, 400),
+    "kotak": BrokerOrderRateLimiter(10, 400),
+}
+
 
 SUPPORTED_SEGMENTS = {"EQUITY", "OPTIONS", "FUTURES", "COMMODITY"}
 SUPPORTED_ORDER_TYPES = {"MARKET", "LIMIT"}
@@ -170,6 +204,10 @@ async def submit_order(
         }
 
     broker = runtime_broker(validated.broker)
+    limiter = _BROKER_LIMITERS.get(canonical_broker(broker))
+    if limiter:
+        await limiter.acquire()
+
     try:
         if broker == "kotak_neo":
             result = await place_kotak(
@@ -184,7 +222,7 @@ async def submit_order(
                 tag=validated.tag,
             )
             broker_order_id = result.get("broker_order_id") or result.get("order_id")
-            if not result.get("ok"):
+            if result.get("ok") is False:
                 raise RuntimeError(result.get("error") or "Kotak order rejected")
             return {
                 "ok": True,

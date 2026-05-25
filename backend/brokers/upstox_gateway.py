@@ -333,7 +333,8 @@ class UpstoxGateway:
                         self.get_market_quote(chunk)
                 except Exception as exc:
                     logger.warning("Upstox market feed polling failed: %s", exc)
-                time.sleep(1.0)
+                poll_interval = float(os.environ.get("UPSTOX_POLL_INTERVAL_SEC", "3.0"))
+                time.sleep(poll_interval)
             logger.info("Upstox live market feed tracking thread stopped")
 
         self._ws_thread = threading.Thread(target=run_polling, daemon=True)
@@ -355,10 +356,12 @@ class UpstoxGateway:
             raise RuntimeError("Upstox access token is missing. Complete OAuth login first.")
         base = self.HFT_BASE_URL if hft else self.API_BASE_URL
         headers = kwargs.pop("headers", {}) or {}
+        algo_name = os.environ.get("UPSTOX_ALGO_NAME", "QuantGAlgo")
         headers.update({
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {self.access_token}",
+            "X-Algo-Name": algo_name,
         })
         self.last_request_at = datetime.now(timezone.utc).isoformat()
         response = requests.request(

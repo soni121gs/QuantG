@@ -11,6 +11,10 @@ from pydantic import BaseModel
 
 from core import db, get_current_user
 
+import time
+
+_STRATEGY_SCORES_CACHE: Dict[str, Dict[str, Any]] = {}
+
 router = APIRouter(prefix="/ai", tags=["AI"])
 
 class ChatReq(BaseModel):
@@ -85,7 +89,13 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
 
 @router.get("/strategy-scores")
 async def ai_strategy_scores(user=Depends(get_current_user)):
-    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(500)
+    user_id = user["id"]
+    now = time.monotonic()
+    cached = _STRATEGY_SCORES_CACHE.get(user_id)
+    if cached and now - cached["timestamp"] < 30.0:
+        return cached["data"]
+
+    rows = await db.strategies.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(500)
     
     # Runtime dynamic imports to avoid circular dependencies
     from server import watchlist, commodity_watchlist, _market_score_for_strategy
@@ -95,16 +105,21 @@ async def ai_strategy_scores(user=Depends(get_current_user)):
     market_by_symbol = {r["symbol"]: r for r in [*market_rows, *commodity_rows]}
     scores = [_market_score_for_strategy(row, market_by_symbol) for row in rows]
     for score in scores:
-        score["user_id"] = user["id"]
+        score["user_id"] = user_id
         await db.strategy_ai_scores.update_one(
-            {"strategy_id": score["strategy_id"], "user_id": user["id"]},
+            {"strategy_id": score["strategy_id"], "user_id": user_id},
             {"$set": score},
             upsert=True,
         )
-    return {
+    result = {
         "scores": [{k: v for k, v in score.items() if k != "user_id"} for score in scores],
         "provider": "gemini-context" if os.environ.get("GEMINI_API_KEY") else "local-market-structure",
     }
+    _STRATEGY_SCORES_CACHE[user_id] = {
+        "timestamp": now,
+        "data": result,
+    }
+    return result
 
 
 @router.get("/market-analysis")

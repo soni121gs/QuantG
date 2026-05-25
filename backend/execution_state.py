@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -34,6 +35,7 @@ class ExecutionStateManager:
         self._sync_strategy_positions: Optional[Callable[[str, Any], Awaitable[dict]]] = None
         self._fetch_positions: Optional[Any] = None
         self._option_ledger: Any = None
+        self._last_sync_by_user: Dict[str, float] = {}
 
     def configure(
         self,
@@ -200,11 +202,17 @@ class ExecutionStateManager:
         settings = await self._get_user_settings(user_id)
         sync_meta: Dict[str, Any] = {}
         if sync:
-            try:
-                sync_meta = await self.sync_brokers(user_id, user)
-            except Exception as exc:
-                logger.warning("execution snapshot broker sync failed user=%s: %s", user_id, exc)
-                sync_meta = {"error": str(exc)}
+            now = time.monotonic()
+            last_sync = self._last_sync_by_user.get(user_id, 0.0)
+            if now - last_sync >= 5.0:
+                try:
+                    sync_meta = await self.sync_brokers(user_id, user)
+                    self._last_sync_by_user[user_id] = now
+                except Exception as exc:
+                    logger.warning("execution snapshot broker sync failed user=%s: %s", user_id, exc)
+                    sync_meta = {"error": str(exc)}
+            else:
+                sync_meta = {"throttled": True, "reason": "Sync requests throttled to at most once per 5 seconds."}
 
         broker_positions = await self._fetch_positions(user, settings)
         strategy_rows = await self._load_strategy_positions(user_id)
