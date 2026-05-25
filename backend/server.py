@@ -3305,9 +3305,9 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
     return {"closed_positions": results, "open_positions_found": len(positions)}
 
 
-async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True) -> Optional[float]:
+async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True, execution_broker: Optional[str] = None) -> Optional[float]:
     settings = await get_user_settings(user_id)
-    data_broker = settings.get("data_broker", "zerodha")
+    data_broker = execution_broker or settings.get("data_broker", "zerodha")
     if data_broker == "kotak_neo":
         gateway = _KOTAK_GATEWAYS.get(user_id)
         if gateway:
@@ -3564,6 +3564,8 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     exch = (exchange or "NSE").upper()
     if exch in {"NSE", "BSE"}:
         return UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
+    if exch in {"NFO", "BFO", "NSE_FO"}:
+        return f"NSE_FO|{symbol}"
     if exch == "MCX":
         if len(symbol) > 10 and symbol.endswith("FUT"):
             return f"MCX_FO|{symbol}"
@@ -5553,7 +5555,7 @@ async def _build_order_intent(
     }
 
 
-async def _resolve_order_fill_hint(user_id: str, intent: OrderIntent, price: Optional[float], paper: bool, option_contract: Optional[Dict[str, Any]]) -> float:
+async def _resolve_order_fill_hint(user_id: str, intent: OrderIntent, price: Optional[float], paper: bool, option_contract: Optional[Dict[str, Any]], execution_broker: Optional[str] = None) -> float:
     if price:
         return float(price)
     instr = intent.instrument
@@ -5561,10 +5563,10 @@ async def _resolve_order_fill_hint(user_id: str, intent: OrderIntent, price: Opt
         if paper:
             spot = option_contract.get("spot") or option_contract.get("atm_strike") or 100.0
             return round(float(spot) * 0.02, 2)
-        ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False)
+        ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False, execution_broker=execution_broker)
         return float(ltp or 0)
     if not paper:
-        ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False)
+        ltp = await _current_ltp_for_symbol(user_id, instr.tradingsymbol, instr.exchange, allow_mock=False, execution_broker=execution_broker)
         if ltp is not None:
             return float(ltp)
     sym = next((s for s in SYMBOLS if s["symbol"] == instr.tradingsymbol), None)
@@ -5757,7 +5759,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         raise HTTPException(status_code=400, detail=f"Live MARKET orders are blocked outside {market_name} market hours.")
 
     strategy_id = await _strategy_source_id(source)
-    fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract)
+    fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
     if _intent_is_entry(intent.intent):
         await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
         await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
