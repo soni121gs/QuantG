@@ -271,6 +271,8 @@ class StrategyRuntimeSettingsReq(BaseModel):
     time_exit_minutes: Optional[int] = None
     indicator_exit_enabled: Optional[bool] = None
     exit_mode: Optional[str] = None
+    broker: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class ProfileUpdateReq(BaseModel):
