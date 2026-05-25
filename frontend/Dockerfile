@@ -6,8 +6,11 @@ WORKDIR /app
 # Copy package files
 COPY package.json yarn.lock* package-lock.json* ./
 
-# Install dependencies
-RUN yarn install --frozen-lockfile || npm ci
+# Install dependencies. The VPS network can be slow, so give Yarn more time;
+# npm fallback needs legacy peer handling for the current lockfile.
+RUN yarn config set registry https://registry.npmjs.org \
+    && yarn install --frozen-lockfile --network-timeout 600000 --network-concurrency 1 \
+    || npm ci --legacy-peer-deps --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 --fetch-timeout=600000
 
 # Copy source code
 COPY . .
