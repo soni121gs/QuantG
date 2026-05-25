@@ -201,7 +201,7 @@ class UpstoxGateway:
         if interval == "minute":
             upstox_interval = "1minute"
         elif interval == "5minute":
-            upstox_interval = "5minute"
+            upstox_interval = "1minute"  # Upstox doesn't support 5m; query 1m and resample!
         elif interval == "30minute":
             upstox_interval = "30minute"
             
@@ -236,6 +236,42 @@ class UpstoxGateway:
                         "low": float(c[3] or 0),
                         "volume": int(c[5] or 0) if len(c) > 5 else 0,
                     })
+            
+            # Resample 1minute candles to 5minute candles if requested
+            if interval == "5minute":
+                resampled = []
+                current_bar = None
+                for c in out:
+                    try:
+                        dt_part, time_part = c["date"].split(" ")
+                        hh, mm = time_part.split(":")[:2]
+                        hh = int(hh)
+                        mm = int(mm)
+                        floored_mm = (mm // 5) * 5
+                        bar_date = f"{dt_part} {hh:02d}:{floored_mm:02d}"
+                    except Exception:
+                        bar_date = c["date"]
+                        
+                    if current_bar is None or current_bar["date"] != bar_date:
+                        if current_bar is not None:
+                            resampled.append(current_bar)
+                        current_bar = {
+                            "date": bar_date,
+                            "open": c["open"],
+                            "high": c["high"],
+                            "low": c["low"],
+                            "close": c["close"],
+                            "volume": c["volume"],
+                        }
+                    else:
+                        current_bar["high"] = max(current_bar["high"], c["high"])
+                        current_bar["low"] = min(current_bar["low"], c["low"])
+                        current_bar["close"] = c["close"]
+                        current_bar["volume"] += c["volume"]
+                if current_bar is not None:
+                    resampled.append(current_bar)
+                out = resampled
+                
             return out
         except Exception as e:
             logger.warning(f"Upstox historical candles failed for {instrument_key}: {e}")

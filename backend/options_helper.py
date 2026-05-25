@@ -23,22 +23,44 @@ from typing import Optional, Dict, Any, List, Tuple
 logger = logging.getLogger("quantg.options")
 
 # Hardcoded fallbacks. Kite's instruments dump is the source of truth at runtime.
-LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
-STRIKE_INTERVALS = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100}
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "CRUDEOIL": 100, "CRUDEOILM": 10, "NATURALGAS": 1250}
+STRIKE_INTERVALS = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100, "CRUDEOIL": 100, "CRUDEOILM": 100, "NATURALGAS": 5}
 # Exchange where the OPTION trades (not the underlying)
-OPT_EXCHANGE = {"NIFTY": "NFO", "BANKNIFTY": "NFO", "SENSEX": "BFO"}
+OPT_EXCHANGE = {"NIFTY": "NFO", "BANKNIFTY": "NFO", "SENSEX": "BFO", "CRUDEOIL": "MCX", "CRUDEOILM": "MCX", "NATURALGAS": "MCX"}
 # Kite tradingsymbol for the SPOT index (used to fetch LTP)
 INDEX_SPOT_SYMBOL = {
     "NIFTY": ("NSE", "NIFTY 50"),
     "BANKNIFTY": ("NSE", "NIFTY BANK"),
     "SENSEX": ("BSE", "SENSEX"),
 }
-# Indices we support
+# Indices/commodities we support
 SUPPORTED = list(LOT_SIZES.keys())
 
 # Cache: {exchange: {"instruments": [...], "cached_at": datetime}}
 _OPT_CACHE: Dict[str, Dict[str, Any]] = {}
 _CACHE_TTL_SEC = 6 * 3600  # 6 hours
+
+
+def get_mcx_active_future_symbol(underlying: str) -> str:
+    """Derive the active near-month MCX future symbol. e.g. CRUDEOIL26MAYFUT"""
+    ist_offset = timedelta(hours=5, minutes=30)
+    dt = datetime.now(timezone.utc) + ist_offset
+    day = dt.day
+    month_offset = 0
+    # Past the 18th of the month, shift to next month contract for MCX commodities
+    if day > 18:
+        month_offset = 1
+    
+    target_date = dt
+    if month_offset > 0:
+        # Move to next month safely
+        target_date = dt + timedelta(days=15)
+        if target_date.month == dt.month:
+            target_date = dt + timedelta(days=32)
+            
+    yy = target_date.strftime("%y")
+    mmm = target_date.strftime("%b").upper()
+    return f"{underlying.upper()}{yy}{mmm}FUT"
 
 
 def _load_instruments(kite, exchange: str) -> List[Dict[str, Any]]:
@@ -52,17 +74,22 @@ def _load_instruments(kite, exchange: str) -> List[Dict[str, Any]]:
         logger.info(f"options cache refreshed: {exchange} ({len(instruments)} instruments)")
         return instruments
     except Exception as e:
-        logger.warning(f"instruments load failed for {exchange}: {e}")
+        logger.warning(f"instruments load failed for segment {exchange}: {e}")
         return cached["instruments"] if cached else []
 
 
 def get_spot_ltp(kite, underlying: str) -> Optional[float]:
-    """Get the current LTP of the index spot (NIFTY 50 / NIFTY BANK / SENSEX)."""
-    if underlying not in INDEX_SPOT_SYMBOL:
-        return None
-    exch, sym = INDEX_SPOT_SYMBOL[underlying]
-    try:
+    """Get the current LTP of the index spot or commodity future."""
+    underlying = underlying.upper()
+    if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+        active_sym = get_mcx_active_future_symbol(underlying)
+        key = f"MCX:{active_sym}"
+    elif underlying in INDEX_SPOT_SYMBOL:
+        exch, sym = INDEX_SPOT_SYMBOL[underlying]
         key = f"{exch}:{sym}"
+    else:
+        return None
+    try:
         ltp_resp = kite.ltp([key])
         if ltp_resp and key in ltp_resp:
             return float(ltp_resp[key]["last_price"])

@@ -74,10 +74,19 @@ export default function Layout({ children }) {
   }, []);
 
   const isMarketOpen = (() => {
-    const h = now.getUTCHours() + 5;
-    const m = now.getUTCMinutes() + 30;
-    const minutes = (h % 24) * 60 + m;
-    return minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
+    const day = now.getUTCDay();
+    // Calculate IST hours and minutes
+    const totalMinutesIST = now.getUTCHours() * 60 + now.getUTCMinutes() + 330;
+    const istHours = Math.floor(totalMinutesIST / 60) % 24;
+    const istMinutes = totalMinutesIST % 60;
+    const minutes = istHours * 60 + istMinutes;
+    
+    const isWeekday = day >= 1 && day <= 5;
+    if (!isWeekday) return false;
+    
+    const nseOpen = minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
+    const mcxOpen = minutes >= 9 * 60 && minutes <= 23 * 60 + 30;
+    return nseOpen || mcxOpen;
   })();
 
   return (

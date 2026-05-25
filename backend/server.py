@@ -634,6 +634,10 @@ async def _fetch_strategy_history(
         if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
             token = await _index_spot_token(kite, sym_upper)
             source_kind = "index-spot"
+        elif sym_upper in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+            active_sym = _mcx_active_future_symbol(sym_upper)
+            token = kite_helper.instrument_token(kite, active_sym, segment="MCX")
+            source_kind = "commodity-future"
         else:
             token = kite_helper.instrument_token(kite, sym_upper)
 
@@ -1868,6 +1872,209 @@ RSI_REVERSAL_CODE = """def run(data):
     return signals
 """
 
+CRUDEOILM_EMA_MOMENTUM_CODE = """def run(data):
+    if len(data) < 25:
+        return []
+    closes = [float(d['close']) for d in data]
+    
+    # 5-period EMA and 13-period EMA for quick crossover signals
+    fast_period, slow_period = 5, 13
+    
+    def calc_ema(values, period):
+        ema = []
+        k = 2 / (period + 1)
+        for i, val in enumerate(values):
+            if i == 0:
+                ema.append(val)
+            else:
+                ema.append(val * k + ema[-1] * (1 - k))
+        return ema
+
+    ema_fast = calc_ema(closes, fast_period)
+    ema_slow = calc_ema(closes, slow_period)
+    
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(21, len(data)):
+        close = closes[i]
+        
+        # Crossover triggers
+        bullish_cross = ema_fast[i] > ema_slow[i] and ema_fast[i-1] <= ema_slow[i-1]
+        bearish_cross = ema_fast[i] < ema_slow[i] and ema_fast[i-1] >= ema_slow[i-1]
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            # Exit long on bearish crossover, or +1.2% TP, or -0.5% SL
+            if bearish_cross or pnl <= -0.5 or pnl >= 1.2:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'EMA Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            # Exit short on bullish crossover, or +1.2% TP, or -0.5% SL
+            if bullish_cross or pnl <= -0.5 or pnl >= 1.2:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'EMA Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_cross:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'EMA Crossover Buy'})
+                position = "LONG"
+                entry_price = close
+            elif bearish_cross:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'EMA Crossover Sell'})
+                position = "SHORT"
+                entry_price = close
+                
+    return signals
+"""
+
+CRUDEOILM_RSI_REVERSION_CODE = """def run(data):
+    if len(data) < 30:
+        return []
+    closes = [float(d['close']) for d in data]
+    
+    # RSI period 14, EMA 21 trend filter
+    period = 14
+    
+    def calc_ema(values, prd):
+        ema = []
+        k = 2 / (prd + 1)
+        for i, val in enumerate(values):
+            if i == 0:
+                ema.append(val)
+            else:
+                ema.append(val * k + ema[-1] * (1 - k))
+        return ema
+        
+    ema21 = calc_ema(closes, 21)
+    
+    # Calculate RSI
+    rsi = [50.0] * len(closes)
+    gains = [0.0] * len(closes)
+    losses = [0.0] * len(closes)
+    
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        gains[i] = max(diff, 0)
+        losses[i] = max(-diff, 0)
+        
+    avg_gain = sum(gains[1:period+1]) / period
+    avg_loss = sum(losses[1:period+1]) / period
+    
+    if avg_loss == 0:
+        rsi[period] = 100.0
+    else:
+        rsi[period] = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+        
+    for i in range(period + 1, len(closes)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        if avg_loss == 0:
+            rsi[i] = 100.0
+        else:
+            rsi[i] = 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+            
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(period + 5, len(closes)):
+        close = closes[i]
+        
+        # Bullish entry: RSI oversold < 35 and price reclaims above EMA21
+        bullish_entry = rsi[i] < 35 and close > ema21[i]
+        # Bearish entry: RSI overbought > 65 and price breaks below EMA21
+        bearish_entry = rsi[i] > 65 and close < ema21[i]
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            if rsi[i] > 65 or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'RSI Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            if rsi[i] < 35 or pnl <= -0.4 or pnl >= 1.0:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'RSI Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'RSI Reversion CE Buy'})
+                position = "LONG"
+                entry_price = close
+            elif bearish_entry:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'RSI Reversion PE Buy'})
+                position = "SHORT"
+                entry_price = close
+                
+    return signals
+"""
+
+CRUDEOILM_VOLATILITY_SCALPER_CODE = """def run(data):
+    if len(data) < 30:
+        return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    
+    # 20-period BB with 2.0 std dev, 14-period ATR
+    period = 20
+    
+    def calc_sma(values, prd):
+        return [sum(values[j-prd+1:j+1])/prd if j >= prd-1 else values[j] for j in range(len(values))]
+        
+    sma20 = calc_sma(closes, 20)
+    
+    # Calculate Bollinger Bands
+    upper_band = []
+    lower_band = []
+    for i in range(len(closes)):
+        if i < period - 1:
+            upper_band.append(closes[i])
+            lower_band.append(closes[i])
+            continue
+        mean = sma20[i]
+        variance = sum((closes[j] - mean) ** 2 for j in range(i-period+1, i+1)) / period
+        std_dev = variance ** 0.5
+        upper_band.append(mean + 2.0 * std_dev)
+        lower_band.append(mean - 2.0 * std_dev)
+        
+    position = "NONE"
+    entry_price = 0.0
+    signals = []
+    
+    for i in range(period + 2, len(closes)):
+        close = closes[i]
+        
+        # Squeeze breakout: price closes outside Bollinger Bands
+        bullish_breakout = close > upper_band[i-1] and closes[i-1] <= upper_band[i-2]
+        bearish_breakout = close < lower_band[i-1] and closes[i-1] >= lower_band[i-2]
+        
+        if position == "LONG":
+            pnl = (close - entry_price) / entry_price * 100
+            # Exit if price drops below SMA20 (mean reversion) or hit targets
+            if close < sma20[i] or pnl <= -0.5 or pnl >= 1.5:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BB Long Exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry_price - close) / entry_price * 100
+            if close > sma20[i] or pnl <= -0.5 or pnl >= 1.5:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BB Short Exit'})
+                position = "NONE"
+        else:
+            if bullish_breakout:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Volatility CE Breakout'})
+                position = "LONG"
+                entry_price = close
+            elif bearish_breakout:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Volatility PE Breakout'})
+                position = "SHORT"
+                entry_price = close
+                
+    return signals
+"""
+
+
 DEFAULT_OPTION_STRATEGIES = [
     {
         "name": "NIFTY VWAP Trend Breakout",
@@ -2756,6 +2963,30 @@ STANDARD_STRATEGY_CATALOG = [
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "MCX",
         "python_code": NATURALGAS_HFT_MICRO_SCALPER_CODE,
         "market_suitability": "Range Breakout & Compression Squeezes",
+    },
+    {
+        "name": "Crude Oil Mini EMA Momentum",
+        "description": "Low-capital Crude Oil Mini option buying strategy driven by EMA momentum crossovers.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOILM_EMA_MOMENTUM_CODE,
+        "market_suitability": "Strong Intraday Trends & Volatility Crossovers",
+    },
+    {
+        "name": "Crude Oil Mini RSI Reversion",
+        "description": "Low-capital Crude Oil Mini option buying using quick RSI oversold recovery with EMA trend confirmation.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOILM_RSI_REVERSION_CODE,
+        "market_suitability": "Oversold Pullbacks & Reversals",
+    },
+    {
+        "name": "Crude Oil Mini Volatility Scalper",
+        "description": "Low-capital Crude Oil Mini option buying capturing breakouts from Bollinger Band compression squeezes.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOILM_VOLATILITY_SCALPER_CODE,
+        "market_suitability": "Volatility Squeezes & Range Breakouts",
     },
 ]
 
@@ -5926,7 +6157,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "per_strategy_capital": settings.get("per_strategy_capital"),
         "max_position_size": settings.get("max_position_size"),
         "gross_order_value": gross_order_value,
-        "market_open": _is_nse_market_open(),
+        "market_open": _is_nse_market_open() or _is_order_market_open("MCX"),
     }
 
 
@@ -6118,6 +6349,10 @@ async def _resolve_option_for_strategy(
             "BANKNIFTY": "NSE_INDEX|Nifty Bank",
             "SENSEX": "BSE_INDEX|SENSEX"
         }
+        if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+            active_sym = _mcx_active_future_symbol(underlying)
+            upstox_keys[underlying] = f"MCX_FO|{active_sym}"
+            
         spot = None
         if underlying in upstox_keys:
             try:
@@ -6133,7 +6368,7 @@ async def _resolve_option_for_strategy(
             if not is_paper:
                 logger.warning(f"Live Upstox spot price unavailable for {underlying}; options resolution blocked.")
                 return None
-            spot = 24850.40 if underlying == "NIFTY" else (81460.20 if underlying == "SENSEX" else 48000.0)
+            spot = 24850.40 if underlying == "NIFTY" else (81460.20 if underlying == "SENSEX" else (6500.00 if underlying in ("CRUDEOIL", "CRUDEOILM") else 245.00))
             
         interval = options_helper.STRIKE_INTERVALS.get(underlying, 100)
         atm = options_helper.round_to_strike(spot, interval)
@@ -6153,16 +6388,17 @@ async def _resolve_option_for_strategy(
         instrument_token = None
         tradingsymbol = None
         try:
-            spot_key = upstox_keys.get(underlying, "NSE_INDEX|Nifty 50")
-            chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, expiry_dt.date().isoformat())
-            if chain and chain.get("status") == "success":
-                data = chain.get("data", []) or []
-                for node in data:
-                    opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
-                    if opt_node and int(opt_node.get("strike_price") or 0) == strike:
-                        instrument_token = opt_node.get("instrument_key")
-                        tradingsymbol = opt_node.get("trading_symbol")
-                        break
+            spot_key = upstox_keys.get(underlying)
+            if spot_key:
+                chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, expiry_dt.date().isoformat())
+                if chain and chain.get("status") == "success":
+                    data = chain.get("data", []) or []
+                    for node in data:
+                        opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
+                        if opt_node and int(opt_node.get("strike_price") or 0) == strike:
+                            instrument_token = opt_node.get("instrument_key")
+                            tradingsymbol = opt_node.get("trading_symbol")
+                            break
         except Exception as e:
             logger.warning(f"Upstox option chain lookup failed: {e}")
             
@@ -6170,13 +6406,28 @@ async def _resolve_option_for_strategy(
             if not is_paper:
                 logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
                 return None
-            expiry_str = expiry_dt.strftime("%y%m%d")
-            tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
-            instrument_token = f"NSE_FO|{tradingsymbol}"
+            if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+                # MCX monthly option symbol format: CRUDEOILM26JUN6500CE
+                ist_now = datetime.now(timezone.utc) + IST_OFFSET
+                month_offset = 1 if ist_now.day > 18 else 0
+                target_date = ist_now
+                if month_offset > 0:
+                    target_date = ist_now + timedelta(days=15)
+                    if target_date.month == ist_now.month:
+                        target_date = ist_now + timedelta(days=32)
+                yy = target_date.strftime("%y")
+                mmm = target_date.strftime("%b").upper()
+                tradingsymbol = f"{underlying.upper()}{yy}{mmm}{strike}{opt_type}"
+                instrument_token = f"MCX_FO|{tradingsymbol}"
+                expiry_dt = target_date
+            else:
+                expiry_str = expiry_dt.strftime("%y%m%d")
+                tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
+                instrument_token = f"NSE_FO|{tradingsymbol}"
             
         return {
             "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
-            "exchange": "NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO",
+            "exchange": "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
             "instrument_token": instrument_token,
             "upstox_instrument_token": instrument_token,
             "lot_size": options_helper.LOT_SIZES.get(underlying, 50),
@@ -6245,7 +6496,7 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "ledger": "sqlite",
         "market_status": {
-            "is_open": _is_nse_market_open(),
+            "is_open": _is_nse_market_open() or _is_order_market_open("MCX"),
             "nifty": latest_ticks.get("NIFTY"),
             "sensex": latest_ticks.get("SENSEX"),
             "last_tick_time": max([t["tick_time"] for t in latest_ticks.values()], default=None),
