@@ -79,7 +79,7 @@ if len(JWT_SECRET.encode()) < 32:
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
-APP_VERSION = "11.0"
+APP_VERSION = "12.0"
 
 app = FastAPI(title="QuantG Algo Trading API", version=APP_VERSION)
 api = APIRouter(prefix="/api")
@@ -601,7 +601,7 @@ async def _fetch_strategy_history(
 ) -> Dict[str, Any]:
     """Fetch strategy candles with explicit source metadata.
 
-    Zerodha Kite is the preferred source. Mock candles are only a paper/demo
+    Upstox is the primary live source. Mock candles are only a paper/demo
     fallback and are tagged as such so the UI can warn users.
     """
     sym_upper = symbol.upper()
@@ -626,19 +626,27 @@ async def _fetch_strategy_history(
             logger.warning(f"Realtime tick service start failed: {e}")
 
     settings = await get_user_settings(user_id)
-    data_broker = settings.get("data_broker", "zerodha")
+    data_broker = settings.get("data_broker", "upstox")
 
     if data_broker == "upstox":
         upstox_gw = await get_user_upstox_gateway(user_id)
         if upstox_gw and upstox_gw.connected:
-            exchange = "MCX" if sym_upper in {"CRUDEOIL", "NATURALGAS"} or "MCX" in sym_upper or sym_upper.endswith("FUT") else "NSE"
+            if sym_upper in {"NIFTY", "BANKNIFTY"}:
+                exchange = "NSE"
+            elif sym_upper == "SENSEX":
+                exchange = "BSE"
+            elif sym_upper in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} or "MCX" in sym_upper or sym_upper.endswith("FUT"):
+                exchange = "MCX"
+            else:
+                exchange = "NSE"
             token = _upstox_instrument_token(exchange, sym_upper)
             if token:
                 # Ensure we start tracking in background
                 upstox_gw.start_market_data_ws([token])
                 # Fetch candles
                 live_data = await asyncio.to_thread(upstox_gw.get_historical_candles, token, interval, days)
-                if live_data and len(live_data) > min_intraday_bars:
+                min_required = 2 if interval != "day" else min_intraday_bars
+                if live_data and len(live_data) >= min_required:
                     return {
                         "data": live_data,
                         "source": f"upstox-{interval}:{sym_upper}",
@@ -2855,7 +2863,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
     required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else 65000.0 if underlying == "CRUDEOIL" else 55000.0 if underlying == "NATURALGAS" else 35000.0))
     is_commodity = instrument_group == "MCX" or underlying in {"CRUDEOIL", "NATURALGAS"}
     options_block = {
-        "enabled": not is_commodity,
+        "enabled": True,
         "underlying": underlying,
         "strike_mode": template["strike_mode"],
         "otm_points": template["otm_points"],
@@ -2874,8 +2882,8 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "strategy_type": strategy_type,
         "required_capital": required_capital,
         "instrument_group": instrument_group,
-        "broker": "upstox" if ("Upstox" in template["name"] or "HFT" in template["name"]) else "zerodha",
-        "mode": "paper",
+        "broker": "upstox",
+        "mode": "live",
         "market_suitability": template.get("market_suitability", "Any Market Condition"),
         "visual_config": {
             "symbol": underlying,
@@ -3006,6 +3014,28 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     except Exception as e:
         logger.warning(f"Failed to seed default strategies for user {user_id}: {e}")
         return 0
+
+
+async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "paper_mode": 1})
+    live_mode = not bool((user or {}).get("paper_mode", True))
+    strategy_mode = "live" if live_mode else "paper"
+    user_res = await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"data_broker": "upstox", "execution_broker": "upstox", "fallback_broker": "none"}},
+    )
+    strat_res = await db.strategies.update_many(
+        {"user_id": user_id},
+        {"$set": {
+            "broker": "upstox",
+            "mode": strategy_mode,
+            "visual_config.options.enabled": True,
+        }},
+    )
+    return {
+        "users": int(user_res.modified_count or 0),
+        "strategies": int(strat_res.modified_count or 0),
+    }
 
 
 async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
@@ -3943,10 +3973,33 @@ async def list_strategies(user=Depends(get_current_user)):
 @api.post("/strategies/seed-defaults")
 async def seed_default_strategies(user=Depends(get_current_user)):
     inserted = await seed_default_strategies_for_user(user["id"])
+    migrated = await migrate_user_to_v12_upstox(user["id"])
     return {
         "ok": True,
         "inserted": inserted,
+        "migrated": migrated,
         "message": "Standardized index and MCX option presets installed. Review and backtest before enabling LIVE.",
+    }
+
+
+@api.post("/ops/v12/upstox-retailer/activate")
+async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
+    inserted = await seed_default_strategies_for_user(user["id"])
+    migrated = await migrate_user_to_v12_upstox(user["id"])
+    await db.strategies.update_many(
+        {"user_id": user["id"], "status": {"$nin": ["live", "paused"]}},
+        {"$set": {"status": "live", "broker": "upstox", "mode": "live"}},
+    )
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    for row in strategies:
+        _sync_option_ledger_strategy(row)
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "inserted": inserted,
+        "migrated": migrated,
+        "live_strategies": sum(1 for s in strategies if s.get("status") == "live"),
+        "message": "QuantG v12 Upstox retailer profile is active for NSE/NFO/BSE/BFO/MCX.",
     }
 
 
@@ -4097,9 +4150,14 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
     new_status = "paused" if row["status"] == "live" else "live"
-    await db.strategies.update_one({"id": sid}, {"$set": {"status": new_status}})
+    update_fields = {
+        "status": new_status,
+        "broker": "upstox",
+        "mode": "live" if not bool((await get_user_settings(user["id"])).get("paper_mode", True)) else row.get("mode", "paper"),
+    }
+    await db.strategies.update_one({"id": sid}, {"$set": update_fields})
     if new_status == "live":
-        _sync_option_ledger_strategy(row)
+        _sync_option_ledger_strategy({**row, **update_fields})
         option_ledger.set_kill_switch(False, strategy_id=sid)
     return {"status": new_status}
 
@@ -4131,10 +4189,10 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
     risk["max_lot"] = 1
     visual_config["risk"] = risk
     
-    update_fields = {"visual_config": visual_config}
+    update_fields = {"visual_config": visual_config, "broker": "upstox"}
     if req.broker is not None:
-        update_fields["broker"] = req.broker.strip().lower()
-        row["broker"] = req.broker.strip().lower()
+        update_fields["broker"] = "upstox"
+        row["broker"] = "upstox"
     if req.mode is not None:
         update_fields["mode"] = req.mode.strip().lower()
         row["mode"] = req.mode.strip().lower()
@@ -6814,7 +6872,7 @@ async def _resolve_option_for_strategy(
     settings = await get_user_settings(user_id)
     strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
     is_paper = strategy_mode == "paper"
-    execution_broker = strategy_row.get("broker") or settings.get("execution_broker", "zerodha")
+    execution_broker = strategy_row.get("broker") or settings.get("execution_broker", "upstox")
     if settings.get("execution_broker") == "upstox" and execution_broker == "zerodha":
         execution_broker = "upstox" 
 
@@ -6939,6 +6997,44 @@ async def _resolve_option_for_strategy(
                             break
         except Exception as e:
             logger.warning(f"Upstox option chain lookup failed: {e}")
+
+        if not instrument_token:
+            try:
+                exch = "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("BSE" if underlying == "SENSEX" else "NSE")
+                segment = "COMM" if exch == "MCX" else "FO"
+                query = underlying.replace("CRUDEOILM", "CRUDEOIL")
+                search = await asyncio.to_thread(
+                    upstox_gw.search_instruments,
+                    query,
+                    exchanges=exch,
+                    segments=segment,
+                    instrument_types=opt_type,
+                    expiry="current_week" if exch != "MCX" else "current_month",
+                    atm_offset=0,
+                    records=30,
+                )
+                candidates = search.get("data") if isinstance(search, dict) else []
+                best = None
+                best_distance = None
+                for node in candidates or []:
+                    if str(node.get("instrument_type") or "").upper() != opt_type:
+                        continue
+                    node_strike = float(node.get("strike_price") or 0)
+                    distance = abs(node_strike - float(strike))
+                    if best is None or distance < best_distance:
+                        best = node
+                        best_distance = distance
+                if best:
+                    instrument_token = best.get("instrument_key")
+                    tradingsymbol = best.get("trading_symbol")
+                    if best.get("expiry"):
+                        expiry_dt = datetime.fromisoformat(str(best["expiry"]))
+                    if best.get("lot_size"):
+                        lot_size = int(float(best.get("lot_size")))
+                    else:
+                        lot_size = options_helper.LOT_SIZES.get(underlying, 50)
+            except Exception as e:
+                logger.warning(f"Upstox instrument search failed: {e}")
             
         if not instrument_token:
             if not is_paper:
@@ -6968,7 +7064,7 @@ async def _resolve_option_for_strategy(
             "exchange": "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
             "instrument_token": instrument_token,
             "upstox_instrument_token": instrument_token,
-            "lot_size": options_helper.LOT_SIZES.get(underlying, 50),
+            "lot_size": locals().get("lot_size") or options_helper.LOT_SIZES.get(underlying, 50),
             "strike": strike,
             "expiry": expiry_dt.date().isoformat(),
             "underlying": underlying,
@@ -6997,12 +7093,15 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             ledger_row = option_ledger.snapshot().get(row["id"], {})
         active_position = ledger_row.get("active_position")
         visual_risk = ((row.get("visual_config") or {}).get("risk") or {})
+        runtime_state = ledger_row.get("state", "IDLE")
+        if runtime_state in {"IDLE", "READY"} and row.get("status") == "live":
+            runtime_state = "SCANNING"
         strategies_page_data.append({
             "strategy_id": row["id"],
             "name": row.get("name"),
             "status": row.get("status"),
             "asset_class": row.get("asset_class", "equity"),
-            "state": ledger_row.get("state", "IDLE"),
+            "state": runtime_state,
             "cooldown_until": ledger_row.get("cooldown_until"),
             "required_capital": ledger_row.get("required_capital", 0),
             "max_lots": 1,
@@ -8835,6 +8934,7 @@ async def startup():
     try:
         async for user_row in db.users.find({}, {"id": 1}):
             await seed_default_strategies_for_user(user_row["id"])
+            await migrate_user_to_v12_upstox(user_row["id"])
     except Exception as e:
         logger.warning(f"default strategy seeding skipped: {e}")
 

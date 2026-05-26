@@ -222,7 +222,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 4000);
+    const t = setInterval(load, 10000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -251,6 +251,7 @@ export default function Dashboard() {
     }, {});
     return [
       { label: "Open", value: counts.OPEN || 0, tone: "good" },
+      { label: "Scanning", value: counts.SCANNING || 0, tone: "good" },
       { label: "Cooldown", value: counts.COOLDOWN || 0, tone: "warn" },
       { label: "Disabled", value: counts.DISABLED || 0, tone: "bad" },
       { label: "Idle", value: counts.IDLE || counts.READY || 0, tone: "neutral" },
@@ -429,7 +430,7 @@ export default function Dashboard() {
                 </Link>
               </div>
               <div className="qd-card p-4">
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                   {strategySummary.map((item) => (
                     <div key={item.label} className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3">
                       <div className="qd-section-title">{item.label}</div>

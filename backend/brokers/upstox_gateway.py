@@ -205,13 +205,15 @@ class UpstoxGateway:
         elif interval == "30minute":
             upstox_interval = "30minute"
             
+        from urllib.parse import quote
+        encoded_key = quote(instrument_key)
         now = datetime.now()
         to_date_str = now.strftime("%Y-%m-%d")
         from_date_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-        
-        from urllib.parse import quote
-        encoded_key = quote(instrument_key)
-        path = f"/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date_str}/{from_date_str}"
+        if interval != "day":
+            path = f"/v2/historical-candle/intraday/{encoded_key}/{upstox_interval}"
+        else:
+            path = f"/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date_str}/{from_date_str}"
         try:
             res = self._request("GET", path)
             if not isinstance(res, dict) or res.get("status") != "success":
@@ -279,6 +281,31 @@ class UpstoxGateway:
             logger.warning(f"Upstox historical candles failed for {instrument_key}: {e}")
             return None
 
+    def search_instruments(
+        self,
+        query: str,
+        *,
+        exchanges: str = "ALL",
+        segments: str = "ALL",
+        instrument_types: Optional[str] = None,
+        expiry: Optional[str] = None,
+        atm_offset: Optional[int] = None,
+        records: int = 20,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "query": str(query or "").strip()[:50],
+            "exchanges": exchanges,
+            "segments": segments,
+            "page_number": 1,
+            "records": max(1, min(int(records or 20), 30)),
+        }
+        if instrument_types:
+            params["instrument_types"] = instrument_types
+        if expiry:
+            params["expiry"] = expiry
+        if atm_offset is not None:
+            params["atm_offset"] = int(atm_offset)
+        return self._request("GET", "/v2/instruments/search", params=params)
 
     def get_market_quote(self, instrument_keys: Iterable[str]) -> Dict[str, Any]:
         keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
@@ -529,4 +556,3 @@ def position_items(payload: Any) -> List[Dict[str, Any]]:
     for value in payload.values():
         out.extend(position_items(value))
     return out
-

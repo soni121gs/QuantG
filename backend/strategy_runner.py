@@ -29,7 +29,7 @@ from market_protection import MarketTrendAnalyzer, FakeSignalFilter
 
 logger = logging.getLogger("quantg.runner")
 
-TICK_SECONDS = 30
+TICK_SECONDS = int(os.environ.get("STRATEGY_RUNNER_TICK_SECONDS", "15"))
 LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -224,7 +224,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     error = None
                     if isinstance(history, dict) and not history.get("paper_mode", True):
                         source = history.get("source", "none")
-                        error = f"No real Kite price history available yet (source={source}). Reconnect Zerodha and restart the ticker."
+                        error = f"No real Upstox price history available yet (source={source}). Reconnect Upstox and restart the feed."
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
@@ -240,7 +240,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 if not is_paper_mode and not bool(history.get("is_live") if isinstance(history, dict) else False):
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
-                                                             "last_error": "Mock price history; live strategy execution blocked until real Kite data is available.",
+                                                             "last_error": "Mock price history; live strategy execution blocked until real Upstox data is available.",
                                                              "last_signals_count": len(signals)},
                                                     "$inc": inc_set})
                     continue
