@@ -3725,6 +3725,8 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     token = str(instrument_token or "").strip()
     if "|" in token:
         return token
+    if token:
+        return None
     symbol = str(trading_symbol or "").upper().strip()
     if "|" in symbol:
         return symbol
@@ -8892,14 +8894,24 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
 async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[str]) -> Optional[float]:
     if not instrument_key:
         return None
+    key = str(instrument_key).strip()
+    if "|" not in key:
+        _log_throttled(
+            f"invalid-upstox-key:{key}",
+            120.0,
+            logging.WARNING,
+            "Rejecting invalid Upstox LTP key before API call instrument_key=%s",
+            key,
+        )
+        return None
     gateway = await get_user_upstox_gateway(user_id)
     if not gateway or not gateway.connected:
         return None
     try:
-        quote = await asyncio.to_thread(gateway.get_market_quote, [instrument_key])
-        return UpstoxGateway.parse_quote_ltp(quote, instrument_key)
+        quote = await asyncio.to_thread(gateway.get_market_quote, [key])
+        return UpstoxGateway.parse_quote_ltp(quote, key)
     except Exception as exc:
-        logger.warning("Upstox LTP failed instrument_key=%s: %s", instrument_key, exc)
+        logger.warning("Upstox LTP failed instrument_key=%s: %s", key, exc)
         return None
 
 

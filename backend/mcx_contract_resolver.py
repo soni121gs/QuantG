@@ -27,6 +27,7 @@ UPSTOX_MCX_MASTER_URL = os.environ.get(
 )
 UPSTOX_MCX_CACHE_TTL_SEC = int(os.environ.get("UPSTOX_MCX_CACHE_TTL_SEC", str(24 * 3600)))
 UPSTOX_MCX_REFRESH_MIN_INTERVAL_SEC = int(os.environ.get("UPSTOX_MCX_REFRESH_MIN_INTERVAL_SEC", "900"))
+MCX_MASTER_CACHE_SCHEMA_VERSION = 2
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
@@ -96,6 +97,16 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _master_instrument_key(row: Dict[str, Any]) -> str:
+    key = str(row.get("instrument_key") or "").strip()
+    if "|" in key:
+        return key
+    token = str(row.get("instrument_token") or "").strip()
+    if "|" in token:
+        return token
+    return ""
+
+
 def _row_option_type(row: Dict[str, Any]) -> str:
     opt = str(row.get("option_type") or "").upper().strip()
     inst = str(row.get("instrument_type") or "").upper().strip()
@@ -157,7 +168,7 @@ def _normalize_contract(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     opt_type = _row_option_type(row)
     expiry = _parse_expiry(row.get("expiry") or row.get("expiry_date"))
     strike = _as_float(row.get("strike_price") or row.get("strike"))
-    instrument_token = row.get("instrument_key") or row.get("instrument_token")
+    instrument_token = _master_instrument_key(row)
     trading_symbol = row.get("trading_symbol") or row.get("tradingsymbol")
     if not all([underlying, opt_type, expiry, strike is not None, instrument_token, trading_symbol]):
         logger.debug(
@@ -190,7 +201,7 @@ def _normalize_future(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     underlying = _row_underlying(row)
     expiry = _parse_expiry(row.get("expiry") or row.get("expiry_date"))
-    instrument_token = row.get("instrument_key") or row.get("instrument_token")
+    instrument_token = _master_instrument_key(row)
     trading_symbol = row.get("trading_symbol") or row.get("tradingsymbol")
     if not all([underlying, expiry, instrument_token, trading_symbol]):
         logger.debug(
@@ -236,6 +247,8 @@ class MCXContractResolver:
 
     def _is_stale(self, meta: Optional[Dict[str, Any]]) -> bool:
         if not meta or not meta.get("refreshed_at"):
+            return True
+        if int(meta.get("schema_version") or 0) != MCX_MASTER_CACHE_SCHEMA_VERSION:
             return True
         try:
             refreshed = datetime.fromisoformat(str(meta["refreshed_at"]).replace("Z", "+00:00"))
@@ -320,6 +333,7 @@ class MCXContractResolver:
                 "source_url": self.master_url,
                 "contract_count": len(contracts),
                 "future_count": len(futures),
+                "schema_version": MCX_MASTER_CACHE_SCHEMA_VERSION,
                 "by_underlying": by_underlying,
                 "futures_by_underlying": futures_by_underlying,
                 "reason": reason,
