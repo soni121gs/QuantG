@@ -6895,7 +6895,8 @@ async def _resolve_option_for_strategy(
                     data = chain.get("data", []) or []
                     for node in data:
                         opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
-                        if opt_node and int(opt_node.get("strike_price") or 0) == strike:
+                        node_strike = float(node.get("strike_price") or opt_node.get("strike_price") or 0)
+                        if opt_node and int(node_strike) == int(strike):
                             instrument_token = opt_node.get("instrument_key")
                             tradingsymbol = opt_node.get("trading_symbol")
                             break
