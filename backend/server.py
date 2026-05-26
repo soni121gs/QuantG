@@ -5414,7 +5414,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             if strat.get("mode") in ("paper", "live"):
                 settings["paper_mode"] = strat.get("mode") == "paper"
             if strat.get("broker"):
-                settings["execution_broker"] = strat.get("broker")
+                strat_broker = strat.get("broker")
+                if settings.get("execution_broker") == "upstox" and strat_broker == "zerodha":
+                    settings["execution_broker"] = "upstox"
+                else:
+                    settings["execution_broker"] = strat_broker
 
     paper = bool(settings.get("paper_mode", True))
     execution_broker = settings.get("execution_broker", "zerodha")
@@ -6780,6 +6784,8 @@ async def _resolve_option_for_strategy(
     strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
     is_paper = strategy_mode == "paper"
     execution_broker = strategy_row.get("broker") or settings.get("execution_broker", "zerodha")
+    if settings.get("execution_broker") == "upstox" and execution_broker == "zerodha":
+        execution_broker = "upstox" 
 
     # For paper trading, generate simulated/mock options contract to remove Zerodha session requirement
     if is_paper:
