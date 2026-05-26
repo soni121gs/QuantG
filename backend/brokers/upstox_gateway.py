@@ -209,7 +209,9 @@ class UpstoxGateway:
         to_date_str = now.strftime("%Y-%m-%d")
         from_date_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
         
-        path = f"/v2/historical-candle/{instrument_key}/{upstox_interval}/{to_date_str}/{from_date_str}"
+        from urllib.parse import quote
+        encoded_key = quote(instrument_key)
+        path = f"/v2/historical-candle/{encoded_key}/{upstox_interval}/{to_date_str}/{from_date_str}"
         try:
             res = self._request("GET", path)
             if not isinstance(res, dict) or res.get("status") != "success":
