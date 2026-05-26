@@ -8,6 +8,20 @@ API = f"{BASE_URL}/api"
 DEMO = {"email": "demo@quantdesk.io", "password": "demo1234"}
 
 
+def _backend_available() -> bool:
+    try:
+        r = requests.get(f"{API}/", timeout=3)
+        return r.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _backend_available(),
+    reason="Backend not running. Start backend before paper trade test.",
+)
+
+
 @pytest.fixture(scope="module")
 def token():
     r = requests.post(f"{API}/auth/login", json=DEMO, timeout=15)

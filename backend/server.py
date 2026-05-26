@@ -39,6 +39,7 @@ from brokers import upstox_gateway as upstox_gateway_utils
 import options_helper
 import backtrader_runner
 import strategy_runner
+from mcx_contract_resolver import MCXContractResolver, mcx_instrument_refresh_loop
 from option_state_ledger import OptionStateLedger
 from execution_bridge import payload_from_intent, submit_order as bridge_submit_order
 from execution_state import execution_state_manager
@@ -354,6 +355,7 @@ class UpstoxTestOrderReq(BaseModel):
 
 class UpstoxSubscribeReq(BaseModel):
     instruments: List[str]
+    mode: str = "ltpc"
 
 
 class ChatReq(BaseModel):
@@ -651,16 +653,34 @@ async def _fetch_strategy_history(
             if exchange == "MCX":
                 token_candidates.extend(await _search_upstox_mcx_future_keys(upstox_gw, sym_upper, limit=5))
             for token in dict.fromkeys(k for k in token_candidates if k):
-                # Ensure we start tracking in background
-                upstox_gw.start_market_data_ws([token])
-                # Fetch candles
+                # Ensure real Upstox V3 websocket tracking is active. Historical
+                # candles remain the bootstrap source; the latest bar is then
+                # refreshed from websocket cache when a live tick exists.
+                feed_started = upstox_gw.start_market_data_ws([token], mode="full")
                 live_data = await asyncio.to_thread(upstox_gw.get_historical_candles, token, interval, days)
+                tick = upstox_gw.latest_tick(token)
+                if tick and live_data:
+                    tick_bar = {
+                        "date": tick.get("received_at"),
+                        "open": float(tick.get("ltp") or 0),
+                        "high": float(tick.get("ltp") or 0),
+                        "low": float(tick.get("ltp") or 0),
+                        "close": float(tick.get("ltp") or 0),
+                        "volume": int(tick.get("last_trade_quantity") or 0),
+                    }
+                    live_data = _merge_tick_bars(live_data, [tick_bar])
+                elif not tick:
+                    logger.info(
+                        "Upstox V3 tick cache empty for %s; using historical REST bootstrap only feed_started=%s",
+                        token,
+                        feed_started,
+                    )
                 min_required = 2 if interval != "day" else min_intraday_bars
                 if live_data and len(live_data) >= min_required:
                     return {
                         "data": live_data,
-                        "source": f"upstox-{interval}:mcx-future:{sym_upper}" if exchange == "MCX" else f"upstox-{interval}:{sym_upper}",
-                        "is_live": True,
+                        "source": f"upstox-v3-websocket+historical:{interval}:mcx-future:{sym_upper}" if exchange == "MCX" else f"upstox-v3-websocket+historical:{interval}:{sym_upper}",
+                        "is_live": bool(tick),
                         "interval": interval,
                     }
 
@@ -734,6 +754,11 @@ async def _fetch_strategy_history(
 @api.get("/")
 async def health():
     return {"status": "ok", "service": "QuantG API", "version": APP_VERSION}
+
+
+@api.get("/health")
+async def health_check():
+    return await health()
 
 
 # ============== Routes: Auth (extracted to routes/auth.py) ==============
@@ -1188,7 +1213,7 @@ async def commodity_watchlist(user=Depends(get_current_user)):
                 if token:
                     keys.append(token)
             if keys:
-                upstox_gw.start_market_data_ws(keys)
+                upstox_gw.start_market_data_ws(keys, mode="ltpc")
                 
             for i, s in enumerate(COMMODITY_SYMBOLS):
                 token = _upstox_instrument_token("MCX", s["symbol"])
@@ -3423,7 +3448,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             "product": pos.get("product"),
             "source": f"{reason}:strategy:{sid}",
         }
-        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
+        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO", "MCX"}:
             lot_size = int(pos.get("lot_size") or 1)
             place_kwargs["symbol"] = sym
             place_kwargs["option_contract"] = {
@@ -3444,9 +3469,9 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             place_kwargs["exchange"] = pos.get("exchange") or "NSE"
         try:
             result = await _place_order_core(**place_kwargs)
-            results.append({"symbol": sym, "qty": qty_net, "side": "SELL", "status": "ok", "order_id": result.get("id")})
+            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "ok", "order_id": result.get("id")})
         except Exception as e:
-            results.append({"symbol": sym, "qty": qty_net, "side": "SELL", "status": "failed", "error": str(e)})
+            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "failed", "error": str(e)})
     if reason in ("risk-trigger", "feed-stale"):
         await db.strategies.update_one({"id": sid, "user_id": user_id}, {"$set": {
             "status": "paused",
@@ -3457,13 +3482,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
 
 async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allow_mock: bool = True, execution_broker: Optional[str] = None) -> Optional[float]:
     settings = await get_user_settings(user_id)
-    data_broker = execution_broker or settings.get("data_broker", "zerodha")
-    if data_broker == "kotak_neo":
-        gateway = _KOTAK_GATEWAYS.get(user_id)
-        if gateway:
-            tick = gateway.latest_tick_by_symbol(symbol.upper())
-            if tick and tick.get("ltp"):
-                return float(tick["ltp"])
+    data_broker = execution_broker or settings.get("data_broker", "upstox")
     if data_broker == "upstox":
         gateway = await get_user_upstox_gateway(user_id)
         token = _upstox_instrument_token(exchange, symbol)
@@ -3475,32 +3494,6 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
                     return ltp
             except Exception as exc:
                 logger.warning("Upstox LTP failed for %s: %s", symbol, exc)
-    kite, _ = await get_user_kite(user_id)
-    if kite:
-        try:
-            key = f"{exchange}:{symbol}"
-            ltp_resp = kite.ltp([key])
-            if ltp_resp and key in ltp_resp:
-                return float(ltp_resp[key]["last_price"])
-        except Exception:
-            pass
-    if data_broker != "kotak_neo" and settings.get("fallback_broker") == "kotak_neo":
-        gateway = _KOTAK_GATEWAYS.get(user_id)
-        if gateway:
-            tick = gateway.latest_tick_by_symbol(symbol.upper())
-            if tick and tick.get("ltp"):
-                return float(tick["ltp"])
-    if data_broker != "upstox" and settings.get("fallback_broker") == "upstox":
-        gateway = await get_user_upstox_gateway(user_id)
-        token = _upstox_instrument_token(exchange, symbol)
-        if gateway and gateway.connected and token:
-            try:
-                quote = await asyncio.to_thread(gateway.get_market_quote, [token])
-                ltp = UpstoxGateway.parse_quote_ltp(quote, token)
-                if ltp is not None:
-                    return ltp
-            except Exception:
-                pass
     if not allow_mock:
         return None
     sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
@@ -4971,7 +4964,7 @@ async def _build_order_intent(
     ``InstrumentRef``.  Returns a dict ``{"intent": OrderIntent, ...}``
     including optional ``lot_size`` / ``lots`` metadata for options.
     """
-    execution_broker = settings.get("execution_broker", "zerodha")
+    execution_broker = "upstox"
     exchange = (exchange or "NSE").upper()
     symbol_upper = symbol.upper().strip()
 
@@ -5074,7 +5067,7 @@ async def _resolve_order_fill_hint(
     paper: bool,
     option_contract: Optional[Dict[str, Any]],
     *,
-    execution_broker: str = "zerodha",
+    execution_broker: str = "upstox",
 ) -> float:
     """Return a best-effort fill price hint for position-size and risk checks.
 
@@ -5130,54 +5123,27 @@ async def _submit_order_intent(
     price: Optional[float],
     tag: str,
 ) -> Dict[str, Any]:
-    """Route a live order to the broker adapter identified by
-    ``intent.instrument.broker`` and return the broker response dict."""
+    """Submit live orders through Upstox only.
+
+    Legacy broker adapters remain in the repository for old routes/tests, but
+    the execution path used by strategies and manual orders is intentionally
+    Upstox-only.
+    """
     instr = intent.instrument
-    broker = (instr.broker or "zerodha").lower()
     side = _intent_side(intent.intent)
     qty = int(intent.quantity)
 
-    if broker in ("kotak_neo", "kotak"):
-        return await _place_kotak_order(
-            user_id,
-            trading_symbol=instr.tradingsymbol,
-            exchange=instr.exchange,
-            side=side,
-            quantity=qty,
-            order_type=order_type,
-            product=product,
-            price=price,
-            tag=tag,
-        )
-
-    if broker == "upstox":
-        upstox_token = instr.instrument_token
-        if not upstox_token or "|" not in upstox_token:
-            resolved = _upstox_instrument_token(instr.exchange, instr.tradingsymbol, instr.instrument_token)
-            if resolved:
-                upstox_token = resolved
-        if not upstox_token:
-            raise RuntimeError(f"Cannot resolve Upstox instrument token for {instr.exchange}:{instr.tradingsymbol}")
-        return await _place_upstox_order(
-            user_id,
-            instrument_token=upstox_token,
-            side=side,
-            quantity=qty,
-            order_type=order_type,
-            product=product,
-            price=price,
-            tag=tag,
-        )
-
-    # Default: Zerodha / Kite
-    kite, _ = await get_user_kite(user_id)
-    if not kite:
-        raise RuntimeError("Zerodha Kite is not connected. Please complete the login flow first.")
-    return await _place_kite_order_with_recovery(
-        kite,
-        tradingsymbol=instr.tradingsymbol,
-        exchange=instr.exchange,
-        transaction_type=side,
+    upstox_token = instr.instrument_token
+    if not upstox_token or "|" not in upstox_token:
+        resolved = _upstox_instrument_token(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+        if resolved:
+            upstox_token = resolved
+    if not upstox_token:
+        raise RuntimeError(f"instrument not found: Upstox instrument_key missing for {instr.exchange}:{instr.tradingsymbol}")
+    return await _place_upstox_order(
+        user_id,
+        instrument_token=upstox_token,
+        side=side,
         quantity=qty,
         order_type=order_type,
         product=product,
@@ -5612,15 +5578,15 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 settings["paper_mode"] = strat.get("mode") == "paper"
             if strat.get("broker"):
                 strat_broker = strat.get("broker")
-                if settings.get("execution_broker") == "upstox" and strat_broker == "zerodha":
-                    settings["execution_broker"] = "upstox"
-                else:
-                    settings["execution_broker"] = strat_broker
+                if strat_broker and strat_broker != "upstox":
+                    await db.strategies.update_one(
+                        {"id": strategy_id, "user_id": user_id},
+                        {"$set": {"broker": "upstox", "last_error": ""}},
+                    )
+                settings["execution_broker"] = "upstox"
 
     paper = bool(settings.get("paper_mode", True))
-    execution_broker = settings.get("execution_broker", "zerodha")
-    if not paper and execution_broker not in {"zerodha", "kotak_neo", "kotak", "upstox"}:
-        raise HTTPException(status_code=400, detail=f"Live execution through {execution_broker} is not enabled yet.")
+    execution_broker = "upstox"
 
     resolution = await _build_order_intent(
         user_id=user_id,
@@ -5655,6 +5621,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 status_code=400,
                 detail=f"Order value INR {intent.quantity * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
             )
+        if not paper:
+            funds_row = await funds({"id": user_id})
+            available_cash = float(funds_row.get("available_cash") or 0)
+            if fill_price_hint > 0 and available_cash > 0 and intent.quantity * fill_price_hint > available_cash:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"margin insufficient: order value INR {intent.quantity * fill_price_hint:.0f} exceeds available Upstox margin INR {available_cash:.0f}.",
+                )
 
     if idempotency_key:
         existing_idem = await db.orders.find_one(
@@ -5696,9 +5670,6 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             instrument_key=instrument_key,
         )
         intent.quantity = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or intent.quantity)
-        if not paper:
-            kite, _ = await get_user_kite(user_id) if execution_broker == "zerodha" else (None, None)
-            await _assert_broker_has_position_quantity(user_id, kite, instr.exchange, instr.tradingsymbol, int(intent.quantity))
 
     resolved_product = (product or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))).upper()
     execution_tag = _new_execution_tag(strategy_id)
@@ -5791,8 +5762,6 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             order_doc = await _mark_order_submitted(order_doc["id"], user_id, submit)
         except Exception as exc:
             await _cancel_strategy_reservation(position_reservation, str(exc))
-            if strategy_id:
-                option_ledger.release_failed_open(strategy_id)
             order_doc = await _mark_order_rejected(order_doc["id"], user_id, str(exc))
             raise HTTPException(
                 status_code=400,
@@ -5827,27 +5796,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     "expiry": order_doc.get("expiry"),
                 }},
             )
-        if paper and strategy_id:
-            ledger_side = "SHORT" if instr.asset_class == "OPTION_SHORT" or intent.intent == "OPEN_SHORT" else "LONG"
-            decision = option_ledger.try_open_position(
-                strategy_id=strategy_id,
-                symbol=instr.tradingsymbol,
-                option_type=order_doc.get("option_type") or ("EQ" if instr.segment == "EQUITY" else instr.segment),
-                entry_price=float(fill_price or 0),
-                quantity=max(1, int(intent.quantity)),
-                position_side=ledger_side,
-                broker_confirmed=True,
-            )
-            if not decision.accepted:
-                await _cancel_strategy_reservation(position_reservation, decision.reason)
-                order_doc = await _mark_order_rejected(order_doc["id"], user_id, f"Strategy entry blocked: {decision.reason}")
-                raise HTTPException(status_code=409, detail=f"Strategy entry blocked: {decision.reason}")
-
     if strategy_id and _intent_is_exit(intent.intent):
         await _mark_strategy_position_exiting(exit_position_record, exit_order_id=order_doc["id"], exit_broker_order_id=broker_order_id)
         if paper:
             await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
-            option_ledger.close_position(strategy_id=strategy_id, exit_price=float(fill_price or 0), exit_reason=source)
 
     if paper:
         order_doc = await _apply_paper_fill_to_position(order_doc, float(fill_price or 0))
@@ -5893,11 +5845,11 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
 
     closed, failed = [], []
     now = datetime.now(timezone.utc).isoformat()
-    kite, kite_status = await get_user_kite(user["id"])
     paper = settings.get("paper_mode", True)
-    execution_broker = settings.get("execution_broker", "zerodha")
-    if not paper and execution_broker == "zerodha" and not kite:
-        raise HTTPException(status_code=400, detail=kite_status.get("reason", "broker_not_connected"))
+    if not paper:
+        gateway = await get_user_upstox_gateway(user["id"])
+        if not gateway or not gateway.connected:
+            raise HTTPException(status_code=400, detail="auth failed: Upstox is not connected.")
 
     for p in positions:
         symbol = p.get("symbol")
@@ -5921,43 +5873,18 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
                 )
                 closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
             else:
-                if any(s["symbol"] == str(symbol).upper() for s in SYMBOLS):
-                    res = await _place_order_core(
-                        user_id=user["id"],
-                        symbol=str(symbol).upper(),
-                        side=side,
-                        qty=abs_qty,
-                        order_type="MARKET",
-                        product=p.get("product") or settings.get("default_product", "MIS"),
-                        source="squareoff",
-                    )
-                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
-                elif execution_broker == "kotak_neo":
-                    res = await _place_kotak_order(
-                        user["id"],
-                        trading_symbol=symbol,
-                        exchange=p.get("exchange") or "NSE",
-                        side=side,
-                        quantity=abs_qty,
-                        order_type="MARKET",
-                        product=p.get("product") or settings.get("default_product", "MIS"),
-                        tag=_new_execution_tag(),
-                    )
-                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
-                else:
-                    res = await _place_kite_order_with_recovery(
-                        kite,
-                        tradingsymbol=symbol,
-                        exchange=p.get("exchange") or "NSE",
-                        transaction_type=side,
-                        quantity=abs_qty,
-                        order_type="MARKET",
-                        product=p.get("product") or settings.get("default_product", "MIS"),
-                        tag=_new_execution_tag(),
-                    )
-                    if not res.get("ok"):
-                        raise RuntimeError(res.get("error") or "Square-off order failed")
-                    closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("order_id")})
+                res = await _place_order_core(
+                    user_id=user["id"],
+                    symbol=str(symbol).upper(),
+                    side=side,
+                    qty=abs_qty,
+                    order_type="MARKET",
+                    product=p.get("product") or settings.get("default_product", "MIS"),
+                    source="squareoff",
+                    exchange=p.get("exchange") or "NSE",
+                    idempotency_key=f"squareoff-live:{symbol}:{now}",
+                )
+                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
         except Exception as e:
             failed.append({"symbol": symbol, "error": str(e)})
     return {"ok": not failed, "closed": closed, "failed": failed}
@@ -6033,16 +5960,6 @@ async def _advance_pending_order_from_broker(
                     {"$set": pos_set},
                 )
                 changed_positions += res.modified_count
-                ledger_side = "SHORT" if instrument.get("asset_class") == "OPTION_SHORT" or intent_name == "OPEN_SHORT" else "LONG"
-                decision = option_ledger.confirm_position_fill(
-                    strategy_id=strategy_id,
-                    entry_price=float(avg_price or order.get("price") or 0),
-                    quantity=max(1, int(filled_qty or order.get("filled_qty") or order.get("qty") or 1)),
-                    position_side=ledger_side,
-                    create_if_missing=True,
-                )
-                if not decision.accepted and decision.reason not in {"already-filled", "duplicate-buy-dropped"}:
-                    logger.warning("ledger fill sync rejected strategy=%s reason=%s", strategy_id, decision.reason)
             if strategy_id and is_exit:
                 exit_positions = await db.strategy_positions.find(
                     {"user_id": user_id, "exit_broker_order_id": str(broker_order_id), "status": "EXITING"},
@@ -6051,7 +5968,6 @@ async def _advance_pending_order_from_broker(
                 for pos in exit_positions:
                     exit_price = float(avg_price or order.get("price") or pos.get("average_buy_price") or 0)
                     await _close_strategy_position_record(pos, exit_price=exit_price, reason="broker-exit-complete")
-                    option_ledger.close_position(strategy_id=pos.get("strategy_id"), exit_price=exit_price, exit_reason="broker-exit-complete")
                     changed_positions += 1
         elif canonical in {ORDER_CANCELLED, ORDER_REJECTED}:
             changed_orders += 1
@@ -6068,7 +5984,6 @@ async def _advance_pending_order_from_broker(
                     },
                 )
                 changed_positions += res.modified_count
-                option_ledger.release_failed_open(strategy_id)
                 await db.strategy_position_locks.delete_many({"user_id": user_id, "strategy_id": strategy_id})
             if strategy_id and is_exit:
                 exit_positions = await db.strategy_positions.find(
@@ -6690,24 +6605,7 @@ def _api_position_row(p: Dict[str, Any], *, broker: str) -> Dict[str, Any]:
 async def _fetch_broker_positions_for_user(user: dict, settings: dict) -> List[Dict[str, Any]]:
     user_id = user["id"]
     paper = settings.get("paper_mode", True)
-    execution_broker = settings.get("execution_broker") or "zerodha"
-    kite, _ = await get_user_kite(user_id)
-
-    if not paper and execution_broker == "kotak_neo":
-        gateway = _KOTAK_GATEWAYS.get(user_id)
-        if gateway and gateway.status().get("authenticated"):
-            result = await asyncio.to_thread(gateway.positions)
-            if result.get("ok"):
-                out = []
-                response = result.get("response") or {}
-                rows = response.get("net") if isinstance(response, dict) else _kotak_position_items(response)
-                for p in rows or []:
-                    if int(p.get("quantity") or 0) == 0:
-                        continue
-                    out.append(_api_position_row(p, broker="kotak_neo"))
-                if out:
-                    return out
-    if not paper and execution_broker == "upstox":
+    if not paper:
         gateway = await get_user_upstox_gateway(user_id)
         if gateway and gateway.connected:
             try:
@@ -6722,27 +6620,6 @@ async def _fetch_broker_positions_for_user(user: dict, settings: dict) -> List[D
                     return out
             except Exception as exc:
                 logger.warning("Upstox positions fetch failed: %s", exc)
-    if kite and not paper:
-        data = kite_helper.safe_positions(kite)
-        if data and data.get("net") is not None:
-            out = []
-            for p in data["net"]:
-                if not p.get("quantity"):
-                    continue
-                out.append(_api_position_row(p, broker="zerodha"))
-            try:
-                await db.kite_positions_cache.update_one(
-                    {"user_id": user_id},
-                    {"$set": {"user_id": user_id, "positions": out,
-                              "cached_at": datetime.now(timezone.utc).isoformat()}},
-                    upsert=True,
-                )
-            except Exception:
-                pass
-            return out
-        cached = await db.kite_positions_cache.find_one({"user_id": user_id}, {"_id": 0})
-        if cached:
-            return [{**p, "stale": True, "cached_at": cached.get("cached_at")} for p in cached.get("positions", [])]
     rows = await db.positions.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(200)
     out = []
     for r in rows:
@@ -6980,15 +6857,17 @@ async def _resolve_option_for_strategy(
     settings = await get_user_settings(user_id)
     strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
     is_paper = strategy_mode == "paper"
-    execution_broker = strategy_row.get("broker") or settings.get("execution_broker", "upstox")
-    if settings.get("execution_broker") == "upstox" and execution_broker == "zerodha":
-        execution_broker = "upstox" 
+    execution_broker = "upstox"
 
     # For paper trading, generate simulated/mock options contract to remove Zerodha session requirement
     if is_paper:
-        latest_ticks = option_ledger.latest_ticks([underlying])
-        tick = latest_ticks.get(underlying)
-        spot = float(tick["ltp"]) if tick else (24850.40 if underlying == "NIFTY" else 81460.20)
+        spot = (
+            24850.40 if underlying == "NIFTY"
+            else 54000.00 if underlying == "BANKNIFTY"
+            else 81460.20 if underlying == "SENSEX"
+            else 6500.00 if underlying in ("CRUDEOIL", "CRUDEOILM")
+            else 245.00
+        )
         
         interval = options_helper.STRIKE_INTERVALS.get(underlying, 100)
         atm = options_helper.round_to_strike(spot, interval)
@@ -7027,21 +6906,7 @@ async def _resolve_option_for_strategy(
         }
 
     # Live resolution
-    if execution_broker == "zerodha":
-        kite, _ = await get_user_kite(user_id)
-        if not kite:
-            return None
-        return await asyncio.to_thread(
-            options_helper.resolve_for_signal,
-            kite,
-            underlying=underlying,
-            signal_action=signal_action,
-            strike_mode=strike_mode,
-            otm_points=otm_points,
-            expiry_offset_weeks=expiry_offset,
-        )
-        
-    elif execution_broker == "upstox":
+    if execution_broker == "upstox":
         upstox_gw = await get_user_upstox_gateway(user_id)
         if not upstox_gw or not upstox_gw.connected:
             return None
@@ -7148,6 +7013,51 @@ async def _resolve_option_for_strategy(
         else:
             strike = atm - otm_points
         strike = options_helper.round_to_strike(strike, interval)
+
+        if underlying in COMMODITY_UNDERLYINGS:
+            mcx_resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
+            app.state.mcx_contract_resolver = mcx_resolver
+            for attempt in range(2):
+                contract = await mcx_resolver.resolve(
+                    underlying=underlying,
+                    spot=float(spot),
+                    option_type=opt_type,
+                    strike_interval=int(interval),
+                    otm_points=int(otm_points or 0),
+                    expiry_offset=int(expiry_offset or 0),
+                    allow_refresh=True,
+                )
+                if contract:
+                    contract["transaction_type"] = "BUY" if "BUY" in strike_mode else "SELL"
+                    logger.info(
+                        "Resolved MCX option via master underlying=%s opt=%s strike=%s expiry=%s token=%s symbol=%s attempt=%s",
+                        underlying,
+                        opt_type,
+                        contract.get("strike"),
+                        contract.get("expiry"),
+                        contract.get("instrument_token"),
+                        contract.get("trading_symbol"),
+                        attempt + 1,
+                    )
+                    return contract
+                if attempt == 0:
+                    logger.warning(
+                        "MCX master lookup failed; forcing instrument refresh and retry underlying=%s opt=%s target_strike=%s",
+                        underlying,
+                        opt_type,
+                        strike,
+                    )
+                    await mcx_resolver.refresh(reason=f"resolve-retry:{underlying}", force=True)
+            logger.warning(
+                "Live Upstox MCX option contract resolution failed underlying=%s opt=%s spot=%s atm=%s target_strike=%s expiry_offset=%s",
+                underlying,
+                opt_type,
+                spot,
+                atm,
+                strike,
+                expiry_offset,
+            )
+            return None
         
         expiry_dt = datetime.now() + timedelta(days=(7 - datetime.now().weekday() + 3) % 7)
         instrument_token = None
@@ -7967,9 +7877,22 @@ async def funds(user=Depends(get_current_user)):
                 if margins_payload and margins_payload.get("status") == "success":
                     data = margins_payload.get("data", {})
                     equity = data.get("equity", {})
-                    avail = round(float(equity.get("available_margin") or 0), 2)
-                    used = round(float(equity.get("used_margin") or 0), 2)
-                    payin = round(float(equity.get("payin_amount") or 0), 2)
+                    commodity = data.get("commodity", {}) or data.get("commodities", {}) or {}
+                    avail = round(
+                        float(equity.get("available_margin") or 0)
+                        + float(commodity.get("available_margin") or 0),
+                        2,
+                    )
+                    used = round(
+                        float(equity.get("used_margin") or 0)
+                        + float(commodity.get("used_margin") or 0),
+                        2,
+                    )
+                    payin = round(
+                        float(equity.get("payin_amount") or 0)
+                        + float(commodity.get("payin_amount") or 0),
+                        2,
+                    )
                     opening = round(avail + used - payin, 2)
                     return {
                         "source": "live",
@@ -7979,8 +7902,9 @@ async def funds(user=Depends(get_current_user)):
                         "used_margin": used,
                         "m2m_realised": 0.0,
                         "m2m_unrealised": 0.0,
-                        "span": round(float(equity.get("span_margin") or 0), 2),
+                        "span": round(float(equity.get("span_margin") or 0) + float(commodity.get("span_margin") or 0), 2),
                         "delivery_margin": 0.0,
+                        "raw_segments": {"equity": bool(equity), "commodity": bool(commodity)},
                     }
             except Exception as e:
                 logger.warning(f"Upstox margins fetch failed: {e}")
@@ -8018,7 +7942,7 @@ async def funds(user=Depends(get_current_user)):
         "m2m_unrealised": 0.0,
         "span": 0.0,
         "delivery_margin": 0.0,
-        "note": "Paper-mode estimate. Connect Zerodha and switch to LIVE for real margins.",
+        "note": "Paper-mode estimate. Connect Upstox and switch to LIVE for real margins.",
     }
 
 
@@ -8425,7 +8349,7 @@ async def upstox_market_data_start(req: UpstoxSubscribeReq, user=Depends(get_cur
     gateway = await get_user_upstox_gateway(user["id"])
     if not gateway or not gateway.connected:
         raise HTTPException(status_code=400, detail="Upstox is not connected.")
-    return await asyncio.to_thread(gateway.start_market_data_ws, req.instruments)
+    return await asyncio.to_thread(gateway.start_market_data_ws, req.instruments, req.mode)
 
 
 @api.get("/upstox/status")
@@ -8958,6 +8882,105 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
     logger.info("SQLite option engine monitor stopped")
 
 
+async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[str]) -> Optional[float]:
+    if not instrument_key:
+        return None
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway or not gateway.connected:
+        return None
+    try:
+        quote = await asyncio.to_thread(gateway.get_market_quote, [instrument_key])
+        return UpstoxGateway.parse_quote_ltp(quote, instrument_key)
+    except Exception as exc:
+        logger.warning("Upstox LTP failed instrument_key=%s: %s", instrument_key, exc)
+        return None
+
+
+def _mongo_position_exit_reason(position: Dict[str, Any], ltp: float) -> Optional[str]:
+    entry = float(position.get("average_buy_price") or 0)
+    if entry <= 0 or ltp <= 0:
+        return None
+    risk = position.get("tp_sl_tsl_config") or {}
+    side = str(position.get("position_side") or "LONG").upper()
+    stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
+    target_price = risk.get("target_price") or risk.get("take_profit")
+    if stop_price in (None, ""):
+        stop_pct = float(risk.get("stop_loss_pct") or DEFAULT_STRATEGY_RISK["stop_loss_pct"])
+        stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
+    if target_price in (None, ""):
+        target_pct = float(risk.get("take_profit_pct") or DEFAULT_STRATEGY_RISK["take_profit_pct"])
+        target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
+    stop_price = float(stop_price)
+    target_price = float(target_price)
+    if side == "SHORT":
+        if ltp >= stop_price:
+            return "stop-loss"
+        if ltp <= target_price:
+            return "take-profit"
+    else:
+        if ltp <= stop_price:
+            return "stop-loss"
+        if ltp >= target_price:
+            return "take-profit"
+    time_exit_minutes = int(risk.get("time_exit_minutes") or 0)
+    if time_exit_minutes > 0:
+        entry_dt = _parse_iso_dt(position.get("entry_time"))
+        if entry_dt and (datetime.now(timezone.utc) - entry_dt).total_seconds() >= time_exit_minutes * 60:
+            return f"time-exit-{time_exit_minutes}m"
+    return None
+
+
+async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
+    logger.info("Mongo strategy position monitor started")
+    while not stop_event.is_set():
+        try:
+            rows = await db.strategy_positions.find(
+                {"status": {"$in": ["OPEN", "FILLED"]}},
+                {"_id": 0},
+            ).to_list(1000)
+            for pos in rows:
+                user_id = pos.get("user_id")
+                sid = pos.get("strategy_id")
+                symbol = pos.get("trading_symbol") or pos.get("symbol")
+                if not user_id or not sid or not symbol:
+                    continue
+                ltp = await _quote_upstox_instrument_key(user_id, pos.get("instrument_token"))
+                if ltp is None:
+                    ltp = await _current_ltp_for_symbol(
+                        user_id,
+                        symbol,
+                        pos.get("exchange") or "NSE",
+                        allow_mock=False,
+                        execution_broker="upstox",
+                    )
+                if ltp is None:
+                    await db.strategy_positions.update_one(
+                        {"id": pos["id"], "user_id": user_id},
+                        {"$set": {"last_error": "websocket disconnected or LTP unavailable", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                    )
+                    continue
+                entry = float(pos.get("average_buy_price") or 0)
+                qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
+                side = str(pos.get("position_side") or "LONG").upper()
+                pnl = round((entry - float(ltp)) * qty, 2) if side == "SHORT" else round((float(ltp) - entry) * qty, 2)
+                await db.strategy_positions.update_one(
+                    {"id": pos["id"], "user_id": user_id},
+                    {"$set": {"last_ltp": float(ltp), "unrealized_pnl": pnl, "last_tick_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()},
+                     "$unset": {"last_error": ""}},
+                )
+                reason = _mongo_position_exit_reason(pos, float(ltp))
+                if reason:
+                    logger.info("Mongo position monitor exit strategy=%s symbol=%s reason=%s", sid, symbol, reason)
+                    await _close_strategy_positions(user_id, sid, reason=reason)
+        except Exception as e:
+            logger.warning(f"Mongo strategy position monitor error: {e}")
+        slept = 0
+        while not stop_event.is_set() and slept < 30:
+            await asyncio.sleep(1)
+            slept += 1
+    logger.info("Mongo strategy position monitor stopped")
+
+
 async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
     interval = max(10, int(os.environ.get("BROKER_RECONCILE_INTERVAL_SEC", "30")))
     logger.info("Broker reconciliation loop started interval=%ss", interval)
@@ -8966,24 +8989,6 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
             for user_row in users:
                 user_id = user_row["id"]
-                kite, _ = await get_user_kite(user_id)
-                if kite:
-                    await _sync_kite_order_statuses(user_id, kite)
-                    tick_manager = getattr(app.state, "tick_manager", None)
-                    if tick_manager:
-                        tick_status = tick_manager.status_info(user_id)
-                        last_tick = tick_status.get("last_tick_at")
-                        stale = True
-                        if last_tick:
-                            try:
-                                last_dt = datetime.fromisoformat(last_tick)
-                                stale = (datetime.now(timezone.utc) - last_dt).total_seconds() > 180
-                            except Exception:
-                                stale = True
-                        if not tick_status.get("auth_failed") and not tick_status.get("connecting") and (
-                            not tick_status.get("connected") or stale
-                        ):
-                            await _start_user_ticker(user_id)
                 await _sync_upstox_order_statuses(user_id)
         except Exception as e:
             logger.warning(f"broker reconciliation error: {e}")
@@ -9023,8 +9028,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    option_ledger.initialize()
-    app.state.option_ledger = option_ledger
+    app.state.option_ledger = None
     execution_state_manager.configure(
         db=db,
         get_user_settings=get_user_settings,
@@ -9034,7 +9038,7 @@ async def startup():
         sync_upstox_orders=_sync_upstox_order_statuses,
         sync_strategy_positions=_sync_strategy_positions_with_broker,
         fetch_positions=_fetch_broker_positions_for_user,
-        option_ledger=option_ledger,
+        option_ledger=None,
     )
     app.state.execution_state = execution_state_manager
 
@@ -9082,6 +9086,9 @@ async def startup():
         ("order_events", [("user_id", 1), ("created_at", -1)], {}),
         ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("system_config", "_id", {}),
+        ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
+        ("upstox_mcx_option_contracts", [("underlying", 1), ("option_type", 1), ("expiry", 1), ("strike", 1)], {}),
+        ("upstox_instrument_cache_meta", "_id", {}),
     ]
     for coll, key, opts in indexes:
         try:
@@ -9127,12 +9134,6 @@ async def startup():
     except Exception as e:
         logger.warning(f"default strategy seeding skipped: {e}")
 
-    try:
-        async for strategy_row in db.strategies.find({}, {"_id": 0}):
-            _sync_option_ledger_strategy(strategy_row)
-    except Exception as e:
-        logger.warning(f"option ledger strategy sync skipped: {e}")
-
     # Background strategy runner — uses REAL Kite candles when user is connected,
     # falls back to MOCK 5-min intraday candles only when no broker session.
     # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
@@ -9167,6 +9168,15 @@ async def startup():
     app.state.tick_manager = RealtimeTickManager()
     app.state.kotak_gateways = _KOTAK_GATEWAYS
     app.state.upstox_gateways = _UPSTOX_GATEWAYS
+    app.state.mcx_contract_resolver = MCXContractResolver(db)
+    try:
+        await app.state.mcx_contract_resolver.ensure_cache(reason="startup")
+    except Exception as e:
+        logger.warning(f"MCX contract cache startup refresh skipped: {e}")
+    app.state.mcx_refresh_stop = asyncio.Event()
+    app.state.mcx_refresh_task = asyncio.create_task(
+        mcx_instrument_refresh_loop(db, app.state.mcx_refresh_stop)
+    )
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
@@ -9174,8 +9184,8 @@ async def startup():
     )
     app.state.health_stop = asyncio.Event()
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
-    app.state.option_engine_stop = asyncio.Event()
-    app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
+    app.state.position_monitor_stop = asyncio.Event()
+    app.state.position_monitor_task = asyncio.create_task(_mongo_position_monitor_loop(app.state.position_monitor_stop))
     app.state.broker_reconcile_stop = asyncio.Event()
     app.state.broker_reconcile_task = asyncio.create_task(_broker_reconciliation_loop(app.state.broker_reconcile_stop))
     logger.info("QuantG API started")
@@ -9201,9 +9211,9 @@ async def shutdown():
     except Exception:
         pass
     try:
-        app.state.option_engine_stop.set()
-        if app.state.option_engine_task:
-            await asyncio.wait_for(app.state.option_engine_task, timeout=3.0)
+        app.state.position_monitor_stop.set()
+        if app.state.position_monitor_task:
+            await asyncio.wait_for(app.state.position_monitor_task, timeout=3.0)
     except Exception:
         pass
     try:
@@ -9213,7 +9223,9 @@ async def shutdown():
     except Exception:
         pass
     try:
-        option_ledger.close()
+        app.state.mcx_refresh_stop.set()
+        if app.state.mcx_refresh_task:
+            await asyncio.wait_for(app.state.mcx_refresh_task, timeout=3.0)
     except Exception:
         pass
     client.close()

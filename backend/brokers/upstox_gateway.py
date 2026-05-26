@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import requests
 
 import kite_helper
+from brokers.upstox_market_data_v3 import UpstoxMarketDataFeedV3
 
 
 logger = logging.getLogger("quantg.upstox_gateway")
@@ -55,6 +56,11 @@ class UpstoxGateway:
         self._ticks_by_token: Dict[str, Dict[str, Any]] = {}
         self._ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
         self._subscribed_tokens: List[str] = []
+        self._feed_v3 = UpstoxMarketDataFeedV3(
+            access_token_getter=lambda: self.access_token,
+            api_base_url=self.api_base_url,
+            timeout=self.timeout,
+        )
         self._ws_running = False
         self._ws_thread = None
         self._lock = threading.RLock()
@@ -87,6 +93,7 @@ class UpstoxGateway:
             "last_tick_at": self.last_tick_at,
             "subscribed_tokens": len(self._subscribed_tokens),
             "ws_running": self._ws_running,
+            "feed_status": self._feed_v3.status(),
         }
 
     def build_login_url(self, *, state: Optional[str] = None, redirect_uri: Optional[str] = None) -> str:
@@ -362,6 +369,9 @@ class UpstoxGateway:
         return None
 
     def latest_tick(self, instrument_token: str) -> Optional[Dict[str, Any]]:
+        feed_tick = self._feed_v3.latest_tick(str(instrument_token))
+        if feed_tick:
+            return feed_tick
         with self._lock:
             tick = self._ticks_by_token.get(str(instrument_token))
             return dict(tick) if tick else None
@@ -372,57 +382,33 @@ class UpstoxGateway:
             return dict(tick) if tick else None
 
     def latest_ticks(self) -> Dict[str, Dict[str, Any]]:
+        feed_ticks = self._feed_v3.latest_ticks()
         with self._lock:
-            return {token: dict(tick) for token, tick in self._ticks_by_token.items()}
+            merged = {token: dict(tick) for token, tick in self._ticks_by_token.items()}
+        merged.update(feed_ticks)
+        return merged
 
-    def start_market_data_ws(self, instruments: Iterable[str]) -> Dict[str, Any]:
-        """Start high-frequency async REST tracking for active instruments as a highly reliable feed."""
+    def start_market_data_ws(self, instruments: Iterable[str], mode: str = "ltpc") -> Dict[str, Any]:
+        """Start real Upstox Market Data Feed V3 websocket tracking."""
         keys = [str(k).strip() for k in instruments if str(k).strip()]
         if not keys:
             return {"ok": False, "reason": "no_instruments_supplied"}
-        
         with self._lock:
-            self._subscribed_tokens = keys
-            if self._ws_running:
-                return {"ok": True, "started": True, "reused": True, "tokens": len(keys)}
+            current = set(self._subscribed_tokens)
+            current.update(keys)
+            self._subscribed_tokens = sorted(current)
             self._ws_running = True
-            
-        import threading
-        import time
-        
-        def run_polling():
-            logger.info("Upstox live market feed tracking thread started")
-            while True:
-                with self._lock:
-                    if not self._ws_running:
-                        break
-                    current_tokens = list(self._subscribed_tokens)
-                if not current_tokens:
-                    time.sleep(1)
-                    continue
-                try:
-                    for i in range(0, len(current_tokens), 50):
-                        chunk = current_tokens[i:i+50]
-                        self.get_market_quote(chunk)
-                except Exception as exc:
-                    logger.warning("Upstox market feed polling failed: %s", exc)
-                poll_interval = float(os.environ.get("UPSTOX_POLL_INTERVAL_SEC", "3.0"))
-                time.sleep(poll_interval)
-            logger.info("Upstox live market feed tracking thread stopped")
-
-        self._ws_thread = threading.Thread(target=run_polling, daemon=True)
-        self._ws_thread.start()
-        return {
-            "ok": True,
-            "started": True,
-            "tokens": len(keys),
-            "feed": "upstox-high-frequency-polling",
-        }
+        try:
+            return self._feed_v3.subscribe(keys, mode=mode)
+        except Exception as exc:
+            self.last_error = f"Upstox V3 feed start failed: {exc}"
+            logger.warning("%s", self.last_error)
+            return {"ok": False, "reason": "feed_start_failed", "error": str(exc)}
 
     def stop_market_data_ws(self) -> Dict[str, Any]:
         with self._lock:
             self._ws_running = False
-        return {"ok": True, "stopped": True}
+        return self._feed_v3.stop()
 
     def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
         if not self.access_token:

@@ -56,7 +56,7 @@ export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = true 
     error,
     refresh,
     paperMode: Boolean(snapshot?.paper_mode),
-    executionBroker: snapshot?.execution_broker || "zerodha",
+    executionBroker: snapshot?.execution_broker || "upstox",
     generatedAt: snapshot?.generated_at,
   };
 }

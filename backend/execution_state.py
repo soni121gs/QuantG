@@ -54,14 +54,9 @@ class ExecutionStateManager:
         self._option_ledger = option_ledger
 
     async def sync_brokers(self, user_id: str, user: dict) -> Dict[str, Any]:
-        settings = await self._get_user_settings(user_id)
-        kite, _ = await self._get_user_kite(user_id)
-        sync_meta: Dict[str, Any] = {"kite": {}, "kotak": {}, "upstox": {}, "positions": {}}
-        if kite and not settings.get("paper_mode", True):
-            sync_meta["kite"] = await self._sync_kite_orders(user_id, kite)
-        sync_meta["kotak"] = await self._sync_kotak_orders(user_id)
+        sync_meta: Dict[str, Any] = {"upstox": {}, "positions": {}}
         sync_meta["upstox"] = await self._sync_upstox_orders(user_id)
-        sync_meta["positions"] = await self._sync_strategy_positions(user_id, kite)
+        sync_meta["positions"] = await self._sync_strategy_positions(user_id, None)
         return sync_meta
 
     async def _load_orders(self, user_id: str) -> List[Dict[str, Any]]:
@@ -114,6 +109,8 @@ class ExecutionStateManager:
         return out
 
     def _ledger_risk_by_strategy(self) -> Dict[str, Dict[str, Any]]:
+        if not self._option_ledger:
+            return {}
         snapshot = self._option_ledger.snapshot()
         out: Dict[str, Dict[str, Any]] = {}
         for sid, row in snapshot.items():
@@ -219,7 +216,7 @@ class ExecutionStateManager:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "paper_mode": bool(settings.get("paper_mode", True)),
-            "execution_broker": settings.get("execution_broker") or "zerodha",
+            "execution_broker": "upstox",
             "sync": sync_meta,
             "positions": positions,
             "orders": orders,
