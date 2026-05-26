@@ -117,6 +117,17 @@ def _is_option_row(row: Dict[str, Any]) -> bool:
     )
 
 
+def _is_future_row(row: Dict[str, Any]) -> bool:
+    segment = str(row.get("segment") or row.get("exchange_segment") or "").upper()
+    exchange = str(row.get("exchange") or "").upper()
+    inst = str(row.get("instrument_type") or "").upper()
+    return (
+        exchange == "MCX"
+        and (segment in {"", "MCX_FO", "MCX"} or segment.startswith("MCX"))
+        and inst in {"FUT", "FUTCOM", "FUTURES"}
+    )
+
+
 def _normalize_underlying(value: Any) -> str:
     text = str(value or "").upper().replace(" ", "").replace("_", "")
     aliases = {
@@ -174,6 +185,38 @@ def _normalize_contract(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _normalize_future(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not _is_future_row(row):
+        return None
+    underlying = _row_underlying(row)
+    expiry = _parse_expiry(row.get("expiry") or row.get("expiry_date"))
+    instrument_token = row.get("instrument_key") or row.get("instrument_token")
+    trading_symbol = row.get("trading_symbol") or row.get("tradingsymbol")
+    if not all([underlying, expiry, instrument_token, trading_symbol]):
+        logger.debug(
+            "dropping incomplete MCX future row underlying=%s expiry=%s token=%s symbol=%s",
+            underlying, expiry, bool(instrument_token), trading_symbol,
+        )
+        return None
+    return {
+        "cache_key": f"{underlying}:{expiry.isoformat()}:{trading_symbol}",
+        "underlying": underlying,
+        "exchange": "MCX",
+        "segment": "MCX_FO",
+        "instrument_type": "FUTCOM",
+        "expiry": expiry.isoformat(),
+        "trading_symbol": str(trading_symbol),
+        "tradingsymbol": str(trading_symbol),
+        "instrument_token": str(instrument_token),
+        "instrument_key": str(instrument_token),
+        "exchange_token": str(row.get("exchange_token") or ""),
+        "lot_size": _as_int(row.get("lot_size") or row.get("minimum_lot"), 1),
+        "tick_size": _as_float(row.get("tick_size")) or 0.05,
+        "raw_instrument_type": row.get("instrument_type"),
+        "updated_at": _utc_now().isoformat(),
+    }
+
+
 class MCXContractResolver:
     def __init__(self, db, master_url: str = UPSTOX_MCX_MASTER_URL):
         self.db = db
@@ -182,7 +225,7 @@ class MCXContractResolver:
         self._last_refresh_attempt = 0.0
 
     async def ensure_cache(self, *, force: bool = False, reason: str = "ensure") -> Dict[str, Any]:
-        meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_OPTCOM"}, {"_id": 0})
+        meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_MASTER"}, {"_id": 0})
         stale = self._is_stale(meta)
         if not force and not stale:
             return {"ok": True, "refreshed": False, "stale": False, "meta": meta}
@@ -205,7 +248,7 @@ class MCXContractResolver:
     async def refresh(self, *, reason: str = "manual", force: bool = False) -> Dict[str, Any]:
         async with self._refresh_lock:
             if not force:
-                meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_OPTCOM"}, {"_id": 0})
+                meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_MASTER"}, {"_id": 0})
                 if not self._is_stale(meta):
                     return {"ok": True, "refreshed": False, "stale": False, "meta": meta}
             self._last_refresh_attempt = time.monotonic()
@@ -214,15 +257,16 @@ class MCXContractResolver:
             try:
                 rows = await asyncio.to_thread(self._download_master)
                 contracts = [c for c in (_normalize_contract(row) for row in rows) if c]
-                if not contracts:
-                    raise RuntimeError("Upstox MCX master contained no MCX option contracts")
-                await self._replace_cache(contracts, started, reason)
-                logger.info("MCX option cache refreshed contracts=%s reason=%s", len(contracts), reason)
-                return {"ok": True, "refreshed": True, "contracts": len(contracts)}
+                futures = [c for c in (_normalize_future(row) for row in rows) if c]
+                if not contracts and not futures:
+                    raise RuntimeError("Upstox MCX master contained no MCX futures/options")
+                await self._replace_cache(contracts, futures, started, reason)
+                logger.info("MCX master cache refreshed options=%s futures=%s reason=%s", len(contracts), len(futures), reason)
+                return {"ok": True, "refreshed": True, "contracts": len(contracts), "futures": len(futures)}
             except Exception as exc:
-                logger.warning("MCX option cache refresh failed reason=%s error=%s", reason, exc)
+                logger.warning("MCX master cache refresh failed reason=%s error=%s", reason, exc)
                 await self.db.upstox_instrument_cache_meta.update_one(
-                    {"_id": "MCX_OPTCOM"},
+                    {"_id": "MCX_MASTER"},
                     {"$set": {
                         "last_error": str(exc)[:500],
                         "last_error_at": _utc_now().isoformat(),
@@ -247,30 +291,110 @@ class MCXContractResolver:
                     return payload[key]
         raise RuntimeError("unexpected Upstox instrument master format")
 
-    async def _replace_cache(self, contracts: List[Dict[str, Any]], started: datetime, reason: str) -> None:
+    async def _replace_cache(self, contracts: List[Dict[str, Any]], futures: List[Dict[str, Any]], started: datetime, reason: str) -> None:
         await self.db.upstox_mcx_option_contracts.delete_many({})
-        ops = [
+        await self.db.upstox_mcx_future_contracts.delete_many({})
+        option_ops = [
             ReplaceOne({"cache_key": c["cache_key"]}, c, upsert=True)
             for c in contracts
         ]
-        for i in range(0, len(ops), 1000):
-            await self.db.upstox_mcx_option_contracts.bulk_write(ops[i:i + 1000], ordered=False)
+        future_ops = [
+            ReplaceOne({"cache_key": c["cache_key"]}, c, upsert=True)
+            for c in futures
+        ]
+        for i in range(0, len(option_ops), 1000):
+            await self.db.upstox_mcx_option_contracts.bulk_write(option_ops[i:i + 1000], ordered=False)
+        for i in range(0, len(future_ops), 1000):
+            await self.db.upstox_mcx_future_contracts.bulk_write(future_ops[i:i + 1000], ordered=False)
         by_underlying: Dict[str, int] = {}
         for contract in contracts:
             by_underlying[contract["underlying"]] = by_underlying.get(contract["underlying"], 0) + 1
+        futures_by_underlying: Dict[str, int] = {}
+        for future in futures:
+            futures_by_underlying[future["underlying"]] = futures_by_underlying.get(future["underlying"], 0) + 1
         await self.db.upstox_instrument_cache_meta.update_one(
-            {"_id": "MCX_OPTCOM"},
+            {"_id": "MCX_MASTER"},
             {"$set": {
                 "refreshed_at": _utc_now().isoformat(),
                 "started_at": started.isoformat(),
                 "source_url": self.master_url,
                 "contract_count": len(contracts),
+                "future_count": len(futures),
                 "by_underlying": by_underlying,
+                "futures_by_underlying": futures_by_underlying,
                 "reason": reason,
                 "market_open": _is_mcx_market_open(),
             }, "$unset": {"last_error": "", "last_error_at": ""}},
             upsert=True,
         )
+
+    async def validate_instrument_key(self, instrument_key: Optional[str]) -> Optional[Dict[str, Any]]:
+        key = str(instrument_key or "").strip()
+        if not key:
+            return None
+        row = await self.db.upstox_mcx_future_contracts.find_one({"instrument_key": key}, {"_id": 0})
+        if row:
+            return row
+        return await self.db.upstox_mcx_option_contracts.find_one({"instrument_key": key}, {"_id": 0})
+
+    async def resolve_future(
+        self,
+        *,
+        underlying: str,
+        expiry_offset: int = 0,
+        allow_refresh: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        underlying = _normalize_underlying(underlying)
+        if underlying not in SUPPORTED_MCX_UNDERLYINGS:
+            logger.warning("MCX future resolution failed: unsupported underlying=%s", underlying)
+            return None
+        if allow_refresh:
+            status = await self.ensure_cache(reason=f"resolve-future:{underlying}")
+            if status.get("stale"):
+                logger.warning("MCX future resolution using stale cache underlying=%s status=%s", underlying, status)
+        today = _ist_now().date().isoformat()
+        rows = await self.db.upstox_mcx_future_contracts.find(
+            {
+                "underlying": underlying,
+                "exchange": "MCX",
+                "instrument_type": "FUTCOM",
+                "expiry": {"$gte": today},
+            },
+            {"_id": 0},
+        ).sort([("expiry", 1), ("trading_symbol", 1)]).to_list(length=200)
+        if not rows:
+            meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_MASTER"}, {"_id": 0})
+            logger.warning("MCX future resolution failed: no futures underlying=%s today=%s meta=%s", underlying, today, meta)
+            if allow_refresh:
+                refreshed = await self.refresh(reason=f"fallback-no-future:{underlying}", force=True)
+                if refreshed.get("ok"):
+                    return await self.resolve_future(
+                        underlying=underlying,
+                        expiry_offset=expiry_offset,
+                        allow_refresh=False,
+                    )
+            return None
+        expiries = sorted({row["expiry"] for row in rows})
+        if expiry_offset >= len(expiries):
+            logger.warning(
+                "MCX future resolution failed: expiry mismatch underlying=%s requested_offset=%s available=%s",
+                underlying, expiry_offset, expiries[:8],
+            )
+            return None
+        expiry = expiries[max(0, int(expiry_offset or 0))]
+        selected = next((row for row in rows if row["expiry"] == expiry), None)
+        if not selected:
+            logger.warning("MCX future resolution failed: no row for chosen expiry underlying=%s expiry=%s", underlying, expiry)
+            return None
+        logger.info(
+            "Resolved MCX future via master underlying=%s expiry=%s key=%s symbol=%s exchange_token=%s",
+            underlying,
+            selected.get("expiry"),
+            selected.get("instrument_key"),
+            selected.get("trading_symbol"),
+            selected.get("exchange_token"),
+        )
+        return selected
 
     async def resolve(
         self,
@@ -314,7 +438,7 @@ class MCXContractResolver:
         ).sort([("expiry", 1), ("strike", 1)]).to_list(length=5000)
 
         if not rows:
-            meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_OPTCOM"}, {"_id": 0})
+            meta = await self.db.upstox_instrument_cache_meta.find_one({"_id": "MCX_MASTER"}, {"_id": 0})
             logger.warning(
                 "MCX option resolution failed: no contracts for underlying=%s opt=%s today=%s meta=%s",
                 underlying, option_type, today, meta,
@@ -362,7 +486,7 @@ class MCXContractResolver:
                 underlying, option_type, expiry, target_strike, selected.get("strike"),
             )
 
-        return {
+        resolved = {
             "trading_symbol": selected["trading_symbol"],
             "tradingsymbol": selected["trading_symbol"],
             "instrument_token": selected["instrument_token"],
@@ -379,6 +503,16 @@ class MCXContractResolver:
             "atm_strike": self._atm_strike(float(spot), int(strike_interval or 1)),
             "resolution_source": "upstox_mcx_master",
         }
+        logger.info(
+            "Resolved MCX option via master underlying=%s opt=%s expiry=%s strike=%s key=%s symbol=%s",
+            underlying,
+            option_type,
+            resolved["expiry"],
+            resolved["strike"],
+            resolved["instrument_token"],
+            resolved["trading_symbol"],
+        )
+        return resolved
 
     @staticmethod
     def _atm_strike(spot: float, interval: int) -> int:
@@ -413,4 +547,3 @@ async def mcx_instrument_refresh_loop(db, stop_event: asyncio.Event) -> None:
         except asyncio.TimeoutError:
             pass
     logger.info("MCX instrument refresh loop stopped")
-

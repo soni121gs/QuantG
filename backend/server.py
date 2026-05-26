@@ -100,6 +100,7 @@ KITE_HISTORY_CACHE_TTL_SEC = int(os.environ.get("KITE_HISTORY_CACHE_TTL_SEC", "5
 KITE_ORDER_SYNC_TTL_SEC = int(os.environ.get("KITE_ORDER_SYNC_TTL_SEC", "10"))
 _RATE_LIMIT_LOCK = asyncio.Lock()
 _RATE_LIMIT_LAST: Dict[str, float] = {}
+_LOG_THROTTLE_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
@@ -670,7 +671,10 @@ async def _fetch_strategy_history(
                     }
                     live_data = _merge_tick_bars(live_data, [tick_bar])
                 elif not tick:
-                    logger.info(
+                    _log_throttled(
+                        f"upstox-bootstrap-empty:{token}",
+                        120.0,
+                        logging.INFO,
                         "Upstox V3 tick cache empty for %s; using historical REST bootstrap only feed_started=%s",
                         token,
                         feed_started,
@@ -1208,15 +1212,18 @@ async def commodity_watchlist(user=Depends(get_current_user)):
         if upstox_gw and upstox_gw.connected:
             # Resolve commodity tokens
             keys = []
+            futures_by_symbol: Dict[str, Dict[str, Any]] = {}
             for s in COMMODITY_SYMBOLS:
-                token = _upstox_instrument_token("MCX", s["symbol"])
-                if token:
-                    keys.append(token)
+                contract = await _resolve_upstox_mcx_future_contract(s["symbol"])
+                if contract and contract.get("instrument_key"):
+                    futures_by_symbol[s["symbol"]] = contract
+                    keys.append(contract["instrument_key"])
             if keys:
                 upstox_gw.start_market_data_ws(keys, mode="ltpc")
                 
             for i, s in enumerate(COMMODITY_SYMBOLS):
-                token = _upstox_instrument_token("MCX", s["symbol"])
+                contract = futures_by_symbol.get(s["symbol"]) or await _resolve_upstox_mcx_future_contract(s["symbol"])
+                token = contract.get("instrument_key") if contract else None
                 tick = upstox_gw.latest_tick(token) if token else None
                 if tick and tick.get("ltp"):
                     price = float(tick["ltp"])
@@ -1231,9 +1238,13 @@ async def commodity_watchlist(user=Depends(get_current_user)):
                         "pct": pct,
                         "source": "upstox",
                         "feed": "upstox-mcx",
+                        "instrument_key": token,
+                        "trading_symbol": contract.get("trading_symbol") if contract else None,
                         "tick_time": tick.get("received_at"),
                     })
                     continue
+                if not token:
+                    logger.warning("MCX watchlist instrument not resolved from Upstox master symbol=%s", s["symbol"])
                 lp = live_price(s["base"], i + 100)
                 rows.append({
                     "symbol": s["symbol"],
@@ -3486,6 +3497,9 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
     if data_broker == "upstox":
         gateway = await get_user_upstox_gateway(user_id)
         token = _upstox_instrument_token(exchange, symbol)
+        if gateway and gateway.connected and exchange == "MCX" and not token:
+            contract = await _resolve_upstox_mcx_future_contract(symbol)
+            token = contract.get("instrument_key") if contract else None
         if gateway and gateway.connected and token:
             try:
                 quote = await asyncio.to_thread(gateway.get_market_quote, [token])
@@ -3698,6 +3712,15 @@ def _mcx_active_future_symbol(symbol: str, dt: Optional[datetime] = None) -> str
     return f"{symbol.upper()}{yy}{mmm}FUT"
 
 
+def _log_throttled(key: str, seconds: float, level: int, message: str, *args: Any) -> None:
+    now = time.monotonic()
+    last = _LOG_THROTTLE_LAST.get(key, 0.0)
+    if now - last < seconds:
+        return
+    _LOG_THROTTLE_LAST[key] = now
+    logger.log(level, message, *args)
+
+
 def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_token: Any = None) -> Optional[str]:
     token = str(instrument_token or "").strip()
     if "|" in token:
@@ -3709,12 +3732,9 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     if exch in {"NSE", "BSE"}:
         return UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
     if exch in {"NFO", "BFO", "NSE_FO"}:
-        return f"NSE_FO|{symbol}"
+        return token or None
     if exch == "MCX":
-        if len(symbol) > 10 and symbol.endswith("FUT"):
-            return f"MCX_FO|{symbol}"
-        active_sym = _mcx_active_future_symbol(symbol)
-        return f"MCX_FO|{active_sym}"
+        return token or None
     if "|" in symbol and "_" in symbol.split("|", 1)[0]:
         return symbol
     return None
@@ -3729,42 +3749,25 @@ async def _search_upstox_mcx_future_keys(
     symbol = str(underlying or "").upper().strip()
     if not symbol:
         return []
-    queries = [symbol]
-    if symbol == "CRUDEOILM":
-        queries.append("CRUDEOIL")
+    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
+    app.state.mcx_contract_resolver = resolver
     keys: List[str] = []
-    for query in dict.fromkeys(queries):
-        for segment in ("COMM", "FO", "ALL"):
-            for expiry_filter in ("current_month", "next_month", None):
-                try:
-                    search = await asyncio.to_thread(
-                        gateway.search_instruments,
-                        query,
-                        exchanges="MCX",
-                        segments=segment,
-                        instrument_types="FUT",
-                        expiry=expiry_filter,
-                        records=10,
-                    )
-                except Exception as exc:
-                    logger.warning("Upstox MCX future search failed for %s/%s/%s: %s", query, segment, expiry_filter, exc)
-                    continue
-                for node in (search.get("data") if isinstance(search, dict) else []) or []:
-                    instrument_type = str(node.get("instrument_type") or "").upper()
-                    key = node.get("instrument_key")
-                    trading_symbol = str(node.get("trading_symbol") or node.get("tradingsymbol") or "").upper()
-                    if instrument_type != "FUT" or not key:
-                        continue
-                    if symbol == "CRUDEOILM" and "CRUDEOILM" not in trading_symbol and "CRUDEOIL" in trading_symbol:
-                        # Keep standard crude as a fallback, but prefer mini if present.
-                        keys.append(str(key))
-                    elif symbol in trading_symbol or query in trading_symbol:
-                        keys.insert(0, str(key))
-                    else:
-                        keys.append(str(key))
-                    if len(dict.fromkeys(keys)) >= limit:
-                        return list(dict.fromkeys(keys))[:limit]
+    contract = await resolver.resolve_future(underlying=symbol, expiry_offset=0, allow_refresh=True)
+    if contract and contract.get("instrument_key"):
+        keys.append(str(contract["instrument_key"]))
     return list(dict.fromkeys(keys))[:limit]
+
+
+async def _resolve_upstox_mcx_future_contract(underlying: str, *, expiry_offset: int = 0) -> Optional[Dict[str, Any]]:
+    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
+    app.state.mcx_contract_resolver = resolver
+    return await resolver.resolve_future(underlying=underlying, expiry_offset=expiry_offset, allow_refresh=True)
+
+
+async def _validate_upstox_mcx_instrument_key(instrument_key: Optional[str]) -> Optional[Dict[str, Any]]:
+    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
+    app.state.mcx_contract_resolver = resolver
+    return await resolver.validate_instrument_key(instrument_key)
 
 
 
@@ -5015,6 +5018,15 @@ async def _build_order_intent(
     token = symbol_upper
     if execution_broker == "upstox":
         resolved = _upstox_instrument_token(exchange, symbol_upper)
+        if exchange == "MCX" and not resolved:
+            contract = await _resolve_upstox_mcx_future_contract(symbol_upper)
+            if not contract or not contract.get("instrument_key"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"instrument not found: MCX {symbol_upper} future missing from Upstox instrument master.",
+                )
+            resolved = contract["instrument_key"]
+            symbol_upper = str(contract.get("trading_symbol") or symbol_upper).upper()
         if resolved:
             token = resolved
 
@@ -6918,8 +6930,17 @@ async def _resolve_option_for_strategy(
             "SENSEX": "BSE_INDEX|SENSEX"
         }
         if underlying in COMMODITY_UNDERLYINGS:
-            active_sym = _mcx_active_future_symbol(underlying)
-            upstox_keys[underlying] = f"MCX_FO|{active_sym}"
+            future_contract = await _resolve_upstox_mcx_future_contract(underlying)
+            if future_contract and future_contract.get("instrument_key"):
+                upstox_keys[underlying] = future_contract["instrument_key"]
+                logger.info(
+                    "Resolved MCX spot future for option resolver underlying=%s key=%s symbol=%s",
+                    underlying,
+                    future_contract.get("instrument_key"),
+                    future_contract.get("trading_symbol"),
+                )
+            else:
+                logger.warning("MCX spot future not found in Upstox master underlying=%s", underlying)
             
         spot = None
         if underlying in upstox_keys:
@@ -6959,41 +6980,6 @@ async def _resolve_option_for_strategy(
             except Exception as e:
                 logger.warning(f"Upstox index search failed for {underlying}: {e}")
 
-        if spot is None and underlying in COMMODITY_UNDERLYINGS:
-            future_queries = [underlying]
-            if underlying == "CRUDEOILM":
-                future_queries.append("CRUDEOIL")
-            for query in future_queries:
-                if spot is not None:
-                    break
-                for segment in ("COMM", "FO", "ALL"):
-                    try:
-                        search = await asyncio.to_thread(
-                            upstox_gw.search_instruments,
-                            query,
-                            exchanges="MCX",
-                            segments=segment,
-                            instrument_types="FUT",
-                            expiry="current_month",
-                            records=10,
-                        )
-                        for node in (search.get("data") if isinstance(search, dict) else []) or []:
-                            instrument_type = str(node.get("instrument_type") or "").upper()
-                            key = node.get("instrument_key")
-                            if instrument_type != "FUT" or not key:
-                                continue
-                            quote = await asyncio.to_thread(upstox_gw.get_market_quote, [key])
-                            qnode = (quote.get("data") or {}).get(key) or {}
-                            ltp = qnode.get("last_price") or qnode.get("ltp")
-                            if ltp:
-                                spot = float(ltp)
-                                upstox_keys[underlying] = key
-                                break
-                        if spot is not None:
-                            break
-                    except Exception as e:
-                        logger.warning(f"Upstox MCX future search failed for {query}/{segment}: {e}")
-                
         if spot is None:
             if not is_paper:
                 logger.warning(f"Live Upstox spot price unavailable for {underlying}; options resolution blocked.")
@@ -7151,12 +7137,12 @@ async def _resolve_option_for_strategy(
                 yy = target_date.strftime("%y")
                 mmm = target_date.strftime("%b").upper()
                 tradingsymbol = f"{underlying.upper()}{yy}{mmm}{strike}{opt_type}"
-                instrument_token = f"MCX_FO|{tradingsymbol}"
+                instrument_token = f"PAPER_MCX|{tradingsymbol}"
                 expiry_dt = target_date
             else:
                 expiry_str = expiry_dt.strftime("%y%m%d")
                 tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
-                instrument_token = f"NSE_FO|{tradingsymbol}"
+                instrument_token = f"PAPER_FO|{tradingsymbol}"
             
         return {
             "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
@@ -8349,7 +8335,28 @@ async def upstox_market_data_start(req: UpstoxSubscribeReq, user=Depends(get_cur
     gateway = await get_user_upstox_gateway(user["id"])
     if not gateway or not gateway.connected:
         raise HTTPException(status_code=400, detail="Upstox is not connected.")
-    return await asyncio.to_thread(gateway.start_market_data_ws, req.instruments, req.mode)
+    valid_instruments: List[str] = []
+    rejected: List[Dict[str, str]] = []
+    for instrument_key in req.instruments:
+        key = str(instrument_key or "").strip()
+        if key.startswith("MCX_FO|"):
+            contract = await _validate_upstox_mcx_instrument_key(key)
+            if not contract:
+                rejected.append({"instrument_key": key, "reason": "not_found_in_upstox_mcx_master"})
+                logger.warning("Rejecting invalid MCX websocket subscription key=%s", key)
+                continue
+            logger.info(
+                "Validated MCX websocket subscription key=%s symbol=%s type=%s",
+                key,
+                contract.get("trading_symbol"),
+                contract.get("instrument_type"),
+            )
+        valid_instruments.append(key)
+    if not valid_instruments:
+        raise HTTPException(status_code=400, detail={"message": "No valid Upstox instrument_key supplied.", "rejected": rejected})
+    result = await asyncio.to_thread(gateway.start_market_data_ws, valid_instruments, req.mode)
+    result["rejected"] = rejected
+    return result
 
 
 @api.get("/upstox/status")
@@ -9088,6 +9095,10 @@ async def startup():
         ("system_config", "_id", {}),
         ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
         ("upstox_mcx_option_contracts", [("underlying", 1), ("option_type", 1), ("expiry", 1), ("strike", 1)], {}),
+        ("upstox_mcx_option_contracts", "instrument_key", {}),
+        ("upstox_mcx_future_contracts", "cache_key", {"unique": True}),
+        ("upstox_mcx_future_contracts", [("underlying", 1), ("expiry", 1)], {}),
+        ("upstox_mcx_future_contracts", "instrument_key", {}),
         ("upstox_instrument_cache_meta", "_id", {}),
     ]
     for coll, key, opts in indexes:

@@ -287,6 +287,7 @@ class UpstoxMarketDataFeedV3:
         self._last_error: Optional[str] = None
         self._last_tick_time: Optional[str] = None
         self._reconnects = 0
+        self._first_tick_logged = False
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -399,8 +400,10 @@ class UpstoxMarketDataFeedV3:
     def _send_subscription_locked(self, keys: Iterable[str], mode: str) -> None:
         if not self._ws_app or not self._ws_app.sock:
             return
-        payload = build_subscription_payload(keys, mode=mode)
+        keys_list = list(keys)
+        payload = build_subscription_payload(keys_list, mode=mode)
         self._ws_app.send(payload, opcode=websocket.ABNF.OPCODE_BINARY)
+        logger.info("Upstox V3 subscription sent mode=%s instrument_count=%s", mode, len(keys_list))
 
     def _on_message(self, ws: Any, message: Any) -> None:
         if isinstance(message, str):
@@ -425,6 +428,9 @@ class UpstoxMarketDataFeedV3:
                     self._ticks[instrument_key] = tick
                     self._last_tick_time = tick["received_at"]
                     updated += 1
+                    if not self._first_tick_logged:
+                        self._first_tick_logged = True
+                        logger.info("Upstox V3 first tick received key=%s ltp=%s", instrument_key, tick.get("ltp"))
         if updated:
             logger.debug("Upstox V3 feed updated %s ticks", updated)
 

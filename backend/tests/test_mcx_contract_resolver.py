@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mcx_contract_resolver import _normalize_contract, MCXContractResolver
+from mcx_contract_resolver import _normalize_contract, _normalize_future, MCXContractResolver
 
 
 def test_normalizes_upstox_mcx_json_option_row():
@@ -60,3 +60,24 @@ def test_target_strike_uses_mcx_interval_and_option_side():
     assert resolver._target_strike(244.2, 5, "PE", 0) == 245
     assert resolver._target_strike(244.2, 5, "PE", 5) == 240
 
+
+def test_normalizes_upstox_mcx_future_row_from_master():
+    row = {
+        "segment": "MCX_FO",
+        "exchange": "MCX",
+        "instrument_type": "FUTCOM",
+        "underlying_symbol": "CRUDEOILM",
+        "expiry": "2026-06-16",
+        "instrument_key": "MCX_FO|566001",
+        "exchange_token": "566001",
+        "trading_symbol": "CRUDEOILM 16 JUN 26 FUT",
+        "lot_size": 10,
+    }
+
+    future = _normalize_future(row)
+
+    assert future["underlying"] == "CRUDEOILM"
+    assert future["instrument_type"] == "FUTCOM"
+    assert future["instrument_key"] == "MCX_FO|566001"
+    assert future["exchange_token"] == "566001"
+    assert future["trading_symbol"] == "CRUDEOILM 16 JUN 26 FUT"
