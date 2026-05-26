@@ -68,7 +68,7 @@ export default function Layout({ children }) {
       api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
     };
     fetch();
-    const t = setInterval(fetch, 5000);
+    const t = setInterval(fetch, 60000);
     return () => clearInterval(t);
   }, []);
 

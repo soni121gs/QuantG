@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, formatApiErrorDetail } from "../lib/api";
 
-const DEFAULT_POLL_MS = 3000;
+const DEFAULT_POLL_MS = 10000;
 
 /**
  * Single source of truth for live execution UI (positions, orders, SL/TP).
  * Polls GET /execution/snapshot and mirrors backend execution_status fields.
  */
-export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = true } = {}) {
+export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = false } = {}) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

@@ -38,7 +38,7 @@ export default function MarketHub() {
 
   useEffect(() => {
     load().catch(() => {});
-    const t = setInterval(() => load().catch(() => {}), 10000);
+    const t = setInterval(() => load().catch(() => {}), 60000);
     return () => clearInterval(t);
   }, [load]);
 

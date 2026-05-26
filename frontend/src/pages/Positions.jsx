@@ -13,7 +13,7 @@ const statusTone = (status) => {
 };
 
 export default function Positions() {
-  const { positions, summary, loading, error, refresh, paperMode, executionBroker } = useExecutionState({ pollMs: 3000 });
+  const { positions, summary, loading, error, refresh, paperMode, executionBroker } = useExecutionState({ pollMs: 15000 });
   const [exiting, setExiting] = useState(null);
 
   const exit = async (symbol) => {

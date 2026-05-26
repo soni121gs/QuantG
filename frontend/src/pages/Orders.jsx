@@ -9,7 +9,7 @@ const FILLED_STATUSES = ["FILLED", "CLOSED", "COMPLETE"];
 const REJECTED_STATUSES = ["CANCELLED", "REJECTED", "FAILED"];
 
 export default function Orders() {
-  const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 4000 });
+  const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 15000 });
   const [watch, setWatch] = useState([]);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("ALL");

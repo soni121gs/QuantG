@@ -180,7 +180,7 @@ const MarketRow = ({ item }) => (
 );
 
 export default function Dashboard() {
-  const { positions: execPositions, orders: execOrders, refresh: refreshExecution } = useExecutionState({ pollMs: 4000 });
+  const { positions: execPositions, orders: execOrders, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -222,7 +222,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 10000);
+    const t = setInterval(load, 60000);
     return () => clearInterval(t);
   }, [load]);
 
