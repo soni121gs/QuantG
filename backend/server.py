@@ -1503,6 +1503,49 @@ DEFAULT_OPTION_STRATEGIES = [
 """,
         "market_suitability": "Intraday Trend Following",
     },
+    {
+        "name": "NIFTY HFT Quick Scalper",
+        "description": "High-frequency index option scalper targeting micro-breakouts on NIFTY 1-minute and 5-minute charts using HFT execution templates.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    if len(data) < 20: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(10, len(data)):
+        ema3 = sum(closes[i-2:i+1]) / 3
+        ema10 = sum(closes[i-9:i+1]) / 10
+        if ema3 > ema10 and closes[i] > closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'HFT Momentum BUY'})
+        elif ema3 < ema10 and closes[i] < closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'HFT Momentum SELL'})
+    return signals
+""",
+        "market_suitability": "Scalper (HFT Low-Latency)",
+    },
+    {
+        "name": "BANKNIFTY HFT Momentum Scalper",
+        "description": "Adaptive HFT option buying scalper for BANKNIFTY using dynamic standard deviation bands.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    if len(data) < 25: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(20, len(data)):
+        sma = sum(closes[i-20:i]) / 20
+        var = sum((x - sma) ** 2 for x in closes[i-20:i]) / 20
+        std = var ** 0.5
+        upper = sma + 1.5 * std
+        lower = sma - 1.5 * std
+        if closes[i] > upper and closes[i-1] <= upper:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'HFT Band Breakout BUY'})
+        elif closes[i] < lower and closes[i-1] >= lower:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'HFT Band Breakdown SELL'})
+    return signals
+""",
+        "market_suitability": "Volatile Breakout (HFT Execution)",
+    },
 ]
 
 LEGACY_OPTION_STRATEGIES = DEFAULT_OPTION_STRATEGIES
