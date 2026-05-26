@@ -1,17 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { Bot, Send, Sparkles, User, Wand2 } from "lucide-react";
+import { AlertCircle, Bot, Send, Sparkles, User } from "lucide-react";
 
 const SESSION = "default";
 const SUGGESTIONS = [
-  "Suggest a momentum strategy for NIFTY",
-  "Give me a pre-market risk checklist",
-  "Explain today's MCX commodity setup",
-  "How to manage risk with a 1L portfolio?",
+  "Check my Upstox and market data status",
+  "Explain my current open positions and risk",
+  "Find stuck or rejected orders",
+  "Why did my active strategies trade or not trade?",
 ];
 const MODES = [
-  { id: "chat", label: "Chat" },
-  { id: "agent", label: "Strategy Agent" },
+  { id: "agent", label: "Ask Agent" },
   { id: "brief", label: "Market Brief" },
 ];
 const BRIEF_PROMPTS = [
@@ -24,12 +23,7 @@ export default function AIBot() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [strategies, setStrategies] = useState([]);
-  const [selectedStrategy, setSelectedStrategy] = useState("");
-  const [agentText, setAgentText] = useState("");
-  const [agentBusy, setAgentBusy] = useState(false);
-  const [proposal, setProposal] = useState(null);
-  const [mode, setMode] = useState("chat");
+  const [mode, setMode] = useState("agent");
   const [aiStatus, setAiStatus] = useState(null);
   const [marketAnalysis, setMarketAnalysis] = useState(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
@@ -38,10 +32,6 @@ export default function AIBot() {
   useEffect(() => {
     api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
     api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
-    api.get("/strategies").then((r) => {
-      setStrategies(r.data || []);
-      if (r.data?.[0]) setSelectedStrategy(r.data[0].id);
-    }).catch(() => {});
   }, []);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -54,31 +44,11 @@ export default function AIBot() {
     const cid = `c-${Date.now()}`;
     setMessages((m) => [...m, { id: cid, role: "user", content }]);
     try {
-      const r = await api.post("/ai/chat", { session_id: SESSION, message: content });
-      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: "assistant", content: r.data.content }]);
+      const r = await api.post("/agent/chat", { session_id: SESSION, message: content });
+      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: "assistant", content: r.data.content, tools_used: r.data.tools_used, unavailable: r.data.unavailable, read_only: true }]);
     } catch (e) {
       setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `Error: ${e.response?.data?.detail || e.message}` }]);
     } finally { setBusy(false); }
-  };
-
-  const runAgent = async (apply = false) => {
-    if (!selectedStrategy || !agentText.trim() || agentBusy) return;
-    setAgentBusy(true);
-    try {
-      const r = await api.post(`/strategies/${selectedStrategy}/ai-modify`, {
-        instruction: agentText.trim(),
-        apply,
-      });
-      setProposal(r.data);
-      if (apply) {
-        const latest = await api.get("/strategies");
-        setStrategies(latest.data || []);
-      }
-    } catch (e) {
-      setProposal({ ok: false, error: e.response?.data?.detail || e.message });
-    } finally {
-      setAgentBusy(false);
-    }
   };
 
   const runMarketAnalysis = async () => {
@@ -97,14 +67,15 @@ export default function AIBot() {
     <div className="flex h-[calc(100vh-130px)] flex-col gap-4" data-testid="ai-bot-page">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// GOOGLE AI STUDIO</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> QuantBot</h1>
-          <p className="text-xs text-[var(--qd-text-2)] mt-1">Chat, strategy editing, and market briefs are separated so the workspace stays calm.</p>
+          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// READ-ONLY GEMINI AGENT</div>
+          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> Ask QuantG Agent</h1>
+          <p className="text-xs text-[var(--qd-text-2)] mt-1">Read-only answers from execution state, orders, positions, strategies, Upstox, market data, logs, and risk.</p>
           <div className="mt-2 inline-flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)]">
-            <span className={aiStatus?.provider === "google-ai-studio" ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>
+            <span className={(aiStatus?.provider || "").includes("google") ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>
               {aiStatus?.provider || "checking"}
             </span>
             <span>{aiStatus?.model || "model loading"}</span>
+            <span className="text-[var(--qd-text-3)]">read-only</span>
           </div>
         </div>
         <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1" data-testid="ai-mode-tabs">
@@ -120,61 +91,6 @@ export default function AIBot() {
           ))}
         </div>
       </div>
-
-      {mode === "agent" && (
-      <div className="qd-card p-4" data-testid="ai-agent-controls">
-        <div className="mb-3">
-          <h2 className="font-head text-lg font-semibold text-white">Strategy Agent</h2>
-          <p className="mt-1 text-xs text-[var(--qd-text-2)]">Preview Gemini changes, inspect validation, then apply only when the proposal looks right.</p>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_auto] gap-2 items-end">
-          <div>
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Strategy</label>
-            <select value={selectedStrategy} onChange={(e) => setSelectedStrategy(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-xs text-white font-mono rounded-sm">
-              {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Agent Instruction</label>
-            <input
-              value={agentText}
-              onChange={(e) => setAgentText(e.target.value)}
-              placeholder="Tighten entries, add VWAP filter, reduce false signals..."
-              className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-xs text-white font-mono rounded-sm"
-              data-testid="agent-instruction"
-            />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => runAgent(false)} disabled={agentBusy || !selectedStrategy || !agentText.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
-              <Wand2 size={14} /> Preview
-            </button>
-            <button onClick={() => runAgent(true)} disabled={agentBusy || !selectedStrategy || !agentText.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
-              Apply
-            </button>
-          </div>
-        </div>
-        {proposal && (
-          <div className="mt-3 border-t border-[var(--qd-border)] pt-3 text-xs font-mono">
-            {proposal.ok === false ? (
-              <div className="text-[var(--qd-loss)]">{proposal.error}</div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-3">
-                <div className="text-[var(--qd-text-2)] whitespace-pre-wrap max-h-28 overflow-y-auto">
-                  {proposal.proposal?.description || "Proposal ready."}
-                  {(proposal.proposal?.notes || []).map((n) => `\n- ${n}`)}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Small label="Applied" value={proposal.applied ? "yes" : "no"} />
-                  <Small label="Signals" value={proposal.validation?.signals ?? 0} />
-                  <Small label="Symbol" value={proposal.validation?.symbol || "-"} />
-                  <Small label="Source" value={proposal.validation?.data_source || "-"} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-      )}
 
       {mode === "brief" && (
         <div className="qd-card p-4">
@@ -203,7 +119,7 @@ export default function AIBot() {
                 key={prompt}
                 type="button"
                 onClick={() => {
-                  setMode("chat");
+                  setMode("agent");
                   send(prompt);
                 }}
                 className="rounded border border-[var(--qd-border)] p-3 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-white"
@@ -242,7 +158,7 @@ export default function AIBot() {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder={mode === "agent" ? "Ask about the current proposal or strategy risk..." : "Ask QuantBot about strategies, commodities, markets, code..."}
+            placeholder="Ask QuantG Agent about app state, orders, positions, broker, feed, logs, or risk..."
             className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2.5 text-sm text-white font-mono rounded-sm"
             data-testid="ai-input"
           />
@@ -266,6 +182,30 @@ const Message = ({ m }) => {
       )}
       <div className={`max-w-[75%] px-4 py-2.5 rounded-sm ${isUser ? "bg-[var(--qd-accent)] text-white" : "bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-white"}`}>
         <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.content}</pre>
+        {!isUser && m.tools_used?.length > 0 && (
+          <div className="mt-3 border-t border-[var(--qd-border)] pt-2">
+            <div className="mb-1 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Read-only tools used</div>
+            <div className="flex flex-wrap gap-1">
+              {m.tools_used.map((tool) => (
+                <span
+                  key={tool.name}
+                  className={`rounded border px-2 py-1 font-mono text-[10px] ${tool.status === "ok" ? "border-[var(--qd-border)] text-[var(--qd-text-2)]" : "border-[var(--qd-loss)] text-[var(--qd-loss)]"}`}
+                  title={tool.error || tool.name}
+                >
+                  {tool.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {!isUser && m.unavailable?.length > 0 && (
+          <div className="mt-2 flex gap-2 rounded border border-[var(--qd-loss)]/60 bg-[var(--qd-bg)] p-2 text-xs text-[var(--qd-loss)]">
+            <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+            <div>
+              Some read-only data was unavailable. The answer may be incomplete.
+            </div>
+          </div>
+        )}
       </div>
       {isUser && (
         <div className="w-7 h-7 rounded-sm bg-[var(--qd-surface-2)] border border-[var(--qd-border)] flex items-center justify-center flex-shrink-0">
@@ -275,10 +215,3 @@ const Message = ({ m }) => {
     </div>
   );
 };
-
-const Small = ({ label, value }) => (
-  <div className="border border-[var(--qd-border)] px-2 py-1 rounded-sm min-w-0">
-    <div className="text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
-    <div className="text-white truncate">{value}</div>
-  </div>
-);

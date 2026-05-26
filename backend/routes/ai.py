@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import uuid
 import json
+import asyncio
+import requests
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -16,10 +18,228 @@ import time
 _STRATEGY_SCORES_CACHE: Dict[str, Dict[str, Any]] = {}
 
 router = APIRouter(prefix="/ai", tags=["AI"])
+agent_router = APIRouter(prefix="/agent", tags=["AI Agent"])
 
 class ChatReq(BaseModel):
     session_id: str = "default"
     message: str
+
+
+READ_ONLY_AGENT_TOOLS = [
+    "get_execution_snapshot",
+    "get_orders",
+    "get_positions",
+    "get_active_strategies",
+    "get_upstox_status",
+    "get_market_data_status",
+    "get_logs_errors",
+    "get_risk_snapshot",
+]
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _clip_json(value: Any, limit: int = 24000) -> Any:
+    text = json.dumps(value, default=str)
+    if len(text) <= limit:
+        return value
+    return {
+        "truncated": True,
+        "limit_chars": limit,
+        "preview": text[:limit],
+    }
+
+
+async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
+    started = _utc_now()
+    try:
+        if name == "get_execution_snapshot":
+            from server import execution_state_manager
+            data = await execution_state_manager.build_snapshot(user, sync=False)
+        elif name == "get_orders":
+            data = await db.orders.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "user_id": 0},
+            ).sort("created_at", -1).to_list(100)
+        elif name == "get_positions":
+            local_positions = await db.positions.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "user_id": 0},
+            ).to_list(100)
+            strategy_positions = await db.strategy_positions.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "user_id": 0},
+            ).sort("updated_at", -1).to_list(100)
+            data = {
+                "local_positions": local_positions,
+                "strategy_positions": strategy_positions,
+            }
+        elif name == "get_active_strategies":
+            rows = await db.strategies.find(
+                {"user_id": user["id"]},
+                {
+                    "_id": 0,
+                    "user_id": 0,
+                    "python_code": 0,
+                },
+            ).sort("created_at", -1).to_list(200)
+            data = [
+                row for row in rows
+                if str(row.get("status") or "").lower() in {"live", "active", "running", "paused"}
+            ]
+        elif name == "get_upstox_status":
+            from server import get_user_upstox_status
+            data = await get_user_upstox_status(user["id"])
+        elif name == "get_market_data_status":
+            from server import _UPSTOX_GATEWAYS, _is_nse_market_open, _is_order_market_open, option_ledger
+            gateway = _UPSTOX_GATEWAYS.get(user["id"])
+            gateway_status = gateway.status() if gateway else {"connected": False, "last_error": "Upstox gateway not initialized"}
+            latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])
+            data = {
+                "market_open": bool(_is_nse_market_open() or _is_order_market_open("MCX")),
+                "upstox_gateway": gateway_status,
+                "latest_ticks": latest_ticks,
+            }
+        elif name == "get_logs_errors":
+            strategy_errors = await db.strategies.find(
+                {"user_id": user["id"], "last_error": {"$nin": [None, ""]}},
+                {"_id": 0, "id": 1, "name": 1, "status": 1, "last_error": 1, "last_evaluated_at": 1, "last_signal_at": 1},
+            ).sort("updated_at", -1).to_list(50)
+            position_errors = await db.strategy_positions.find(
+                {"user_id": user["id"], "last_error": {"$nin": [None, ""]}},
+                {"_id": 0, "id": 1, "strategy_id": 1, "symbol": 1, "status": 1, "last_error": 1, "updated_at": 1},
+            ).sort("updated_at", -1).to_list(50)
+            rejected_orders = await db.orders.find(
+                {"user_id": user["id"], "status": {"$in": ["REJECTED", "rejected", "FAILED", "failed"]}},
+                {"_id": 0, "user_id": 0},
+            ).sort("created_at", -1).to_list(50)
+            data = {
+                "strategy_errors": strategy_errors,
+                "position_errors": position_errors,
+                "recent_rejected_orders": rejected_orders,
+            }
+        elif name == "get_risk_snapshot":
+            from server import get_user_settings
+            settings = await get_user_settings(user["id"])
+            day = datetime.now(timezone.utc).date().isoformat()
+            orders = await db.orders.find(
+                {"user_id": user["id"], "created_at": {"$gte": day}},
+                {"_id": 0, "user_id": 0},
+            ).to_list(1000)
+            positions = await db.positions.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "user_id": 0},
+            ).to_list(200)
+            realised = round(sum(float(o.get("realised_pnl") or 0) for o in orders), 2)
+            open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
+            loss_limit = float(settings.get("max_daily_loss") or 0)
+            data = {
+                "date": day,
+                "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
+                "daily_loss_limit": loss_limit,
+                "realised_pnl": realised,
+                "open_pnl": open_pnl,
+                "total_pnl": round(realised + open_pnl, 2),
+                "loss_remaining": round(max(0.0, loss_limit + realised), 2) if loss_limit else None,
+                "orders_today": len(orders),
+                "max_trades_per_day": int(settings.get("max_trades_per_day") or 0),
+                "per_strategy_capital": settings.get("per_strategy_capital"),
+                "max_position_size": settings.get("max_position_size"),
+            }
+        else:
+            raise ValueError(f"Unknown read-only tool: {name}")
+        return {
+            "name": name,
+            "status": "ok",
+            "started_at": started,
+            "finished_at": _utc_now(),
+            "data": _clip_json(data),
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "status": "error",
+            "started_at": started,
+            "finished_at": _utc_now(),
+            "error": str(exc),
+        }
+
+
+def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]]) -> str:
+    failed = [t for t in tool_results if t.get("status") != "ok"]
+    ok_tools = [t["name"] for t in tool_results if t.get("status") == "ok"]
+    if failed:
+        missing = ", ".join(f"{t['name']}: {t.get('error', 'unavailable')}" for t in failed[:4])
+        return (
+            "I am unsure because some app data is unavailable.\n\n"
+            f"Available read-only tools: {', '.join(ok_tools) or 'none'}.\n"
+            f"Missing or failed data: {missing}."
+        )
+    return (
+        "I am unsure because Gemini is not configured or did not return a usable response. "
+        "The read-only QuantG data was collected successfully, but I need Gemini to interpret it clearly."
+    )
+
+
+def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return _local_agent_reply(message, tool_results)
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+    timeout = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
+    history_text = "\n".join(
+        f"{'User' if row.get('role') == 'user' else 'Agent'}: {str(row.get('content') or '')[:1000]}"
+        for row in recent_messages[-8:]
+    )
+    prompt = f"""
+You are Ask QuantG Agent inside QuantG.
+
+STRICT READ-ONLY PHASE 1 RULES:
+- You can only interpret the provided tool results.
+- You must never place, cancel, modify, or exit trades.
+- You must never change strategy, risk, broker, profile, or market-data settings.
+- You must never tell the user that you performed a trading action.
+- If the data is missing, stale, failed, or insufficient, begin with "I am unsure" and explain exactly what data is missing.
+- Keep the answer practical, concise, and grounded only in the tool data.
+- Mention which read-only tools you used when it helps the user trust the answer.
+
+Recent conversation:
+{history_text or "None"}
+
+User question:
+{message}
+
+Read-only tool results JSON:
+{json.dumps(tool_results, default=str)[:50000]}
+"""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 1200,
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    res = requests.post(url, params={"key": api_key}, json=payload, timeout=timeout)
+    res.raise_for_status()
+    data = res.json()
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    text = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
+    return text or _local_agent_reply(message, tool_results)
+
+
+async def _gemini_agent_reply(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
+    try:
+        timeout = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
+        return await asyncio.wait_for(
+            asyncio.to_thread(_gemini_agent_reply_sync, message, tool_results, recent_messages),
+            timeout=timeout + 2,
+        )
+    except Exception:
+        return _local_agent_reply(message, tool_results)
 
 
 @router.get("/chat/{session_id}")
@@ -85,6 +305,99 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
     }
     await db.ai_chats.insert_many([user_msg, bot_msg])
     return {k: v for k, v in bot_msg.items() if k not in {"_id", "user_id", "session_id"}}
+
+
+@agent_router.post("/chat")
+async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
+    content = req.message.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    now = _utc_now()
+    user_msg = {
+        "id": str(uuid.uuid4()),
+        "role": "user",
+        "content": content,
+        "created_at": now,
+        "user_id": user["id"],
+        "session_id": req.session_id,
+        "surface": "ask-quantg-agent",
+    }
+    recent_messages = await db.ai_chats.find(
+        {"user_id": user["id"], "session_id": req.session_id},
+        {"_id": 0, "role": 1, "content": 1},
+    ).sort("created_at", -1).to_list(8)
+    recent_messages = list(reversed(recent_messages))
+
+    tool_results = await asyncio.gather(*[_run_agent_tool(name, user) for name in READ_ONLY_AGENT_TOOLS])
+    reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
+    provider = "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback"
+    failed_tools = [t for t in tool_results if t.get("status") != "ok"]
+    unavailable = [
+        {"tool": t["name"], "error": t.get("error", "unavailable")}
+        for t in failed_tools
+    ]
+
+    bot_msg = {
+        "id": str(uuid.uuid4()),
+        "role": "assistant",
+        "content": reply,
+        "provider": provider,
+        "model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash") if provider == "google-ai-studio" else "quantg-local-rules",
+        "created_at": _utc_now(),
+        "user_id": user["id"],
+        "session_id": req.session_id,
+        "surface": "ask-quantg-agent",
+        "read_only": True,
+        "tool_calls": [
+            {
+                "name": t["name"],
+                "status": t.get("status"),
+                "started_at": t.get("started_at"),
+                "finished_at": t.get("finished_at"),
+                "error": t.get("error"),
+            }
+            for t in tool_results
+        ],
+    }
+    audit_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "session_id": req.session_id,
+        "question": content,
+        "gemini_response": reply,
+        "provider": provider,
+        "model": bot_msg["model"],
+        "read_only": True,
+        "rules": {
+            "can_place_orders": False,
+            "can_cancel_orders": False,
+            "can_modify_trades": False,
+            "can_change_strategy_risk_broker_settings": False,
+        },
+        "tool_calls": list(tool_results),
+        "created_at": _utc_now(),
+    }
+    await db.ai_chats.insert_many([user_msg, bot_msg])
+    await db.agent_audit_logs.insert_one(audit_doc)
+    return {
+        "id": bot_msg["id"],
+        "role": "assistant",
+        "content": reply,
+        "provider": bot_msg["provider"],
+        "model": bot_msg["model"],
+        "created_at": bot_msg["created_at"],
+        "read_only": True,
+        "tools_used": [
+            {
+                "name": t["name"],
+                "status": t.get("status"),
+                "error": t.get("error"),
+            }
+            for t in tool_results
+        ],
+        "unavailable": unavailable,
+    }
 
 
 @router.get("/strategy-scores")

@@ -9095,11 +9095,12 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
 
 # Include modular routers into api router to ensure /api prefix is preserved
 from routes.auth import router as auth_router
-from routes.ai import router as ai_router
+from routes.ai import agent_router, router as ai_router
 from routes.ops import router as ops_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
+api.include_router(agent_router)
 api.include_router(ops_router)
 
 # ============== Boot ==============
