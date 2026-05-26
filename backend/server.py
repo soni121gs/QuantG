@@ -792,12 +792,12 @@ def _quantbot_reply(message: str) -> str:
             "  * **Ticks:** Keep the tick evaluation interval at **30 seconds** (do not go below 15s).\n"
             "  * **Diversity:** Distribute strategies across different symbols (NIFTY, BANKNIFTY, MCX Crude) and timeframes to minimize overlapping API calls."
         )
-    if "kotak" in text or "mcx" in text or "commodity" in text or "gas" in text or "oil" in text:
+    if "mcx" in text or "commodity" in text or "gas" in text or "oil" in text:
         return (
-            "🛢️ **Kotak Neo & MCX Commodities Integration**\n\n"
-            "- **Commodity Options & Futures:** QuantG supports MCX commodities (Crude Oil, Natural Gas) via the Kotak Neo gateway.\n"
-            "- **Symbol Formatting:** Always use exact Kotak-compliant MCX symbols (e.g., `CRUDEOIL26MAYFUT` or `NATURALGAS26MAYFUT`).\n"
-            "- **Risk Management:** Commodity margins are high. Double-check your capital allocation bounds in the strategy card's 'Risk & Exit Bounds' before switching live trading on."
+            "🛢️ **Upstox MCX Commodities Integration**\n\n"
+            "- **Commodity Options & Futures:** QuantG supports MCX crude oil and natural gas through Upstox instrument master resolution.\n"
+            "- **Instrument Keys:** The engine uses exact Upstox `instrument_key` values from the JSON master, never guessed MCX symbols.\n"
+            "- **Risk Management:** Commodity option premiums move fast. Start in paper mode, use one lot, and confirm TP/SL exits before switching live trading on."
         )
     if "filter" in text or "fake" in text or "bot" in text or "accuracy" in text or "score" in text:
         return (
@@ -846,8 +846,8 @@ def _quantbot_reply(message: str) -> str:
         "👋 **QuantBot v11.0 Live Assistant**\n\n"
         "I am fully updated on the QuantG terminal architecture! Ask me about:\n"
         "- `Upstox HFT` (low-latency order routing, adaptive `is_hft` validation scoring)\n"
-        "- `Zerodha Kite` (performance guides, API rate limits, hardware thresholds)\n"
-        "- `Kotak Neo MCX` (commodity option symbols, Crude Oil / Natural Gas setups)\n"
+        "- `Upstox V3 feed` (websocket status, instrument_key subscriptions, tick freshness)\n"
+        "- `Upstox MCX` (instrument-master contract resolution for Crude Oil / Natural Gas)\n"
         "- `AI Signal Validation` (the 9 layers of `FakeSignalFilter` and scoring rules)\n"
         "- `Python Strategy Code` (standard `run(data)` syntax and deterministic sandbox design)\n"
         "- `Risk Bounds` (custom SL/TP, Trailing stops, cooldowns, daily loss limits)"
@@ -871,9 +871,9 @@ You are QuantBot inside QuantG, a personal Indian algo-trading terminal. You are
 
 ### QUANTG TERMINAL ARCHITECTURE & CORE CAPABILITIES
 1. **Supported Brokers & Routing:**
-   - **Zerodha Kite:** Standard REST/WebSocket ticker integration. Rate-limited to ~100 calls/min. Recommended limits: max 2-3 concurrent live strategies, scanning every 30 seconds.
-   - **Kotak Neo:** Standard integration supporting Equity/F&O and MCX Commodities. Commodity symbol format requires exact Kotak-compliant structures (e.g., `CRUDEOIL26MAYFUT`, `NATURALGAS26MAYFUT`).
-   - **Upstox API v2 HFT Gateway:** Configured to run on high-speed order execution pipelines at `api-hft.upstox.com` in live mode when `hft=True` is provided (e.g. standard for HFT option scalp presets).
+   - **Upstox-only Runtime:** Market data, instrument resolution, margin checks, and orders route through Upstox APIs.
+   - **Upstox Market Data Feed V3:** Live strategies use V3 websocket ticks and exact `instrument_key` values from the Upstox instrument master.
+   - **Upstox Orders:** Strategy signals only request BUY/SELL intent; the QuantG order manager resolves the contract, checks risk/margin, and places one controlled order.
 2. **Fake Signal Filter (AI Validation Bot) & Scoring Rules:**
    - Evaluates signals using a 9-layer scoring model (0-100% confidence score, standard threshold is **40%**, HFT threshold is **35%**).
    - **HFT Scoring Mode:** Engaged automatically if strategy name or description contains "HFT" or "scalper".
@@ -1356,48 +1356,88 @@ DEFAULT_STRATEGY_RISK = {
 
 DEFAULT_OPTION_STRATEGIES = [
     {
-        "name": "NIFTY Intraday Theta Straddle",
-        "description": "Automated delta-neutral intraday straddle writing. Sells ATM NIFTY Call & Put options at 9:20 AM to capture maximum time decay (Theta) and auto-closes at 3:15 PM.",
-        "underlying": "NIFTY", "strike_mode": "ATM_SELL", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
+        "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
+        "description": "Upstox-compatible single-leg NIFTY ATM option buying strategy. Uses live NIFTY candles, resolves the exact Upstox option instrument_key, enters on momentum, and exits through the same order manager.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
-    if len(data) < 20: return []
+    if len(data) < 35: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
     signals = []
-    for i in range(len(data)):
-        dt = data[i]['date']
-        try:
-            time_part = dt.split(" ")[1][:5]
-        except Exception:
-            continue
-        if time_part == "09:20":
-            signals.append({'date': dt, 'action': 'SELL', 'reason': 'Straddle Entry'})
-        elif time_part == "15:15":
-            signals.append({'date': dt, 'action': 'BUY', 'reason': 'EOD Exit'})
+    position = "NONE"
+    entry = 0.0
+    for i in range(21, len(data)):
+        ema8 = sum(closes[i-7:i+1]) / 8
+        ema21 = sum(closes[i-20:i+1]) / 21
+        range12 = max(highs[i-11:i+1]) - min(lows[i-11:i+1])
+        momentum = closes[i] - closes[i-3]
+        bullish = closes[i] > ema8 > ema21 and momentum > range12 * 0.18
+        bearish = closes[i] < ema8 < ema21 and momentum < -range12 * 0.18
+        if position == "LONG":
+            pnl = (closes[i] - entry) / entry * 100
+            if closes[i] < ema8 or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NIFTY option exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry - closes[i]) / entry * 100
+            if closes[i] > ema8 or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NIFTY put exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NIFTY CE momentum'})
+                position = "LONG"
+                entry = closes[i]
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NIFTY PE momentum'})
+                position = "SHORT"
     return signals
 """,
-        "market_suitability": "Sideways Range-bound (Theta Harvesting)",
+        "market_suitability": "Upstox live trend and momentum",
     },
     {
-        "name": "BANKNIFTY Weekly Income Strangle",
-        "description": "Shorts BANKNIFTY Call & Put options 100 points out-of-the-money (OTM) at 9:20 AM. High probability weekly premium harvesting.",
-        "underlying": "BANKNIFTY", "strike_mode": "ATM_SELL", "otm_points": 100, "lots": 1,
-        "strategy_type": "Option Selling", "required_capital": 150000.0, "instrument_group": "NFO",
+        "name": "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+        "description": "Upstox-compatible single-leg BANKNIFTY ATM option buying strategy. It avoids multi-leg selling, resolves the exact Upstox option instrument_key, and lets the order manager place one BUY/exit cycle.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
-    if len(data) < 20: return []
+    if len(data) < 35: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
     signals = []
-    for i in range(len(data)):
-        dt = data[i]['date']
-        try:
-            time_part = dt.split(" ")[1][:5]
-        except Exception:
-            continue
-        if time_part == "09:20":
-            signals.append({'date': dt, 'action': 'SELL', 'reason': 'Strangle Entry'})
-        elif time_part == "15:15":
-            signals.append({'date': dt, 'action': 'BUY', 'reason': 'EOD Exit'})
+    position = "NONE"
+    entry = 0.0
+    for i in range(22, len(data)):
+        channel_high = max(highs[i-12:i])
+        channel_low = min(lows[i-12:i])
+        avg_range = sum(highs[j] - lows[j] for j in range(i-12, i)) / 12
+        bullish = closes[i] > channel_high and closes[i] - closes[i-1] > avg_range * 0.35
+        bearish = closes[i] < channel_low and closes[i-1] - closes[i] > avg_range * 0.35
+        mid = (channel_high + channel_low) / 2
+        if position == "LONG":
+            pnl = (closes[i] - entry) / entry * 100
+            if closes[i] < mid or pnl <= -0.4 or pnl >= 0.9:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY option exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry - closes[i]) / entry * 100
+            if closes[i] > mid or pnl <= -0.4 or pnl >= 0.9:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY put exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY CE breakout'})
+                position = "LONG"
+                entry = closes[i]
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY PE breakout'})
+                position = "SHORT"
     return signals
 """,
-        "market_suitability": "Sideways Range-bound (Theta Harvesting)",
+        "market_suitability": "Upstox live volatility breakout",
     },
     {
         "name": "NIFTY VWAP Trend Breakout",
@@ -2883,6 +2923,8 @@ _seed_templates_by_name = {
 DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
 LEGACY_DEFAULT_STRATEGY_NAMES = {
+    "NIFTY Intraday Theta Straddle",
+    "BANKNIFTY Weekly Income Strangle",
     # 17 legacy default strategy names
     "NIFTY Momentum EMA",
     "NIFTY RSI Reversion",
@@ -3976,6 +4018,37 @@ async def _evaluate_strategy_risk(user_id: str, sid: str) -> bool:
     return False
 
 
+async def _is_upstox_strategy_feed_stale(user_id: str) -> tuple[bool, str]:
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway or not gateway.connected:
+        return True, "upstox_not_connected"
+    status = gateway.status() or {}
+    feed = status.get("feed_status") or {}
+    state = str(feed.get("state") or "").lower()
+    connected = bool(feed.get("connected"))
+    subscribed_count = int(feed.get("subscribed_count") or 0)
+    last_tick = feed.get("last_tick_time") or status.get("last_tick_at")
+    if not connected and state not in {"connected", "reconnecting"}:
+        return True, f"feed_{state or 'disconnected'}"
+    if subscribed_count <= 0:
+        # A live position may have been restored after restart before the feed
+        # resubscribed. Let the position monitor quote via REST instead of
+        # force-closing a valid trade on a startup timing gap.
+        return False, "feed_not_subscribed_yet"
+    if not last_tick:
+        return False, "waiting_for_first_tick"
+    try:
+        last_dt = datetime.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - last_dt.astimezone(timezone.utc)).total_seconds()
+    except Exception:
+        return False, "last_tick_parse_pending"
+    if age > 180:
+        return True, f"last_tick_age_{int(age)}s"
+    return False, "feed_live"
+
+
 async def _strategy_health_loop(stop_event: asyncio.Event):
     logger.info("Strategy health monitor starting")
     while not stop_event.is_set():
@@ -3987,19 +4060,21 @@ async def _strategy_health_loop(stop_event: asyncio.Event):
                 uid = s["user_id"]
                 settings = await get_user_settings(uid)
                 if not settings.get("paper_mode", True):
-                    tick_manager = getattr(app.state, "tick_manager", None)
-                    tick_status = tick_manager.status_info(uid) if tick_manager else {"connected": False, "last_tick_at": None}
-                    last_tick = tick_status.get("last_tick_at")
-                    stale = True
-                    if last_tick:
-                        try:
-                            last_dt = datetime.fromisoformat(last_tick)
-                            stale = (datetime.now(timezone.utc) - last_dt).total_seconds() > 120
-                        except Exception:
-                            stale = True
-                    if not tick_status.get("connected") or stale:
-                        await _close_strategy_positions(uid, s["id"], reason="feed-stale")
-                        continue
+                    active_positions = await db.strategy_positions.count_documents({
+                        "user_id": uid,
+                        "strategy_id": s["id"],
+                        "status": {"$in": ["OPEN", "FILLED", "EXITING"]},
+                    })
+                    if active_positions:
+                        feed_stale, feed_reason = await _is_upstox_strategy_feed_stale(uid)
+                        if feed_stale:
+                            logger.warning(
+                                "Closing strategy positions because Upstox V3 feed is stale strategy=%s reason=%s",
+                                s["id"],
+                                feed_reason,
+                            )
+                            await _close_strategy_positions(uid, s["id"], reason="feed-stale")
+                            continue
                 try:
                     if await _evaluate_strategy_risk(uid, s["id"]):
                         await _close_strategy_positions(uid, s["id"], reason="risk-trigger")
@@ -9203,7 +9278,7 @@ async def startup():
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
-                                    app.state.runner_stop, _resolve_option)
+                                    app.state.runner_stop, _resolve_option, _close_strategy_positions)
     )
     app.state.health_stop = asyncio.Event()
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))

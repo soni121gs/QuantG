@@ -160,7 +160,7 @@ async def _release_lock(db) -> None:
 
 
 async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio.Event,
-                      resolve_option_fn=None):
+                      resolve_option_fn=None, close_strategy_fn=None):
     """Main loop. Dependencies injected to avoid circular imports.
 
     resolve_option_fn(user_id, underlying, signal_action, strike_mode, otm_points,
@@ -290,6 +290,36 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 # Determine if this strategy trades OPTIONS instead of equity
                 opt_cfg = (vc or {}).get("options") or {}
                 option_contract = None
+                option_buying_mode = bool(opt_cfg.get("enabled")) and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
+                if option_buying_mode and action == "SELL":
+                    active_position = await db.strategy_positions.find_one(
+                        {
+                            "user_id": s["user_id"],
+                            "strategy_id": s["id"],
+                            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+                        },
+                        {"_id": 0, "id": 1},
+                    )
+                    if active_position and close_strategy_fn:
+                        await close_strategy_fn(s["user_id"], s["id"], reason="strategy-sell-signal")
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set,
+                                      "last_signal_action": action,
+                                      "last_signals_count": signals_count,
+                                      "last_filter_reason": "SELL signal used as option-buying exit."},
+                             "$inc": inc_set},
+                        )
+                    else:
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set,
+                                      "last_signal_action": action,
+                                      "last_signals_count": signals_count,
+                                      "last_filter_reason": "SELL signal ignored: option-buying strategy has no active position."},
+                             "$inc": inc_set},
+                        )
+                    continue
                 if opt_cfg.get("enabled") and resolve_option_fn:
                     try:
                         option_contract = await resolve_option_fn(
