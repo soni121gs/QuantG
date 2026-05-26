@@ -3030,6 +3030,10 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
             "broker": "upstox",
             "mode": strategy_mode,
             "visual_config.options.enabled": True,
+        }, "$unset": {
+            "last_data_source": "",
+            "last_error": "",
+            "last_filter_reason": "",
         }},
     )
     return {
@@ -6944,7 +6948,8 @@ async def _resolve_option_for_strategy(
             "BANKNIFTY": "NSE_INDEX|Nifty Bank",
             "SENSEX": "BSE_INDEX|SENSEX"
         }
-        if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+        commodity_underlyings = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
+        if underlying in commodity_underlyings:
             active_sym = _mcx_active_future_symbol(underlying)
             upstox_keys[underlying] = f"MCX_FO|{active_sym}"
             
@@ -6958,6 +6963,41 @@ async def _resolve_option_for_strategy(
                     spot = float(spot_ltp)
             except Exception as e:
                 logger.warning(f"Failed to fetch Upstox spot price: {e}")
+
+        if spot is None and underlying in commodity_underlyings:
+            future_queries = [underlying]
+            if underlying == "CRUDEOILM":
+                future_queries.append("CRUDEOIL")
+            for query in future_queries:
+                if spot is not None:
+                    break
+                for segment in ("COMM", "FO", "ALL"):
+                    try:
+                        search = await asyncio.to_thread(
+                            upstox_gw.search_instruments,
+                            query,
+                            exchanges="MCX",
+                            segments=segment,
+                            instrument_types="FUT",
+                            expiry="current_month",
+                            records=10,
+                        )
+                        for node in (search.get("data") if isinstance(search, dict) else []) or []:
+                            instrument_type = str(node.get("instrument_type") or "").upper()
+                            key = node.get("instrument_key")
+                            if instrument_type != "FUT" or not key:
+                                continue
+                            quote = await asyncio.to_thread(upstox_gw.get_market_quote, [key])
+                            qnode = (quote.get("data") or {}).get(key) or {}
+                            ltp = qnode.get("last_price") or qnode.get("ltp")
+                            if ltp:
+                                spot = float(ltp)
+                                upstox_keys[underlying] = key
+                                break
+                        if spot is not None:
+                            break
+                    except Exception as e:
+                        logger.warning(f"Upstox MCX future search failed for {query}/{segment}: {e}")
                 
         if spot is None:
             if not is_paper:
@@ -7001,23 +7041,41 @@ async def _resolve_option_for_strategy(
         if not instrument_token:
             try:
                 exch = "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("BSE" if underlying == "SENSEX" else "NSE")
-                segment = "COMM" if exch == "MCX" else "FO"
-                query = underlying.replace("CRUDEOILM", "CRUDEOIL")
-                search = await asyncio.to_thread(
-                    upstox_gw.search_instruments,
-                    query,
-                    exchanges=exch,
-                    segments=segment,
-                    instrument_types=opt_type,
-                    expiry="current_week" if exch != "MCX" else "current_month",
-                    atm_offset=0,
-                    records=30,
-                )
-                candidates = search.get("data") if isinstance(search, dict) else []
+                segment_candidates = ("COMM", "FO", "ALL") if exch == "MCX" else ("FO", "OPT", "ALL")
+                expiry_candidates = ("current_month", "next_month", None) if exch == "MCX" else ("current_week", "next_week", "current_month", None)
+                query_roots = [underlying]
+                if underlying == "CRUDEOILM":
+                    query_roots.append("CRUDEOIL")
+                query_candidates = []
+                for root in query_roots:
+                    query_candidates.extend([f"{root} {int(strike)}", root])
+                candidates = []
+                for query in dict.fromkeys(query_candidates):
+                    for segment in segment_candidates:
+                        for expiry_filter in expiry_candidates:
+                            search = await asyncio.to_thread(
+                                upstox_gw.search_instruments,
+                                query,
+                                exchanges=exch,
+                                segments=segment,
+                                instrument_types=opt_type,
+                                expiry=expiry_filter,
+                                atm_offset=0,
+                                records=30,
+                            )
+                            batch = search.get("data") if isinstance(search, dict) else []
+                            if batch:
+                                candidates.extend(batch)
+                    if candidates:
+                        break
                 best = None
                 best_distance = None
                 for node in candidates or []:
-                    if str(node.get("instrument_type") or "").upper() != opt_type:
+                    node_opt_type = str(node.get("instrument_type") or node.get("option_type") or "").upper()
+                    if node_opt_type != opt_type:
+                        continue
+                    key = node.get("instrument_key")
+                    if not key:
                         continue
                     node_strike = float(node.get("strike_price") or 0)
                     distance = abs(node_strike - float(strike))
@@ -7033,6 +7091,7 @@ async def _resolve_option_for_strategy(
                         lot_size = int(float(best.get("lot_size")))
                     else:
                         lot_size = options_helper.LOT_SIZES.get(underlying, 50)
+                    logger.info("Resolved Upstox option %s %s strike=%s key=%s symbol=%s", underlying, opt_type, strike, instrument_token, tradingsymbol)
             except Exception as e:
                 logger.warning(f"Upstox instrument search failed: {e}")
             

@@ -305,7 +305,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             await db.strategies.update_one(
                                 {"id": s["id"]},
                                 {"$set": {**eval_set,
-                                          "last_error": "Options resolution failed (markets closed / no session?)",
+                                          "last_error": f"Upstox option contract resolution failed for {opt_cfg.get('underlying', 'NIFTY')}. Check OAuth, exchange segment permission, and instrument search logs.",
                                           "last_signals_count": signals_count},
                                  "$inc": inc_set})
                             continue
