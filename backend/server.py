@@ -6959,10 +6959,37 @@ async def _resolve_option_for_strategy(
                 res = await asyncio.to_thread(upstox_gw.get_market_quote, [upstox_keys[underlying]])
                 node = res.get("data", {}).get(upstox_keys[underlying]) or {}
                 spot_ltp = node.get("last_price") or node.get("ltp")
+                if not spot_ltp:
+                    spot_ltp = UpstoxGateway.parse_quote_ltp(res, upstox_keys[underlying])
                 if spot_ltp:
                     spot = float(spot_ltp)
             except Exception as e:
                 logger.warning(f"Failed to fetch Upstox spot price: {e}")
+
+        if spot is None and underlying in {"NIFTY", "BANKNIFTY", "SENSEX"}:
+            try:
+                index_exchange = "BSE" if underlying == "SENSEX" else "NSE"
+                index_query = "Nifty Bank" if underlying == "BANKNIFTY" else ("Nifty 50" if underlying == "NIFTY" else "SENSEX")
+                search = await asyncio.to_thread(
+                    upstox_gw.search_instruments,
+                    index_query,
+                    exchanges=index_exchange,
+                    segments="INDEX",
+                    instrument_types="INDEX",
+                    records=5,
+                )
+                for node in (search.get("data") if isinstance(search, dict) else []) or []:
+                    key = node.get("instrument_key")
+                    if not key:
+                        continue
+                    quote = await asyncio.to_thread(upstox_gw.get_market_quote, [key])
+                    spot_ltp = UpstoxGateway.parse_quote_ltp(quote, key)
+                    if spot_ltp:
+                        spot = float(spot_ltp)
+                        upstox_keys[underlying] = key
+                        break
+            except Exception as e:
+                logger.warning(f"Upstox index search failed for {underlying}: {e}")
 
         if spot is None and underlying in commodity_underlyings:
             future_queries = [underlying]
