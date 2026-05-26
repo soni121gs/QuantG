@@ -282,6 +282,22 @@ export default function Layout({ children }) {
             </div>
           )}
           {children}
+
+          {/* SEBI Compliance F&O Risk Disclosure */}
+          <div className="mt-8 p-4 qd-card bg-[rgba(255,159,10,0.03)] border-l-2 border-[var(--qd-warn)] text-xs text-[var(--qd-text-2)] leading-relaxed rounded-sm" data-testid="sebi-disclosure">
+            <h4 className="font-mono font-bold text-[var(--qd-warn)] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <ShieldAlert size={14} /> SEBI Mandated Derivative Risk Disclosure
+            </h4>
+            <ul className="list-disc pl-4 space-y-1 font-mono text-[10px]">
+              <li>9 out of 10 individual traders in equity Futures and Options (F&O) segment incurred net losses.</li>
+              <li>On average, loss makers registered a net trading loss close to ₹ 50,000.</li>
+              <li>Over and above the net trading losses incurred, loss-makers expended an additional 28% of net trading losses as transaction costs.</li>
+              <li>Those making net profits incurred transaction costs of 15% to 50% of their net profits.</li>
+            </ul>
+            <p className="mt-2 text-[9px] text-[var(--qd-text-3)] font-mono italic">
+              Source: SEBI study dated January 25, 2023 on "Analysis of Profit and Loss of Individual Traders dealing in equity Futures and Options Segment".
+            </p>
+          </div>
         </main>
       </div>
 
