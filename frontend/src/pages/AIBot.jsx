@@ -17,7 +17,7 @@ const MODES = [
 const BRIEF_PROMPTS = [
   "Create a short market brief for NIFTY, BANKNIFTY, SENSEX, and MCX commodities.",
   "Summarize risks before placing live orders today.",
-  "Build a checklist for commodity trades using exact Kotak MCX symbols.",
+  "Build a checklist for commodity trades using Upstox instrument keys.",
 ];
 
 export default function AIBot() {

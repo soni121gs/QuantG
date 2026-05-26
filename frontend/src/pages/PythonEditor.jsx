@@ -116,8 +116,8 @@ function updateSmaWindowInCode(code, key, value) {
 
 function formatDataSource(source) {
   if (!source) return "—";
-  if (source.startsWith("zerodha-kite-5minute")) return source.includes("tick-live") ? "REAL ticker 5m" : "REAL Kite 5m";
-  if (source.startsWith("zerodha-kite-day")) return "REAL Kite day";
+  if (source.includes("kite-5minute")) return source.includes("tick-live") ? "Legacy ticker 5m" : "Legacy 5m";
+  if (source.includes("kite-day")) return "Legacy day";
   if (source.startsWith("mock-5minute")) return "MOCK 5m";
   if (source.startsWith("mock-day")) return "MOCK day";
   return source;

@@ -4,7 +4,7 @@ import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
 
-const BROKER_LABELS = { zerodha: "Zerodha", kotak_neo: "Kotak Neo", upstox: "Upstox" };
+const BROKER_LABELS = { upstox: "Upstox" };
 
 export default function MarketHub() {
   const [health, setHealth] = useState(null);
@@ -70,26 +70,7 @@ export default function MarketHub() {
     }
   };
 
-  const startKotakTicker = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post("/market/kotak-ticker/start");
-      await load();
-      if (r.data.started) {
-        toast.success(`Kotak ticker started for ${r.data.tokens || 0} symbols`);
-      } else {
-        toast.error(r.data.reason || "Kotak ticker could not start");
-      }
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Kotak ticker start failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const brokers = health?.brokers || {
-    zerodha: health?.zerodha,
-    kotak_neo: health?.kotak_neo,
     upstox: health?.upstox,
   };
 
@@ -136,16 +117,11 @@ export default function MarketHub() {
         <section className="qd-card p-4 xl:col-span-2">
           <div className="flex items-start justify-between gap-3 mb-3">
             <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Ticker Quality</h2>
-            <button onClick={startKotakTicker} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
-              Start Kotak ticker
-            </button>
             <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
               Auto-pick
             </button>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <FeedCard name="Zerodha" data={feed?.zerodha} />
-            <FeedCard name="Kotak Neo" data={feed?.kotak_neo} />
+          <div className="grid grid-cols-1 gap-3">
             <FeedCard name="Upstox" data={feed?.upstox} />
           </div>
           <div className="mt-3 text-xs font-mono text-[var(--qd-text-2)]">

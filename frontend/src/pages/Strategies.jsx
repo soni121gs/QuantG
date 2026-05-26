@@ -35,7 +35,7 @@ const timeAgo = (iso) => {
 
 const sourceLabel = (source) => {
   if (!source) return "-";
-  if (source.startsWith("zerodha-kite-5minute")) return source.includes("tick-live") ? "Real ticker" : "Kite 5m";
+  if (source.includes("kite-5minute")) return source.includes("tick-live") ? "Legacy ticker" : "Legacy 5m";
   if (source.startsWith("mock-5minute")) return "Mock 5m";
   return source;
 };
@@ -68,25 +68,19 @@ export default function Strategies() {
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState("score");
 
-  // Broker states
-  const [zStatus, setZStatus] = useState({ connected: false });
-  const [kotakStatus, setKotakStatus] = useState({ connected: false });
+  // Broker state
   const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [strategiesRes, scoresRes, zRes, kRes, uRes] = await Promise.all([
+      const [strategiesRes, scoresRes, uRes] = await Promise.all([
         api.get("/strategies"),
         api.get("/ai/strategy-scores").catch(() => ({ data: { scores: [] } })),
-        api.get("/zerodha/status").catch(() => ({ data: { connected: false } })),
-        api.get("/kotak/status").catch(() => ({ data: { connected: false } })),
         api.get("/upstox/status").catch(() => ({ data: { connected: false } })),
       ]);
       setList(strategiesRes.data || []);
       setScores(Object.fromEntries((scoresRes.data?.scores || []).map((row) => [row.strategy_id, row])));
-      setZStatus(zRes.data || { connected: false });
-      setKotakStatus(kRes.data || { connected: false });
       setUpstoxStatus(uRes.data || { connected: false });
     } finally {
       setLoading(false);
@@ -284,7 +278,7 @@ export default function Strategies() {
             <Zap className="mx-auto mb-4 text-indigo-400 animate-pulse" size={48} />
             <h2 className="font-head text-2xl font-bold text-white mb-2">No Option Strategies Found</h2>
             <p className="text-sm text-[var(--qd-text-2)] max-w-lg mx-auto mb-8">
-              Initialize your QuantG terminal with the standard HFT & low-latency option-trading presets tailored specifically for Upstox, Zerodha, and Kotak.
+              Initialize your QuantG terminal with HFT and low-latency option-trading presets tailored specifically for Upstox.
             </p>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left mb-8">
@@ -353,8 +347,6 @@ export default function Strategies() {
               manualOrder={manualOrder}
               exitAll={exitAll}
               load={load}
-              zStatus={zStatus}
-              kotakStatus={kotakStatus}
               upstoxStatus={upstoxStatus}
             />
           ))}
@@ -366,7 +358,7 @@ export default function Strategies() {
   );
 }
 
-function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, exitAll, load, zStatus, kotakStatus, upstoxStatus }) {
+function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, exitAll, load, upstoxStatus }) {
   const live = s.status === "live";
   const paused = s.status === "paused";
   const notice = noticeFor(s);
@@ -463,10 +455,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     if (s.name?.toLowerCase().includes("upstox") || s.description?.toLowerCase().includes("upstox")) {
       return { name: "Upstox HFT", connected: upstoxStatus?.connected };
     }
-    if (s.asset_class === "commodity" || s.instrument_group === "MCX" || s.name?.toLowerCase().includes("commodity")) {
-      return { name: "Kotak Neo", connected: kotakStatus?.connected };
-    }
-    return { name: "Zerodha", connected: zStatus?.connected };
+    return { name: "Upstox HFT", connected: upstoxStatus?.connected };
   };
 
   const broker = getBrokerStatus();
@@ -705,8 +694,6 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
                   className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                   <option value="upstox">Upstox (HFT Enabled)</option>
-                  <option value="zerodha">Zerodha (Kite)</option>
-                  <option value="kotak_neo">Kotak Neo</option>
                 </select>
               </div>
               <div>

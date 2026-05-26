@@ -146,7 +146,7 @@ export default function Auth({ mode: initialMode = "login" }) {
               <span className="cyber-gradient-text">HFT Trading Terminal.</span>
             </h1>
             <p className="text-base text-[var(--qd-text-2)] leading-relaxed">
-              A high-precision, low-latency execution desk tailored for index options and commodities. Trade completely independent of legacy brokers, or connect seamlessly via Upstox and Kotak Neo.
+              A high-precision, low-latency execution desk tailored for index options and commodities, routed through Upstox API v2.
             </p>
           </div>
 
@@ -293,4 +293,3 @@ const Field = ({ icon, placeholder, value, onChange, type = "text", testid }) =>
     />
   </div>
 );
-

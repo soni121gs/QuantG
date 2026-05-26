@@ -116,17 +116,9 @@ export default function OpsConsole() {
 
   const counts = data?.counts || {};
   const ticker = data?.ticker || {};
-  const zerodhaTicker = data?.zerodha_ticker || {};
-  const kotakTicker = data?.kotak_ticker || {};
-  const zerodha = data?.zerodha || {};
-  const kotak = data?.kotak_neo || {};
   const upstox = data?.upstox || {};
   const rateLimits = data?.rate_limits || {};
   const prefs = data?.broker_preferences || {};
-
-  // Active broker flags to determine status panel rendering
-  const isZerodhaActive = prefs.data_broker === "zerodha" || prefs.execution_broker === "zerodha";
-  const isKotakActive = prefs.data_broker === "kotak_neo" || prefs.execution_broker === "kotak_neo";
   const isUpstoxActive = prefs.data_broker === "upstox" || prefs.execution_broker === "upstox";
 
   // Calculate Margin Metrics
@@ -243,19 +235,9 @@ export default function OpsConsole() {
       )}
 
       {/* SYSTEM STATUS RIBBON */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <MetricCard label="Mode" value={data?.mode || "PAPER"} tone={data?.mode === "LIVE" ? "loss" : "warn"} isPulse={data?.mode === "LIVE"} />
         <MetricCard label="Market" value={data?.market?.status || "CLOSED"} tone={data?.market?.open ? "profit" : "warn"} />
-        <MetricCard 
-          label="Zerodha" 
-          value={!isZerodhaActive ? "Inactive" : (zerodha.connected ? "Active" : "Down")} 
-          tone={!isZerodhaActive ? "normal" : (zerodha.connected ? "profit" : "warn")} 
-        />
-        <MetricCard 
-          label="Kotak Neo" 
-          value={!isKotakActive ? "Inactive" : (kotak.connected ? "Ready" : "Offline")} 
-          tone={!isKotakActive ? "normal" : (kotak.connected ? "profit" : "warn")} 
-        />
         <MetricCard 
           label="Upstox API" 
           value={!isUpstoxActive ? "Inactive" : (upstox.connected ? "Connected" : "Offline")} 
@@ -447,27 +429,11 @@ export default function OpsConsole() {
             </h2>
             
             <div className="space-y-3 font-mono text-xs">
-              {(!prefs.data_broker || prefs.data_broker === "zerodha") && (
-                <ChecklistItem 
-                  label="Zerodha Ticker" 
-                  checked={zerodhaTicker.connected} 
-                  details={`${zerodhaTicker.subscribed_tokens ?? 0} tokens active`} 
-                />
-              )}
-              {(!prefs.data_broker || prefs.data_broker === "kotak_neo") && (
-                <ChecklistItem 
-                  label="Kotak Neo Ticker" 
-                  checked={kotakTicker.connected} 
-                  details={`${kotakTicker.ticks ?? 0} ticks ingested`} 
-                />
-              )}
-              {(!prefs.data_broker || prefs.data_broker === "upstox") && (
-                <ChecklistItem 
-                  label="Upstox Feed" 
-                  checked={upstox.connected} 
-                  details={upstox.connected ? "Ingestion online" : "Auth missing"} 
-                />
-              )}
+              <ChecklistItem
+                label="Upstox Feed"
+                checked={upstox.connected}
+                details={upstox.connected ? "Ingestion online" : "Auth missing"}
+              />
               <ChecklistItem 
                 label="SQLite Write Lock" 
                 checked={true} 
@@ -551,7 +517,7 @@ export default function OpsConsole() {
           />
           <ActionCard
             icon={Wifi}
-            title={prefs.data_broker === "kotak_neo" ? "Restart Kotak Ticker" : "Restart Zerodha Ticker"}
+            title="Restart Upstox Feed"
             text="Flush active websocket subscriptions and perform full telemetry handshake."
             busy={busy === "ticker"}
             onClick={() => run("ticker", "/ops/ticker/restart")}
@@ -765,4 +731,3 @@ const ActionCard = ({ icon: Icon, title, text, onClick, busy, danger }) => (
     </span>
   </button>
 );
-

@@ -520,7 +520,7 @@ export default function Dashboard() {
                   <Field label="NIFTY Index" value={telemetry?.market_status?.nifty?.ltp ? money(telemetry.market_status.nifty.ltp) : "Waiting"} />
                   <Field label="SENSEX Index" value={telemetry?.market_status?.sensex?.ltp ? money(telemetry.market_status.sensex.ltp) : "Waiting"} />
                   <Field label="Last Tick Time" value={telemetry?.market_status?.last_tick_time ? new Date(telemetry.market_status.last_tick_time).toLocaleTimeString() : "-"} />
-                  <Field label="Telemetry Source" value={telemetry?.market_status?.data_source || "Zerodha Feed"} />
+                  <Field label="Telemetry Source" value={telemetry?.market_status?.data_source || "Upstox Feed"} />
                 </div>
               </div>
             </aside>
@@ -664,7 +664,7 @@ export default function Dashboard() {
         <div className="space-y-5">
           {/* Commodity metrics */}
           <section className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-            <KpiCard label="Commodity Feed" value={commodities[0]?.source === "kotak_neo" ? "KOTAK LIVE" : "UPSTOX LIVE"} icon={Activity} sub="Realtime High-Frequency Feed" />
+            <KpiCard label="Commodity Feed" value="UPSTOX LIVE" icon={Activity} sub="Realtime High-Frequency Feed" />
             <KpiCard label="MCX Positions" value={commodityPositions.length} icon={PieChart} sub="Active MCX Contracts" />
             <KpiCard label="MCX Orders" value={commodityOrders.length} icon={Power} sub="MCX Orders Filled Today" />
             <KpiCard label="MCX Status" value="Market Open" icon={Shield} tone="text-[var(--qd-profit)]" sub="Session trades 09:00 - 23:30" />

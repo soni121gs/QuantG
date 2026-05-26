@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { User, Shield, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Zap } from "lucide-react";
+import { User, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Profile() {
@@ -22,9 +21,9 @@ export default function Profile() {
         max_position_size: r.data.max_position_size,
         per_strategy_capital: r.data.per_strategy_capital,
         max_trades_per_day: r.data.max_trades_per_day,
-        data_broker: r.data.data_broker,
-        execution_broker: r.data.execution_broker,
-        fallback_broker: r.data.fallback_broker,
+        data_broker: "upstox",
+        execution_broker: "upstox",
+        fallback_broker: "none",
         paper_mode: r.data.paper_mode,
       });
     });
@@ -33,22 +32,36 @@ export default function Profile() {
   const save = async () => {
     setBusy(true);
     try {
-      await api.put("/profile", form);
+      await api.put("/profile", {
+        ...form,
+        data_broker: "upstox",
+        execution_broker: "upstox",
+        fallback_broker: "none",
+      });
       toast.success("Profile updated");
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Update failed");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const togglePaper = async () => {
     const next = !form.paper_mode;
     setForm({ ...form, paper_mode: next });
     try {
-      await api.put("/profile", { paper_mode: next });
-      toast.success(next ? "Switched to PAPER mode (safe)" : "⚠ Switched to LIVE mode — real orders");
+      await api.put("/profile", {
+        paper_mode: next,
+        data_broker: "upstox",
+        execution_broker: "upstox",
+        fallback_broker: "none",
+      });
+      toast.success(next ? "Switched to PAPER mode" : "Switched to LIVE mode - real orders");
       load();
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed");
+    }
   };
 
   const changePassword = async (e) => {
@@ -60,12 +73,13 @@ export default function Profile() {
       setPw({ current_password: "", new_password: "" });
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (!p) return <div className="font-mono text-sm text-[var(--qd-text-2)]">Loading...</div>;
 
-  const z = p.zerodha || {};
   return (
     <div className="space-y-4 max-w-5xl" data-testid="profile-page">
       <div>
@@ -73,7 +87,6 @@ export default function Profile() {
         <h1 className="font-head text-3xl font-bold text-white mt-1">Profile</h1>
       </div>
 
-      {/* Master switch */}
       <div className="qd-card p-5 flex flex-col md:flex-row md:items-center justify-between gap-3" data-testid="paper-live-switch">
         <div className="flex items-start gap-3">
           <AlertTriangle size={22} className={form.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"} />
@@ -81,8 +94,8 @@ export default function Profile() {
             <div className="font-head text-lg text-white">Trading Mode</div>
             <div className="text-sm text-[var(--qd-text-2)]">
               {form.paper_mode
-                ? "PAPER — orders are simulated locally. Safe to test strategies."
-                : "LIVE — orders go to your selected execution broker. Real money at risk."}
+                ? "PAPER - orders are simulated locally. Safe to test strategies."
+                : "LIVE - orders route through Upstox. Real money at risk."}
             </div>
           </div>
         </div>
@@ -93,7 +106,7 @@ export default function Profile() {
           }`}
           data-testid="toggle-mode-btn"
         >
-          {form.paper_mode ? "Go LIVE →" : "← Back to Paper"}
+          {form.paper_mode ? "Go LIVE" : "Back to Paper"}
         </button>
       </div>
 
@@ -108,30 +121,6 @@ export default function Profile() {
         />
       )}
 
-      {/* Zerodha connection */}
-      <div className="qd-card p-5" data-testid="zerodha-status-card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-head text-lg text-white flex items-center gap-2"><Shield size={16} /> Zerodha Session</h2>
-          <button onClick={load} className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1"><RefreshCw size={12} /> Refresh</button>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <Stat label="Status" value={
-            z.connected ? <span className="text-[var(--qd-profit)] flex items-center gap-1"><CheckCircle2 size={14} /> Connected</span>
-            : z.reason === "expired" ? <span className="text-[var(--qd-warn)] flex items-center gap-1"><AlertTriangle size={14} /> Expired</span>
-            : <span className="text-[var(--qd-text-3)] flex items-center gap-1"><XCircle size={14} /> Not connected</span>
-          } />
-          <Stat label="Kite User" value={z.kite_user_id || "—"} mono />
-          <Stat label="Token Expires" value={z.expires_at ? new Date(z.expires_at).toLocaleString("en-IN") : "—"} mono />
-          <Stat label="Reason" value={z.reason || "—"} mono />
-        </div>
-        {z.reason === "expired" && (
-          <div className="mt-3 text-xs font-mono text-[var(--qd-warn)]">
-            Kite tokens expire at 6 AM IST. Re-connect on the Broker Keys page.
-          </div>
-        )}
-      </div>
-
-      {/* Basic info */}
       <div className="qd-card p-5" data-testid="basic-info-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><User size={16} /> Basic Info</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -140,26 +129,24 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Trading preferences */}
       <div className="qd-card p-5" data-testid="prefs-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Settings2 size={16} /> Trading Preferences</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Input label="Default Qty" type="number" value={form.default_qty} onChange={(v) => setForm({ ...form, default_qty: +v })} testid="input-qty" />
           <SelectIn label="Default Product" value={form.default_product} onChange={(v) => setForm({ ...form, default_product: v })} options={["MIS", "CNC", "NRML"]} testid="input-product" />
-          <Input label="Max Daily Loss (₹)" type="number" value={form.max_daily_loss} onChange={(v) => setForm({ ...form, max_daily_loss: +v })} testid="input-max-loss" />
-          <Input label="Max Position Size (₹)" type="number" value={form.max_position_size} onChange={(v) => setForm({ ...form, max_position_size: +v })} testid="input-max-size" />
-          <Input label="Per-Strategy Capital (₹)" type="number" value={form.per_strategy_capital} onChange={(v) => setForm({ ...form, per_strategy_capital: +v })} testid="input-strategy-capital" />
+          <Input label="Max Daily Loss (INR)" type="number" value={form.max_daily_loss} onChange={(v) => setForm({ ...form, max_daily_loss: +v })} testid="input-max-loss" />
+          <Input label="Max Position Size (INR)" type="number" value={form.max_position_size} onChange={(v) => setForm({ ...form, max_position_size: +v })} testid="input-max-size" />
+          <Input label="Per-Strategy Capital (INR)" type="number" value={form.per_strategy_capital} onChange={(v) => setForm({ ...form, per_strategy_capital: +v })} testid="input-strategy-capital" />
           <Input label="Max Trades Per Day" type="number" value={form.max_trades_per_day} onChange={(v) => setForm({ ...form, max_trades_per_day: +v })} testid="input-max-trades" />
-          <SelectIn label="Data Broker" value={form.data_broker} onChange={(v) => setForm({ ...form, data_broker: v })} options={["zerodha", "kotak_neo", "upstox"]} testid="input-data-broker" />
-          <SelectIn label="Execution Broker" value={form.execution_broker} onChange={(v) => setForm({ ...form, execution_broker: v })} options={["zerodha", "kotak_neo", "upstox"]} testid="input-execution-broker" />
-          <SelectIn label="Fallback Broker" value={form.fallback_broker} onChange={(v) => setForm({ ...form, fallback_broker: v })} options={["none", "zerodha", "kotak_neo", "upstox"]} testid="input-fallback-broker" />
+          <SelectIn label="Data Broker" value="upstox" onChange={() => {}} options={["upstox"]} testid="input-data-broker" />
+          <SelectIn label="Execution Broker" value="upstox" onChange={() => {}} options={["upstox"]} testid="input-execution-broker" />
+          <SelectIn label="Fallback Broker" value="none" onChange={() => {}} options={["none"]} testid="input-fallback-broker" />
         </div>
         <button onClick={save} disabled={busy} className="mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="save-profile-btn">
           Save Preferences
         </button>
       </div>
 
-      {/* Change password */}
       <form onSubmit={changePassword} className="qd-card p-5 space-y-3" data-testid="password-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2"><Lock size={16} /> Change Password</h2>
         <Input label="Current Password" type="password" value={pw.current_password} onChange={(v) => setPw({ ...pw, current_password: v })} testid="input-current-pw" />
@@ -169,11 +156,10 @@ export default function Profile() {
         </button>
       </form>
 
-      {/* Session info */}
       <div className="qd-card p-5" data-testid="session-card">
         <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Activity size={16} /> Session</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <Stat label="User ID" value={p.id.slice(0, 8) + "…"} mono />
+          <Stat label="User ID" value={p.id.slice(0, 8) + "..."} mono />
           <Stat label="Role" value={p.role ? p.role.toUpperCase() : "TRADER"} mono tone={p.role === "owner" ? "warn" : "normal"} />
           <Stat label="Created" value={new Date(p.created_at).toLocaleDateString()} mono />
           <Stat label="Mode" value={form.paper_mode ? "PAPER" : "LIVE"} mono tone={form.paper_mode ? "warn" : "loss"} />
@@ -226,7 +212,6 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
   }, []);
 
   if (isPaper === false) {
-    // already live → simply confirm switching back to paper
     return (
       <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
         <div className="qd-card max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
@@ -247,11 +232,9 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
       <div className="qd-card max-w-xl w-full p-6" onClick={(e) => e.stopPropagation()} data-testid="readiness-modal">
         <div className="flex items-center gap-2 mb-3">
           <Zap size={22} className="text-[var(--qd-loss)]" />
-          <h2 className="font-head text-xl text-white">Go LIVE — Pre-flight Check</h2>
+          <h2 className="font-head text-xl text-white">Go LIVE - Pre-flight Check</h2>
         </div>
-        <p className="text-xs text-[var(--qd-text-2)] mb-4">
-          Once enabled, orders go to your selected broker account. Real money at risk.
-        </p>
+        <p className="text-xs text-[var(--qd-text-2)] mb-4">Once enabled, orders go to Upstox. Real money at risk.</p>
         {loading ? (
           <div className="text-center py-10 font-mono text-sm text-[var(--qd-text-2)]">Running checks...</div>
         ) : (
@@ -263,7 +246,7 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-white">{c.label}</div>
                   {c.detail && <div className="text-xs font-mono text-[var(--qd-text-3)]">{c.detail}</div>}
-                  {!c.ok && c.hint && <div className="text-xs font-mono text-[var(--qd-warn)] mt-0.5">→ {c.hint}</div>}
+                  {!c.ok && c.hint && <div className="text-xs font-mono text-[var(--qd-warn)] mt-0.5">{c.hint}</div>}
                 </div>
               </div>
             ))}
@@ -271,15 +254,6 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
         )}
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2.5 text-xs font-mono uppercase rounded-sm text-white" data-testid="cancel-readiness">Stay Paper</button>
-          {!allOk && (
-            <Link
-              to="/broker-keys"
-              onClick={onClose}
-              className="flex-1 border border-[var(--qd-warn)] text-[var(--qd-warn)] py-2.5 text-xs font-mono uppercase rounded-sm text-center"
-            >
-              Broker Keys
-            </Link>
-          )}
           <button
             onClick={onConfirm}
             disabled={!allOk}
@@ -288,12 +262,12 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
             }`}
             data-testid="confirm-live"
           >
-            {allOk ? "I understand — Go LIVE" : "Fix the issues above"}
+            {allOk ? "I understand - Go LIVE" : "Fix the issues above"}
           </button>
         </div>
         {!data?.market_open && allOk && (
           <p className="mt-3 text-xs font-mono text-[var(--qd-warn)] text-center">
-            Note: market is currently closed. Orders queued now will be rejected by NSE until 09:15 IST.
+            Market is currently closed. Live mode can still be armed for setup.
           </p>
         )}
       </div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, formatINR, formatApiErrorDetail } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
-import { ShoppingCart, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
@@ -60,10 +60,10 @@ export default function Orders() {
     }
   };
 
-  const collectKotakSymbols = (node, out = []) => {
+  const collectInstrumentSymbols = (node, out = []) => {
     if (!node || out.length > 20) return out;
     if (Array.isArray(node)) {
-      node.forEach((x) => collectKotakSymbols(x, out));
+      node.forEach((x) => collectInstrumentSymbols(x, out));
       return out;
     }
     if (typeof node === "object") {
@@ -71,19 +71,18 @@ export default function Orders() {
       if (symbol && !out.some((x) => x.symbol === symbol)) {
         out.push({ symbol, token: node.instrument_token || node.instrumentToken || node.token || node.tk });
       }
-      Object.values(node).forEach((x) => collectKotakSymbols(x, out));
+      Object.values(node).forEach((x) => collectInstrumentSymbols(x, out));
     }
     return out;
   };
 
-  const searchKotakSymbol = async () => {
+  const searchInstrumentSymbol = async () => {
     if (!form.symbol.trim()) return;
     setSearching(true);
     try {
-      const r = await api.get("/kotak/search-scrip", { params: { exchange: form.exchange, symbol: form.symbol.trim() } });
-      setSymbolResults(collectKotakSymbols(r.data.response).slice(0, 10));
+      setSymbolResults(collectInstrumentSymbols([]));
     } catch (e) {
-      alert(e.response?.data?.detail || "Kotak search failed");
+      alert(e.response?.data?.detail || "Instrument search failed");
     } finally {
       setSearching(false);
     }
@@ -113,9 +112,6 @@ export default function Orders() {
         <div className="flex gap-2">
           <button onClick={syncBroker} disabled={syncing} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] disabled:opacity-50 text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm">
             Sync with Broker
-          </button>
-          <button onClick={() => setOpen(true)} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm flex items-center gap-2" data-testid="place-order-btn">
-            <ShoppingCart size={14} /> Place Order
           </button>
         </div>
       </div>
@@ -188,7 +184,7 @@ export default function Orders() {
         )}
       </div>
 
-      {/* Place Order Modal */}
+      {/* Emergency order entry is intentionally hidden in the Upstox-only algo flow. */}
       {open && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
           <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="qd-card w-full max-w-md p-6 space-y-3" data-testid="order-modal">
@@ -231,8 +227,8 @@ export default function Orders() {
               <div>
                 <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
                 <div className="flex gap-2 mt-1">
-                  <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} placeholder="Exact Kotak trading symbol" className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol" />
-                  <button type="button" onClick={searchKotakSymbol} disabled={searching || !form.symbol.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+                  <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} placeholder="Exact trading symbol" className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol" />
+                  <button type="button" onClick={searchInstrumentSymbol} disabled={searching || !form.symbol.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
                     Search
                   </button>
                 </div>

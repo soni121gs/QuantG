@@ -168,7 +168,7 @@ class TokenOut(BaseModel):
 
 
 class BrokerKeyReq(BaseModel):
-    broker: str = "zerodha"
+    broker: str = "upstox"
     api_key: str
     api_secret: str
     user_id_at_broker: Optional[str] = None
@@ -261,7 +261,7 @@ class OrderReq(BaseModel):
 
 
 class InstrumentRef(BaseModel):
-    broker: str          # 'zerodha', 'kotak', 'upstox'
+    broker: str          # 'upstox'
     segment: str         # 'EQUITY', 'FUTURES', 'OPTIONS', 'COMMODITY'
     exchange: str        # 'NSE', 'BSE', 'NFO', 'MCX'
     tradingsymbol: str
@@ -1023,9 +1023,9 @@ def _market_score_for_strategy(row: Dict[str, Any], market_by_symbol: Dict[str, 
 # ============== Routes: Broker keys ==============
 @api.post("/broker/keys", response_model=BrokerKeyOut)
 async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
-    broker = (req.broker or "zerodha").strip().lower()
-    if broker not in {"zerodha", "kotak_neo", "upstox"}:
-        raise HTTPException(400, "Unsupported broker")
+    broker = (req.broker or "upstox").strip().lower()
+    if broker != "upstox":
+        raise HTTPException(400, "QuantG is configured for Upstox-only execution")
     # upsert per user+broker
     existing = await db.broker_keys.find_one({"user_id": user["id"], "broker": broker})
     doc = {
@@ -1038,18 +1038,6 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
         "created_at": (existing or {}).get("created_at", datetime.now(timezone.utc).isoformat()),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if broker == "kotak_neo":
-        # Allow Kotak to be configured from the UI. Env vars still override
-        # these values at runtime for VPS deployments.
-        for key, value in {
-            "mobile_number": req.mobile_number,
-            "mpin": req.mpin,
-            "totp_secret_key": req.totp_secret_key,
-        }.items():
-            if value not in (None, ""):
-                doc[key] = encrypt_secret(value)
-            elif existing and existing.get(key):
-                doc[key] = existing.get(key)
     if broker == "upstox":
         redirect_uri = (req.redirect_uri or (existing or {}).get("redirect_uri") or os.environ.get("UPSTOX_REDIRECT_URI") or "").strip()
         if not redirect_uri:
@@ -1073,7 +1061,7 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
 
 @api.get("/broker/keys", response_model=List[BrokerKeyOut])
 async def list_broker_keys(user=Depends(get_current_user)):
-    rows = await db.broker_keys.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    rows = await db.broker_keys.find({"user_id": user["id"], "broker": "upstox"}, {"_id": 0}).to_list(50)
     out = []
     for r in rows:
         k = decrypt_secret(r.get("api_key"))
@@ -7235,9 +7223,9 @@ async def get_user_settings(user_id: str) -> dict:
         "max_position_size": (user or {}).get("max_position_size", 50000.0),
         "per_strategy_capital": (user or {}).get("per_strategy_capital", 25000.0),
         "max_trades_per_day": (user or {}).get("max_trades_per_day", 20),
-        "data_broker": (user or {}).get("data_broker", "zerodha"),
-        "execution_broker": (user or {}).get("execution_broker", "zerodha"),
-        "fallback_broker": (user or {}).get("fallback_broker", "none"),
+        "data_broker": "upstox",
+        "execution_broker": "upstox",
+        "fallback_broker": "none",
         "paper_mode": (user or {}).get("paper_mode", True),
     }
 
@@ -7248,55 +7236,26 @@ async def live_readiness(user=Depends(get_current_user)):
     """Pre-flight checks before flipping to LIVE. Returns each check + an overall ready flag."""
     checks = []
     settings = await get_user_settings(user["id"])
-    data_broker = settings.get("data_broker", "zerodha")
-    execution_broker = settings.get("execution_broker", "zerodha")
-    required_brokers = {b for b in (data_broker, execution_broker) if b in {"zerodha", "kotak_neo", "upstox"}}
-    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
-    kotak_status = await get_user_kotak_status(user["id"])
+    data_broker = "upstox"
+    execution_broker = "upstox"
     upstox_status = await get_user_upstox_status(user["id"])
-    zerodha_required = "zerodha" in required_brokers
-    kotak_required = "kotak_neo" in required_brokers
-    upstox_required = "upstox" in required_brokers
-    required_keys_ok = (
-        (not zerodha_required or bool(keys))
-        and (not kotak_required or bool(kotak_status.get("keys_saved")))
-        and (not upstox_required or bool(upstox_status.get("keys_saved")))
-    )
+    required_keys_ok = bool(upstox_status.get("keys_saved"))
     checks.append({
         "id": "broker_keys",
-        "label": "Required broker credentials saved",
+        "label": "Upstox credentials saved",
         "ok": required_keys_ok,
     })
-    kite, status = await get_user_kite(user["id"])
-    checks[-1]["hint"] = "Save required broker credentials on Broker Keys" if not required_keys_ok else None
-    required_sessions_ok = (
-        (not zerodha_required or bool(status.get("connected")))
-        and (not kotak_required or bool(kotak_status.get("connected")))
-        and (not upstox_required or bool(upstox_status.get("connected")))
-    )
+    checks[-1]["hint"] = "Save Upstox credentials on Broker Keys" if not required_keys_ok else None
+    required_sessions_ok = bool(upstox_status.get("connected"))
     checks.append({
-        "id": "kite_session",
-        "label": "Active selected broker session",
+        "id": "upstox_session",
+        "label": "Active Upstox session",
         "ok": required_sessions_ok,
         "detail": f"data={data_broker}, execution={execution_broker}",
-        "hint": "Connect the selected data/execution broker on Broker Keys" if not required_sessions_ok else None,
+        "hint": "Connect Upstox OAuth on Broker Keys" if not required_sessions_ok else None,
     })
-    funds_ok = False
-    funds_msg = None
-    if execution_broker == "kotak_neo":
-        funds_ok = bool(kotak_status.get("connected"))
-        funds_msg = "Kotak connected; live margin check not exposed yet."
-    elif execution_broker == "upstox":
-        funds_ok = bool(upstox_status.get("connected"))
-        funds_msg = "Upstox connected; live margin check not exposed yet."
-    elif kite:
-        try:
-            margins = kite.margins(segment="equity")
-            avail = float((margins.get("available", {}) or {}).get("live_balance") or 0)
-            funds_ok = avail > 100
-            funds_msg = f"₹{avail:.2f} available"
-        except Exception as e:
-            funds_msg = f"Margins call failed: {e}"
+    funds_ok = bool(upstox_status.get("connected"))
+    funds_msg = "Upstox connected; live margin check not exposed yet."
     checks.append({
         "id": "funds",
         "label": "Sufficient funds in account",
@@ -7345,17 +7304,7 @@ async def live_readiness(user=Depends(get_current_user)):
             "hint": "MCX trades 09:00 – 23:30 IST, Mon–Fri" if not mcx_open else None,
         })
 
-    tick_manager = getattr(app.state, "tick_manager", None)
-    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
-    tick_auth_failed = bool(tick_status.get("auth_failed"))
-    kotak_gateway_status = kotak_status.get("gateway") or {}
-
-    if data_broker == "zerodha":
-        selected_tick_ok = bool((tick_status.get("connected") or tick_status.get("connecting")) and not tick_auth_failed)
-    elif data_broker == "upstox":
-        selected_tick_ok = bool(upstox_status.get("connected"))
-    else:  # kotak_neo
-        selected_tick_ok = bool(kotak_gateway_status.get("authenticated") and kotak_gateway_status.get("ticks", 0) > 0)
+    selected_tick_ok = bool(upstox_status.get("connected"))
 
     checks.append({
         "id": "tick_feed",
@@ -7363,21 +7312,11 @@ async def live_readiness(user=Depends(get_current_user)):
         "ok": selected_tick_ok,
         "detail": (
             f"upstox connected" if data_broker == "upstox" and selected_tick_ok else
-            "auth failed; reconnect Zerodha" if data_broker == "zerodha" and tick_auth_failed else
-            f"connected, last tick {tick_status.get('last_tick_at')}" if data_broker == "zerodha" and tick_status.get("connected") else
-            "connecting" if data_broker == "zerodha" and tick_status.get("connecting") else
-            f"kotak connected, ticks {kotak_gateway_status.get('ticks', 0)}" if data_broker == "kotak_neo" and selected_tick_ok else
             "not connected"
         ),
         "hint": (
             "Connect Upstox on Broker Keys to start the market feed."
             if data_broker == "upstox" and not selected_tick_ok
-            else "Click Connect to Zerodha on Broker Keys to create a fresh Kite session."
-            if data_broker == "zerodha" and tick_auth_failed
-            else "Fetch a strategy or watchlist with a live Kite session to start the websocket feed."
-            if data_broker == "zerodha" and not tick_status.get("connected")
-            else "Connect Kotak on Broker Keys and subscribe tokens."
-            if data_broker == "kotak_neo" and not selected_tick_ok
             else None
         ),
     })
@@ -7386,8 +7325,6 @@ async def live_readiness(user=Depends(get_current_user)):
     paper_mode = bool(settings.get("paper_mode", True))
     
     overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours", "tick_feed"})
-    if not paper_mode and not market_open:
-        overall_ready = False
         
     return {
         "ready": overall_ready,
@@ -8538,7 +8475,6 @@ async def paper_trading_stats(user=Depends(get_current_user)):
 @api.get("/profile")
 async def get_profile(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
-    _, kite_status = await get_user_kite(user["id"])
     paper_stats = await paper_trading_stats(user=user)
     return {
         "id": user["id"],
@@ -8547,8 +8483,6 @@ async def get_profile(user=Depends(get_current_user)):
         "role": user.get("role", "trader"),
         "version": APP_VERSION,
         **settings,
-        "zerodha": kite_status,
-        "kotak_neo": await get_user_kotak_status(user["id"]),
         "upstox": await get_user_upstox_status(user["id"]),
         "paper_trading_stats": paper_stats,
     }
@@ -8579,10 +8513,12 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
             raise HTTPException(status_code=400, detail=f"{f} cannot be negative")
     if "max_trades_per_day" in update and update["max_trades_per_day"] < 0:
         raise HTTPException(status_code=400, detail="max_trades_per_day cannot be negative")
-    broker_values = {"zerodha", "kotak_neo", "upstox", "none"}
-    for f in ("data_broker", "execution_broker", "fallback_broker"):
-        if f in update and update[f] not in broker_values:
-            raise HTTPException(status_code=400, detail=f"{f} must be one of {sorted(broker_values)}")
+    if "data_broker" in update and update["data_broker"] != "upstox":
+        raise HTTPException(status_code=400, detail="data_broker must be upstox")
+    if "execution_broker" in update and update["execution_broker"] != "upstox":
+        raise HTTPException(status_code=400, detail="execution_broker must be upstox")
+    if "fallback_broker" in update and update["fallback_broker"] not in {"none", "upstox"}:
+        raise HTTPException(status_code=400, detail="fallback_broker must be none or upstox")
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
     return await get_profile(user=user)

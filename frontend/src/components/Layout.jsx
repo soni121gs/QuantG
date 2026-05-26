@@ -14,7 +14,6 @@ import {
   X,
   UserCircle,
   TrendingUp,
-  AlertCircle,
   ShieldAlert,
   HeartPulse,
 } from "lucide-react";
@@ -270,17 +269,6 @@ export default function Layout({ children }) {
 
         {/* Main */}
         <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">
-          {profile?.execution_broker === "zerodha" && profile?.zerodha?.reason === "expired" && (
-            <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 mb-4 flex items-center justify-between gap-3" data-testid="token-expired-banner">
-              <div className="flex items-center gap-2">
-                <AlertCircle size={16} className="text-[var(--qd-warn)]" />
-                <span className="text-sm text-[var(--qd-text-2)]">
-                  <span className="text-[var(--qd-warn)] font-semibold">Zerodha session expired.</span> Re-connect to resume live trading.
-                </span>
-              </div>
-              <button onClick={() => navigate("/broker-keys")} className="bg-[var(--qd-warn)] text-black px-3 py-1.5 text-xs font-mono uppercase rounded-sm whitespace-nowrap">Re-connect</button>
-            </div>
-          )}
           {children}
 
           {/* SEBI Compliance F&O Risk Disclosure */}

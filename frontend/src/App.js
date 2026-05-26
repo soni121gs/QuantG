@@ -21,7 +21,6 @@ const Positions = React.lazy(() => import("./pages/Positions"));
 const Profile = React.lazy(() => import("./pages/Profile"));
 const OpsConsole = React.lazy(() => import("./pages/OpsConsole"));
 const MarketHub = React.lazy(() => import("./pages/MarketHub"));
-const ZerodhaCallback = React.lazy(() => import("./pages/ZerodhaCallback"));
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -54,7 +53,6 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/login" element={<PublicOnly><Auth mode="login" /></PublicOnly>} />
             <Route path="/signup" element={<PublicOnly><Auth mode="register" /></PublicOnly>} />
-            <Route path="/zerodha-callback" element={<ZerodhaCallback />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/strategies" element={<Protected><Strategies /></Protected>} />
             <Route path="/python" element={<Protected><PythonEditor /></Protected>} />
