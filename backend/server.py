@@ -7599,7 +7599,15 @@ async def ops_diagnostics(user):
     tick_manager = getattr(app.state, "tick_manager", None)
     zerodha_tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     kotak_tick_status = _kotak_ticker_status(user["id"])
-    tick_status = kotak_tick_status if settings.get("data_broker") == "kotak_neo" else zerodha_tick_status
+    upstox_gw = await get_user_upstox_gateway(user["id"])
+    upstox_status = upstox_gw.status() if upstox_gw else {"connected": False}
+    
+    if settings.get("data_broker") == "kotak_neo":
+        tick_status = kotak_tick_status
+    elif settings.get("data_broker") == "upstox":
+        tick_status = upstox_status
+    else:
+        tick_status = zerodha_tick_status
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
     stale_nonblocking_error_ids = [
         s.get("id")

@@ -270,7 +270,7 @@ export default function Layout({ children }) {
 
         {/* Main */}
         <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">
-          {profile?.zerodha?.reason === "expired" && (
+          {profile?.execution_broker === "zerodha" && profile?.zerodha?.reason === "expired" && (
             <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 mb-4 flex items-center justify-between gap-3" data-testid="token-expired-banner">
               <div className="flex items-center gap-2">
                 <AlertCircle size={16} className="text-[var(--qd-warn)]" />
