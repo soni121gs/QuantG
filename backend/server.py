@@ -1546,6 +1546,49 @@ DEFAULT_OPTION_STRATEGIES = [
 """,
         "market_suitability": "Volatile Breakout (HFT Execution)",
     },
+    {
+        "name": "NIFTY Quick EMA Scalper",
+        "description": "Super low-capital (INR 5,000) retail option buying scalp. Uses a fast 5-minute EMA crossover (3 EMA crossing 9 EMA) to catch quick momentum swings.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    if len(data) < 20: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(10, len(data)):
+        ema3 = sum(closes[i-2:i+1]) / 3
+        ema9 = sum(closes[i-8:i+1]) / 9
+        if ema3 > ema9 and closes[i] > closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'EMA Crossover Buy'})
+        elif ema3 < ema9 and closes[i] < closes[i-1]:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'EMA Crossover Sell'})
+    return signals
+""",
+        "market_suitability": "High-Frequency Retail Scalper",
+    },
+    {
+        "name": "BANKNIFTY Volatility Breakout",
+        "description": "Capital-efficient (INR 8,000) BANKNIFTY retail options buying strategy. Captures quick price expansions when closing candles break out of standard deviation bands.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 8000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    if len(data) < 25: return []
+    closes = [d['close'] for d in data]
+    signals = []
+    for i in range(20, len(data)):
+        sma = sum(closes[i-20:i]) / 20
+        var = sum((x - sma) ** 2 for x in closes[i-20:i]) / 20
+        std = var ** 0.5
+        upper = sma + 1.2 * std
+        lower = sma - 1.2 * std
+        if closes[i] > upper and closes[i-1] <= upper:
+            signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Volatility Band Breakout'})
+        elif closes[i] < lower and closes[i-1] >= lower:
+            signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Volatility Band Breakdown'})
+    return signals
+""",
+        "market_suitability": "Volatile Retail Momentum",
+    },
 ]
 
 LEGACY_OPTION_STRATEGIES = DEFAULT_OPTION_STRATEGIES
