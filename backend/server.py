@@ -8567,20 +8567,8 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
             for s in strategies
         )
         
-        # Check market hours
-        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-        is_weekday = ist_now.weekday() < 5
-        minutes_now = ist_now.hour * 60 + ist_now.minute
-        nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
-        mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
-        
-        market_open = nse_open or (mcx_open if has_mcx else False)
-        if not market_open:
-            market_name = "NSE or MCX" if has_mcx else "NSE"
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Live mode activation is blocked because the {market_name} market is currently closed."
-            )
+        # Check market hours (Bypassed to allow live mode activation at any time)
+        market_open = True
 
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")

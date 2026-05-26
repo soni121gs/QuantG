@@ -8,6 +8,8 @@ import {
   Layers,
   LineChart,
   PieChart,
+  Play,
+  Pause,
   Power,
   RefreshCw,
   Save,
@@ -272,6 +274,17 @@ export default function Dashboard() {
     await load();
   };
 
+  const toggleStrategy = async (id) => {
+    await api.post(`/strategies/${id}/toggle`);
+    await load();
+  };
+
+  const exitStrategy = async (id) => {
+    if (!window.confirm("Emergency Square Off: exit all open positions for this strategy?")) return;
+    await api.post(`/strategies/${id}/exit-all`);
+    await load();
+  };
+
   return (
     <div className="space-y-5" data-testid="dashboard-page">
       {/* Top Header Card */}
@@ -433,6 +446,7 @@ export default function Dashboard() {
                   {strategies.slice(0, 5).map((row) => {
                     const pos = row.active_position || {};
                     const spnl = pos.unrealized_pnl ?? row.daily_pnl?.realised_pnl ?? 0;
+                    const live = row.status === "live";
                     return (
                       <div key={row.strategy_id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3 hover:bg-[var(--qd-surface)]/20 px-2 rounded">
                         <div className="min-w-0">
@@ -443,10 +457,36 @@ export default function Dashboard() {
                             {pos.stoploss_price ? ` · SL ${money(pos.stoploss_price)}` : ""}
                           </div>
                         </div>
-                        <StatusPill tone={row.state === "OPEN" ? "good" : row.state === "COOLDOWN" ? "warn" : row.state === "DISABLED" ? "bad" : "neutral"}>
-                          {row.state || "Idle"}
-                        </StatusPill>
-                        <div className={`min-w-[100px] text-right font-mono text-xs font-semibold ${toneClass(spnl)}`}>
+                        <div className="flex items-center gap-2">
+                          <StatusPill tone={row.state === "OPEN" ? "good" : row.state === "COOLDOWN" ? "warn" : row.state === "DISABLED" ? "bad" : "neutral"}>
+                            {row.state || "Idle"}
+                          </StatusPill>
+                          
+                          {/* Live Running controls */}
+                          <button
+                            onClick={() => toggleStrategy(row.strategy_id)}
+                            className={`flex items-center justify-center p-1.5 rounded border transition-all ${
+                              live 
+                                ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]" 
+                                : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
+                            }`}
+                            title={live ? "Pause Strategy" : "Go Live / Resume Strategy"}
+                            data-testid={`dashboard-toggle-${row.strategy_id}`}
+                          >
+                            {live ? <Pause size={12} /> : <Play size={12} />}
+                          </button>
+
+                          {/* Emergency Square Off */}
+                          <button
+                            onClick={() => exitStrategy(row.strategy_id)}
+                            className="flex items-center justify-center p-1.5 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black transition-all"
+                            title="Square Off Strategy Positions"
+                            data-testid={`dashboard-exit-${row.strategy_id}`}
+                          >
+                            <Shield size={12} />
+                          </button>
+                        </div>
+                        <div className={`min-w-[80px] text-right font-mono text-xs font-semibold ${toneClass(spnl)}`}>
                           {money(spnl)}
                         </div>
                       </div>

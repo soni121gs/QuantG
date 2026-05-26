@@ -763,10 +763,14 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       </div>
 
       <div className="mt-auto pt-4">
-        <div className="grid grid-cols-3 gap-2">
-          <ActionButton onClick={() => manualOrder(s.id, "BUY")} tone="buy" icon={TrendingUp} label="Buy" />
-          <ActionButton onClick={() => manualOrder(s.id, "SELL")} tone="sell" icon={TrendingDown} label="Sell" />
-          <ActionButton onClick={() => exitAll(s.id)} tone="warn" icon={Shield} label="Exit" />
+        <div className="grid grid-cols-1 gap-2">
+          <button
+            onClick={() => exitAll(s.id)}
+            className="flex items-center justify-center gap-2 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black py-2.5 font-mono text-xs font-bold uppercase tracking-wider transition-all"
+            data-testid={`exit-all-${s.id}`}
+          >
+            <Shield size={14} /> Square Off / Exit Position
+          </button>
         </div>
         <div className="mt-2 grid grid-cols-[1fr_1fr_auto_auto] gap-2">
           <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white disabled:opacity-50" data-testid={`test-run-${s.id}`}>
