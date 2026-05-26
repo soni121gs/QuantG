@@ -103,6 +103,12 @@ _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
+COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
+COMMODITY_REQUIRED_CAPITAL = {
+    "CRUDEOIL": 30000.0,
+    "CRUDEOILM": 6000.0,
+    "NATURALGAS": 18000.0,
+}
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
@@ -423,6 +429,7 @@ SYMBOLS = [
 
 COMMODITY_SYMBOLS = [
     {"symbol": "CRUDEOIL", "name": "MCX Crude Oil", "base": 6550.0, "exchange": "MCX"},
+    {"symbol": "CRUDEOILM", "name": "MCX Crude Oil Mini", "base": 6550.0, "exchange": "MCX"},
     {"symbol": "NATURALGAS", "name": "MCX Natural Gas", "base": 245.0, "exchange": "MCX"},
 ]
 
@@ -635,12 +642,15 @@ async def _fetch_strategy_history(
                 exchange = "NSE"
             elif sym_upper == "SENSEX":
                 exchange = "BSE"
-            elif sym_upper in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} or "MCX" in sym_upper or sym_upper.endswith("FUT"):
+            elif sym_upper in COMMODITY_UNDERLYINGS or "MCX" in sym_upper or sym_upper.endswith("FUT"):
                 exchange = "MCX"
             else:
                 exchange = "NSE"
             token = _upstox_instrument_token(exchange, sym_upper)
-            if token:
+            token_candidates = [token] if token else []
+            if exchange == "MCX":
+                token_candidates.extend(await _search_upstox_mcx_future_keys(upstox_gw, sym_upper, limit=5))
+            for token in dict.fromkeys(k for k in token_candidates if k):
                 # Ensure we start tracking in background
                 upstox_gw.start_market_data_ws([token])
                 # Fetch candles
@@ -649,7 +659,7 @@ async def _fetch_strategy_history(
                 if live_data and len(live_data) >= min_required:
                     return {
                         "data": live_data,
-                        "source": f"upstox-{interval}:{sym_upper}",
+                        "source": f"upstox-{interval}:mcx-future:{sym_upper}" if exchange == "MCX" else f"upstox-{interval}:{sym_upper}",
                         "is_live": True,
                         "interval": interval,
                     }
@@ -661,7 +671,7 @@ async def _fetch_strategy_history(
         if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
             token = await _index_spot_token(kite, sym_upper)
             source_kind = "index-spot"
-        elif sym_upper in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+        elif sym_upper in COMMODITY_UNDERLYINGS:
             active_sym = _mcx_active_future_symbol(sym_upper)
             token = kite_helper.instrument_token(kite, active_sym, segment="MCX")
             source_kind = "commodity-future"
@@ -2795,7 +2805,40 @@ CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
     return signals
 """
 
-STANDARD_STRATEGY_CATALOG = []
+STANDARD_STRATEGY_CATALOG = [
+    {
+        "name": "UPSTOX MCX Crude Mini EMA Option Buyer",
+        "description": "Upstox MCX CRUDEOILM long-option scalper using fast EMA momentum on live 5-minute futures candles. One mini lot by default.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 6000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOILM_EMA_MOMENTUM_CODE,
+        "market_suitability": "Fast intraday crude mini momentum",
+    },
+    {
+        "name": "UPSTOX MCX Crude Mini RSI Option Buyer",
+        "description": "Upstox MCX CRUDEOILM long-option reversal strategy for stretched RSI moves. One mini lot by default.",
+        "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 6000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOILM_RSI_REVERSION_CODE,
+        "market_suitability": "Mean reversion after sharp crude mini moves",
+    },
+    {
+        "name": "UPSTOX MCX Natural Gas Breakout Option Buyer",
+        "description": "Upstox MCX NATURALGAS long-option breakout strategy using volatility bands on live 5-minute futures candles.",
+        "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 18000.0, "instrument_group": "MCX",
+        "python_code": NATURALGAS_HFT_MICRO_SCALPER_CODE,
+        "market_suitability": "Natural gas volatility expansion",
+    },
+    {
+        "name": "UPSTOX MCX Crude Volatility Option Buyer",
+        "description": "Upstox MCX CRUDEOIL long-option breakout strategy for compression-to-expansion crude oil moves.",
+        "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "MCX",
+        "python_code": CRUDEOIL_HFT_VOLATILITY_CODE,
+        "market_suitability": "Crude oil volatility breakout",
+    },
+]
 
 _seed_templates_by_name = {
     template["name"]: template
@@ -2858,10 +2901,10 @@ LEGACY_DEFAULT_STRATEGY_NAMES = {
 
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     underlying = str(template["underlying"]).upper()
-    instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "MCX" if underlying in {"CRUDEOIL", "NATURALGAS"} else "NFO")).upper()
+    instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "MCX" if underlying in COMMODITY_UNDERLYINGS else "NFO")).upper()
     strategy_type = template.get("strategy_type") or ("Option Selling" if str(template.get("strike_mode") or "").upper().endswith("SELL") else "Option Buying")
-    required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else 65000.0 if underlying == "CRUDEOIL" else 55000.0 if underlying == "NATURALGAS" else 35000.0))
-    is_commodity = instrument_group == "MCX" or underlying in {"CRUDEOIL", "NATURALGAS"}
+    required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else COMMODITY_REQUIRED_CAPITAL.get(underlying, 35000.0)))
+    is_commodity = instrument_group == "MCX" or underlying in COMMODITY_UNDERLYINGS
     options_block = {
         "enabled": True,
         "underlying": underlying,
@@ -2907,7 +2950,7 @@ def _strategy_asset_class(row: Dict[str, Any]) -> str:
         return explicit
     visual_config = row.get("visual_config") or {}
     symbol = str(visual_config.get("symbol") or "").upper()
-    if symbol in {"CRUDEOIL", "NATURALGAS"}:
+    if symbol in COMMODITY_UNDERLYINGS:
         return "commodity"
     options_config = visual_config.get("options") or {}
     if options_config.get("enabled"):
@@ -2925,7 +2968,7 @@ def _strategy_instrument_group(row: Dict[str, Any]) -> str:
         return str(exchange).upper()
     options_config = visual_config.get("options") or {}
     underlying = str(options_config.get("underlying") or visual_config.get("symbol") or "").upper()
-    if underlying in {"CRUDEOIL", "NATURALGAS"}:
+    if underlying in COMMODITY_UNDERLYINGS:
         return "MCX"
     if underlying == "SENSEX":
         return "BFO"
@@ -2967,8 +3010,7 @@ def _strategy_required_capital(row: Dict[str, Any]) -> float:
     base = {
         "NIFTY": 35000.0,
         "SENSEX": 45000.0,
-        "CRUDEOIL": 65000.0,
-        "NATURALGAS": 55000.0,
+        **COMMODITY_REQUIRED_CAPITAL,
     }.get(underlying, 25000.0)
     if _strategy_type(row) == "Option Selling":
         base = max(base, 125000.0)
@@ -3683,6 +3725,53 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     if "|" in symbol and "_" in symbol.split("|", 1)[0]:
         return symbol
     return None
+
+
+async def _search_upstox_mcx_future_keys(
+    gateway: UpstoxGateway,
+    underlying: str,
+    *,
+    limit: int = 5,
+) -> List[str]:
+    symbol = str(underlying or "").upper().strip()
+    if not symbol:
+        return []
+    queries = [symbol]
+    if symbol == "CRUDEOILM":
+        queries.append("CRUDEOIL")
+    keys: List[str] = []
+    for query in dict.fromkeys(queries):
+        for segment in ("COMM", "FO", "ALL"):
+            for expiry_filter in ("current_month", "next_month", None):
+                try:
+                    search = await asyncio.to_thread(
+                        gateway.search_instruments,
+                        query,
+                        exchanges="MCX",
+                        segments=segment,
+                        instrument_types="FUT",
+                        expiry=expiry_filter,
+                        records=10,
+                    )
+                except Exception as exc:
+                    logger.warning("Upstox MCX future search failed for %s/%s/%s: %s", query, segment, expiry_filter, exc)
+                    continue
+                for node in (search.get("data") if isinstance(search, dict) else []) or []:
+                    instrument_type = str(node.get("instrument_type") or "").upper()
+                    key = node.get("instrument_key")
+                    trading_symbol = str(node.get("trading_symbol") or node.get("tradingsymbol") or "").upper()
+                    if instrument_type != "FUT" or not key:
+                        continue
+                    if symbol == "CRUDEOILM" and "CRUDEOILM" not in trading_symbol and "CRUDEOIL" in trading_symbol:
+                        # Keep standard crude as a fallback, but prefer mini if present.
+                        keys.append(str(key))
+                    elif symbol in trading_symbol or query in trading_symbol:
+                        keys.insert(0, str(key))
+                    else:
+                        keys.append(str(key))
+                    if len(dict.fromkeys(keys)) >= limit:
+                        return list(dict.fromkeys(keys))[:limit]
+    return list(dict.fromkeys(keys))[:limit]
 
 
 
@@ -4999,6 +5088,17 @@ async def _resolve_order_fill_hint(
     # Try option premium LTP from option_contract
     if option_contract and option_contract.get("ltp"):
         return float(option_contract["ltp"])
+    if option_contract and execution_broker == "upstox" and option_contract.get("instrument_token"):
+        token = str(option_contract.get("instrument_token"))
+        gateway = await get_user_upstox_gateway(user_id)
+        if gateway and gateway.connected:
+            try:
+                quote = await asyncio.to_thread(gateway.get_market_quote, [token])
+                ltp = UpstoxGateway.parse_quote_ltp(quote, token)
+                if ltp and ltp > 0:
+                    return float(ltp)
+            except Exception as exc:
+                logger.warning("Upstox option LTP failed for %s: %s", token, exc)
 
     instr = intent.instrument
     try:
@@ -5493,6 +5593,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     side = (side or "").upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+    if option_contract:
+        option_side = str(option_contract.get("transaction_type") or "").upper()
+        if option_side in ("BUY", "SELL"):
+            side = option_side
     order_type = (order_type or "MARKET").upper()
     if order_type not in ("MARKET", "LIMIT"):
         raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
@@ -6910,7 +7014,7 @@ async def _resolve_option_for_strategy(
         
         return {
             "tradingsymbol": tradingsymbol,
-            "exchange": "NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO",
+            "exchange": "MCX" if underlying in COMMODITY_UNDERLYINGS else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
             "instrument_token": 999999 + int(strike),
             "lot_size": lot_size,
             "strike": strike,
@@ -6948,8 +7052,7 @@ async def _resolve_option_for_strategy(
             "BANKNIFTY": "NSE_INDEX|Nifty Bank",
             "SENSEX": "BSE_INDEX|SENSEX"
         }
-        commodity_underlyings = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
-        if underlying in commodity_underlyings:
+        if underlying in COMMODITY_UNDERLYINGS:
             active_sym = _mcx_active_future_symbol(underlying)
             upstox_keys[underlying] = f"MCX_FO|{active_sym}"
             
@@ -6991,7 +7094,7 @@ async def _resolve_option_for_strategy(
             except Exception as e:
                 logger.warning(f"Upstox index search failed for {underlying}: {e}")
 
-        if spot is None and underlying in commodity_underlyings:
+        if spot is None and underlying in COMMODITY_UNDERLYINGS:
             future_queries = [underlying]
             if underlying == "CRUDEOILM":
                 future_queries.append("CRUDEOIL")
@@ -7067,7 +7170,7 @@ async def _resolve_option_for_strategy(
 
         if not instrument_token:
             try:
-                exch = "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("BSE" if underlying == "SENSEX" else "NSE")
+                exch = "MCX" if underlying in COMMODITY_UNDERLYINGS else ("BSE" if underlying == "SENSEX" else "NSE")
                 segment_candidates = ("COMM", "FO", "ALL") if exch == "MCX" else ("FO", "OPT", "ALL")
                 expiry_candidates = ("current_month", "next_month", None) if exch == "MCX" else ("current_week", "next_week", "current_month", None)
                 query_roots = [underlying]
@@ -7126,7 +7229,7 @@ async def _resolve_option_for_strategy(
             if not is_paper:
                 logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
                 return None
-            if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+            if underlying in COMMODITY_UNDERLYINGS:
                 # MCX monthly option symbol format: CRUDEOILM26JUN6500CE
                 ist_now = datetime.now(timezone.utc) + IST_OFFSET
                 month_offset = 1 if ist_now.day > 18 else 0
@@ -7147,7 +7250,7 @@ async def _resolve_option_for_strategy(
             
         return {
             "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
-            "exchange": "MCX" if underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"} else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
+            "exchange": "MCX" if underlying in COMMODITY_UNDERLYINGS else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
             "instrument_token": instrument_token,
             "upstox_instrument_token": instrument_token,
             "lot_size": locals().get("lot_size") or options_helper.LOT_SIZES.get(underlying, 50),
@@ -7461,7 +7564,7 @@ async def live_readiness(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
     has_mcx = any(
         s.get("instrument_group") == "MCX"
-        or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+        or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
         or "MCX" in str(s.get("symbol")).upper()
         for s in strategies
     )
@@ -7587,7 +7690,7 @@ def _build_recovery_plan(
     # Check if they have commodity strategies
     has_mcx = any(
         s.get("instrument_group") == "MCX"
-        or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+        or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
         for s in errored
     ) or (execution_broker == "upstox" and not nse_open and mcx_open)
 
@@ -8681,7 +8784,7 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
         strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
         has_mcx = any(
             s.get("instrument_group") == "MCX"
-            or str(s.get("symbol")).upper() in {"CRUDEOIL", "NATURALGAS"}
+            or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
             or "MCX" in str(s.get("symbol")).upper()
             for s in strategies
         )
