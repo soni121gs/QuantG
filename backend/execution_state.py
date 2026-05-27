@@ -13,6 +13,38 @@ logger = logging.getLogger("quantg.execution_state")
 
 OPEN_ORDER_STATUSES = set(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
 TERMINAL_ORDER_STATUSES = set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES | {"FAILED"})
+DEFAULT_STOP_LOSS_PCT = 22.0
+DEFAULT_TAKE_PROFIT_PCT = 45.0
+
+
+def _pct(row: Dict[str, Any], *keys: str, default: float) -> float:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            try:
+                pct = float(value)
+                return pct if pct > 1 else pct * 100.0
+            except (TypeError, ValueError):
+                continue
+    return default
+
+
+def _risk_prices(entry: float, side: str, risk: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    if entry <= 0:
+        return {"stop_loss": None, "take_profit": None}
+    stop_loss = risk.get("stoploss_price") or risk.get("stop_loss")
+    take_profit = risk.get("target_price") or risk.get("take_profit")
+    side_text = str(side or "LONG").upper()
+    if stop_loss in (None, ""):
+        stop_pct = _pct(risk, "stop_loss_pct", "stoploss_pct", default=DEFAULT_STOP_LOSS_PCT)
+        stop_loss = entry * (1 - stop_pct / 100) if side_text != "SHORT" else entry * (1 + stop_pct / 100)
+    if take_profit in (None, ""):
+        target_pct = _pct(risk, "take_profit_pct", "target_pct", default=DEFAULT_TAKE_PROFIT_PCT)
+        take_profit = entry * (1 + target_pct / 100) if side_text != "SHORT" else entry * (1 - target_pct / 100)
+    return {
+        "stop_loss": round(float(stop_loss), 2) if stop_loss not in (None, "") else None,
+        "take_profit": round(float(take_profit), 2) if take_profit not in (None, "") else None,
+    }
 
 
 class ExecutionStateManager:
@@ -64,7 +96,19 @@ class ExecutionStateManager:
             {"user_id": user_id, "visibility": {"$ne": "hidden"}},
             {"_id": 0, "user_id": 0},
         ).sort("created_at", -1).to_list(200)
-        return [normalize_order_row(row) for row in rows]
+        orders = [normalize_order_row(row) for row in rows]
+        strategy_ids = {str(o.get("strategy_id")) for o in orders if o.get("strategy_id")}
+        if strategy_ids:
+            strategies = await self._db.strategies.find(
+                {"user_id": user_id, "id": {"$in": list(strategy_ids)}},
+                {"_id": 0, "id": 1, "name": 1},
+            ).to_list(500)
+            name_by_id = {str(s.get("id")): s.get("name") for s in strategies}
+            for order in orders:
+                sid = str(order.get("strategy_id") or "")
+                if sid and name_by_id.get(sid):
+                    order["strategy_name"] = name_by_id[sid]
+        return orders
 
     async def _load_strategy_positions(self, user_id: str) -> List[Dict[str, Any]]:
         rows = await self._db.strategy_positions.find(
@@ -83,23 +127,35 @@ class ExecutionStateManager:
             },
             {"_id": 0, "user_id": 0},
         ).to_list(500)
+        strategy_ids = {str(row.get("strategy_id")) for row in rows if row.get("strategy_id")}
+        name_by_id: Dict[str, Any] = {}
+        if strategy_ids:
+            strategies = await self._db.strategies.find(
+                {"user_id": user_id, "id": {"$in": list(strategy_ids)}},
+                {"_id": 0, "id": 1, "name": 1},
+            ).to_list(500)
+            name_by_id = {str(s.get("id")): s.get("name") for s in strategies}
         out: List[Dict[str, Any]] = []
         for row in rows:
             risk = row.get("tp_sl_tsl_config") or {}
-            stop_loss = risk.get("stoploss_price") or risk.get("stop_loss")
-            take_profit = risk.get("target_price") or risk.get("take_profit")
+            avg_price = float(row.get("average_buy_price") or 0)
+            position_side = row.get("position_side") or "LONG"
+            prices = _risk_prices(avg_price, position_side, risk)
+            stop_loss = risk.get("stoploss_price") or risk.get("stop_loss") or prices.get("stop_loss")
+            take_profit = risk.get("target_price") or risk.get("take_profit") or prices.get("take_profit")
             out.append({
                 "id": row.get("id"),
                 "strategy_id": row.get("strategy_id"),
+                "strategy_name": name_by_id.get(str(row.get("strategy_id") or "")),
                 "symbol": row.get("trading_symbol") or row.get("symbol"),
                 "exchange": row.get("exchange"),
                 "segment": segment_from_exchange(row.get("exchange") or "NSE", row.get("asset_class") or "DIRECT"),
                 "instrument_token": row.get("instrument_token"),
                 "qty": int(row.get("open_quantity") or row.get("quantity") or 0),
-                "avg_price": float(row.get("average_buy_price") or 0),
+                "avg_price": avg_price,
                 "status": row.get("status"),
                 "execution_status": row.get("status"),
-                "position_side": row.get("position_side") or "LONG",
+                "position_side": position_side,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "entry_order_id": row.get("entry_order_id"),
@@ -169,6 +225,7 @@ class ExecutionStateManager:
             })
             base.update({
                 "strategy_id": sp.get("strategy_id"),
+                "strategy_name": sp.get("strategy_name"),
                 "strategy_position_id": sp.get("id"),
                 "execution_status": sp.get("execution_status"),
                 "position_side": sp.get("position_side") or ledger.get("position_side") or "LONG",

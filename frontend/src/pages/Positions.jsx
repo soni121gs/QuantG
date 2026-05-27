@@ -67,6 +67,7 @@ export default function Positions() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
+                  <th className="px-4 py-2">Strategy</th>
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Qty</th>
                   <th className="px-4 py-2">Avg</th>
@@ -86,6 +87,7 @@ export default function Positions() {
                   const longPos = qty > 0;
                   return (
                     <tr key={`${p.symbol}-${p.strategy_id || ""}`} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`pos-${p.symbol}`}>
+                      <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{p.strategy_name || p.strategy_id || "broker"}</td>
                       <td className="px-4 py-2.5 text-white">{p.symbol}</td>
                       <td className={`px-4 py-2.5 ${longPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{longPos ? "+" : ""}{qty}</td>
                       <td className="px-4 py-2.5">{formatINR(p.avg_price)}</td>

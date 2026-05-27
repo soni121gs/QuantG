@@ -3322,9 +3322,73 @@ def _ledger_pct(value: Any, default: float) -> float:
     return pct / 100.0 if pct > 1 else pct
 
 
+def _risk_pct(risk: Dict[str, Any], *keys: str, default: float) -> float:
+    for key in keys:
+        value = risk.get(key)
+        if value not in (None, ""):
+            try:
+                pct = float(value)
+                return pct if pct > 1 else pct * 100.0
+            except (TypeError, ValueError):
+                continue
+    return float(default)
+
+
+def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw = dict(risk or {})
+    stop_pct = _risk_pct(raw, "stop_loss_pct", "stoploss_pct", "stop_pct", default=DEFAULT_STRATEGY_RISK["stop_loss_pct"])
+    target_pct = _risk_pct(raw, "take_profit_pct", "target_pct", "tp_pct", default=DEFAULT_STRATEGY_RISK["take_profit_pct"])
+    trail_trigger_pct = _risk_pct(raw, "trail_trigger_pct", default=DEFAULT_STRATEGY_RISK["trail_trigger_pct"])
+    trail_step_pct = _risk_pct(raw, "trail_step_pct", default=DEFAULT_STRATEGY_RISK["trail_step_pct"])
+    raw.update({
+        "stop_loss_pct": stop_pct,
+        "stoploss_pct": stop_pct,
+        "take_profit_pct": target_pct,
+        "target_pct": target_pct,
+        "trail_trigger_pct": trail_trigger_pct,
+        "trail_step_pct": trail_step_pct,
+        "trailing_sl_enabled": bool(raw.get("trailing_sl_enabled", True)),
+        "time_exit_minutes": int(raw.get("time_exit_minutes") or DEFAULT_STRATEGY_RISK["time_exit_minutes"]),
+        "exit_mode": raw.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
+    })
+    return raw
+
+
+def _position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None) -> Dict[str, Optional[float]]:
+    entry = float(position.get("average_buy_price") or 0)
+    if entry <= 0:
+        return {"stop_loss": None, "take_profit": None, "trailing_sl": None}
+    risk = _normalize_strategy_risk(position.get("tp_sl_tsl_config") or {})
+    side = str(position.get("position_side") or "LONG").upper()
+    stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
+    target_price = risk.get("target_price") or risk.get("take_profit")
+    if stop_price in (None, ""):
+        stop_pct = float(risk["stop_loss_pct"])
+        stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
+    if target_price in (None, ""):
+        target_pct = float(risk["take_profit_pct"])
+        target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
+    trailing_sl = risk.get("trailing_sl")
+    if risk.get("trailing_sl_enabled") and ltp and ltp > 0:
+        trigger_pct = float(risk["trail_trigger_pct"])
+        step_pct = float(risk["trail_step_pct"])
+        if side == "SHORT" and ltp <= entry * (1 - trigger_pct / 100):
+            candidate = ltp * (1 + step_pct / 100)
+            trailing_sl = min(float(trailing_sl or candidate), candidate)
+        elif side != "SHORT" and ltp >= entry * (1 + trigger_pct / 100):
+            candidate = ltp * (1 - step_pct / 100)
+            trailing_sl = max(float(trailing_sl or 0), candidate)
+    effective_stop = trailing_sl or stop_price
+    return {
+        "stop_loss": round(float(effective_stop), 2) if effective_stop not in (None, "") else None,
+        "take_profit": round(float(target_price), 2) if target_price not in (None, "") else None,
+        "trailing_sl": round(float(trailing_sl), 2) if trailing_sl not in (None, "") else None,
+    }
+
+
 def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
     visual_config = row.get("visual_config") or {}
-    risk = visual_config.get("risk") or {}
+    risk = _normalize_strategy_risk(visual_config.get("risk") or {})
     options_config = visual_config.get("options") or {}
     required_capital = row.get("required_capital")
     if required_capital is None:
@@ -3417,7 +3481,7 @@ async def _reserve_strategy_position(
         )
 
     row = await _strategy_row(user_id, strategy_id)
-    risk = ((row or {}).get("visual_config") or {}).get("risk") or {}
+    risk = _normalize_strategy_risk(((row or {}).get("visual_config") or {}).get("risk") or {})
     now = datetime.now(timezone.utc).isoformat()
     lock_ids = _strategy_lock_ids(user_id, strategy_id, instrument_key)
     lock_docs = [
@@ -3491,13 +3555,25 @@ async def _activate_strategy_position(
     if not reservation:
         return
     now = datetime.now(timezone.utc).isoformat()
-    risk_patch: Dict[str, Any] = dict(reservation.get("tp_sl_tsl_config") or {})
+    risk_patch: Dict[str, Any] = _normalize_strategy_risk(reservation.get("tp_sl_tsl_config") or {})
     if stop_loss is not None:
         risk_patch["stoploss_price"] = float(stop_loss)
         risk_patch["stop_loss"] = float(stop_loss)
     if take_profit is not None:
         risk_patch["target_price"] = float(take_profit)
         risk_patch["take_profit"] = float(take_profit)
+    if average_buy_price and (risk_patch.get("stoploss_price") in (None, "") or risk_patch.get("target_price") in (None, "")):
+        price_patch = _position_risk_prices({
+            "average_buy_price": average_buy_price,
+            "position_side": "SHORT" if str(reservation.get("position_side") or "").upper() == "SHORT" else "LONG",
+            "tp_sl_tsl_config": risk_patch,
+        })
+        if price_patch.get("stop_loss") is not None:
+            risk_patch["stoploss_price"] = price_patch["stop_loss"]
+            risk_patch["stop_loss"] = price_patch["stop_loss"]
+        if price_patch.get("take_profit") is not None:
+            risk_patch["target_price"] = price_patch["take_profit"]
+            risk_patch["take_profit"] = price_patch["take_profit"]
     await db.strategy_positions.update_one(
         {"id": reservation["id"], "user_id": reservation["user_id"]},
         {"$set": {
@@ -3631,7 +3707,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
     positions = await db.strategy_positions.find({
         "user_id": user_id,
         "strategy_id": sid,
-        "status": {"$in": ["OPEN", "FILLED"]},
+        "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
     }, {"_id": 0}).to_list(20)
     for pos in positions:
         sym = pos.get("trading_symbol") or pos.get("symbol")
@@ -4498,6 +4574,7 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
         if value is not None:
             risk[key] = value
     risk["max_lot"] = 1
+    risk = _normalize_strategy_risk(risk)
     visual_config["risk"] = risk
     
     update_fields = {"visual_config": visual_config, "broker": "upstox"}
@@ -5210,7 +5287,10 @@ async def _build_order_intent(
         seg = "OPTIONS"
         opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
         token = str(option_contract.get("instrument_token") or tsym)
-        asset_class = "OPTION_SHORT" if side == "SELL" else "OPTION_LONG"
+        broker_side = str(option_contract.get("transaction_type") or side or "BUY").upper()
+        source_text = str(source or "").lower()
+        is_exit_source = any(part in source_text for part in ("exit", "squareoff", "stop-loss", "take-profit", "trailing-sl", "time-exit"))
+        asset_class = "OPTION_LONG" if broker_side == "BUY" or is_exit_source else "OPTION_SHORT"
 
         lot_size = int(option_contract.get("lot_size") or options_helper.LOT_SIZES.get((option_contract.get("underlying") or "").upper(), 1))
         lots = max(1, int(qty or 1))
@@ -5227,7 +5307,7 @@ async def _build_order_intent(
 
         # Determine intent
         strategy_id = await _strategy_source_id(source)
-        intent_str = _infer_intent(side, strategy_id, user_id, instr, asset_class)
+        intent_str = _infer_intent(broker_side, strategy_id, user_id, instr, asset_class)
 
         intent = OrderIntent(
             instrument=instr,
@@ -5378,8 +5458,8 @@ async def _submit_order_intent(
     side = _intent_side(intent.intent)
     qty = int(intent.quantity)
 
-    upstox_token = instr.instrument_token
-    if not upstox_token or "|" not in upstox_token:
+    upstox_token = instr.instrument_token if "|" in str(instr.instrument_token or "") else None
+    if not upstox_token:
         resolved = _upstox_instrument_token(instr.exchange, instr.tradingsymbol, instr.instrument_token)
         if resolved:
             upstox_token = resolved
@@ -6074,10 +6154,49 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="No open position for that symbol")
     qty = abs(int(target["qty"]))
     side = "SELL" if target["qty"] > 0 else "BUY"
+    exchange = target.get("exchange") or ("NFO" if symbol.endswith(("CE", "PE")) else "NSE")
+    instrument_token = str(target.get("instrument_token") or "").strip()
+    if exchange in {"NFO", "BFO", "MCX"} or symbol.endswith(("CE", "PE")):
+        if "|" not in instrument_token:
+            strategy_pos = await db.strategy_positions.find_one(
+                {
+                    "user_id": user["id"],
+                    "$or": [{"trading_symbol": symbol}, {"symbol": symbol}],
+                    "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
+                },
+                {"_id": 0},
+            )
+            instrument_token = str((strategy_pos or {}).get("instrument_token") or "").strip()
+        if "|" not in instrument_token:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot exit {symbol} from QuantG: Upstox instrument_key is missing. "
+                    "Exit this position in Upstox now, then run Sync with Broker."
+                ),
+            )
+        lot_size = int(target.get("lot_size") or qty or 1)
+        return await _place_order_core(
+            user_id=user["id"],
+            symbol=symbol,
+            side=side,
+            qty=max(1, math.ceil(qty / max(1, lot_size))),
+            order_type="MARKET",
+            product=target.get("product"),
+            source="manual-exit",
+            exchange=exchange,
+            option_contract={
+                "tradingsymbol": symbol,
+                "exchange": exchange,
+                "instrument_token": instrument_token,
+                "lot_size": lot_size,
+                "transaction_type": side,
+            },
+        )
     return await _place_order_core(
         user_id=user["id"], symbol=symbol, side=side, qty=qty,
         order_type="MARKET", product=target.get("product"), source="manual-exit",
-        exchange=target.get("exchange") or "NSE",
+        exchange=exchange,
     )
 
 
@@ -6118,15 +6237,30 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
                 )
                 closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
             else:
+                exchange = p.get("exchange") or ("NFO" if str(symbol).upper().endswith(("CE", "PE")) else "NSE")
+                option_contract = None
+                if exchange in {"NFO", "BFO", "MCX"} or str(symbol).upper().endswith(("CE", "PE")):
+                    token = str(p.get("instrument_token") or "").strip()
+                    if "|" not in token:
+                        failed.append({"symbol": symbol, "error": "Upstox instrument_key missing. Exit this position in Upstox, then sync broker state."})
+                        continue
+                    option_contract = {
+                        "tradingsymbol": str(symbol).upper(),
+                        "exchange": exchange,
+                        "instrument_token": token,
+                        "lot_size": max(1, abs_qty),
+                        "transaction_type": side,
+                    }
                 res = await _place_order_core(
                     user_id=user["id"],
                     symbol=str(symbol).upper(),
                     side=side,
-                    qty=abs_qty,
+                    qty=1 if option_contract else abs_qty,
                     order_type="MARKET",
                     product=p.get("product") or settings.get("default_product", "MIS"),
                     source="squareoff",
-                    exchange=p.get("exchange") or "NSE",
+                    exchange=exchange,
+                    option_contract=option_contract,
                     idempotency_key=f"squareoff-live:{symbol}:{now}",
                 )
                 closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
@@ -6196,15 +6330,29 @@ async def _advance_pending_order_from_broker(
                 if final_qty > 0:
                     pos_set["quantity"] = final_qty
                     pos_set["open_quantity"] = final_qty
-                res = await db.strategy_positions.update_many(
-                    {
-                        "user_id": user_id,
-                        "entry_broker_order_id": str(broker_order_id),
-                        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
-                    },
-                    {"$set": pos_set},
-                )
-                changed_positions += res.modified_count
+                match = {
+                    "user_id": user_id,
+                    "entry_broker_order_id": str(broker_order_id),
+                    "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
+                }
+                positions = await db.strategy_positions.find(match, {"_id": 0}).to_list(20)
+                for pos in positions:
+                    position_update = dict(pos_set)
+                    entry_price = float(position_update.get("average_buy_price") or pos.get("average_buy_price") or 0)
+                    prices = _position_risk_prices({**pos, "average_buy_price": entry_price})
+                    risk = _normalize_strategy_risk(pos.get("tp_sl_tsl_config") or {})
+                    if prices.get("stop_loss") is not None:
+                        risk["stoploss_price"] = prices["stop_loss"]
+                        risk["stop_loss"] = prices["stop_loss"]
+                    if prices.get("take_profit") is not None:
+                        risk["target_price"] = prices["take_profit"]
+                        risk["take_profit"] = prices["take_profit"]
+                    position_update["tp_sl_tsl_config"] = risk
+                    res = await db.strategy_positions.update_one(
+                        {"id": pos["id"], "user_id": user_id},
+                        {"$set": position_update},
+                    )
+                    changed_positions += res.modified_count
             if strategy_id and is_exit:
                 exit_positions = await db.strategy_positions.find(
                     {"user_id": user_id, "exit_broker_order_id": str(broker_order_id), "status": "EXITING"},
@@ -9150,26 +9298,23 @@ def _mongo_position_exit_reason(position: Dict[str, Any], ltp: float) -> Optiona
     entry = float(position.get("average_buy_price") or 0)
     if entry <= 0 or ltp <= 0:
         return None
-    risk = position.get("tp_sl_tsl_config") or {}
+    risk = _normalize_strategy_risk(position.get("tp_sl_tsl_config") or {})
     side = str(position.get("position_side") or "LONG").upper()
-    stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
-    target_price = risk.get("target_price") or risk.get("take_profit")
-    if stop_price in (None, ""):
-        stop_pct = float(risk.get("stop_loss_pct") or DEFAULT_STRATEGY_RISK["stop_loss_pct"])
-        stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
-    if target_price in (None, ""):
-        target_pct = float(risk.get("take_profit_pct") or DEFAULT_STRATEGY_RISK["take_profit_pct"])
-        target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
+    prices = _position_risk_prices({**position, "tp_sl_tsl_config": risk}, ltp=ltp)
+    stop_price = prices.get("stop_loss")
+    target_price = prices.get("take_profit")
+    if stop_price is None or target_price is None:
+        return None
     stop_price = float(stop_price)
     target_price = float(target_price)
     if side == "SHORT":
         if ltp >= stop_price:
-            return "stop-loss"
+            return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
         if ltp <= target_price:
             return "take-profit"
     else:
         if ltp <= stop_price:
-            return "stop-loss"
+            return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
         if ltp >= target_price:
             return "take-profit"
     time_exit_minutes = int(risk.get("time_exit_minutes") or 0)
@@ -9185,7 +9330,7 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             rows = await db.strategy_positions.find(
-                {"status": {"$in": ["OPEN", "FILLED"]}},
+                {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"_id": 0},
             ).to_list(1000)
             for pos in rows:
@@ -9213,9 +9358,21 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
                 qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
                 side = str(pos.get("position_side") or "LONG").upper()
                 pnl = round((entry - float(ltp)) * qty, 2) if side == "SHORT" else round((float(ltp) - entry) * qty, 2)
+                risk_prices = _position_risk_prices(pos, ltp=float(ltp))
+                risk_update = {}
+                risk = _normalize_strategy_risk(pos.get("tp_sl_tsl_config") or {})
+                if risk_prices.get("stop_loss") is not None:
+                    risk["stoploss_price"] = risk_prices["stop_loss"]
+                    risk["stop_loss"] = risk_prices["stop_loss"]
+                if risk_prices.get("take_profit") is not None:
+                    risk["target_price"] = risk_prices["take_profit"]
+                    risk["take_profit"] = risk_prices["take_profit"]
+                if risk_prices.get("trailing_sl") is not None:
+                    risk["trailing_sl"] = risk_prices["trailing_sl"]
+                risk_update["tp_sl_tsl_config"] = risk
                 await db.strategy_positions.update_one(
                     {"id": pos["id"], "user_id": user_id},
-                    {"$set": {"last_ltp": float(ltp), "unrealized_pnl": pnl, "last_tick_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()},
+                    {"$set": {"last_ltp": float(ltp), "unrealized_pnl": pnl, "last_tick_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(), **risk_update},
                      "$unset": {"last_error": ""}},
                 )
                 reason = _mongo_position_exit_reason(pos, float(ltp))

@@ -28,6 +28,26 @@ const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
 const toneClass = (value) => ((value ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]");
 const filledOrder = (status) => ["FILLED", "CLOSED", "COMPLETE"].includes((status || "").toUpperCase());
+const ACTIVE_POSITION_STATES = ["OPEN", "FILLED"];
+const PENDING_POSITION_STATES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "EXITING"];
+const BROKER_OPEN_ORDER_STATES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING", "EXIT_PENDING"];
+const PROBLEM_ORDER_STATES = ["FAILED", "REJECTED"];
+
+const asStatus = (value) => String(value || "").toUpperCase();
+const hasQty = (value) => Math.abs(parseInt(value || 0, 10)) > 0;
+
+const statusTone = (status) => {
+  const s = asStatus(status);
+  if (ACTIVE_POSITION_STATES.includes(s)) return "good";
+  if (PENDING_POSITION_STATES.includes(s)) return "warn";
+  if (["FAILED", "REJECTED", "BROKER_NOT_FOUND"].includes(s)) return "bad";
+  return "neutral";
+};
+
+const shortId = (value) => {
+  const text = String(value || "");
+  return text.length > 10 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
+};
 
 const Field = ({ label, value, tone }) => (
   <div className="min-w-0">
@@ -179,8 +199,72 @@ const MarketRow = ({ item }) => (
   </div>
 );
 
+const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
+  const position = row.position;
+  const pendingOrder = row.pendingOrder;
+  const failedOrder = row.failedOrder;
+  const status = position?.execution_status || position?.ledger_status || (pendingOrder ? pendingOrder.status : row.state || "FLAT");
+  const positionOpen = position && hasQty(position.qty);
+  const problem = failedOrder || asStatus(position?.execution_status) === "BROKER_NOT_FOUND";
+  const warning = !problem && (pendingOrder || PENDING_POSITION_STATES.includes(asStatus(status)));
+  const tone = problem ? "bad" : warning ? "warn" : positionOpen ? "good" : row.status === "live" ? "neutral" : "neutral";
+  const pnl = position?.pnl ?? row.active_position?.unrealized_pnl ?? row.daily_pnl?.realised_pnl ?? 0;
+  const slMissing = positionOpen && position?.stop_loss == null;
+  const tpMissing = positionOpen && position?.take_profit == null;
+  const live = row.status === "live";
+
+  return (
+    <div className="grid gap-3 border-t border-[var(--qd-border)] px-4 py-3 lg:grid-cols-[minmax(220px,1.1fr)_minmax(260px,1.35fr)_minmax(180px,0.9fr)_auto] lg:items-center">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-white">{row.name}</div>
+        <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Field label="Position" value={positionOpen ? position.symbol : "Flat"} tone={positionOpen ? "text-white" : "text-[var(--qd-text-3)]"} />
+        <Field label="Qty" value={positionOpen ? position.qty : "0"} tone={positionOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"} />
+        <Field label="SL" value={position?.stop_loss != null ? money(position.stop_loss) : "-"} tone={slMissing ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"} />
+        <Field label="TP" value={position?.take_profit != null ? money(position.take_profit) : "-"} tone={tpMissing ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-2)]"} />
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill tone={tone}>{positionOpen ? status : pendingOrder ? "Order pending" : problem ? "Needs check" : "Flat"}</StatusPill>
+          {slMissing && <StatusPill tone="bad">No SL</StatusPill>}
+          {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
+        </div>
+        <div className={`mt-2 font-mono text-xs font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={() => onToggle(row.strategy_id)}
+          className={`flex h-8 w-8 items-center justify-center rounded border transition-all ${
+            live
+              ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
+              : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
+          }`}
+          title={live ? "Pause Strategy" : "Resume Strategy"}
+          data-testid={`dashboard-toggle-${row.strategy_id}`}
+        >
+          {live ? <Pause size={13} /> : <Play size={13} />}
+        </button>
+        <button
+          onClick={() => onExit(row.strategy_id)}
+          disabled={!positionOpen}
+          className="flex h-8 w-8 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+          title={positionOpen ? "Square Off Strategy Positions" : "No open position for this strategy"}
+          data-testid={`dashboard-exit-${row.strategy_id}`}
+        >
+          <Shield size={13} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export default function Dashboard() {
-  const { positions: execPositions, orders: execOrders, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
+  const { positions: execPositions, orders: execOrders, strategyPositions: execStrategyPositions, summary: executionSummary, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -226,12 +310,64 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const pnl = pf?.total_pnl ?? 0;
-  const openPositions = pf?.open_positions ?? positions.length;
+  const pnl = executionSummary.total_unrealized_pnl ?? pf?.total_pnl ?? 0;
+  const openPositions = executionSummary.open_positions ?? pf?.open_positions ?? positions.length;
   const strategies = useMemo(() => telemetry?.strategies_page_data || [], [telemetry?.strategies_page_data]);
   const marketOpen = telemetry?.market_status?.is_open;
   const firstRisk = strategies[0]?.risk_settings || {};
   const topWatch = useMemo(() => watch.slice(0, 8), [watch]);
+  const openOrders = useMemo(() => orders.filter((o) => BROKER_OPEN_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
+  const failedOrders = useMemo(() => orders.filter((o) => PROBLEM_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
+  const openStrategyPositions = useMemo(() => positions.filter((p) => hasQty(p.qty)), [positions]);
+  const pendingStrategyPositions = useMemo(() => execStrategyPositions.filter((p) => PENDING_POSITION_STATES.includes(asStatus(p.execution_status || p.status))), [execStrategyPositions]);
+  const missingProtectionCount = useMemo(() => openStrategyPositions.filter((p) => p.stop_loss == null || p.take_profit == null).length, [openStrategyPositions]);
+
+  const strategiesWithExecution = useMemo(() => {
+    const positionsByStrategy = new Map();
+    openStrategyPositions.forEach((p) => {
+      if (p.strategy_id && !positionsByStrategy.has(p.strategy_id)) positionsByStrategy.set(p.strategy_id, p);
+    });
+    execStrategyPositions.forEach((p) => {
+      if (p.strategy_id && !positionsByStrategy.has(p.strategy_id)) positionsByStrategy.set(p.strategy_id, p);
+    });
+
+    const pendingByStrategy = new Map();
+    const failedByStrategy = new Map();
+    orders.forEach((o) => {
+      const sid = o.strategy_id || (String(o.source || "").includes("strategy:") ? String(o.source).split("strategy:").pop() : "");
+      if (!sid) return;
+      const status = asStatus(o.execution_status || o.status);
+      if (BROKER_OPEN_ORDER_STATES.includes(status) && !pendingByStrategy.has(sid)) pendingByStrategy.set(sid, o);
+      if (PROBLEM_ORDER_STATES.includes(status) && !failedByStrategy.has(sid)) failedByStrategy.set(sid, o);
+    });
+
+    const known = new Set();
+    const rows = strategies.map((s) => {
+      known.add(s.strategy_id);
+      return {
+        ...s,
+        position: positionsByStrategy.get(s.strategy_id),
+        pendingOrder: pendingByStrategy.get(s.strategy_id),
+        failedOrder: failedByStrategy.get(s.strategy_id),
+      };
+    });
+
+    openStrategyPositions.forEach((p) => {
+      if (!p.strategy_id || known.has(p.strategy_id)) return;
+      rows.push({
+        strategy_id: p.strategy_id,
+        name: p.strategy_name || p.strategy_id,
+        status: "unknown",
+        state: p.execution_status || "OPEN",
+        position: p,
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const priority = (row) => (row.failedOrder ? 0 : row.position && hasQty(row.position.qty) ? 1 : row.pendingOrder ? 2 : row.status === "live" ? 3 : 4);
+      return priority(a) - priority(b);
+    });
+  }, [strategies, openStrategyPositions, execStrategyPositions, orders]);
 
   // Tab Filtering
   const equityPositions = useMemo(() => positions.filter((p) => p.asset_type === "equity" || p.exchange === "NSE"), [positions]);
@@ -244,19 +380,19 @@ export default function Dashboard() {
   const foStrategies = useMemo(() => strategies.filter((s) => s.asset_class === "option" || s.strategy_id.includes("Straddle") || s.strategy_id.includes("Scalper") || s.name.includes("Option")), [strategies]);
 
   const strategySummary = useMemo(() => {
-    const counts = strategies.reduce((acc, row) => {
+    const counts = strategiesWithExecution.reduce((acc, row) => {
       const key = row.state || "IDLE";
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {});
     return [
-      { label: "Open", value: counts.OPEN || 0, tone: "good" },
-      { label: "Scanning", value: counts.SCANNING || 0, tone: "good" },
-      { label: "Cooldown", value: counts.COOLDOWN || 0, tone: "warn" },
-      { label: "Disabled", value: counts.DISABLED || 0, tone: "bad" },
-      { label: "Idle", value: counts.IDLE || counts.READY || 0, tone: "neutral" },
+      { label: "Open pos", value: openStrategyPositions.length, tone: "good" },
+      { label: "Pending", value: pendingStrategyPositions.length + openOrders.length, tone: "warn" },
+      { label: "No SL/TP", value: missingProtectionCount, tone: missingProtectionCount ? "bad" : "good" },
+      { label: "Failed", value: failedOrders.length, tone: failedOrders.length ? "bad" : "good" },
+      { label: "Flat", value: Math.max(0, strategiesWithExecution.length - openStrategyPositions.length), tone: "neutral" },
     ];
-  }, [strategies]);
+  }, [strategiesWithExecution, openStrategyPositions.length, pendingStrategyPositions.length, openOrders.length, missingProtectionCount, failedOrders.length]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -414,7 +550,13 @@ export default function Dashboard() {
             <KpiCard label="Account Balance" value={money(funds?.available_cash)} icon={Wallet} sub={funds?.source === "live" ? "Live Account Balance" : "Simulated Paper Cash"} />
             <KpiCard label="Utilized Margin" value={money(funds?.used_margin)} icon={Layers} sub={funds?.source === "live" ? "Live Blocked Margin" : "Paper Blocked Margin"} />
             <KpiCard label="Open Profit" value={money(pnl)} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={toneClass(pnl)} sub={`${openPositions} Active positions`} />
-            <KpiCard label="Subsystem Health" value={`${pf?.active_strategies ?? 0}/${pf?.strategies ?? 0}`} icon={Activity} sub={`${pf?.paused_strategies ?? 0} paused engines`} />
+            <KpiCard
+              label="Trade Safety"
+              value={`${missingProtectionCount}/${openStrategyPositions.length}`}
+              icon={Activity}
+              tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"}
+              sub={`${openOrders.length} pending orders, ${failedOrders.length} failed`}
+            />
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -423,24 +565,39 @@ export default function Dashboard() {
               <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
                 <div>
                   <div className="qd-section-title">// Runtime ledger states</div>
-                  <h2 className="mt-1 font-head text-xl font-semibold text-white">Active System Blocks</h2>
+                  <h2 className="mt-1 font-head text-xl font-semibold text-white">Strategy Position Ledger</h2>
                 </div>
                 <Link to="/strategies" className="font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:text-white">
                   Manage strategies
                 </Link>
               </div>
-              <div className="qd-card p-4">
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+              <div className="qd-card overflow-hidden">
+                <div className="grid grid-cols-2 gap-px bg-[var(--qd-border)] md:grid-cols-5">
                   {strategySummary.map((item) => (
-                    <div key={item.label} className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3">
+                    <div key={item.label} className="bg-[var(--qd-bg)] p-4">
                       <div className="qd-section-title">{item.label}</div>
-                      <div className="mt-2 font-mono text-2xl font-bold text-white">{item.value}</div>
+                      <div className={`mt-2 font-mono text-2xl font-bold ${
+                        item.tone === "good" ? "text-[var(--qd-profit)]" :
+                        item.tone === "warn" ? "text-[var(--qd-warn)]" :
+                        item.tone === "bad" ? "text-[var(--qd-loss)]" :
+                        "text-white"
+                      }`}>{item.value}</div>
                     </div>
                   ))}
                 </div>
-                
+
+                <div>
+                  {strategiesWithExecution.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-xs text-[var(--qd-text-3)]">No strategies loaded.</div>
+                  ) : (
+                    strategiesWithExecution.map((row) => (
+                      <StrategyLedgerRow key={row.strategy_id} row={row} onToggle={toggleStrategy} onExit={exitStrategy} />
+                    ))
+                  )}
+                </div>
+
                 {/* Active strategy logs */}
-                <div className="mt-4 divide-y divide-[var(--qd-border)]">
+                <div className="hidden">
                   {strategies.filter((s) => s.state === "OPEN").map((row) => (
                     <EngineStrategyCard key={row.strategy_id} row={row} onSave={saveRuntimeSettings} />
                   ))}
@@ -531,7 +688,10 @@ export default function Dashboard() {
           <section className="qd-card overflow-hidden">
             <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between">
               <h2 className="font-head text-sm font-semibold text-white">Positions Monitor</h2>
-              <StatusPill>{positions.length} Active Positions</StatusPill>
+              <div className="flex gap-2">
+                <StatusPill>{positions.length} Active Positions</StatusPill>
+                {missingProtectionCount > 0 && <StatusPill tone="bad">{missingProtectionCount} Missing SL/TP</StatusPill>}
+              </div>
             </div>
             {positions.length === 0 ? (
               <div className="p-10 text-center">
@@ -543,12 +703,14 @@ export default function Dashboard() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                      <th className="px-4 py-3">Strategy</th>
                       <th className="px-4 py-3">Symbol</th>
                       <th className="px-4 py-3">Qty</th>
                       <th className="px-4 py-3">Avg Buy</th>
                       <th className="px-4 py-3">LTP</th>
                       <th className="px-4 py-3">Target</th>
                       <th className="px-4 py-3">Stop Loss</th>
+                      <th className="px-4 py-3">Protection</th>
                       <th className="px-4 py-3">State</th>
                       <th className="px-4 py-3 text-right">PnL</th>
                     </tr>
@@ -556,13 +718,21 @@ export default function Dashboard() {
                   <tbody className="font-mono">
                     {positions.map((p) => (
                       <tr key={p.symbol} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
+                        <td className="px-4 py-3 text-[var(--qd-text-2)]">{p.strategy_name || p.strategy_id || "broker"}</td>
                         <td className="px-4 py-3 font-semibold text-white">{p.symbol}</td>
                         <td className="px-4 py-3 text-[var(--qd-text-2)]">{p.qty}</td>
                         <td className="px-4 py-3 text-[var(--qd-text-3)]">{money(p.avg_price)}</td>
                         <td className="px-4 py-3 text-[var(--qd-text-2)]">{money(p.ltp)}</td>
                         <td className="px-4 py-3 text-[var(--qd-profit)]">{p.take_profit ? money(p.take_profit) : "—"}</td>
                         <td className="px-4 py-3 text-[var(--qd-loss)]">{p.stop_loss ? money(p.stop_loss) : "—"}</td>
-                        <td className="px-4 py-3 text-[var(--qd-warn)] uppercase text-[10px]">{p.execution_status || "ACTIVE"}</td>
+                        <td className="px-4 py-3">
+                          <StatusPill tone={p.stop_loss != null && p.take_profit != null ? "good" : "bad"}>
+                            {p.stop_loss != null && p.take_profit != null ? "Protected" : "Missing"}
+                          </StatusPill>
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusPill tone={statusTone(p.execution_status || p.ledger_status)}>{p.execution_status || p.ledger_status || "ACTIVE"}</StatusPill>
+                        </td>
                         <td className={`px-4 py-3 text-right font-semibold ${toneClass(p.pnl)}`}>{money(p.pnl)}</td>
                       </tr>
                     ))}

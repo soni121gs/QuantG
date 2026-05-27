@@ -142,8 +142,8 @@ def normalize_position_row(
         qty = int(quantity if quantity is not None else float(_first_value(raw, ["quantity", "netQty", "net_quantity", "qty", "net_quantity"]) or 0))
     except Exception:
         qty = 0
-    avg = float(average_price if average_price is not None else _first_value(raw, ["average_price", "avg_price", "averagePrice", "avgPrc"]) or 0)
-    ltp = float(last_price if last_price is not None else _first_value(raw, ["last_price", "ltp", "lastTradedPrice"]) or avg or 0)
+    avg = float(average_price if average_price is not None else _first_value(raw, ["average_price", "avg_price", "averagePrice", "avgPrc", "buy_price", "buyPrice", "day_buy_price", "dayBuyPrice"]) or 0)
+    ltp = float(last_price if last_price is not None else _first_value(raw, ["last_price", "ltp", "lastTradedPrice", "last_traded_price"]) or avg or 0)
     exch = str(exchange or _first_value(raw, ["exchange", "exSeg", "exchange_segment"]) or ("NFO" if symbol.endswith(("CE", "PE")) else "NSE")).upper()
     computed_pnl = float(pnl if pnl is not None else _first_value(raw, ["pnl", "unrealisedPnl", "unrealized_pnl", "unrealised_pnl"]) or ((ltp - avg) * qty))
     row = {

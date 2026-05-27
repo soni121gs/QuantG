@@ -156,7 +156,7 @@ export default function Orders() {
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Seg</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">SL</th><th className="px-4 py-2">TP</th><th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Strategy</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Seg</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">SL</th><th className="px-4 py-2">TP</th><th className="px-4 py-2">Status</th>
               </tr>
             </thead>
             <tbody className="font-mono">
@@ -165,6 +165,7 @@ export default function Orders() {
                 return (
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "—"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.strategy_name || o.strategy_id || (String(o.source || "").includes("strategy:") ? String(o.source).split("strategy:").pop() : "manual")}</td>
                   <td className="px-4 py-2.5 text-white">{o.symbol}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.segment || o.exchange || "-"}</td>
                   <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
