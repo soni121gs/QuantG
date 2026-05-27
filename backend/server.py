@@ -107,6 +107,7 @@ _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
+_UPSTOX_TOKEN_VALIDATION_CACHE: Dict[str, Dict[str, Any]] = {}
 COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
 COMMODITY_REQUIRED_CAPITAL = {
     "CRUDEOIL": 30000.0,
@@ -6294,6 +6295,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     paper = bool(settings.get("paper_mode", True))
     execution_broker = "upstox"
+    if not paper:
+        upstox_status = await get_user_upstox_status(user_id)
+        if not upstox_status.get("token_valid"):
+            raise HTTPException(
+                status_code=400,
+                detail="Live trading disabled: Reconnect Upstox required before placing live orders.",
+            )
 
     resolution = await _build_order_intent(
         user_id=user_id,
@@ -8192,6 +8200,47 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     status = upstox_helper.status_from_keys(keys, api_key)
     gateway = _UPSTOX_GATEWAYS.get(user_id)
     gateway_status = gateway.status() if gateway else {}
+    token_present = bool(access_token)
+    token_state = "missing"
+    token_valid = False
+    token_validation_error = None
+    token_validated_at = None
+    if token_present:
+        token_state = "present"
+        cache = _UPSTOX_TOKEN_VALIDATION_CACHE.get(user_id) or {}
+        cache_age = _market_data_age_sec(cache.get("validated_at"))
+        if cache and cache_age is not None and cache_age < 300:
+            token_valid = bool(cache.get("valid"))
+            token_state = str(cache.get("state") or ("valid" if token_valid else "invalid"))
+            token_validation_error = cache.get("error")
+            token_validated_at = cache.get("validated_at")
+        else:
+            validator = gateway or UpstoxGateway(
+                api_key=api_key,
+                api_secret=api_secret,
+                access_token=access_token,
+                redirect_uri=redirect_uri,
+                sandbox=bool(keys.get("is_sandbox")) if keys else False,
+            )
+            try:
+                await asyncio.to_thread(validator.get_profile)
+                token_valid = True
+                token_state = "valid"
+                logger.info("Upstox access token validated for user=%s", user_id)
+            except Exception as exc:
+                token_valid = False
+                token_validation_error = str(exc)[:300]
+                token_state = "expired" if any(part in token_validation_error.lower() for part in ("401", "unauthorized", "expired", "invalid token")) else "invalid"
+                logger.warning("Upstox access token validation failed user=%s state=%s error=%s", user_id, token_state, token_validation_error)
+            token_validated_at = datetime.now(timezone.utc).isoformat()
+            _UPSTOX_TOKEN_VALIDATION_CACHE[user_id] = {
+                "valid": token_valid,
+                "state": token_state,
+                "error": token_validation_error,
+                "validated_at": token_validated_at,
+            }
+    else:
+        logger.warning("Upstox token missing for user=%s; live trading and ticker require reconnect", user_id)
     missing = [
         name
         for name, value in {
@@ -8202,15 +8251,27 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         if not value
     ]
     status.update({
-        "connected": bool(access_token),
-        "authenticated": bool(access_token),
+        "connected": bool(token_valid),
+        "authenticated": bool(token_valid),
+        "logged_in": bool(token_valid),
         "keys_saved": bool(keys or api_key),
         "api_secret_saved": bool(api_secret),
         "redirect_uri_ready": bool(redirect_uri),
-        "access_token_saved": bool(access_token),
+        "access_token_saved": token_present,
+        "token_present": token_present,
+        "token_state": token_state,
+        "token_valid": token_valid,
+        "token_validated_at": token_validated_at,
+        "token_validation_error": token_validation_error,
+        "last_auth_time": (keys or {}).get("access_token_obtained_at"),
+        "reconnect_required": not token_valid,
+        "live_trading_enabled": bool(token_valid),
+        "feed_running": bool(((gateway_status or {}).get("feed_status") or {}).get("connected") or (gateway_status or {}).get("ws_running")),
+        "feed_status": (gateway_status or {}).get("feed_status"),
         "env_ready": not missing,
         "missing_env": missing,
-        "reason": None if access_token else ("no_token" if api_key else "no_keys"),
+        "reason": None if token_valid else (token_state if token_present else ("no_token" if api_key else "no_keys")),
+        "message": "Upstox connected" if token_valid else "Reconnect Upstox required",
         "gateway": gateway_status or None,
         "is_sandbox": bool(keys.get("is_sandbox")) if keys else False,
     })
@@ -8226,7 +8287,12 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
     access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
     redirect_uri = _upstox_redirect_uri(None, keys)
     if not api_key and not access_token:
+        logger.warning("Upstox gateway not initialized for user=%s: no_keys", user_id)
         return None
+    if access_token:
+        logger.info("Loaded Upstox access token from %s for user=%s", "env" if os.environ.get("UPSTOX_ACCESS_TOKEN") else "storage", user_id)
+    else:
+        logger.warning("Upstox gateway initialized without access token user=%s; reconnect required", user_id)
     gateway = UpstoxGateway(
         api_key=api_key,
         api_secret=api_secret,
@@ -8272,13 +8338,13 @@ async def live_readiness(user=Depends(get_current_user)):
         "ok": required_keys_ok,
     })
     checks[-1]["hint"] = "Save Upstox credentials on Broker Keys" if not required_keys_ok else None
-    required_sessions_ok = bool(upstox_status.get("connected"))
+    required_sessions_ok = bool(upstox_status.get("connected") and upstox_status.get("token_valid"))
     checks.append({
         "id": "upstox_session",
         "label": "Active Upstox session",
         "ok": required_sessions_ok,
         "detail": f"data={data_broker}, execution={execution_broker}",
-        "hint": "Connect Upstox OAuth on Broker Keys" if not required_sessions_ok else None,
+        "hint": "Reconnect Upstox required on Broker Keys" if not required_sessions_ok else None,
     })
     funds_ok = bool(upstox_status.get("connected"))
     funds_msg = "Upstox connected; live margin check not exposed yet."
@@ -8330,18 +8396,20 @@ async def live_readiness(user=Depends(get_current_user)):
             "hint": "MCX trades 09:00 – 23:30 IST, Mon–Fri" if not mcx_open else None,
         })
 
-    selected_tick_ok = bool(upstox_status.get("connected"))
+    gateway_status = upstox_status.get("gateway") or {}
+    feed_status = gateway_status.get("feed_status") or upstox_status.get("feed_status") or {}
+    selected_tick_ok = bool(upstox_status.get("connected") and (feed_status.get("connected") or gateway_status.get("ws_running")))
 
     checks.append({
         "id": "tick_feed",
         "label": "Realtime selected tick feed",
         "ok": selected_tick_ok,
         "detail": (
-            f"upstox connected" if data_broker == "upstox" and selected_tick_ok else
-            "not connected"
+            f"upstox feed {feed_status.get('state') or 'running'}" if data_broker == "upstox" and selected_tick_ok else
+            f"ticker startup skipped: {upstox_status.get('reason') or feed_status.get('last_error') or 'not running'}"
         ),
         "hint": (
-            "Connect Upstox on Broker Keys to start the market feed."
+            "Reconnect Upstox on Broker Keys, then restart the Upstox feed."
             if data_broker == "upstox" and not selected_tick_ok
             else None
         ),
@@ -8350,7 +8418,7 @@ async def live_readiness(user=Depends(get_current_user)):
     market_open = nse_open or mcx_open if has_mcx else nse_open
     paper_mode = bool(settings.get("paper_mode", True))
     
-    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours", "tick_feed"})
+    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours"})
         
     return {
         "ready": overall_ready,
@@ -8446,8 +8514,19 @@ def _build_recovery_plan(
         add("critical", "Execution broker disconnected", kite_status.get("reason") or "Zerodha session is not active.", "Reconnect Zerodha on Broker Keys.")
     if execution_broker == "kotak_neo" and not kotak_status.get("connected"):
         add("critical", "Kotak execution disconnected", kotak_status.get("reason") or "Kotak session is not active.", "Connect Kotak on Broker Keys.")
+    if execution_broker == "upstox":
+        upstox = readiness.get("upstox") or {}
+        upstox_session = next((c for c in readiness.get("checks") or [] if c.get("id") == "upstox_session"), {})
+        if not upstox_session.get("ok"):
+            add("critical", "Reconnect Upstox required", upstox_session.get("detail") or "Upstox access token is missing or expired.", "Open Broker Keys and reconnect Upstox OAuth.", "/broker/upstox/login")
     if data_broker == "zerodha" and market_open and not tick_status.get("connected"):
         add("warning", "Realtime Kite ticker is down", tick_status.get("last_error") or "No connected Kite websocket.", "Restart ticker.", "/ops/ticker/restart")
+    if data_broker == "upstox":
+        feed = tick_status.get("feed_status") or {}
+        if not tick_status.get("authenticated"):
+            add("critical", "Upstox data session missing", tick_status.get("last_error") or "Ticker startup skipped: no_token.", "Reconnect Upstox on Broker Keys.", "/broker/upstox/login")
+        elif not (feed.get("connected") or tick_status.get("ws_running")):
+            add("warning", "Upstox ticker is stopped", feed.get("last_error") or tick_status.get("last_error") or "Feed has not started.", "Restart Upstox feed.", "/ops/ticker/restart")
     if data_broker == "kotak_neo":
         gateway = kotak_status.get("gateway") or {}
         if not gateway.get("authenticated"):
@@ -8459,7 +8538,7 @@ def _build_recovery_plan(
     if errored:
         add("warning", "Strategies have blocking errors", f"{len(errored)} strategy error(s) need attention.", "Open Strategy Errors below; clear only after fixing.", "/ops/strategies/clear-errors")
     for check in readiness.get("checks") or []:
-        if check.get("id") in {"market_hours", "mcx_market_hours", "tick_feed"}:
+        if check.get("id") in {"market_hours", "mcx_market_hours"}:
             continue
         if not check.get("ok"):
             add("critical", check.get("label") or "Readiness failed", check.get("detail") or check.get("hint") or "A required live check failed.", check.get("hint") or "Fix readiness check.")
@@ -8593,6 +8672,53 @@ async def _start_user_kotak_ticker(user_id: str, symbols: Optional[List[str]] = 
     }
 
 
+async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    status = await get_user_upstox_status(user_id)
+    if not status.get("token_valid"):
+        reason = status.get("reason") or "no_token"
+        logger.warning("Upstox ticker startup skipped: %s user=%s", reason, user_id)
+        return {
+            "started": False,
+            "reason": reason,
+            "message": "Reconnect Upstox required",
+            "status": status,
+        }
+    gateway = await get_user_upstox_gateway(user_id)
+    if not gateway:
+        logger.warning("Upstox ticker startup skipped: gateway_unavailable user=%s", user_id)
+        return {"started": False, "reason": "gateway_unavailable", "message": "Reconnect Upstox required", "status": status}
+
+    target_symbols = [str(s).upper() for s in (symbols or ["NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])]
+    keys: List[str] = []
+    failures: List[Dict[str, str]] = []
+    for symbol in target_symbols:
+        token = _upstox_instrument_token("NSE", symbol) or _upstox_instrument_token("BSE", symbol)
+        if not token and symbol in COMMODITY_UNDERLYINGS:
+            contract = await _resolve_upstox_mcx_future_contract(symbol)
+            token = str(contract.get("instrument_key")) if contract and contract.get("instrument_key") else None
+        if token:
+            keys.append(token)
+        else:
+            failures.append({"symbol": symbol, "reason": "no_token_resolved"})
+
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        logger.warning("Upstox ticker startup skipped: no_tokens_resolved user=%s failures=%s", user_id, failures[:8])
+        return {"started": False, "reason": "no_tokens_resolved", "failures": failures[:8], "status": gateway.status()}
+    result = await asyncio.to_thread(gateway.start_market_data_ws, keys, "ltpc")
+    if result.get("ok"):
+        logger.info("Upstox ticker startup successful user=%s tokens=%s", user_id, len(keys))
+    else:
+        logger.warning("Upstox ticker startup skipped/failed user=%s reason=%s result=%s", user_id, result.get("reason"), result)
+    return {
+        "started": bool(result.get("ok")),
+        "tokens": len(keys),
+        "failures": failures[:8],
+        "status": gateway.status(),
+        "result": result,
+    }
+
+
 # ============== Routes: Ops Console (extracted to routes/ops.py) ==============
 async def ops_diagnostics(user):
     settings = await get_user_settings(user["id"])
@@ -8605,8 +8731,20 @@ async def ops_diagnostics(user):
     tick_manager = getattr(app.state, "tick_manager", None)
     zerodha_tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
     kotak_tick_status = _kotak_ticker_status(user["id"])
+    upstox_auth_status = await get_user_upstox_status(user["id"])
     upstox_gw = await get_user_upstox_gateway(user["id"])
-    upstox_status = upstox_gw.status() if upstox_gw else {"connected": False}
+    upstox_status = upstox_gw.status() if upstox_gw else {
+        "connected": False,
+        "authenticated": False,
+        "last_error": "Ticker startup skipped: no_token" if upstox_auth_status.get("reason") == "no_token" else upstox_auth_status.get("message"),
+        "feed_status": {"connected": False, "state": "stopped", "last_error": upstox_auth_status.get("reason")},
+    }
+    if upstox_gw:
+        upstox_status.update({
+            "connected": bool(upstox_auth_status.get("token_valid")),
+            "authenticated": bool(upstox_auth_status.get("token_valid")),
+            "last_error": upstox_status.get("last_error") or (None if upstox_auth_status.get("token_valid") else upstox_auth_status.get("message")),
+        })
     
     if settings.get("data_broker") == "kotak_neo":
         tick_status = kotak_tick_status
@@ -8667,7 +8805,7 @@ async def ops_diagnostics(user):
         "readiness": readiness,
         "zerodha": kite_status,
         "kotak_neo": kotak_status,
-        "upstox": await get_user_upstox_status(user["id"]),
+        "upstox": upstox_auth_status,
         "ticker": tick_status,
         "zerodha_ticker": zerodha_tick_status,
         "kotak_ticker": kotak_tick_status,
@@ -9068,6 +9206,8 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     )
     await db.broker_oauth_states.delete_one({"state": state, "broker": "upstox"})
     _UPSTOX_GATEWAYS.pop(user_id, None)
+    _UPSTOX_TOKEN_VALIDATION_CACHE.pop(user_id, None)
+    logger.info("Upstox OAuth connected and token stored for user=%s", user_id)
     base = _public_base_url(None)
     return RedirectResponse(url=f"{base}/broker-keys?upstox=connected", status_code=303)
 
@@ -9553,6 +9693,12 @@ async def get_profile(user=Depends(get_current_user)):
 async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
     if "paper_mode" in update and update["paper_mode"] is False:
+        upstox_status = await get_user_upstox_status(user["id"])
+        if not upstox_status.get("token_valid"):
+            raise HTTPException(
+                status_code=400,
+                detail="Live trading disabled: Reconnect Upstox required before switching to LIVE.",
+            )
         # Find if user has MCX strategies
         strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
         has_mcx = any(

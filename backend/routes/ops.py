@@ -25,9 +25,11 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
 @router.post("/ticker/restart")
 async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user), request: Request = None):
     # Import settings to check broker pref
-    from server import get_user_settings, _start_user_kotak_ticker, _start_user_ticker, app
+    from server import get_user_settings, _start_user_kotak_ticker, _start_user_ticker, _start_user_upstox_ticker, app
     
     settings = await get_user_settings(user["id"])
+    if settings.get("data_broker") == "upstox":
+        return await _start_user_upstox_ticker(user["id"])
     if settings.get("data_broker") == "kotak_neo":
         return await _start_user_kotak_ticker(user["id"])
         
@@ -75,6 +77,7 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         _stale_local_open_orders,
         _sync_strategy_positions_with_broker,
         _sync_upstox_order_statuses,
+        _start_user_upstox_ticker,
         _start_user_ticker,
         _KOTAK_GATEWAYS,
         _sync_kotak_order_statuses,
@@ -96,6 +99,7 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
 
     actions.append({"name": "upstox_order_sync", "result": await _sync_upstox_order_statuses(user["id"], force=True)})
     actions.append({"name": "upstox_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
+    actions.append({"name": "upstox_market_ticker", "result": await _start_user_upstox_ticker(user["id"])})
 
     kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
     if kotak_gateway and kotak_gateway.status().get("authenticated"):

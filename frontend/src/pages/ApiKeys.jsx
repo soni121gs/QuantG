@@ -123,8 +123,17 @@ export default function ApiKeys() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="text-sm min-w-0">
             <div className={upstoxStatus.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-2)]"}>
-              {upstoxStatus.connected ? "Upstox connected - live data and orders enabled" : upstoxStatus.keys_saved ? "Upstox keys saved. Click Connect Upstox." : "Save Upstox API Key and Secret first."}
+              {upstoxStatus.connected ? "Upstox connected - live data and orders enabled" : upstoxStatus.keys_saved ? "Reconnect Upstox required" : "Save Upstox API Key and Secret first."}
             </div>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono text-[var(--qd-text-3)]">
+              <div>Login: <span className={upstoxStatus.logged_in ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.logged_in ? "logged in" : "not logged in"}</span></div>
+              <div>Token: <span className={upstoxStatus.token_valid ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.token_state || (upstoxStatus.token_present ? "present" : "missing")}</span></div>
+              <div>Last auth: <span className="text-white">{upstoxStatus.last_auth_time ? new Date(upstoxStatus.last_auth_time).toLocaleString() : "-"}</span></div>
+              <div>Feed: <span className={upstoxStatus.feed_running ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.feed_running ? "running" : "stopped"}</span></div>
+            </div>
+            {upstoxStatus.reconnect_required && (
+              <div className="mt-2 text-xs font-mono text-[var(--qd-warn)]">Live trading disabled until Upstox OAuth is reconnected.</div>
+            )}
             <div className="text-xs text-[var(--qd-text-3)] mt-2">Paste this Redirect URL in Upstox Developer Portal (exact match):</div>
             <div className="text-xs font-mono text-[var(--qd-profit)] break-all mt-1">{upstoxRedirectUrl}</div>
             <div className="text-xs font-mono text-[var(--qd-text-3)] mt-2">

@@ -189,6 +189,10 @@ class UpstoxGateway:
         """Fetch Upstox user available and utilized funds across equity and commodity desks."""
         return self._request("GET", "/v2/user/get-funds-and-margin")
 
+    def get_profile(self) -> Dict[str, Any]:
+        """Validate the current Upstox access token with a lightweight user call."""
+        return self._request("GET", "/v2/user/profile")
+
     def get_option_chain(self, underlying_key: str, expiry_date: str) -> Dict[str, Any]:
         """Fetch low-latency index Option Chain lookup from Upstox."""
         return self._request("GET", "/v2/option/chain", params={
@@ -402,7 +406,12 @@ class UpstoxGateway:
         """Start real Upstox Market Data Feed V3 websocket tracking."""
         keys = [str(k).strip() for k in instruments if str(k).strip()]
         if not keys:
+            logger.warning("Upstox V3 ticker startup skipped: no_instruments_supplied")
             return {"ok": False, "reason": "no_instruments_supplied"}
+        if not self.access_token:
+            self.last_error = "Ticker startup skipped: no_token"
+            logger.warning("Upstox V3 ticker startup skipped: no_token instruments=%s", len(keys))
+            return {"ok": False, "started": False, "reason": "no_token", "message": "Reconnect Upstox required"}
         with self._lock:
             current = set(self._subscribed_tokens)
             current.update(keys)

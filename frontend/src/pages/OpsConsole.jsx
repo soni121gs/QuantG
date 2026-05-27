@@ -117,6 +117,7 @@ export default function OpsConsole() {
   const counts = data?.counts || {};
   const ticker = data?.ticker || {};
   const upstox = data?.upstox || {};
+  const feedState = upstox.feed_status || upstox.gateway?.feed_status || ticker.feed_status || {};
   const rateLimits = data?.rate_limits || {};
   const prefs = data?.broker_preferences || {};
   const isUpstoxActive = prefs.data_broker === "upstox" || prefs.execution_broker === "upstox";
@@ -240,11 +241,11 @@ export default function OpsConsole() {
         <MetricCard label="Market" value={data?.market?.status || "CLOSED"} tone={data?.market?.open ? "profit" : "warn"} />
         <MetricCard 
           label="Upstox API" 
-          value={!isUpstoxActive ? "Inactive" : (upstox.connected ? "Connected" : "Offline")} 
-          tone={!isUpstoxActive ? "normal" : (upstox.connected ? "profit" : "warn")} 
+          value={!isUpstoxActive ? "Inactive" : (upstox.connected ? "Connected" : "Reconnect")} 
+          tone={!isUpstoxActive ? "normal" : (upstox.connected ? "profit" : "loss")} 
           isPulse={isUpstoxActive && upstox.connected} 
         />
-        <MetricCard label="Active Tickers" value={ticker.connected ? "CONNECTED" : "DISCONNECTED"} tone={ticker.connected ? "profit" : "warn"} />
+        <MetricCard label="Active Tickers" value={ticker.connected || feedState.connected ? "CONNECTED" : "STOPPED"} tone={ticker.connected || feedState.connected ? "profit" : "loss"} />
         <MetricCard label="Live Strats" value={counts.live_strategies ?? 0} tone={counts.live_strategies ? "profit" : "normal"} />
         <MetricCard label="Blocked Strats" value={counts.errored_strategies ?? 0} tone={counts.errored_strategies ? "loss" : "profit"} isPulse={!!counts.errored_strategies} />
       </div>
@@ -274,7 +275,7 @@ export default function OpsConsole() {
               {upstox.connected ? (
                 <div className="flex items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono font-semibold text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)] border border-[var(--qd-profit)]/30 rounded-full">
-                    <CheckCircle2 size={12} /> HFT READY
+                    <CheckCircle2 size={12} /> {upstox.feed_running ? "HFT READY" : "AUTH OK / FEED STOPPED"}
                   </span>
                   <button 
                     onClick={handleUpstoxLogin}
@@ -299,15 +300,15 @@ export default function OpsConsole() {
               <TelemetryMetric 
                 label="OAuth Integration" 
                 value={upstox.keys_saved ? (upstox.connected ? "Authorized" : "Ready / Need Login") : "Not configured"} 
-                desc={upstox.keys_saved ? "Broker configuration loaded" : "Provide API Keys in API Settings"}
+                desc={upstox.connected ? `Last auth: ${fmt(upstox.last_auth_time)}` : (upstox.message || "Reconnect Upstox required")}
                 status={upstox.connected ? "success" : upstox.keys_saved ? "warn" : "error"}
               />
               <TelemetryMetric 
                 label="HFT Dispatcher" 
-                value={upstox.connected ? "ACTIVE PULSE" : "IDLE"} 
-                desc="REST order pipe listener"
-                status={upstox.connected ? "success" : "idle"}
-                isPulse={upstox.connected}
+                value={upstox.feed_running ? "ACTIVE PULSE" : "STOPPED"} 
+                desc={feedState.last_error || upstox.reason || "Websocket feed state"}
+                status={upstox.feed_running ? "success" : "error"}
+                isPulse={upstox.feed_running}
               />
               <TelemetryMetric 
                 label="SQLite DB Engine" 
@@ -339,11 +340,11 @@ export default function OpsConsole() {
               </div>
               <div className="flex justify-between items-center text-[var(--qd-text-2)]">
                 <span>Encrypted Access Token</span>
-                <span className="text-white select-all">{upstox.access_token_saved ? "●●●●●●●● (Stateful Cached)" : "None"}</span>
+                <span className="text-white select-all">{upstox.token_present ? `${upstox.token_state || "present"} / ${upstox.token_valid ? "valid" : "not valid"}` : "missing"}</span>
               </div>
               <div className="flex justify-between items-center text-[var(--qd-text-2)]">
                 <span>WebSocket Tick Dispatcher</span>
-                <span className="text-white">1.0s High-Freq Ingestion Daemon</span>
+                <span className="text-white">{upstox.feed_running ? "running" : "stopped"}</span>
               </div>
             </div>
           </div>
@@ -431,8 +432,8 @@ export default function OpsConsole() {
             <div className="space-y-3 font-mono text-xs">
               <ChecklistItem
                 label="Upstox Feed"
-                checked={upstox.connected}
-                details={upstox.connected ? "Ingestion online" : "Auth missing"}
+                checked={upstox.connected && upstox.feed_running}
+                details={upstox.connected ? (upstox.feed_running ? "Ingestion online" : "Token valid, feed stopped") : "Reconnect Upstox required"}
               />
               <ChecklistItem 
                 label="SQLite Write Lock" 
@@ -470,7 +471,7 @@ export default function OpsConsole() {
               <DiagRow k="Subscribed Tokens" v={ticker.subscribed_tokens ?? 0} />
               <DiagRow k="SQLite Ledger Path" v="runtime_state.sqlite3" />
               <DiagRow k="Websocket URL" v={ticker.websocket_url || "Stateful Cache"} />
-              <DiagRow k="Readiness Assessment" v={data?.readiness?.ready ? "System fully operational" : "Review configurations"} />
+              <DiagRow k="Readiness Assessment" v={data?.readiness?.ready ? "System operational" : (upstox.reconnect_required ? "Reconnect Upstox required" : "Review configurations")} />
             </div>
           </div>
 
