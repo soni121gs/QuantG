@@ -1258,7 +1258,7 @@ async def commodity_watchlist(user=Depends(get_current_user)):
     the UI can distinguish demo context from broker data.
     """
     settings = await get_user_settings(user["id"])
-    data_broker = settings.get("data_broker", "zerodha")
+    data_broker = settings.get("data_broker", "upstox")
     rows = []
 
     if data_broker == "upstox":
@@ -3959,8 +3959,9 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
                 logger.warning("Upstox LTP failed for %s: %s", symbol, exc)
     if not allow_mock:
         return None
-    sym = next((s for s in SYMBOLS if s["symbol"] == symbol.upper()), None)
-    return live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else None
+    all_symbols = [*SYMBOLS, *COMMODITY_SYMBOLS]
+    sym = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
+    return live_price(sym["base"], all_symbols.index(sym))["price"] if sym else None
 
 
 def _kotak_exchange_segment(exchange: str) -> str:
@@ -4801,21 +4802,22 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
     vc = row.get("visual_config") or {}
     opt_cfg = vc.get("options") or {}
-    # Options mode: resolve contract & place option order
+    # Options mode: resolve the same Upstox contract path used by the runner.
     if opt_cfg.get("enabled"):
-        kite, _ = await get_user_kite(user["id"])
-        if not kite:
-            raise HTTPException(status_code=400, detail="Options trading requires a connected Zerodha session.")
-        contract = options_helper.resolve_for_signal(
-            kite,
+        contract = await _resolve_option_for_strategy(
+            user["id"],
+            row,
             underlying=opt_cfg.get("underlying", "NIFTY"),
             signal_action=action,
             strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
             otm_points=int(opt_cfg.get("otm_points") or 0),
-            expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+            expiry_offset=int(opt_cfg.get("expiry_offset") or 0),
         )
         if not contract:
-            raise HTTPException(status_code=400, detail="Could not resolve option contract. Markets may be closed or instruments unavailable.")
+            raise HTTPException(
+                status_code=400,
+                detail="Could not resolve Upstox option contract. Check OAuth, MCX/NFO permission, and instrument master cache.",
+            )
         result = await _place_order_core(
             user_id=user["id"], symbol=opt_cfg.get("underlying", "NIFTY"),
             side=action, qty=int(opt_cfg.get("lots") or 1),
@@ -7986,10 +7988,16 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
                 "last_evaluated_at": row.get("last_evaluated_at"),
                 "last_signal_at": row.get("last_signal_at"),
                 "last_signal_action": row.get("last_signal_action"),
+                "last_signals_count": row.get("last_signals_count"),
+                "last_filter_reason": row.get("last_filter_reason"),
+                "last_data_source": row.get("last_data_source"),
+                "last_data_live": row.get("last_data_live"),
+                "last_data_reason": row.get("last_data_reason"),
+                "latest_candle_age_sec": row.get("latest_candle_age_sec"),
                 "last_error": row.get("last_error"),
             },
         })
-    latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX"])
+    latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "ledger": "sqlite",
@@ -8340,8 +8348,8 @@ def _build_recovery_plan(
 ) -> Dict[str, Any]:
     issues: List[Dict[str, Any]] = []
     mode_live = not bool(settings.get("paper_mode", True))
-    data_broker = settings.get("data_broker", "zerodha")
-    execution_broker = settings.get("execution_broker", "zerodha")
+    data_broker = settings.get("data_broker", "upstox")
+    execution_broker = settings.get("execution_broker", "upstox")
 
     def add(severity: str, title: str, detail: str, action: str, endpoint: Optional[str] = None) -> None:
         issues.append({
@@ -8629,7 +8637,7 @@ async def ops_diagnostics(user):
 async def funds(user=Depends(get_current_user)):
     """Return broker funds & margins when live, otherwise a paper-money snapshot."""
     settings = await get_user_settings(user["id"])
-    execution_broker = settings.get("execution_broker", "zerodha")
+    execution_broker = settings.get("execution_broker", "upstox")
     
     if execution_broker == "upstox":
         upstox_gw = await get_user_upstox_gateway(user["id"])
@@ -9221,14 +9229,14 @@ async def market_feed_comparison(user=Depends(get_current_user)):
     if upstox_healthy:
         candidates.append(("upstox", upstox_age if upstox_age is not None else 999999))
 
-    recommended = settings.get("data_broker", "zerodha")
+    recommended = settings.get("data_broker", "upstox")
     reason = "Keep configured data broker until a healthier live feed is observed."
     
     if candidates:
         candidates.sort(key=lambda x: x[1])
         best_broker, _ = candidates[0]
         
-        preferred = settings.get("data_broker", "zerodha")
+        preferred = settings.get("data_broker", "upstox")
         pref_healthy = (preferred == "zerodha" and zerodha_healthy) or \
                        (preferred == "kotak_neo" and kotak_healthy) or \
                        (preferred == "upstox" and upstox_healthy)
@@ -9241,7 +9249,7 @@ async def market_feed_comparison(user=Depends(get_current_user)):
             reason = f"{recommended.replace('_', ' ').title()} has fresh ticks and configured broker is stale/unavailable."
 
     return {
-        "configured_data_broker": settings.get("data_broker", "zerodha"),
+        "configured_data_broker": settings.get("data_broker", "upstox"),
         "recommended_data_broker": recommended,
         "reason": reason,
         "zerodha": {
@@ -9546,19 +9554,22 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
             broker_symbols_by_user: Dict[str, Dict[str, Dict[str, Any]]] = {}
             
-            recorded_nifty = False
-            recorded_sensex = False
+            recorded_symbols = {"NIFTY": False, "SENSEX": False, "CRUDEOIL": False, "CRUDEOILM": False, "NATURALGAS": False}
 
             for user_row in users:
                 user_id = user_row["id"]
                 
-                # Check Upstox live spot prices first if connected
+                # Check Upstox live spot/future prices first if connected.
                 upstox_gw = await get_user_upstox_gateway(user_id)
                 if upstox_gw and upstox_gw.connected:
                     upstox_keys = {
                         "NIFTY": "NSE_INDEX|Nifty 50",
                         "SENSEX": "BSE_INDEX|SENSEX"
                     }
+                    for comm_symbol in ("CRUDEOIL", "CRUDEOILM", "NATURALGAS"):
+                        contract = await _resolve_upstox_mcx_future_contract(comm_symbol)
+                        if contract and contract.get("instrument_key"):
+                            upstox_keys[comm_symbol] = contract["instrument_key"]
                     try:
                         quotes = await asyncio.to_thread(upstox_gw.get_market_quote, list(upstox_keys.values()))
                         data_node = quotes.get("data", {}) or {}
@@ -9567,13 +9578,14 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                             spot_ltp = node.get("last_price") or node.get("ltp")
                             if spot_ltp:
                                 option_ledger.record_market_tick(idx_sym, float(spot_ltp), "upstox")
-                                if idx_sym == "NIFTY":
-                                    recorded_nifty = True
-                                elif idx_sym == "SENSEX":
-                                    recorded_sensex = True
+                                if idx_sym in recorded_symbols:
+                                    recorded_symbols[idx_sym] = True
                     except Exception as e:
-                        logger.warning(f"Upstox index spot quote failed in monitor loop: {e}")
+                        logger.warning(f"Upstox spot/future quote failed in monitor loop: {e}")
 
+                settings = await get_user_settings(user_id)
+                if settings.get("data_broker") == "upstox":
+                    continue
                 kite, _ = await get_user_kite(user_id)
                 if not kite:
                     continue
@@ -9589,28 +9601,27 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                     node = ltp_resp.get(key) or {}
                     if node.get("last_price"):
                         option_ledger.record_market_tick(idx_symbol, float(node["last_price"]), "zerodha")
-                        if idx_symbol == "NIFTY":
-                            recorded_nifty = True
-                        elif idx_symbol == "SENSEX":
-                            recorded_sensex = True
+                        recorded_symbols[idx_symbol] = True
 
             # Simulated random walk fallback so index/commodity telemetry is never stuck on "Waiting..."
             import random
-            if not recorded_nifty:
+            if not recorded_symbols["NIFTY"]:
                 last_nifty = option_ledger.latest_ticks(["NIFTY"]).get("NIFTY")
                 last_price = float(last_nifty["ltp"]) if last_nifty else 24850.40
                 new_price = round(last_price + random.uniform(-2.5, 2.5), 2)
                 option_ledger.record_market_tick("NIFTY", new_price, "simulated")
-            if not recorded_sensex:
+            if not recorded_symbols["SENSEX"]:
                 last_sensex = option_ledger.latest_ticks(["SENSEX"]).get("SENSEX")
                 last_price = float(last_sensex["ltp"]) if last_sensex else 81460.20
                 new_price = round(last_price + random.uniform(-8.0, 8.0), 2)
                 option_ledger.record_market_tick("SENSEX", new_price, "simulated")
                 
-            for comm_symbol, base_price in [("CRUDEOIL", 6550.0), ("NATURALGAS", 215.0)]:
+            for comm_symbol, base_price in [("CRUDEOIL", 6550.0), ("CRUDEOILM", 6550.0), ("NATURALGAS", 215.0)]:
+                if recorded_symbols.get(comm_symbol):
+                    continue
                 last_comm = option_ledger.latest_ticks([comm_symbol]).get(comm_symbol)
                 last_price = float(last_comm["ltp"]) if last_comm else base_price
-                step_range = 1.0 if comm_symbol == "CRUDEOIL" else 0.1
+                step_range = 1.0 if comm_symbol in {"CRUDEOIL", "CRUDEOILM"} else 0.1
                 new_price = round(last_price + random.uniform(-step_range, step_range), 2)
                 option_ledger.record_market_tick(comm_symbol, new_price, "simulated")
 
@@ -9831,7 +9842,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    app.state.option_ledger = None
+    app.state.option_ledger = option_ledger
     execution_state_manager.configure(
         db=db,
         get_user_settings=get_user_settings,
@@ -9841,7 +9852,7 @@ async def startup():
         sync_upstox_orders=_sync_upstox_order_statuses,
         sync_strategy_positions=_sync_strategy_positions_with_broker,
         fetch_positions=_fetch_broker_positions_for_user,
-        option_ledger=None,
+        option_ledger=option_ledger,
     )
     app.state.execution_state = execution_state_manager
 
@@ -9995,6 +10006,8 @@ async def startup():
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
     app.state.position_monitor_stop = asyncio.Event()
     app.state.position_monitor_task = asyncio.create_task(_mongo_position_monitor_loop(app.state.position_monitor_stop))
+    app.state.option_engine_stop = asyncio.Event()
+    app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     app.state.broker_reconcile_stop = asyncio.Event()
     app.state.broker_reconcile_task = asyncio.create_task(_broker_reconciliation_loop(app.state.broker_reconcile_stop))
     logger.info("QuantG API started")
@@ -10023,6 +10036,12 @@ async def shutdown():
         app.state.position_monitor_stop.set()
         if app.state.position_monitor_task:
             await asyncio.wait_for(app.state.position_monitor_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.option_engine_stop.set()
+        if app.state.option_engine_task:
+            await asyncio.wait_for(app.state.option_engine_task, timeout=3.0)
     except Exception:
         pass
     try:

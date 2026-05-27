@@ -235,6 +235,13 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
   const slMissing = positionOpen && position?.stop_loss == null;
   const tpMissing = positionOpen && position?.take_profit == null;
   const live = row.status === "live";
+  const idleLabel = live ? (row.state === "SCANNING" ? "Scanning" : row.state || "Live") : "Flat";
+  const telemetry = row.telemetry || {};
+  const detail = problem
+    ? failedOrder?.status_message || telemetry.last_error
+    : pendingOrder
+      ? pendingOrder.status_message || "Waiting for broker order book sync"
+      : telemetry.last_error || telemetry.last_filter_reason || telemetry.last_data_reason || telemetry.last_data_source;
 
   return (
     <div className="grid gap-3 border-t border-[var(--qd-border)] px-4 py-3 lg:grid-cols-[minmax(220px,1.1fr)_minmax(260px,1.35fr)_minmax(180px,0.9fr)_auto] lg:items-center">
@@ -252,11 +259,12 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
 
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <StatusPill tone={tone}>{positionOpen ? status : pendingOrder ? "Order pending" : problem ? "Needs check" : "Flat"}</StatusPill>
+          <StatusPill tone={tone}>{positionOpen ? status : pendingOrder ? "Order pending" : problem ? "Needs check" : idleLabel}</StatusPill>
           {slMissing && <StatusPill tone="bad">No SL</StatusPill>}
           {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
         </div>
         <div className={`mt-2 font-mono text-xs font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
+        {detail && <div className="mt-1 max-w-[260px] truncate text-[10px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
       </div>
 
       <div className="flex items-center justify-end gap-2">
