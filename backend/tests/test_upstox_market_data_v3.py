@@ -44,7 +44,16 @@ def test_protobuf_decoding_and_tick_extraction():
     tick = extract_ltp_tick("NSE_FO|45450", decoded["feeds"]["NSE_FO|45450"], current_ts=decoded["currentTs"])
     assert tick["instrument_key"] == "NSE_FO|45450"
     assert tick["ltp"] == pytest.approx(219.3)
-    assert tick["source"] == "upstox-market-data-feed-v3"
+    assert tick["source"] == "websocket"
+    assert tick["received_at"]
+
+
+def test_tick_without_broker_timestamp_marks_server_received_at_fallback():
+    tick = extract_ltp_tick("MCX_FO|566995", {"ltpc": {"ltp": 101.25}})
+    assert tick["ltp"] == pytest.approx(101.25)
+    assert tick["received_at"]
+    assert tick["timestamp_source"] == "server_received_at"
+    assert tick["timestamp"] == tick["received_at"]
 
 
 def test_feed_client_initialization_and_tick_cache_update():

@@ -47,6 +47,8 @@ def test_market_quality_blocks_stale_micro_scalp_tick():
     quality = evaluate_market_data_quality(
         ltp=100,
         tick_time=old_tick,
+        received_at=old_tick,
+        instrument_token="NSE_FO|1",
         risk_style="micro_scalp",
     )
 
@@ -57,6 +59,8 @@ def test_market_quality_blocks_stale_micro_scalp_tick():
 def test_market_quality_blocks_wide_spread():
     quality = evaluate_market_data_quality(
         ltp=100,
+        received_at=datetime.now(timezone.utc),
+        instrument_token="NSE_FO|1",
         bid=99,
         ask=101,
         risk_style="momentum",
@@ -70,9 +74,87 @@ def test_market_quality_accepts_fresh_tick():
     quality = evaluate_market_data_quality(
         ltp=100,
         tick_time=datetime.now(timezone.utc),
+        received_at=datetime.now(timezone.utc),
+        instrument_token="NSE_FO|1",
         bid=99.9,
         ask=100.1,
         risk_style="balanced",
     )
 
     assert quality["ok"]
+
+
+def test_mcx_quote_with_timestamp_passes():
+    now = datetime.now(timezone.utc)
+    quality = evaluate_market_data_quality(
+        ltp=6500,
+        tick_time=now,
+        received_at=now,
+        instrument_token="MCX_FO|123",
+        exchange="MCX",
+        market_open=True,
+        risk_style="balanced",
+    )
+
+    assert quality["ok"]
+
+
+def test_mcx_quote_without_broker_timestamp_uses_received_at():
+    now = datetime.now(timezone.utc)
+    quality = evaluate_market_data_quality(
+        ltp=6500,
+        tick_time=None,
+        received_at=now,
+        instrument_token="MCX_FO|123",
+        exchange="MCX",
+        market_open=True,
+        risk_style="balanced",
+    )
+
+    assert quality["ok"]
+
+
+def test_mcx_stale_quote_blocks():
+    old_tick = datetime.now(timezone.utc) - timedelta(seconds=180)
+    quality = evaluate_market_data_quality(
+        ltp=6500,
+        tick_time=old_tick,
+        received_at=old_tick,
+        instrument_token="MCX_FO|123",
+        exchange="MCX",
+        market_open=True,
+        risk_style="balanced",
+    )
+
+    assert not quality["ok"]
+    assert "stale" in quality["reason"]
+
+
+def test_mcx_missing_token_blocks():
+    now = datetime.now(timezone.utc)
+    quality = evaluate_market_data_quality(
+        ltp=6500,
+        tick_time=now,
+        received_at=now,
+        instrument_token="",
+        exchange="MCX",
+        market_open=True,
+    )
+
+    assert not quality["ok"]
+    assert quality["reason"] == "instrument token unresolved"
+
+
+def test_mcx_market_closed_blocks_with_clear_message():
+    now = datetime.now(timezone.utc)
+    quality = evaluate_market_data_quality(
+        ltp=6500,
+        tick_time=now,
+        received_at=now,
+        instrument_token="MCX_FO|123",
+        exchange="MCX",
+        market_open=False,
+    )
+
+    assert not quality["ok"]
+    assert quality["reason"] == "MCX market is closed"

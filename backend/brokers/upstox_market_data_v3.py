@@ -250,18 +250,29 @@ def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: O
     ltp = ltpc.get("ltp")
     if ltp in (None, ""):
         return None
+    received_at = datetime.now(timezone.utc).isoformat()
+    broker_ts = ltpc.get("ltt") or current_ts
+    timestamp_source = "broker_ltt" if ltpc.get("ltt") else "upstox_current_ts" if current_ts else "server_received_at"
+    if timestamp_source == "server_received_at":
+        logger.warning("Upstox V3 tick missing broker timestamp; using server received_at key=%s", instrument_key)
     return {
         "token": instrument_key,
         "instrument_key": instrument_key,
         "symbol": instrument_key.split("|")[-1] if "|" in instrument_key else instrument_key,
+        "exchange": instrument_key.split("|")[0].replace("_FO", "") if "|" in instrument_key else None,
         "ltp": float(ltp),
+        "bid": None,
+        "ask": None,
         "close": float(ltpc.get("cp") or 0),
-        "last_trade_time": ltpc.get("ltt"),
+        "last_trade_time": broker_ts,
+        "timestamp": broker_ts or received_at,
+        "timestamp_source": timestamp_source,
         "last_trade_quantity": ltpc.get("ltq"),
-        "received_at": datetime.now(timezone.utc).isoformat(),
+        "received_at": received_at,
         "exchange_ts": current_ts,
         "raw": feed,
-        "source": "upstox-market-data-feed-v3",
+        "source": "websocket",
+        "feed": "upstox-market-data-feed-v3",
     }
 
 
@@ -428,6 +439,13 @@ class UpstoxMarketDataFeedV3:
                     self._ticks[instrument_key] = tick
                     self._last_tick_time = tick["received_at"]
                     updated += 1
+                    logger.debug(
+                        "Upstox V3 quote received key=%s ltp=%s timestamp_source=%s received_at=%s",
+                        instrument_key,
+                        tick.get("ltp"),
+                        tick.get("timestamp_source"),
+                        tick.get("received_at"),
+                    )
                     if not self._first_tick_logged:
                         self._first_tick_logged = True
                         logger.info("Upstox V3 first tick received key=%s ltp=%s", instrument_key, tick.get("ltp"))

@@ -64,7 +64,7 @@ from order_lifecycle import (
     canonical_order_status,
     is_order_active,
 )
-from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
+from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality, parse_market_timestamp
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
@@ -1291,10 +1291,19 @@ async def commodity_watchlist(user=Depends(get_current_user)):
                         "change": change,
                         "pct": pct,
                         "source": "upstox",
-                        "feed": "upstox-mcx",
+                        "feed": tick.get("source") or "upstox-mcx",
                         "instrument_key": token,
+                        "token": token,
                         "trading_symbol": contract.get("trading_symbol") if contract else None,
-                        "tick_time": tick.get("received_at"),
+                        "timestamp": tick.get("timestamp") or tick.get("last_trade_time") or tick.get("received_at"),
+                        "timestamp_source": tick.get("timestamp_source"),
+                        "received_at": tick.get("received_at"),
+                        "tick_time": tick.get("timestamp") or tick.get("last_trade_time") or tick.get("received_at"),
+            "data_age_sec": _market_data_age_sec(tick.get("received_at")),
+                        "bid": tick.get("bid"),
+                        "ask": tick.get("ask"),
+                        "market_status": "open" if _is_order_market_open("MCX") else "closed",
+                        "block_reason": None if _is_order_market_open("MCX") else "MCX market is closed",
                     })
                     continue
                 if not token:
@@ -1307,6 +1316,12 @@ async def commodity_watchlist(user=Depends(get_current_user)):
                     **lp,
                     "source": "upstox_pending",
                     "feed": "upstox-mcx-mock",
+                    "instrument_key": token,
+                    "token": token,
+                    "received_at": None,
+                    "data_age_sec": None,
+                    "market_status": "open" if _is_order_market_open("MCX") else "closed",
+                    "block_reason": "instrument token unresolved" if not token else "data feed unavailable",
                 })
             return rows
 
@@ -5415,6 +5430,13 @@ def _is_order_market_open(exchange: str, now_utc: Optional[datetime] = None) -> 
     return _is_nse_market_open(now_utc)
 
 
+def _market_data_age_sec(value: Any, now_utc: Optional[datetime] = None) -> Optional[float]:
+    parsed = parse_market_timestamp(value)
+    if not parsed:
+        return None
+    return max(0.0, ((now_utc or datetime.now(timezone.utc)) - parsed).total_seconds())
+
+
 # ---------------------------------------------------------------------------
 # Intent classification helpers
 # ---------------------------------------------------------------------------
@@ -5646,23 +5668,57 @@ async def _market_snapshot_for_intent(
     option_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     instr = intent.instrument
-    snapshot: Dict[str, Any] = {"ltp": None, "tick_time": None, "bid": None, "ask": None, "source": "unavailable"}
-    gateway = await get_user_upstox_gateway(user_id)
     token = str(instr.instrument_token or "").strip()
+    market_open = _is_order_market_open(instr.exchange)
+    snapshot: Dict[str, Any] = {
+        "symbol": instr.tradingsymbol,
+        "exchange": instr.exchange,
+        "instrument_key": token or None,
+        "token": token or None,
+        "ltp": None,
+        "timestamp": None,
+        "tick_time": None,
+        "timestamp_source": None,
+        "received_at": None,
+        "data_age_sec": None,
+        "bid": None,
+        "ask": None,
+        "source": "unavailable",
+        "feed": "unavailable",
+        "market_status": "open" if market_open else "closed",
+        "market_open": market_open,
+        "block_reason": None,
+    }
+    gateway = await get_user_upstox_gateway(user_id)
     tick = gateway.latest_tick(token) if gateway and token else None
     if not tick and gateway:
         tick = gateway.latest_tick_by_symbol(instr.tradingsymbol)
     if tick:
         raw = tick.get("raw") if isinstance(tick.get("raw"), dict) else {}
+        received_at = tick.get("received_at")
+        broker_ts = tick.get("last_trade_time") or tick.get("tick_time") or tick.get("timestamp")
+        timestamp = broker_ts or received_at
+        timestamp_source = tick.get("timestamp_source") or ("broker" if broker_ts else "server_received_at" if received_at else None)
+        if received_at and not broker_ts:
+            logger.warning("Market snapshot using received_at fallback for %s token=%s", instr.tradingsymbol, token)
         snapshot.update({
+            "symbol": tick.get("symbol") or instr.tradingsymbol,
+            "exchange": tick.get("exchange") or instr.exchange,
+            "instrument_key": tick.get("instrument_key") or token or None,
+            "token": tick.get("token") or token or None,
             "ltp": tick.get("ltp"),
-            "tick_time": tick.get("received_at") or tick.get("last_trade_time") or tick.get("tick_time"),
+            "timestamp": timestamp,
+            "tick_time": timestamp,
+            "timestamp_source": timestamp_source,
+            "received_at": received_at,
+            "data_age_sec": _market_data_age_sec(received_at),
             "bid": tick.get("bid") or tick.get("bidP") or raw.get("bid") or raw.get("bid_price") or raw.get("bidP"),
             "ask": tick.get("ask") or tick.get("askP") or raw.get("ask") or raw.get("ask_price") or raw.get("askP"),
-            "source": "upstox-cache",
+            "source": tick.get("source") or "upstox-cache",
+            "feed": tick.get("feed") or "upstox-cache",
         })
     if snapshot.get("ltp") in (None, "") and option_contract and option_contract.get("ltp"):
-        snapshot.update({"ltp": option_contract.get("ltp"), "source": "option-contract"})
+        snapshot.update({"ltp": option_contract.get("ltp"), "source": "option-contract", "feed": "option-contract"})
     return snapshot
 
 
@@ -5689,20 +5745,13 @@ async def _pre_trade_risk_gate(
 
     market_snapshot = await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
     live_ltp = float(market_snapshot.get("ltp") or fill_price_hint or 0)
-    if not paper and not market_snapshot.get("tick_time"):
-        payload = {
-            "event": "PRETRADE_BLOCK",
-            "strategy_id": strategy_id,
-            "symbol": intent.instrument.tradingsymbol,
-            "reason": "market data timestamp unavailable",
-            "market_snapshot": market_snapshot,
-            "risk_style": risk.get("risk_style"),
-        }
-        await _record_pretrade_risk_event(user_id, payload)
-        raise HTTPException(status_code=400, detail="Pre-trade blocked: market data timestamp unavailable")
     quality = evaluate_market_data_quality(
         ltp=live_ltp,
         tick_time=market_snapshot.get("tick_time"),
+        received_at=market_snapshot.get("received_at"),
+        instrument_token=market_snapshot.get("instrument_key") or intent.instrument.instrument_token,
+        exchange=intent.instrument.exchange,
+        market_open=_is_order_market_open(intent.instrument.exchange),
         bid=market_snapshot.get("bid"),
         ask=market_snapshot.get("ask"),
         reference_price=fill_price_hint if fill_price_hint > 0 else None,
@@ -5714,10 +5763,19 @@ async def _pre_trade_risk_gate(
             "strategy_id": strategy_id,
             "symbol": intent.instrument.tradingsymbol,
             "reason": quality.get("reason"),
+            "market_snapshot": market_snapshot,
             "market_quality": quality,
             "risk_style": risk.get("risk_style"),
         }
         await _record_pretrade_risk_event(user_id, payload)
+        logger.warning(
+            "Pre-trade blocked symbol=%s exchange=%s token=%s reason=%s snapshot=%s",
+            intent.instrument.tradingsymbol,
+            intent.instrument.exchange,
+            market_snapshot.get("instrument_key"),
+            quality.get("reason"),
+            market_snapshot,
+        )
         raise HTTPException(status_code=400, detail=f"Pre-trade blocked: {quality.get('reason')}")
 
     funds_row = {"available_cash": settings.get("per_strategy_capital") or settings.get("max_position_size") or 0}

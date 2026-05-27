@@ -332,11 +332,21 @@ class UpstoxGateway:
                             symbol = token.split("|")[-1] if "|" in token else token
                             normalized = {
                                 "token": token,
+                                "instrument_key": token,
                                 "symbol": symbol,
+                                "exchange": token.split("|")[0].replace("_FO", "") if "|" in token else None,
                                 "ltp": val,
+                                "bid": node.get("bid_price") or node.get("bid") or node.get("bp"),
+                                "ask": node.get("ask_price") or node.get("ask") or node.get("ap"),
+                                "timestamp": node.get("last_trade_time") or node.get("timestamp") or received_at,
+                                "timestamp_source": "broker_quote" if (node.get("last_trade_time") or node.get("timestamp")) else "server_received_at",
                                 "received_at": received_at,
                                 "raw": node,
+                                "source": "REST",
+                                "feed": "upstox-rest",
                             }
+                            if normalized["timestamp_source"] == "server_received_at":
+                                logger.warning("Upstox REST quote missing broker timestamp; using server received_at key=%s", token)
                             self._ticks_by_token[token] = normalized
                             self._ticks_by_symbol[symbol.upper()] = normalized
         return res

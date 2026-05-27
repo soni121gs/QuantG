@@ -51,6 +51,15 @@ MAX_STALE_SEC_BY_STYLE = {
     "balanced": 60,
 }
 
+MCX_MAX_STALE_SEC_BY_STYLE = {
+    "micro_scalp": 45,
+    "momentum": 90,
+    "breakout": 120,
+    "volatile_breakout": 150,
+    "pullback": 120,
+    "balanced": 120,
+}
+
 
 MAX_SPREAD_BPS_BY_STYLE = {
     "micro_scalp": 45,
@@ -141,6 +150,10 @@ def evaluate_market_data_quality(
     *,
     ltp: float,
     tick_time: Any = None,
+    received_at: Any = None,
+    instrument_token: Optional[str] = None,
+    exchange: str = "NSE",
+    market_open: Optional[bool] = None,
     bid: Optional[float] = None,
     ask: Optional[float] = None,
     reference_price: Optional[float] = None,
@@ -149,17 +162,26 @@ def evaluate_market_data_quality(
 ) -> Dict[str, Any]:
     price = _positive(ltp)
     style = str(risk_style or "balanced")
+    exch = str(exchange or "NSE").upper()
+    token = str(instrument_token or "").strip()
+    if not token:
+        return {"ok": False, "reason": "instrument token unresolved", "checks": {"instrument_token": token, "exchange": exch}}
+    if market_open is False:
+        return {"ok": False, "reason": f"{exch} market is closed", "checks": {"market_open": False, "exchange": exch}}
     if price <= 0:
         return {"ok": False, "reason": "ltp unavailable", "checks": {"ltp": price}}
 
     now = now or datetime.now(timezone.utc)
-    max_stale = MAX_STALE_SEC_BY_STYLE.get(style, MAX_STALE_SEC_BY_STYLE["balanced"])
+    stale_rules = MCX_MAX_STALE_SEC_BY_STYLE if exch == "MCX" else MAX_STALE_SEC_BY_STYLE
+    max_stale = stale_rules.get(style, stale_rules["balanced"])
     parsed_tick_time = parse_market_timestamp(tick_time)
+    parsed_received_at = parse_market_timestamp(received_at)
     age_sec = None
-    if parsed_tick_time:
-        age_sec = max(0.0, (now - parsed_tick_time).total_seconds())
-        if age_sec > max_stale:
-            return {"ok": False, "reason": f"market data stale: last tick age {int(age_sec)}s > {max_stale}s", "checks": {"ltp": price, "age_sec": age_sec, "max_stale_sec": max_stale}}
+    if not parsed_received_at:
+        return {"ok": False, "reason": "market data received_at unavailable", "checks": {"ltp": price, "exchange": exch}}
+    age_sec = max(0.0, (now - parsed_received_at).total_seconds())
+    if age_sec > max_stale:
+        return {"ok": False, "reason": f"market data stale: last quote age {int(age_sec)}s > {max_stale}s", "checks": {"ltp": price, "age_sec": age_sec, "max_stale_sec": max_stale, "exchange": exch, "has_broker_timestamp": bool(parsed_tick_time)}}
 
     bid_price = _positive(bid)
     ask_price = _positive(ask)
@@ -175,4 +197,4 @@ def evaluate_market_data_quality(
         if move_bps > 500:
             return {"ok": False, "reason": f"price jump too large: {move_bps:.0f} bps from reference", "checks": {"move_bps": round(move_bps, 2)}}
 
-    return {"ok": True, "reason": "accepted", "checks": {"ltp": price, "age_sec": age_sec, "max_stale_sec": max_stale}}
+    return {"ok": True, "reason": "accepted", "checks": {"ltp": price, "age_sec": age_sec, "max_stale_sec": max_stale, "exchange": exch}}

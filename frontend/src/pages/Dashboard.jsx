@@ -49,6 +49,14 @@ const shortId = (value) => {
   return text.length > 10 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
 };
 
+const quoteTime = (value) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleTimeString();
+};
+
+const quoteAge = (value) => (value == null ? "-" : `${Math.round(Number(value) || 0)}s`);
+
 const Field = ({ label, value, tone }) => (
   <div className="min-w-0">
     <div className="qd-section-title text-[9px]">{label}</div>
@@ -959,6 +967,14 @@ export default function Dashboard() {
                       <div className="min-w-0">
                         <div className="font-mono text-sm font-semibold text-white">{item.symbol}</div>
                         <div className="mt-0.5 truncate text-xs text-[var(--qd-text-3)]">{item.name}</div>
+                        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-[var(--qd-text-3)]">
+                          <span>Quote {quoteTime(item.received_at || item.tick_time)}</span>
+                          <span>Age {quoteAge(item.data_age_sec)}</span>
+                          <span>Feed {item.feed || item.source || "-"}</span>
+                          <span>Market {item.market_status || "-"}</span>
+                          <span className="col-span-2 truncate">Key {item.instrument_key || item.token || "-"}</span>
+                          {item.block_reason && <span className="col-span-2 truncate text-[var(--qd-warn)]">{item.block_reason}</span>}
+                        </div>
                       </div>
                       <div className="text-right">
                         <div className="font-mono text-sm font-bold text-white">{money(item.price)}</div>
