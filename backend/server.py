@@ -1404,6 +1404,70 @@ DEFAULT_STRATEGY_RISK = {
     "pause_on_issue": True,
 }
 
+
+RETAIL_LIVE_STATE_CODE = """def run(data):
+    if len(data) < 8:
+        return []
+
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    volumes = [max(1.0, float(d.get('volume') or 1)) for d in data]
+
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for value in values[1:]:
+            out.append(value * k + out[-1] * (1 - k))
+        return out
+
+    def avg(values):
+        return sum(values) / max(1, len(values))
+
+    ema_fast = ema(closes, 3)
+    ema_slow = ema(closes, 8)
+    signals = []
+    position = "NONE"
+    entry = 0.0
+
+    for i in range(7, len(data)):
+        close = closes[i]
+        prev = closes[i - 1]
+        range_recent = avg([highs[j] - lows[j] for j in range(max(1, i - 5), i + 1)])
+        momentum = close - closes[max(0, i - 3)]
+        min_move = max(close * 0.00012, range_recent * 0.18)
+        avg_vol = avg(volumes[max(0, i - 8):i])
+        vol_ok = volumes[i] >= avg_vol * 0.65
+        body_up = close >= prev
+        body_down = close <= prev
+
+        bullish = ema_fast[i] > ema_slow[i] and momentum > min_move and body_up and vol_ok
+        bearish = ema_fast[i] < ema_slow[i] and momentum < -min_move and body_down and vol_ok
+
+        if position == "LONG":
+            pnl = (close - entry) / entry * 100 if entry else 0
+            if bearish or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Retail CE exit / PE rotation'})
+                position = "NONE"
+        elif position == "SHORT":
+            pnl = (entry - close) / entry * 100 if entry else 0
+            if bullish or pnl <= -0.35 or pnl >= 0.8:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Retail PE exit / CE rotation'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Retail live CE momentum'})
+                position = "LONG"
+                entry = close
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Retail live PE momentum'})
+                position = "SHORT"
+                entry = close
+
+    return signals
+"""
+
+
 DEFAULT_OPTION_STRATEGIES = [
     {
         "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
@@ -2966,6 +3030,13 @@ STANDARD_STRATEGY_CATALOG = [
     },
 ]
 
+
+for _template in [*DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]:
+    if str(_template.get("strategy_type") or "").lower() == "option buying":
+        _template["python_code"] = RETAIL_LIVE_STATE_CODE
+        _template["market_suitability"] = _template.get("market_suitability") or "Retail live momentum"
+
+
 _seed_templates_by_name = {
     template["name"]: template
     for template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]
@@ -3206,9 +3277,33 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
             "last_filter_reason": "",
         }},
     )
+    template_sync_count = 0
+    for template in DEFAULT_OPTION_STRATEGIES:
+        res = await db.strategies.update_one(
+            {"user_id": user_id, "name": template["name"]},
+            {"$set": {
+                "description": template["description"],
+                "python_code": template["python_code"],
+                "strategy_type": template.get("strategy_type", "Option Buying"),
+                "required_capital": float(template.get("required_capital") or 0),
+                "instrument_group": template.get("instrument_group"),
+                "market_suitability": template.get("market_suitability", "Retail live momentum"),
+                "visual_config.options.enabled": True,
+                "visual_config.options.underlying": str(template.get("underlying") or "NIFTY").upper(),
+                "visual_config.options.strike_mode": template.get("strike_mode", "ATM_BUY"),
+                "visual_config.options.otm_points": int(template.get("otm_points") or 0),
+                "visual_config.options.lots": int(template.get("lots") or 1),
+                "default_strategy_version": "retail-live-state-v1",
+            }, "$unset": {
+                "last_filter_reason": "",
+                "last_error": "",
+            }},
+        )
+        template_sync_count += int(res.modified_count or 0)
     return {
         "users": int(user_res.modified_count or 0),
         "strategies": int(strat_res.modified_count or 0),
+        "templates_synced": template_sync_count,
     }
 
 

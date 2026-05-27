@@ -235,7 +235,14 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 signals_count = len(signals)
                 if not signals:
                     await db.strategies.update_one({"id": s["id"]},
-                                                   {"$set": {**eval_set, "last_signals_count": 0},
+                                                   {"$set": {
+                                                       **eval_set,
+                                                       "last_signals_count": 0,
+                                                       "last_filter_reason": (
+                                                           f"No current setup from strategy code "
+                                                           f"(candles={len(data)}, source={eval_set.get('last_data_source', 'unknown')})."
+                                                       ),
+                                                   },
                                                     "$inc": inc_set})
                     continue
                 last_sig = signals[-1]

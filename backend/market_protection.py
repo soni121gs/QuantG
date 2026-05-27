@@ -385,10 +385,10 @@ class FakeSignalFilter:
         support = trend_info.get("support", 0)
         resistance = trend_info.get("resistance", 0)
         
-        if action == "BUY" and abs(current_price - support) / support < 0.005:
+        if action == "BUY" and support and abs(current_price - support) / support < 0.005:
             confidence += 15
             reasons.append("Bounce from support")
-        elif action == "SELL" and abs(current_price - resistance) / resistance < 0.005:
+        elif action == "SELL" and resistance and abs(current_price - resistance) / resistance < 0.005:
             confidence += 15
             reasons.append("Bounce from resistance")
         
