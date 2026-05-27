@@ -52,6 +52,7 @@ async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_use
         _sync_kite_order_statuses, 
         _stale_local_open_orders, 
         _sync_kotak_order_statuses, 
+        _sync_upstox_order_statuses,
         _sync_strategy_positions_with_broker
     )
     
@@ -60,8 +61,9 @@ async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_use
     sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0, "reason": status.get("reason", "zerodha_not_connected")}
     stale = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": status.get("reason", "zerodha_not_connected")}
     kotak_sync = await _sync_kotak_order_statuses(user["id"])
+    upstox_sync = await _sync_upstox_order_statuses(user["id"], force=True)
     position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
-    return {"ok": True, "sync": sync, "stale": stale, "kotak_sync": kotak_sync, "position_sync": position_sync}
+    return {"ok": True, "sync": sync, "stale": stale, "kotak_sync": kotak_sync, "upstox_sync": upstox_sync, "position_sync": position_sync}
 
 
 @router.post("/auto-recover")
@@ -72,6 +74,7 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         _sync_kite_order_statuses,
         _stale_local_open_orders,
         _sync_strategy_positions_with_broker,
+        _sync_upstox_order_statuses,
         _start_user_ticker,
         _KOTAK_GATEWAYS,
         _sync_kotak_order_statuses,
@@ -90,6 +93,9 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
     else:
         actions.append({"name": "zerodha_session", "skipped": True, "reason": kite_status.get("reason", "not_connected")})
+
+    actions.append({"name": "upstox_order_sync", "result": await _sync_upstox_order_statuses(user["id"], force=True)})
+    actions.append({"name": "upstox_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
 
     kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
     if kotak_gateway and kotak_gateway.status().get("authenticated"):
@@ -186,4 +192,3 @@ async def reject_user(user_id: str, user=Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found or cannot be rejected")
     return {"ok": True, "message": "User registration rejected and deleted."}
-

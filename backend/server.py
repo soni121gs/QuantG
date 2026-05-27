@@ -7072,18 +7072,25 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
     return result
 
 
-async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
+async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> Dict[str, int]:
     gateway = await get_user_upstox_gateway(user_id)
     if not gateway or not gateway.connected:
         return {"checked": 0, "updated": 0, "reason": "upstox_not_connected"}
-    if not _check_and_update_sync_throttle(user_id, "upstox"):
+    if not force and not _check_and_update_sync_throttle(user_id, "upstox"):
         return {"checked": 0, "updated": 0, "throttled": True}
+    if force:
+        _LAST_USER_BROKER_SYNC[f"{user_id}:upstox"] = time.monotonic()
     try:
         report = await asyncio.to_thread(gateway.get_order_book)
     except Exception as exc:
         logger.warning("Upstox order book fetch failed: %s", exc)
         return {"checked": 0, "updated": 0, "reason": str(exc)}
     items = report.get("orders") or upstox_gateway_utils.order_items(report)
+    reported_order_ids = {
+        str(extract_upstox_order_id(item))
+        for item in items
+        if extract_upstox_order_id(item)
+    }
     updated = 0
     now = datetime.now(timezone.utc).isoformat()
     for item in items:
@@ -7154,7 +7161,67 @@ async def _sync_upstox_order_statuses(user_id: str) -> Dict[str, int]:
             ).to_list(20)
             for pos in exit_positions:
                 await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
-    result = {"checked": len(items), "updated": updated}
+
+    missing_fixed = 0
+    stale_before = datetime.now(timezone.utc) - timedelta(minutes=2)
+    local_active = await db.orders.find(
+        {
+            "user_id": user_id,
+            "broker": "upstox",
+            "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)},
+            "visibility": {"$ne": "hidden"},
+        },
+        {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1, "strategy_id": 1},
+    ).to_list(500)
+    for row in local_active:
+        created_at = row.get("created_at")
+        created_dt = None
+        if isinstance(created_at, datetime):
+            created_dt = created_at.astimezone(timezone.utc)
+        elif isinstance(created_at, str):
+            try:
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                created_dt = None
+        if created_dt and created_dt >= stale_before:
+            continue
+
+        broker_order_id = str(row.get("broker_order_id") or "").strip()
+        if broker_order_id and broker_order_id in reported_order_ids:
+            continue
+
+        stale_status = "BROKER_NOT_FOUND" if broker_order_id else "STALE"
+        message = (
+            "Local stale Upstox order cleared: broker no longer reports this order."
+            if broker_order_id else
+            "Local stale Upstox order cleared: no broker order id was ever recorded."
+        )
+        res = await db.orders.update_one(
+            {"user_id": user_id, "id": row["id"]},
+            {"$set": {
+                "status": ORDER_REJECTED,
+                "legacy_status": stale_status,
+                "broker_status": stale_status,
+                "status_message": message,
+                "visibility": "hidden",
+                "updated_at": now,
+            }},
+        )
+        missing_fixed += res.modified_count
+        await db.strategy_positions.update_many(
+            {
+                "user_id": user_id,
+                "$or": [
+                    {"entry_order_id": row["id"]},
+                    {"entry_broker_order_id": broker_order_id} if broker_order_id else {"entry_broker_order_id": "__none__"},
+                ],
+                "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
+            },
+            {"$set": {"status": stale_status, "updated_at": now, "broker_status_message": message},
+             "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+        )
+        await db.strategy_position_locks.delete_many({"user_id": user_id, "strategy_id": row.get("strategy_id")})
+    result = {"checked": len(items), "updated": updated, "missing_from_broker_fixed": missing_fixed}
     await _record_broker_sync_state(user_id, "upstox", result)
     return result
 

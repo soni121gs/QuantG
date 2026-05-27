@@ -31,7 +31,7 @@ const filledOrder = (status) => ["FILLED", "CLOSED", "COMPLETE"].includes((statu
 const ACTIVE_POSITION_STATES = ["OPEN", "FILLED"];
 const PENDING_POSITION_STATES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "EXITING"];
 const BROKER_OPEN_ORDER_STATES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING", "EXIT_PENDING"];
-const PROBLEM_ORDER_STATES = ["FAILED", "REJECTED"];
+const PROBLEM_ORDER_STATES = ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"];
 
 const asStatus = (value) => String(value || "").toUpperCase();
 const hasQty = (value) => Math.abs(parseInt(value || 0, 10)) > 0;

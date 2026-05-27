@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
 const FILLED_STATUSES = ["FILLED", "CLOSED", "COMPLETE"];
-const REJECTED_STATUSES = ["CANCELLED", "REJECTED", "FAILED"];
+const REJECTED_STATUSES = ["CANCELLED", "REJECTED", "FAILED", "BROKER_NOT_FOUND", "STALE"];
 
 export default function Orders() {
   const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 15000 });
@@ -32,13 +32,14 @@ export default function Orders() {
     api.get("/market/watchlist").then((r) => setWatch(r.data)).catch(() => {});
   }, []);
 
-  const filtered = orders.filter((o) => {
+  const visibleOrders = orders.filter((o) => o.visibility !== "hidden");
+  const filtered = visibleOrders.filter((o) => {
     const status = o.execution_status || o.status;
     if (filter === "ALL") return true;
     if (filter === "OPEN") return OPEN_STATUSES.includes(status);
     if (filter === "COMPLETE") return FILLED_STATUSES.includes(status);
     if (filter === "CANCELLED") return REJECTED_STATUSES.includes(status);
-    if (filter === "FAILED") return status === "FAILED" || status === "REJECTED";
+    if (filter === "FAILED") return ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"].includes(status);
     return true;
   });
 
@@ -134,18 +135,18 @@ export default function Orders() {
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
             >
-              {f} {f !== "ALL" && `· ${orders.filter((o) => {
+              {f} {f !== "ALL" && `- ${visibleOrders.filter((o) => {
                 const status = o.execution_status || o.status;
                 if (f === "OPEN") return OPEN_STATUSES.includes(status);
                 if (f === "COMPLETE") return FILLED_STATUSES.includes(status);
-                if (f === "FAILED") return status === "FAILED" || status === "REJECTED";
+                if (f === "FAILED") return ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"].includes(status);
                 return REJECTED_STATUSES.includes(status);
               }).length}`}
             </button>
           ))}
         </div>
         <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">
-          showing {filtered.length} of {orders.length}
+          showing {filtered.length} of {visibleOrders.length}
         </span>
       </div>
 
@@ -164,15 +165,15 @@ export default function Orders() {
                 const status = o.execution_status || o.status;
                 return (
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
-                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "—"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "-"}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.strategy_name || o.strategy_id || (String(o.source || "").includes("strategy:") ? String(o.source).split("strategy:").pop() : "manual")}</td>
                   <td className="px-4 py-2.5 text-white">{o.symbol}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.segment || o.exchange || "-"}</td>
                   <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                   <td className="px-4 py-2.5">{o.qty}</td>
                   <td className="px-4 py-2.5">{formatINR(o.price)}</td>
-                  <td className="px-4 py-2.5 text-[var(--qd-loss)]">{o.stop_loss != null ? formatINR(o.stop_loss) : "—"}</td>
-                  <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.take_profit != null ? formatINR(o.take_profit) : "—"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-loss)]">{o.stop_loss != null ? formatINR(o.stop_loss) : "-"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.take_profit != null ? formatINR(o.take_profit) : "-"}</td>
                   <td className={`px-4 py-2.5 ${
                     FILLED_STATUSES.includes(status) ? "text-[var(--qd-profit)]" :
                     REJECTED_STATUSES.includes(status) ? "text-[var(--qd-loss)]" :
@@ -221,7 +222,7 @@ export default function Orders() {
             <div className={["NSE", "BSE"].includes(form.exchange) ? "" : "hidden"}>
               <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
               <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid={["NSE", "BSE"].includes(form.exchange) ? "order-symbol" : "order-symbol-watch-hidden"}>
-                {watch.map((s) => <option key={s.symbol} value={s.symbol}>{`${s.symbol} — ₹${formatINR(s.price)}`}</option>)}
+                {watch.map((s) => <option key={s.symbol} value={s.symbol}>{`${s.symbol} - INR ${formatINR(s.price)}`}</option>)}
               </select>
             </div>
             {!["NSE", "BSE"].includes(form.exchange) && (
@@ -288,3 +289,4 @@ export default function Orders() {
     </div>
   );
 }
+
