@@ -220,6 +220,9 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     data = history.get("data") or []
                     eval_set["last_data_source"] = history.get("source", "unknown")
                     eval_set["last_data_live"] = bool(history.get("is_live"))
+                    eval_set["last_data_reason"] = history.get("live_reason")
+                    eval_set["last_candle_at"] = history.get("last_candle_at")
+                    eval_set["latest_candle_age_sec"] = history.get("latest_candle_age_sec")
                 if not data:
                     error = None
                     if isinstance(history, dict) and not history.get("paper_mode", True):
@@ -292,6 +295,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 option_contract = None
                 option_buying_mode = bool(opt_cfg.get("enabled")) and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
                 if option_buying_mode and action == "SELL":
+                    # In option-buying strategies a SELL signal has two meanings:
+                    # with an active position it is an exit, while flat it is a PE entry.
                     active_position = await db.strategy_positions.find_one(
                         {
                             "user_id": s["user_id"],
@@ -310,16 +315,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                       "last_filter_reason": "SELL signal used as option-buying exit."},
                              "$inc": inc_set},
                         )
-                    else:
-                        await db.strategies.update_one(
-                            {"id": s["id"]},
-                            {"$set": {**eval_set,
-                                      "last_signal_action": action,
-                                      "last_signals_count": signals_count,
-                                      "last_filter_reason": "SELL signal ignored: option-buying strategy has no active position."},
-                             "$inc": inc_set},
-                        )
-                    continue
+                        continue
                 if opt_cfg.get("enabled") and resolve_option_fn:
                     try:
                         option_contract = await resolve_option_fn(

@@ -97,6 +97,7 @@ option_ledger = OptionStateLedger(
 
 KITE_HISTORICAL_MIN_INTERVAL_SEC = float(os.environ.get("KITE_HISTORICAL_MIN_INTERVAL_SEC", "0.40"))
 KITE_HISTORY_CACHE_TTL_SEC = int(os.environ.get("KITE_HISTORY_CACHE_TTL_SEC", "55"))
+STRATEGY_LIVE_CANDLE_MAX_AGE_SEC = int(os.environ.get("STRATEGY_LIVE_CANDLE_MAX_AGE_SEC", "1200"))
 KITE_ORDER_SYNC_TTL_SEC = int(os.environ.get("KITE_ORDER_SYNC_TTL_SEC", "10"))
 _RATE_LIMIT_LOCK = asyncio.Lock()
 _RATE_LIMIT_LAST: Dict[str, float] = {}
@@ -236,6 +237,9 @@ class StrategyOut(BaseModel):
     last_signals_count: Optional[int] = None
     last_data_source: Optional[str] = None
     last_data_live: Optional[bool] = None
+    last_data_reason: Optional[str] = None
+    last_candle_at: Optional[str] = None
+    latest_candle_age_sec: Optional[float] = None
     last_error: Optional[str] = None
     broker: Optional[str] = "upstox"
     mode: Optional[str] = "paper"
@@ -559,6 +563,47 @@ def _merge_tick_bars(historical: List[Dict[str, Any]], tick_bars: List[Dict[str,
     return historical
 
 
+def _parse_candle_datetime_ist(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("T", " ")
+    if "+" in text:
+        text = text.split("+", 1)[0]
+    if text.endswith("Z"):
+        text = text[:-1]
+    formats = (
+        ("%Y-%m-%d %H:%M:%S", 19),
+        ("%Y-%m-%d %H:%M", 16),
+        ("%Y-%m-%d", 10),
+    )
+    for fmt, width in formats:
+        try:
+            return datetime.strptime(text[:width], fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _latest_candle_fresh_for_live(candles: List[Dict[str, Any]], exchange: str) -> Dict[str, Any]:
+    if not candles:
+        return {"fresh": False, "reason": "no candles"}
+    last_at = _parse_candle_datetime_ist(candles[-1].get("date"))
+    if not last_at:
+        return {"fresh": False, "reason": "latest candle timestamp unavailable"}
+
+    now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST_OFFSET
+    market_open = _is_order_market_open("MCX" if exchange == "MCX" else "NSE")
+    age_sec = (now_ist - last_at).total_seconds()
+    fresh = market_open and -60 <= age_sec <= STRATEGY_LIVE_CANDLE_MAX_AGE_SEC
+    return {
+        "fresh": fresh,
+        "last_candle_at": last_at.strftime("%Y-%m-%d %H:%M"),
+        "age_sec": round(age_sec, 2),
+        "reason": "fresh Upstox historical candle" if fresh else f"stale candle age {round(age_sec)}s",
+    }
+
+
 async def _rate_limit(bucket: str, min_interval_sec: float) -> None:
     async with _RATE_LIMIT_LOCK:
         now = time.monotonic()
@@ -660,6 +705,7 @@ async def _fetch_strategy_history(
                 feed_started = upstox_gw.start_market_data_ws([token], mode="full")
                 live_data = await asyncio.to_thread(upstox_gw.get_historical_candles, token, interval, days)
                 tick = upstox_gw.latest_tick(token)
+                candle_freshness = _latest_candle_fresh_for_live(live_data or [], exchange)
                 if tick and live_data:
                     tick_bar = {
                         "date": tick.get("received_at"),
@@ -681,10 +727,14 @@ async def _fetch_strategy_history(
                     )
                 min_required = 2 if interval != "day" else min_intraday_bars
                 if live_data and len(live_data) >= min_required:
+                    is_live_source = bool(tick) or bool(candle_freshness.get("fresh"))
                     return {
                         "data": live_data,
                         "source": f"upstox-v3-websocket+historical:{interval}:mcx-future:{sym_upper}" if exchange == "MCX" else f"upstox-v3-websocket+historical:{interval}:{sym_upper}",
-                        "is_live": bool(tick),
+                        "is_live": is_live_source,
+                        "live_reason": "websocket tick" if tick else candle_freshness.get("reason"),
+                        "last_candle_at": candle_freshness.get("last_candle_at"),
+                        "latest_candle_age_sec": candle_freshness.get("age_sec"),
                         "interval": interval,
                     }
 
@@ -4457,11 +4507,21 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     else:
         symbol = (vc.get("symbol") or "RELIANCE").upper()
 
-    # Fetch candles using the same path as the background runner.
-    history = await _fetch_strategy_history(user["id"], symbol, days=60, interval="5minute")
+    settings = await get_user_settings(user["id"])
+    strategy_mode = row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
+    allow_mock = strategy_mode == "paper"
+
+    # Fetch candles using the same path and live/mock policy as the background runner.
+    history = await _fetch_strategy_history(
+        user["id"],
+        symbol,
+        days=60,
+        interval="5minute",
+        allow_mock=allow_mock,
+        strategy=row,
+    )
     data: List[dict] = history["data"]
     source_label = history["source"]
-    kite, _ = await get_user_kite(user["id"])
 
     if not data:
         raise HTTPException(status_code=400, detail=f"No price data for {symbol}")
@@ -4498,26 +4558,24 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                     f"{'; '.join(signal_validation.get('reasons') or [])}"
                 )
             else:
-                settings = await get_user_settings(user["id"])
-                if not history.get("is_live", False) and not settings.get("paper_mode", True):
+                if not history.get("is_live", False) and not allow_mock:
                     raise HTTPException(
                         status_code=400,
-                        detail="Live execution blocked: candle source is mock. Connect Kite or switch to paper mode.",
+                        detail=f"Live execution blocked: Upstox candle source is not fresh ({history.get('live_reason') or source_label}). Reconnect Upstox or switch to paper mode.",
                     )
                 try:
                     if options_mode:
-                        if not kite:
-                            raise HTTPException(status_code=400, detail="Options test-run requires a connected Zerodha session.")
-                        option_contract_used = options_helper.resolve_for_signal(
-                            kite,
+                        option_contract_used = await _resolve_option_for_strategy(
+                            user["id"],
+                            row,
                             underlying=symbol,
                             signal_action=action,
                             strike_mode=opt_cfg.get("strike_mode", "ATM_BUY"),
                             otm_points=int(opt_cfg.get("otm_points") or 0),
-                            expiry_offset_weeks=int(opt_cfg.get("expiry_offset") or 0),
+                            expiry_offset=int(opt_cfg.get("expiry_offset") or 0),
                         )
                         if not option_contract_used:
-                            raise HTTPException(status_code=400, detail="Could not resolve option contract - markets may be closed or instruments unavailable.")
+                            raise HTTPException(status_code=400, detail="Could not resolve Upstox option contract - check OAuth, exchange permissions, and instrument search.")
                         order_result = await _place_order_core(
                             user_id=user["id"], symbol=symbol, side=action,
                             qty=int(opt_cfg.get("lots") or 1),
@@ -4544,6 +4602,9 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             "last_fired_signal_date": last_sig.get("date", ""),
                             "last_data_source": source_label,
                             "last_data_live": bool(history.get("is_live")),
+                            "last_data_reason": history.get("live_reason"),
+                            "last_candle_at": history.get("last_candle_at"),
+                            "latest_candle_age_sec": history.get("latest_candle_age_sec"),
                         },
                          "$inc": {"signals_fired": 1, "evaluations": 1}},
                     )

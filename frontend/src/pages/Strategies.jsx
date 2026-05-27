@@ -56,6 +56,9 @@ const noticeFor = (s) => {
   if (s.last_error?.includes("entry blocked: duplicate-buy-dropped")) return { text: "Entry skipped: duplicate buy dropped", kind: "filter" };
   if (s.last_error?.includes("entry blocked: max-trades-day-reached")) return { text: "Entry skipped: max trades reached", kind: "filter" };
   if (s.last_error) return { text: s.last_error, kind: "error" };
+  if (s.mode === "live" && s.last_data_source && !s.last_data_live) {
+    return { text: `Data not fresh: ${s.last_data_reason || "waiting for current Upstox candle"}`, kind: "filter" };
+  }
   return null;
 };
 
@@ -531,9 +534,10 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         <p className="mt-2 line-clamp-2 text-xs text-[var(--qd-text-3)]">{score?.reason || s.ai_confidence_reason || "Waiting for live market structure."}</p>
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-2 border-y border-[var(--qd-border)] py-3">
+      <div className="mt-4 grid grid-cols-2 gap-2 border-y border-[var(--qd-border)] py-3 sm:grid-cols-4">
         <Metric label="Scans" value={s.evaluations ?? 0} compact />
-        <Metric label="Signals" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
+        <Metric label="Orders" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
+        <Metric label="Last Signals" value={s.last_signals_count ?? 0} compact tone={(s.last_signals_count ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
         <Metric label="Last Scan" value={timeAgo(s.last_evaluated_at)} compact />
       </div>
 
