@@ -19,6 +19,8 @@ from brokers.upstox_market_data_v3 import UpstoxMarketDataFeedV3
 
 logger = logging.getLogger("quantg.upstox_gateway")
 
+_last_warn_time: Dict[str, float] = {}
+
 
 class UpstoxGateway:
     AUTH_DIALOG_URL = "https://api.upstox.com/v2/login/authorization/dialog"
@@ -350,7 +352,12 @@ class UpstoxGateway:
                                 "feed": "upstox-rest",
                             }
                             if normalized["timestamp_source"] == "server_received_at":
-                                logger.warning("Upstox REST quote missing broker timestamp; using server received_at key=%s", token)
+                                import time
+                                now_ts = time.time()
+                                last_time = _last_warn_time.get(token, 0.0)
+                                if now_ts - last_time > 300:
+                                    _last_warn_time[token] = now_ts
+                                    logger.warning("Upstox REST quote missing broker timestamp; using server received_at key=%s (rate-limited)", token)
                             self._ticks_by_token[token] = normalized
                             self._ticks_by_symbol[symbol.upper()] = normalized
         return res

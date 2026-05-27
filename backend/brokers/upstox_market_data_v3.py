@@ -231,6 +231,9 @@ def build_subscription_payload(instrument_keys: Iterable[str], mode: str = "ltpc
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
+_last_warn_time: Dict[str, float] = {}
+
+
 def decode_feed_response(raw: bytes) -> Dict[str, Any]:
     message = FeedResponse()
     message.ParseFromString(raw)
@@ -254,7 +257,11 @@ def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: O
     broker_ts = ltpc.get("ltt") or current_ts
     timestamp_source = "broker_ltt" if ltpc.get("ltt") else "upstox_current_ts" if current_ts else "server_received_at"
     if timestamp_source == "server_received_at":
-        logger.warning("Upstox V3 tick missing broker timestamp; using server received_at key=%s", instrument_key)
+        now_ts = time.time()
+        last_time = _last_warn_time.get(instrument_key, 0.0)
+        if now_ts - last_time > 300:
+            _last_warn_time[instrument_key] = now_ts
+            logger.warning("Upstox V3 tick missing broker timestamp; using server received_at key=%s (rate-limited)", instrument_key)
     return {
         "token": instrument_key,
         "instrument_key": instrument_key,
