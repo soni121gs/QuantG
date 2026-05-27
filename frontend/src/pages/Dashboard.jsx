@@ -100,16 +100,16 @@ const EngineStrategyCard = ({ row, onSave }) => {
   const risk = row.risk_settings || {};
   const pnl = pos.unrealized_pnl ?? 0;
   const [form, setForm] = useState({
-    target_pct: row.target_pct ?? 45,
-    stoploss_pct: row.stoploss_pct ?? 22,
+    target_pct: row.target_pct ?? 28,
+    stoploss_pct: row.stoploss_pct ?? 14,
     trailing_sl_enabled: row.trailing_sl_enabled ?? true,
-    trail_trigger_pct: row.trail_trigger_pct ?? 25,
-    trail_step_pct: row.trail_step_pct ?? 10,
-    cooldown_minutes: row.cooldown_minutes ?? 20,
+    trail_trigger_pct: row.trail_trigger_pct ?? 12,
+    trail_step_pct: row.trail_step_pct ?? 7,
+    cooldown_minutes: row.cooldown_minutes ?? 25,
     max_trades_day: row.max_trades_day ?? 2,
     daily_loss_limit: risk.daily_loss_limit ?? 0,
     required_capital: row.required_capital ?? 0,
-    time_exit_minutes: row.time_exit_minutes ?? risk.time_exit_minutes ?? 45,
+    time_exit_minutes: row.time_exit_minutes ?? risk.time_exit_minutes ?? 35,
     indicator_exit_enabled: row.indicator_exit_enabled ?? risk.indicator_exit_enabled ?? true,
     exit_mode: row.exit_mode ?? risk.exit_mode ?? "tp_sl_tsl_or_signal",
   });
@@ -493,7 +493,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-5 grid grid-cols-2 gap-3">
             <Field label="Max lot limit" value="1 contract" />
-            <Field label="Cooldown delay" value={`${strategies[0]?.cooldown_minutes ?? 20} min`} />
+            <Field label="Cooldown delay" value={`${strategies[0]?.cooldown_minutes ?? 25} min`} />
             <Field label="Loss cutoff" value={money(firstRisk.daily_loss_limit || 0)} />
             <Field label="Kill gate" value={firstRisk.kill_switch_enabled ? "ARMED" : "CLEAR"} tone={firstRisk.kill_switch_enabled ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
           </div>

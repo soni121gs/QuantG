@@ -1392,13 +1392,14 @@ def run(data):
 
 DEFAULT_STRATEGY_RISK = {
     # Human percent values. The SQLite option ledger stores these as fractions.
-    "stop_loss_pct": 22.0,
-    "take_profit_pct": 45.0,
-    "trail_trigger_pct": 25.0,
-    "trail_step_pct": 10.0,
-    "cooldown_minutes": 20,
+    "stop_loss_pct": 14.0,
+    "take_profit_pct": 28.0,
+    "trail_trigger_pct": 12.0,
+    "trail_step_pct": 7.0,
+    "cooldown_minutes": 25,
     "max_trades_day": 2,
-    "time_exit_minutes": 45,
+    "daily_loss_limit": 1000.0,
+    "time_exit_minutes": 35,
     "indicator_exit_enabled": True,
     "exit_mode": "tp_sl_tsl_or_signal",
     "pause_on_issue": True,
@@ -1406,7 +1407,7 @@ DEFAULT_STRATEGY_RISK = {
 
 
 RETAIL_LIVE_STATE_CODE = """def run(data):
-    if len(data) < 8:
+    if len(data) < 25:
         return []
 
     closes = [float(d['close']) for d in data]
@@ -1424,34 +1425,37 @@ RETAIL_LIVE_STATE_CODE = """def run(data):
     def avg(values):
         return sum(values) / max(1, len(values))
 
-    ema_fast = ema(closes, 3)
-    ema_slow = ema(closes, 8)
+    ema_fast = ema(closes, 4)
+    ema_slow = ema(closes, 10)
+    ema_filter = ema(closes, 18)
     signals = []
     position = "NONE"
     entry = 0.0
 
-    for i in range(7, len(data)):
+    for i in range(18, len(data)):
         close = closes[i]
         prev = closes[i - 1]
-        range_recent = avg([highs[j] - lows[j] for j in range(max(1, i - 5), i + 1)])
+        range_recent = avg([highs[j] - lows[j] for j in range(max(1, i - 8), i + 1)])
         momentum = close - closes[max(0, i - 3)]
-        min_move = max(close * 0.00012, range_recent * 0.18)
-        avg_vol = avg(volumes[max(0, i - 8):i])
-        vol_ok = volumes[i] >= avg_vol * 0.65
+        min_move = max(close * 0.00014, range_recent * 0.24)
+        avg_vol = avg(volumes[max(0, i - 15):i])
+        vol_ok = volumes[i] >= avg_vol * 0.9
         body_up = close >= prev
         body_down = close <= prev
+        higher_high = highs[i] > max(highs[i - 3:i])
+        lower_low = lows[i] < min(lows[i - 3:i])
 
-        bullish = ema_fast[i] > ema_slow[i] and momentum > min_move and body_up and vol_ok
-        bearish = ema_fast[i] < ema_slow[i] and momentum < -min_move and body_down and vol_ok
+        bullish = ema_fast[i] > ema_slow[i] > ema_filter[i] and momentum > min_move and body_up and higher_high and vol_ok
+        bearish = ema_fast[i] < ema_slow[i] < ema_filter[i] and momentum < -min_move and body_down and lower_low and vol_ok
 
         if position == "LONG":
             pnl = (close - entry) / entry * 100 if entry else 0
-            if bearish or pnl <= -0.35 or pnl >= 0.8:
+            if bearish or pnl <= -0.30 or pnl >= 0.75:
                 signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Retail CE exit / PE rotation'})
                 position = "NONE"
         elif position == "SHORT":
             pnl = (entry - close) / entry * 100 if entry else 0
-            if bullish or pnl <= -0.35 or pnl >= 0.8:
+            if bullish or pnl <= -0.30 or pnl >= 0.75:
                 signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Retail PE exit / CE rotation'})
                 position = "NONE"
         else:
@@ -3271,6 +3275,19 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
             "broker": "upstox",
             "mode": strategy_mode,
             "visual_config.options.enabled": True,
+            "visual_config.risk.stop_loss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
+            "visual_config.risk.stoploss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
+            "visual_config.risk.take_profit_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
+            "visual_config.risk.target_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
+            "visual_config.risk.trailing_sl_enabled": True,
+            "visual_config.risk.trail_trigger_pct": DEFAULT_STRATEGY_RISK["trail_trigger_pct"],
+            "visual_config.risk.trail_step_pct": DEFAULT_STRATEGY_RISK["trail_step_pct"],
+            "visual_config.risk.cooldown_minutes": DEFAULT_STRATEGY_RISK["cooldown_minutes"],
+            "visual_config.risk.max_trades_day": DEFAULT_STRATEGY_RISK["max_trades_day"],
+            "visual_config.risk.daily_loss_limit": DEFAULT_STRATEGY_RISK["daily_loss_limit"],
+            "visual_config.risk.time_exit_minutes": DEFAULT_STRATEGY_RISK["time_exit_minutes"],
+            "visual_config.risk.indicator_exit_enabled": DEFAULT_STRATEGY_RISK["indicator_exit_enabled"],
+            "visual_config.risk.exit_mode": DEFAULT_STRATEGY_RISK["exit_mode"],
         }, "$unset": {
             "last_data_source": "",
             "last_error": "",
@@ -3293,7 +3310,20 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.strike_mode": template.get("strike_mode", "ATM_BUY"),
                 "visual_config.options.otm_points": int(template.get("otm_points") or 0),
                 "visual_config.options.lots": int(template.get("lots") or 1),
-                "default_strategy_version": "retail-live-state-v1",
+                "visual_config.risk.stop_loss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
+                "visual_config.risk.stoploss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
+                "visual_config.risk.take_profit_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
+                "visual_config.risk.target_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
+                "visual_config.risk.trailing_sl_enabled": True,
+                "visual_config.risk.trail_trigger_pct": DEFAULT_STRATEGY_RISK["trail_trigger_pct"],
+                "visual_config.risk.trail_step_pct": DEFAULT_STRATEGY_RISK["trail_step_pct"],
+                "visual_config.risk.cooldown_minutes": DEFAULT_STRATEGY_RISK["cooldown_minutes"],
+                "visual_config.risk.max_trades_day": DEFAULT_STRATEGY_RISK["max_trades_day"],
+                "visual_config.risk.daily_loss_limit": DEFAULT_STRATEGY_RISK["daily_loss_limit"],
+                "visual_config.risk.time_exit_minutes": DEFAULT_STRATEGY_RISK["time_exit_minutes"],
+                "visual_config.risk.indicator_exit_enabled": DEFAULT_STRATEGY_RISK["indicator_exit_enabled"],
+                "visual_config.risk.exit_mode": DEFAULT_STRATEGY_RISK["exit_mode"],
+                "default_strategy_version": "retail-balanced-v3",
             }, "$unset": {
                 "last_filter_reason": "",
                 "last_error": "",
@@ -3348,7 +3378,11 @@ def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "trail_trigger_pct": trail_trigger_pct,
         "trail_step_pct": trail_step_pct,
         "trailing_sl_enabled": bool(raw.get("trailing_sl_enabled", True)),
+        "cooldown_minutes": int(raw.get("cooldown_minutes") or DEFAULT_STRATEGY_RISK["cooldown_minutes"]),
+        "max_trades_day": int(raw.get("max_trades_day") or DEFAULT_STRATEGY_RISK["max_trades_day"]),
+        "daily_loss_limit": float(raw.get("daily_loss_limit") or DEFAULT_STRATEGY_RISK["daily_loss_limit"]),
         "time_exit_minutes": int(raw.get("time_exit_minutes") or DEFAULT_STRATEGY_RISK["time_exit_minutes"]),
+        "indicator_exit_enabled": bool(raw.get("indicator_exit_enabled", DEFAULT_STRATEGY_RISK["indicator_exit_enabled"])),
         "exit_mode": raw.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
     })
     return raw
@@ -6896,7 +6930,7 @@ async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[
     rows = await db.strategy_positions.find({
         "user_id": user_id,
         "mode": "live",
-        "status": {"$in": ["OPEN", "FILLED", "EXITING"]},
+        "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
     }, {"_id": 0}).to_list(500)
     marked = 0
     now = datetime.now(timezone.utc).isoformat()

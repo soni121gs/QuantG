@@ -210,12 +210,12 @@ export default function Strategies() {
   };
 
   return (
-    <div className="space-y-5" data-testid="strategies-page">
-      <section className="flex flex-col gap-4 border-b border-[var(--qd-border)] pb-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="space-y-3" data-testid="strategies-page">
+      <section className="flex flex-col gap-3 border-b border-[var(--qd-border)] pb-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="qd-section-title">Strategy Catalog</div>
-          <h1 className="mt-1 font-head text-3xl font-bold text-white">Standardized Strategies</h1>
-          <p className="mt-2 max-w-2xl text-sm text-[var(--qd-text-2)]">
+          <h1 className="mt-1 font-head text-2xl font-bold text-white">Standardized Strategies</h1>
+          <p className="mt-1 max-w-2xl text-xs text-[var(--qd-text-2)]">
             Filterable option systems with explicit capital, strategy type, and live AI confidence.
           </p>
         </div>
@@ -235,7 +235,7 @@ export default function Strategies() {
         </div>
       </section>
 
-      <section className="qd-card p-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between bg-black/40 backdrop-blur-md border border-[var(--qd-border)] shadow-xl rounded-md">
+      <section className="qd-card flex flex-col gap-3 rounded-md border border-[var(--qd-border)] bg-black/40 p-3 backdrop-blur-md lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 pr-1 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">
             <Filter size={14} className="text-[var(--qd-accent)]" /> Categories
@@ -244,7 +244,7 @@ export default function Strategies() {
             <button
               key={item.id}
               onClick={() => setSelectedFilter(item.id)}
-              className={`rounded px-3 py-1.5 font-mono text-xs uppercase tracking-wider transition-all duration-300 ${
+              className={`rounded px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-all duration-300 ${
                 selectedFilter === item.id
                   ? "bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.4)] border border-indigo-400/35"
                   : "bg-white/[0.02] border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:text-white hover:border-indigo-500/50 hover:bg-white/[0.05]"
@@ -261,7 +261,7 @@ export default function Strategies() {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
-            className="bg-black/60 border border-[var(--qd-border)] hover:border-indigo-500/50 text-white px-3 py-1.5 text-xs font-mono rounded cursor-pointer outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+            className="cursor-pointer rounded border border-[var(--qd-border)] bg-black/60 px-3 py-1.5 font-mono text-xs text-white outline-none transition-all hover:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500"
             data-testid="sort-selector"
           >
             <option value="score">AI Confidence Score</option>
@@ -337,7 +337,7 @@ export default function Strategies() {
           <p className="text-sm text-[var(--qd-text-2)]">No strategies match this filter.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+        <div className="space-y-2">
           {filtered.map((s) => (
             <StrategyCard
               key={s.id}
@@ -465,22 +465,22 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
 
   return (
     <article 
-      className={`qd-card flex min-h-[410px] flex-col p-5 transition-all duration-300 relative overflow-hidden ${
+      className={`qd-card flex flex-col p-3 transition-all duration-300 relative overflow-hidden ${
         isHft 
-          ? "border-indigo-500/40 bg-gradient-to-br from-black/60 to-indigo-950/20 hover:border-indigo-400/80 shadow-[0_0_25px_rgba(99,102,241,0.06)]" 
+          ? "border-indigo-500/35 bg-black/50 hover:border-indigo-400/70" 
           : "hover:border-white/10"
       }`} 
       data-testid={`strategy-${s.id}`}
     >
-      {isHft && (
+      {false && isHft && (
         <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-indigo-500/10 via-cyan-500/5 to-transparent pointer-events-none rounded-bl-full animate-pulse" />
       )}
       
-      <div className="flex items-start justify-between gap-3 relative z-10">
+      <div className="flex flex-col gap-3 relative z-10 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           {isHft && (
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/20 to-indigo-500/20 border border-amber-500/35 text-amber-300 font-mono text-[9px] uppercase tracking-wider font-semibold animate-pulse mb-1.5 w-max">
-              <Zap size={9} className="fill-amber-300 animate-bounce" /> Upstox v2 HFT
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-amber-300 font-mono text-[9px] uppercase tracking-wider font-semibold mb-1 w-max">
+              <Zap size={9} /> Upstox
             </div>
           )}
           <div className="qd-section-title flex items-center gap-1.5">
@@ -488,7 +488,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             <span className="w-1 h-1 rounded-full bg-[var(--qd-text-3)]" />
             <span className="text-[var(--qd-text-2)]">{speedLabel()}</span>
           </div>
-          <h2 className="mt-1 line-clamp-2 font-head text-lg font-semibold text-white">{s.name}</h2>
+          <h2 className="mt-1 truncate font-head text-base font-semibold text-white">{s.name}</h2>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-rose-300 animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-cyan-300"}`}>
               {s.mode === "live" ? "● PRODUCTION LIVE" : "● PAPER SIMULATED"}
@@ -498,7 +498,15 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             </span>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="grid min-w-[280px] grid-cols-3 gap-2 rounded border border-white/5 bg-black/25 p-2 sm:grid-cols-6 lg:grid-cols-3 xl:grid-cols-6">
+          <Metric label="Capital" value={money(s.required_capital)} compact />
+          <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
+          <Metric label="Score" value={scoreValue ? `${scoreValue}%` : "-"} compact />
+          <Metric label="Scans" value={s.evaluations ?? 0} compact />
+          <Metric label="Orders" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
+          <Metric label="Last" value={timeAgo(s.last_evaluated_at)} compact />
+        </div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           <StatusBadge status={s.status} />
           <div className="flex items-center gap-1.5 font-mono text-[9px] text-[var(--qd-text-3)]">
             <span>{broker.name}</span>
@@ -508,9 +516,9 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         </div>
       </div>
 
-      <p className="mt-3 min-h-[40px] text-sm leading-relaxed text-[var(--qd-text-2)] relative z-10">{s.description || "No description"}</p>
+      <p className="hidden">{s.description || "No description"}</p>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 relative z-10">
+      <div className="hidden">
         <Metric label="Total Capital Required" value={money(s.required_capital)} />
         <Metric label="Strategy Type" value={s.strategy_type || "Option Buying"} />
         <Metric label="Asset" value={s.asset_class === "commodity" ? "Oil and Gas" : s.asset_class || "equity"} />
@@ -520,7 +528,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         </div>
       </div>
 
-      <div className="mt-4 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3">
+      <div className="hidden">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Bot size={15} className="text-[var(--qd-accent)]" />
@@ -534,7 +542,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         <p className="mt-2 line-clamp-2 text-xs text-[var(--qd-text-3)]">{score?.reason || s.ai_confidence_reason || "Waiting for live market structure."}</p>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 border-y border-[var(--qd-border)] py-3 sm:grid-cols-4">
+      <div className="hidden">
         <Metric label="Scans" value={s.evaluations ?? 0} compact />
         <Metric label="Orders" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
         <Metric label="Last Signals" value={s.last_signals_count ?? 0} compact tone={(s.last_signals_count ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
@@ -542,7 +550,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       </div>
 
       {notice && (
-        <div className={`mt-3 rounded border px-3 py-2 text-xs ${
+        <div className={`mt-2 rounded border px-3 py-2 text-xs ${
           notice.kind === "filter"
             ? "border-[rgba(255,159,10,0.35)] text-[var(--qd-warn)]"
             : "border-[rgba(255,59,48,0.35)] text-[var(--qd-loss)]"
@@ -552,7 +560,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       )}
 
       {/* EXPANDABLE RISK & EXIT SETTINGS */}
-      <div className="mt-4 border-t border-[rgba(255,255,255,0.06)] pt-3">
+      <div className="mt-2 border-t border-[rgba(255,255,255,0.06)] pt-2">
         <button 
           onClick={() => setExpanded(!expanded)}
           className="w-full flex items-center justify-between py-1.5 px-2 bg-white/5 border border-white/10 hover:border-white/20 rounded font-mono text-[10px] uppercase tracking-wide text-white transition-all active:scale-[0.99]"
@@ -753,8 +761,8 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         )}
       </div>
 
-      <div className="mt-auto pt-4">
-        <div className="grid grid-cols-1 gap-2">
+      <div className="mt-2">
+        <div className="grid grid-cols-1 gap-2 sm:hidden">
           <button
             onClick={() => exitAll(s.id)}
             className="flex items-center justify-center gap-2 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black py-2.5 font-mono text-xs font-bold uppercase tracking-wider transition-all"
@@ -763,7 +771,14 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             <Shield size={14} /> Square Off / Exit Position
           </button>
         </div>
-        <div className="mt-2 grid grid-cols-[1fr_1fr_auto_auto] gap-2">
+        <div className="mt-2 grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-2">
+          <button
+            onClick={() => exitAll(s.id)}
+            className="hidden items-center justify-center gap-2 rounded border border-[var(--qd-warn)] px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black sm:flex"
+            data-testid={`exit-all-${s.id}`}
+          >
+            <Shield size={13} /> Exit
+          </button>
           <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white disabled:opacity-50" data-testid={`test-run-${s.id}`}>
             <Activity size={13} /> {testing === s.id ? "Running" : "Test"}
           </button>
