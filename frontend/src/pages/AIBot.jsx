@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { AlertCircle, Bot, Send, Sparkles, User } from "lucide-react";
+import { AlertCircle, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity } from "lucide-react";
 
 const SESSION = "default";
 const SUGGESTIONS = [
-  "Check my Upstox and market data status",
-  "Explain my current open positions and risk",
-  "Find stuck or rejected orders",
-  "Why did my active strategies trade or not trade?",
+  "Verify my active strategies and drawdown limits",
+  "Check MCX commodities feed and market status",
+  "Lower my daily loss limit to 6000 INR for protection",
+  "Switch terminal to emergency paper mode",
 ];
 const MODES = [
   { id: "agent", label: "Ask Agent" },
@@ -27,11 +27,30 @@ export default function AIBot() {
   const [aiStatus, setAiStatus] = useState(null);
   const [marketAnalysis, setMarketAnalysis] = useState(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  
+  // Real-time Dashboard state
+  const [profile, setProfile] = useState(null);
+  
   const endRef = useRef(null);
 
+  const fetchProfile = () => {
+    api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
+  };
+
   useEffect(() => {
+    // Inject Google Fonts dynamically
+    const link = document.createElement("link");
+    link.href = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap";
+    link.rel = "stylesheet";
+    document.head.appendChild(link);
+
     api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
     api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
+    fetchProfile();
+
+    return () => {
+      try { document.head.removeChild(link); } catch (e) {}
+    };
   }, []);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -45,10 +64,50 @@ export default function AIBot() {
     setMessages((m) => [...m, { id: cid, role: "user", content }]);
     try {
       const r = await api.post("/agent/chat", { session_id: SESSION, message: content });
-      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: "assistant", content: r.data.content, tools_used: r.data.tools_used, unavailable: r.data.unavailable, read_only: true }]);
+      setMessages((m) => [...m, {
+        id: `a-${Date.now()}`,
+        role: "assistant",
+        content: r.data.content,
+        tools_used: r.data.tools_used,
+        unavailable: r.data.unavailable,
+        read_only: r.data.read_only,
+        pending_action: r.data.pending_action
+      }]);
     } catch (e) {
       setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `Error: ${e.response?.data?.detail || e.message}` }]);
     } finally { setBusy(false); }
+  };
+
+  const handleApproveAction = async (actionId) => {
+    try {
+      await api.post("/agent/action/approve", { action_id: actionId });
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.pending_action?.id === actionId
+            ? { ...msg, pending_action: { ...msg.pending_action, status: "approved" } }
+            : msg
+        )
+      );
+      // Immediately refresh profile dashboard metrics in real time!
+      fetchProfile();
+    } catch (e) {
+      alert(e.response?.data?.detail || "Action approval failed");
+    }
+  };
+
+  const handleRejectAction = async (actionId) => {
+    try {
+      await api.post("/agent/action/reject", { action_id: actionId });
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.pending_action?.id === actionId
+            ? { ...msg, pending_action: { ...msg.pending_action, status: "rejected" } }
+            : msg
+        )
+      );
+    } catch (e) {
+      alert(e.response?.data?.detail || "Action rejection failed");
+    }
   };
 
   const runMarketAnalysis = async () => {
@@ -64,27 +123,86 @@ export default function AIBot() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-130px)] flex-col gap-4" data-testid="ai-bot-page">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <div className="flex h-[calc(100vh-130px)] flex-col gap-4 premium-font" data-testid="ai-bot-page">
+      <style>{`
+        .premium-font {
+          font-family: 'Plus Jakarta Sans', 'Outfit', sans-serif !important;
+        }
+        .glass-card {
+          background: rgba(30, 41, 59, 0.35);
+          backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-card:hover {
+          border-color: rgba(255, 255, 255, 0.15);
+          background: rgba(30, 41, 59, 0.45);
+          box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.4);
+        }
+        .action-badge {
+          font-size: 9px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          font-weight: 700;
+          padding: 3px 9px;
+          border-radius: 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+        }
+        .badge-kill {
+          background: rgba(239, 68, 68, 0.15);
+          border: 1px solid rgba(239, 68, 68, 0.4);
+          color: #f87171;
+        }
+        .badge-drawdown {
+          background: rgba(245, 158, 11, 0.15);
+          border: 1px solid rgba(245, 158, 11, 0.4);
+          color: #fbbf24;
+        }
+        .badge-size {
+          background: rgba(59, 130, 246, 0.15);
+          border: 1px solid rgba(59, 130, 246, 0.4);
+          color: #60a5fa;
+        }
+        .badge-normal {
+          background: rgba(16, 185, 129, 0.15);
+          border: 1px solid rgba(16, 185, 129, 0.4);
+          color: #34d399;
+        }
+        .glow-pulse-red {
+          box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+          animation: red-pulse 2s infinite alternate;
+        }
+        .glow-pulse-green {
+          box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
+          animation: green-pulse 2s infinite alternate;
+        }
+        @keyframes red-pulse {
+          0% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.4); }
+          100% { box-shadow: 0 0 12px rgba(239, 68, 68, 0.8); }
+        }
+        @keyframes green-pulse {
+          0% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.4); }
+          100% { box-shadow: 0 0 12px rgba(16, 185, 129, 0.8); }
+        }
+      `}</style>
+
+      {/* Header Area */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between border-b border-[var(--qd-border)] pb-4">
         <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// READ-ONLY GEMINI AGENT</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Bot size={26} className="text-[var(--qd-accent)]" /> Ask QuantG Agent</h1>
-          <p className="text-xs text-[var(--qd-text-2)] mt-1">Read-only answers from execution state, orders, positions, strategies, Upstox, market data, logs, and risk.</p>
-          <div className="mt-2 inline-flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)]">
-            <span className={(aiStatus?.provider || "").includes("google") ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>
-              {aiStatus?.provider || "checking"}
-            </span>
-            <span>{aiStatus?.model || "model loading"}</span>
-            <span className="text-[var(--qd-text-3)]">read-only</span>
-          </div>
+          <div className="font-mono text-[9px] tracking-widest uppercase text-[var(--qd-text-3)]">// ACTIVE RISK & CO-PILOT TERMINAL</div>
+          <h1 className="font-head text-3xl font-extrabold text-white mt-1 flex items-center gap-3"><Bot size={28} className="text-[var(--qd-accent)]" /> Ask QuantG Agent</h1>
+          <p className="text-xs text-[var(--qd-text-2)] mt-1">Autonomous safety guardrails, drawdowns control, and instant emergency switches.</p>
         </div>
-        <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1" data-testid="ai-mode-tabs">
+        <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1">
           {MODES.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setMode(item.id)}
-              className={`px-3 py-2 font-mono text-[10px] uppercase tracking-wider rounded ${mode === item.id ? "bg-[var(--qd-accent)] text-white" : "text-[var(--qd-text-2)] hover:text-white"}`}
+              className={`px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider rounded transition-all duration-200 ${mode === item.id ? "bg-[var(--qd-accent)] text-white shadow" : "text-[var(--qd-text-2)] hover:text-white"}`}
             >
               {item.label}
             </button>
@@ -93,23 +211,23 @@ export default function AIBot() {
       </div>
 
       {mode === "brief" && (
-        <div className="qd-card p-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="glass-card p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
             <div>
-              <h2 className="font-head text-lg font-semibold text-white">Market Brief</h2>
-              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini reads live strategy scores, index context, and MCX crude oil/natural gas feed snapshots.</p>
+              <h2 className="font-head text-lg font-semibold text-white flex items-center gap-2"><Activity size={18} className="text-[var(--qd-accent)]" /> Market Analysis</h2>
+              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and MCX commodity feeds.</p>
             </div>
             <button
               type="button"
               onClick={runMarketAnalysis}
               disabled={analysisBusy}
-              className="rounded bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-white disabled:opacity-50"
+              className="rounded bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] transition-all px-4 py-2 font-mono text-xs uppercase tracking-wider text-white disabled:opacity-50"
             >
-              {analysisBusy ? "Analyzing" : "Run Gemini Analysis"}
+              {analysisBusy ? "Analyzing..." : "Generate Analysis"}
             </button>
           </div>
           {marketAnalysis?.content && (
-            <div className="mt-3 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3 text-sm leading-relaxed text-[var(--qd-text-2)] whitespace-pre-wrap">
+            <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)] whitespace-pre-wrap">
               {marketAnalysis.content}
             </div>
           )}
@@ -122,7 +240,7 @@ export default function AIBot() {
                   setMode("agent");
                   send(prompt);
                 }}
-                className="rounded border border-[var(--qd-border)] p-3 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-white"
+                className="rounded border border-[var(--qd-border)] p-3.5 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-white transition-all bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50"
               >
                 {prompt}
               </button>
@@ -131,65 +249,240 @@ export default function AIBot() {
         </div>
       )}
 
-      <div className="flex-1 qd-card flex flex-col min-h-0">
-        <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages">
-          {messages.length === 0 && (
-            <div className="text-center py-10">
-              <Sparkles className="mx-auto text-[var(--qd-accent)] mb-3" />
-              <p className="font-mono text-sm text-[var(--qd-text-2)] mb-6">How can I help your trading today?</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-2xl mx-auto">
-                {SUGGESTIONS.map((s) => (
-                  <button key={s} onClick={() => send(s)} className="text-left text-xs font-mono text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-white p-3 transition-colors rounded-sm" data-testid={`suggestion-${s.slice(0, 10)}`}>
-                    {s}
-                  </button>
-                ))}
+      {/* Main Grid Structure */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-0">
+        
+        {/* Left Column: Chat Area */}
+        <div className="lg:col-span-8 flex flex-col min-h-0 glass-card">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages">
+            {messages.length === 0 && (
+              <div className="text-center py-16">
+                <Sparkles className="mx-auto text-[var(--qd-accent)] mb-4 animate-pulse" size={32} />
+                <p className="font-mono text-sm text-[var(--qd-text-2)] mb-8">How can I protect or configure your trading setup today?</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-xl mx-auto">
+                  {SUGGESTIONS.map((s) => (
+                    <button key={s} onClick={() => send(s)} className="text-left text-xs font-mono text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-white p-4 transition-all rounded bg-[var(--qd-surface-2)]/10 hover:bg-[var(--qd-surface-2)]/40 hover:-translate-y-0.5">
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-          {messages.map((m, i) => (
-            <Message key={m.id || `m-${i}`} m={m} />
-          ))}
-          {busy && <Message key="typing" m={{ role: "assistant", content: "..." }} />}
-          <div ref={endRef} />
+            )}
+            {messages.map((m, i) => (
+              <Message
+                key={m.id || `m-${i}`}
+                m={m}
+                onApprove={handleApproveAction}
+                onReject={handleRejectAction}
+              />
+            ))}
+            {busy && <Message key="typing" m={{ role: "assistant", content: "..." }} />}
+            <div ref={endRef} />
+          </div>
+
+          {/* Send Input */}
+          <div className="border-t border-[var(--qd-border)] p-3 flex items-center gap-2 bg-[var(--qd-bg)]/20 rounded-b-xl">
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              placeholder="Configure drawdown controls, toggle emergency kill, or update settings..."
+              className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-white font-mono rounded"
+              data-testid="ai-input"
+            />
+            <button onClick={() => send()} disabled={busy || !text.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-5 py-3 rounded transition-all flex items-center justify-center shadow-md" data-testid="ai-send-btn">
+              <Send size={16} />
+            </button>
+          </div>
         </div>
 
-        <div className="border-t border-[var(--qd-border)] p-3 flex items-center gap-2">
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Ask QuantG Agent about app state, orders, positions, broker, feed, logs, or risk..."
-            className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2.5 text-sm text-white font-mono rounded-sm"
-            data-testid="ai-input"
-          />
-          <button onClick={() => send()} disabled={busy || !text.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2.5 rounded-sm" data-testid="ai-send-btn">
-            <Send size={16} />
-          </button>
+        {/* Right Column: Live Risk Management Dashboard */}
+        <div className="lg:col-span-4 flex flex-col gap-4 overflow-y-auto">
+          
+          {/* Live Status and Mode Indicator */}
+          <div className="glass-card p-5 flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)]/50 pb-3">
+              <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-400" /> System Governance</h2>
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${profile?.paper_mode ? "bg-rose-500 glow-pulse-red" : "bg-emerald-500 glow-pulse-green"}`} />
+                <span className="font-mono text-[10px] font-bold text-white uppercase">{profile?.paper_mode ? "Sandbox Paper" : "Production Live"}</span>
+              </div>
+            </div>
+
+            {profile ? (
+              <div className="space-y-4">
+                {/* Active Mode Banner */}
+                <div className={`p-3.5 rounded border text-center font-mono text-xs font-bold ${profile.paper_mode ? "bg-rose-950/20 border-rose-500/30 text-rose-400" : "bg-emerald-950/20 border-emerald-500/30 text-emerald-400"}`}>
+                  {profile.paper_mode ? "🚨 EMERGENCY PAUSE / PAPER ACTIVE" : "🟢 TERMINAL ACTIVELY ROUTING LIVE ORDERS"}
+                </div>
+
+                {/* Grid metrics */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
+                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Drawdown Limit</div>
+                    <div className="font-head font-bold text-sm text-white mt-1">{Number(profile.max_daily_loss).toLocaleString()} INR</div>
+                  </div>
+                  <div className="p-3 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
+                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Trades Speed Limit</div>
+                    <div className="font-head font-bold text-sm text-white mt-1">{profile.max_trades_per_day || "Unlimited"} / Day</div>
+                  </div>
+                </div>
+
+                {/* Progress Drawdown Bar */}
+                <div className="space-y-1.5 mt-2">
+                  <div className="flex justify-between font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">
+                    <span>Daily Drawdown Margin</span>
+                    <span className="text-amber-400 font-bold">Risk Boundary</span>
+                  </div>
+                  <div className="w-full bg-[var(--qd-bg)] rounded-full h-2.5 overflow-hidden border border-[var(--qd-border)]/60">
+                    <div className="bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500 h-full rounded-full" style={{ width: "65%" }}></div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-6 animate-pulse">Loading profile risk metrics...</div>
+            )}
+          </div>
+
+          {/* Capital Allocations & Size Limits */}
+          <div className="glass-card p-5">
+            <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider border-b border-[var(--qd-border)]/50 pb-3 mb-4 flex items-center gap-2"><Sliders size={16} className="text-blue-400" /> Capital & Position Size Limits</h2>
+            
+            {profile ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
+                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Per-Strategy Cap</div>
+                  <div className="font-mono text-xs font-extrabold text-blue-400">{Number(profile.per_strategy_capital || 0).toLocaleString()} INR</div>
+                </div>
+                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
+                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Max Position Size</div>
+                  <div className="font-mono text-xs font-extrabold text-blue-400">{Number(profile.max_position_size || 0).toLocaleString()} INR</div>
+                </div>
+                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
+                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Default Lot Quantity</div>
+                  <div className="font-mono text-xs font-extrabold text-blue-400">{profile.default_qty || "Not Set"}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-6 animate-pulse">Loading size boundaries...</div>
+            )}
+          </div>
+
+          {/* Quick Help & Guidelines */}
+          <div className="glass-card p-5 text-xs leading-relaxed text-[var(--qd-text-2)]">
+            <h3 className="font-head font-bold text-white uppercase text-xs pb-2 flex items-center gap-2"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> Copilot Guidelines</h3>
+            <p className="mt-1 font-mono">You can speak freely with the co-pilot to adjust parameters. All critical changes require your explicit click approval here before committing to Upstox live routes.</p>
+          </div>
+
         </div>
+
       </div>
     </div>
   );
 }
 
-const Message = ({ m }) => {
+const Message = ({ m, onApprove, onReject }) => {
   const isUser = m.role === "user";
+  const hasAction = !isUser && m.pending_action;
+
+  const getActionBadge = (actionName, params) => {
+    if (params?.paper_mode === true || actionName === "emergency_kill") {
+      return <span className="action-badge badge-kill"><ShieldAlert size={11} /> Kill Switch</span>;
+    }
+    if (params?.max_daily_loss !== undefined) {
+      return <span className="action-badge badge-drawdown"><Sliders size={11} /> Drawdown Control</span>;
+    }
+    if (params?.max_position_size !== undefined || params?.per_strategy_capital !== undefined) {
+      return <span className="action-badge badge-size"><Sliders size={11} /> Position Sizing</span>;
+    }
+    return <span className="action-badge badge-normal"><Sliders size={11} /> Parameter Adaptation</span>;
+  };
+
+  const getActionDescription = (actionName, params) => {
+    const list = [];
+    if (params?.paper_mode !== undefined) {
+      list.push(`Set Trading Mode to: ${params.paper_mode ? "🚨 PAPER / EMERGENCY PAUSE" : "🟢 LIVE TRADING"}`);
+    }
+    if (params?.max_daily_loss !== undefined) {
+      list.push(`Change Daily Loss Limit to: ${Number(params.max_daily_loss).toLocaleString()} INR`);
+    }
+    if (params?.max_position_size !== undefined) {
+      list.push(`Change Maximum Position Size to: ${Number(params.max_position_size).toLocaleString()} INR`);
+    }
+    if (params?.per_strategy_capital !== undefined) {
+      list.push(`Set Strategy Capital Allocation: ${Number(params.per_strategy_capital).toLocaleString()} INR`);
+    }
+    if (params?.default_qty !== undefined) {
+      list.push(`Change Default Order Quantity: ${params.default_qty}`);
+    }
+    if (params?.max_trades_per_day !== undefined) {
+      list.push(`Adjust Max Trades Per Day: ${params.max_trades_per_day}`);
+    }
+    return list.map((item, index) => <div key={index} className="font-mono text-xs text-white py-1">{item}</div>);
+  };
+
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : ""}`}>
       {!isUser && (
-        <div className="w-7 h-7 rounded-sm bg-[var(--qd-accent)] flex items-center justify-center flex-shrink-0">
-          <Bot size={14} className="text-white" />
+        <div className="w-8 h-8 rounded bg-[var(--qd-accent)] flex items-center justify-center flex-shrink-0 shadow-md">
+          <Bot size={16} className="text-white" />
         </div>
       )}
-      <div className={`max-w-[75%] px-4 py-2.5 rounded-sm ${isUser ? "bg-[var(--qd-accent)] text-white" : "bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-white"}`}>
-        <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.content}</pre>
+      <div className={`max-w-[85%] px-4 py-3 rounded-lg shadow-sm border ${isUser ? "bg-[var(--qd-accent)] border-[var(--qd-accent)] text-white" : "bg-[var(--qd-surface-2)]/65 border-[var(--qd-border)] text-white"}`}>
+        <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed font-sans">{m.content}</pre>
+
+        {hasAction && (
+          <div className="mt-4 p-4 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)]/80 relative overflow-hidden">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-2 mb-3">
+              <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] font-semibold">AI System Action Proposal</div>
+              {getActionBadge(m.pending_action.action, m.pending_action.params)}
+            </div>
+
+            <div className="space-y-1 my-3 bg-[var(--qd-surface-2)]/50 p-3 rounded border border-[var(--qd-border)]/40">
+              {getActionDescription(m.pending_action.action, m.pending_action.params)}
+            </div>
+
+            {m.pending_action.status === "pending" && (
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={() => onApprove(m.pending_action.id)}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 font-mono text-[11px] font-semibold tracking-wider text-white uppercase py-2 px-3 rounded shadow transition-all duration-200"
+                >
+                  Approve Action
+                </button>
+                <button
+                  onClick={() => onReject(m.pending_action.id)}
+                  className="flex-1 bg-rose-600/25 hover:bg-rose-600/40 border border-rose-500/40 font-mono text-[11px] font-semibold tracking-wider text-rose-400 uppercase py-2 px-3 rounded transition-all duration-200"
+                >
+                  Decline
+                </button>
+              </div>
+            )}
+
+            {m.pending_action.status === "approved" && (
+              <div className="mt-3 py-2 px-3 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-emerald-400 text-xs font-mono">
+                <CheckCircle2 size={14} className="flex-shrink-0" />
+                <span>Action approved and successfully committed to terminal settings.</span>
+              </div>
+            )}
+
+            {m.pending_action.status === "rejected" && (
+              <div className="mt-3 py-2 px-3 rounded bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-rose-400 text-xs font-mono">
+                <XCircle size={14} className="flex-shrink-0" />
+                <span>Action proposal rejected and discarded.</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {!isUser && m.tools_used?.length > 0 && (
-          <div className="mt-3 border-t border-[var(--qd-border)] pt-2">
-            <div className="mb-1 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Read-only tools used</div>
+          <div className="mt-4 border-t border-[var(--qd-border)]/70 pt-2.5">
+            <div className="mb-1.5 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] font-semibold">Active context feed</div>
             <div className="flex flex-wrap gap-1">
               {m.tools_used.map((tool) => (
                 <span
                   key={tool.name}
-                  className={`rounded border px-2 py-1 font-mono text-[10px] ${tool.status === "ok" ? "border-[var(--qd-border)] text-[var(--qd-text-2)]" : "border-[var(--qd-loss)] text-[var(--qd-loss)]"}`}
+                  className={`rounded border px-2 py-0.5 font-mono text-[9px] ${tool.status === "ok" ? "border-[var(--qd-border)] text-[var(--qd-text-3)]" : "border-[var(--qd-loss)] text-[var(--qd-loss)]"}`}
                   title={tool.error || tool.name}
                 >
                   {tool.name}
@@ -199,7 +492,7 @@ const Message = ({ m }) => {
           </div>
         )}
         {!isUser && m.unavailable?.length > 0 && (
-          <div className="mt-2 flex gap-2 rounded border border-[var(--qd-loss)]/60 bg-[var(--qd-bg)] p-2 text-xs text-[var(--qd-loss)]">
+          <div className="mt-2.5 flex gap-2 rounded border border-[var(--qd-loss)]/60 bg-[var(--qd-bg)] p-2 text-[11px] text-[var(--qd-loss)]">
             <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
             <div>
               Some read-only data was unavailable. The answer may be incomplete.
@@ -208,8 +501,8 @@ const Message = ({ m }) => {
         )}
       </div>
       {isUser && (
-        <div className="w-7 h-7 rounded-sm bg-[var(--qd-surface-2)] border border-[var(--qd-border)] flex items-center justify-center flex-shrink-0">
-          <User size={14} className="text-white" />
+        <div className="w-8 h-8 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] flex items-center justify-center flex-shrink-0 shadow-md">
+          <User size={16} className="text-white" />
         </div>
       )}
     </div>

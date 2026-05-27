@@ -28,6 +28,10 @@ class ChatReq(BaseModel):
     message: str
 
 
+class ActionDecisionReq(BaseModel):
+    action_id: str
+
+
 READ_ONLY_AGENT_TOOLS = [
     "get_execution_snapshot",
     "get_orders",
@@ -225,6 +229,33 @@ def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]], gemini_
     )
 
 
+def _parse_and_store_pending_action(reply_text: str, user_id: str) -> tuple[str, Optional[dict]]:
+    import re
+    pattern = r"PROPOSED_ACTION:\s*(\{.*\})"
+    match = re.search(pattern, reply_text, re.DOTALL)
+    if not match:
+        return reply_text, None
+    raw_json = match.group(1).strip()
+    try:
+        data = json.loads(raw_json)
+        action_type = data.get("action")
+        params = data.get("params", {})
+        if action_type and params:
+            action_id = "act_" + str(uuid.uuid4())
+            cleaned_text = reply_text.replace(match.group(0), "").strip()
+            return cleaned_text, {
+                "action_id": action_id,
+                "user_id": user_id,
+                "action_type": action_type,
+                "params": params,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+    except Exception as e:
+        logger.warning("Failed to parse proposed action JSON: %s", e)
+    return reply_text, None
+
+
 def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -239,11 +270,20 @@ def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], r
     prompt = f"""
 You are Ask QuantG Agent inside QuantG.
 
-STRICT READ-ONLY PHASE 1 RULES:
-- You can only interpret the provided tool results.
-- You must never place, cancel, modify, or exit trades.
-- You must never change strategy, risk, broker, profile, or market-data settings.
-- You must never tell the user that you performed a trading action.
+STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2):
+- Although you cannot directly execute database changes, you can PROPOSE professional system actions for user approval.
+- Specifically, you can suggest changes to these exact fields:
+  * `max_daily_loss`: Daily drawdown limit in INR (Drawdown Control).
+  * `paper_mode`: Set to true (Emergency Kill Switch) or false.
+  * `max_position_size`: Maximum allowed capital per single position (Position Sizing).
+  * `per_strategy_capital`: Capital allocated to each strategy (Position Sizing).
+  * `max_trades_per_day`: Number of allowed trades per day.
+  * `default_qty`: Default order quantity.
+- To propose an action, you MUST append a single block matching exactly this format at the absolute end of your response text (replacing with actual keys and values in the JSON):
+PROPOSED_ACTION: {{"action": "update_profile", "params": {{"max_daily_loss": 5000.0}}}}
+
+STRICT READ-ONLY DEFAULT RULES:
+- You must never place, cancel, modify, or exit trades directly.
 - If the data is missing, stale, failed, or insufficient, begin with "I am unsure" and explain exactly what data is missing.
 - Keep the answer practical, concise, and grounded only in the tool data.
 - Mention which read-only tools you used when it helps the user trust the answer.
@@ -375,6 +415,12 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
 
     tool_results = await asyncio.gather(*[_run_agent_tool(name, user) for name in READ_ONLY_AGENT_TOOLS])
     reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
+    
+    # Parse and store proposed action
+    reply, pending_action_doc = _parse_and_store_pending_action(reply, user["id"])
+    if pending_action_doc:
+        await db.pending_actions.insert_one(pending_action_doc)
+
     provider = "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback"
     failed_tools = [t for t in tool_results if t.get("status") != "ok"]
     unavailable = [
@@ -393,6 +439,12 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         "session_id": req.session_id,
         "surface": "ask-quantg-agent",
         "read_only": True,
+        "pending_action": {
+            "id": pending_action_doc["action_id"],
+            "action": pending_action_doc["action_type"],
+            "params": pending_action_doc["params"],
+            "status": "pending",
+        } if pending_action_doc else None,
         "tool_calls": [
             {
                 "name": t["name"],
@@ -413,6 +465,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         "provider": provider,
         "model": bot_msg["model"],
         "read_only": True,
+        "pending_action": bot_msg["pending_action"],
         "rules": {
             "can_place_orders": False,
             "can_cancel_orders": False,
@@ -432,6 +485,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         "model": bot_msg["model"],
         "created_at": bot_msg["created_at"],
         "read_only": True,
+        "pending_action": bot_msg["pending_action"],
         "tools_used": [
             {
                 "name": t["name"],
@@ -442,6 +496,77 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         ],
         "unavailable": unavailable,
     }
+
+
+@agent_router.post("/action/approve")
+async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_user)):
+    action = await db.pending_actions.find_one({"action_id": req.action_id, "user_id": user["id"]})
+    if not action:
+        raise HTTPException(status_code=404, detail="Pending action not found")
+    if action.get("status") != "pending":
+        raise HTTPException(status_code=400, detail=f"Action is already {action.get('status')}")
+        
+    action_type = action.get("action_type")
+    params = action.get("params") or {}
+    
+    if action_type == "update_profile":
+        update = {}
+        if "paper_mode" in params:
+            update["paper_mode"] = bool(params["paper_mode"])
+            if update["paper_mode"] is False:
+                from server import get_user_upstox_status
+                upstox_status = await get_user_upstox_status(user["id"])
+                if not upstox_status.get("token_valid"):
+                    raise HTTPException(status_code=400, detail="Live trading disabled: Reconnect Upstox required before switching to LIVE.")
+        if "default_qty" in params:
+            val = int(params["default_qty"])
+            if val <= 0:
+                raise HTTPException(status_code=400, detail="default_qty must be > 0")
+            update["default_qty"] = val
+        if "max_daily_loss" in params:
+            val = float(params["max_daily_loss"])
+            if val < 0:
+                raise HTTPException(status_code=400, detail="max_daily_loss cannot be negative")
+            update["max_daily_loss"] = val
+        if "max_position_size" in params:
+            val = float(params["max_position_size"])
+            if val < 0:
+                raise HTTPException(status_code=400, detail="max_position_size cannot be negative")
+            update["max_position_size"] = val
+        if "per_strategy_capital" in params:
+            val = float(params["per_strategy_capital"])
+            if val < 0:
+                raise HTTPException(status_code=400, detail="per_strategy_capital cannot be negative")
+            update["per_strategy_capital"] = val
+        if "max_trades_per_day" in params:
+            val = int(params["max_trades_per_day"])
+            if val < 0:
+                raise HTTPException(status_code=400, detail="max_trades_per_day cannot be negative")
+            update["max_trades_per_day"] = val
+            
+        if update:
+            await db.users.update_one({"id": user["id"]}, {"$set": update})
+            
+    await db.pending_actions.update_one(
+        {"action_id": req.action_id},
+        {"$set": {"status": "approved", "executed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "approved", "action_id": req.action_id}
+
+
+@agent_router.post("/action/reject")
+async def reject_agent_action(req: ActionDecisionReq, user=Depends(get_current_user)):
+    action = await db.pending_actions.find_one({"action_id": req.action_id, "user_id": user["id"]})
+    if not action:
+        raise HTTPException(status_code=404, detail="Pending action not found")
+    if action.get("status") != "pending":
+        raise HTTPException(status_code=400, detail=f"Action is already {action.get('status')}")
+        
+    await db.pending_actions.update_one(
+        {"action_id": req.action_id},
+        {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "rejected", "action_id": req.action_id}
 
 
 @router.get("/strategy-scores")
