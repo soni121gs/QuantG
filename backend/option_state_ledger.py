@@ -54,6 +54,50 @@ def _normalize_side(value: Optional[str]) -> str:
     return SIDE_SHORT if text in {SIDE_SHORT, "SHORT", "SELL"} else SIDE_LONG
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _adaptive_exit_pcts(
+    entry: float,
+    *,
+    target_pct: float,
+    stoploss_pct: float,
+    trail_trigger_pct: float,
+    trail_step_pct: float,
+    risk_style: str,
+    adaptive_enabled: bool,
+    target_r_multiple: float,
+) -> tuple[float, float, float, float]:
+    """Return decimal percentages tuned for option premium and strategy style."""
+    if not adaptive_enabled or entry <= 0:
+        return target_pct, stoploss_pct, trail_trigger_pct, trail_step_pct
+
+    style = str(risk_style or "balanced").lower()
+    style_bounds = {
+        "micro_scalp": (0.035, 0.075, 1.15, 1.35),
+        "momentum": (0.045, 0.095, 1.25, 1.55),
+        "breakout": (0.055, 0.115, 1.35, 1.70),
+        "volatile_breakout": (0.065, 0.135, 1.40, 1.85),
+        "pullback": (0.045, 0.090, 1.25, 1.55),
+        "balanced": (0.045, 0.100, 1.25, 1.55),
+    }
+    min_stop, max_stop, min_r, max_r = style_bounds.get(style, style_bounds["balanced"])
+
+    premium_factor = 1.0
+    if entry < 75:
+        premium_factor = 1.18
+    elif entry > 250:
+        premium_factor = 0.88
+
+    stop = _clamp(stoploss_pct * premium_factor, min_stop, max_stop)
+    r_multiple = _clamp(float(target_r_multiple or min_r), min_r, max_r)
+    target = _clamp(max(target_pct, stop * r_multiple), stop * min_r, stop * max_r)
+    trigger = _clamp(min(trail_trigger_pct, stop * 0.75), 0.025, max(0.03, stop * 0.95))
+    step = _clamp(min(trail_step_pct, stop * 0.45), 0.015, max(0.02, stop * 0.65))
+    return target, stop, trigger, step
+
+
 @dataclass(frozen=True)
 class LedgerDecision:
     accepted: bool
@@ -121,6 +165,9 @@ class OptionStateLedger:
         trailing_sl_enabled: bool = True,
         trail_trigger_pct: float = 0.25,
         trail_step_pct: float = 0.10,
+        risk_style: str = "balanced",
+        adaptive_exits_enabled: bool = True,
+        target_r_multiple: float = 1.45,
         cooldown_minutes: int = 20,
         max_trades_day: int = 2,
         required_capital: float = 0.0,
@@ -139,6 +186,9 @@ class OptionStateLedger:
                         "trailing_sl_enabled": 1 if trailing_sl_enabled else 0,
                         "trail_trigger_pct": trail_trigger_pct,
                         "trail_step_pct": trail_step_pct,
+                        "risk_style": risk_style,
+                        "adaptive_exits_enabled": 1 if adaptive_exits_enabled else 0,
+                        "target_r_multiple": float(target_r_multiple or 1.45),
                         "cooldown_minutes": cooldown_minutes,
                         "max_trades_day": max_trades_day,
                         "required_capital": required_capital,
@@ -205,9 +255,22 @@ class OptionStateLedger:
         trail_trigger_pct: float,
         trail_step_pct: float,
         position_side: str,
+        risk_style: str = "balanced",
+        adaptive_enabled: bool = True,
+        target_r_multiple: float = 1.45,
     ) -> tuple[float, float, Optional[float]]:
         entry = float(entry_price)
         side = _normalize_side(position_side)
+        target_pct, stoploss_pct, trail_trigger_pct, trail_step_pct = _adaptive_exit_pcts(
+            entry,
+            target_pct=target_pct,
+            stoploss_pct=stoploss_pct,
+            trail_trigger_pct=trail_trigger_pct,
+            trail_step_pct=trail_step_pct,
+            risk_style=risk_style,
+            adaptive_enabled=adaptive_enabled,
+            target_r_multiple=target_r_multiple,
+        )
         if side == SIDE_SHORT:
             target_price = round(entry * (1 - target_pct), 2)
             stoploss_price = round(entry * (1 + stoploss_pct), 2)
@@ -260,6 +323,9 @@ class OptionStateLedger:
                     "trailing_sl_enabled": 1,
                     "trail_trigger_pct": 0.20,
                     "trail_step_pct": 0.10,
+                    "risk_style": "balanced",
+                    "adaptive_exits_enabled": 1,
+                    "target_r_multiple": 1.45,
                     "cooldown_minutes": 5,
                     "max_trades_day": 3,
                     "required_capital": 0.0,
@@ -311,6 +377,9 @@ class OptionStateLedger:
                 trail_trigger_pct=float(state.get("trail_trigger_pct", 0.20)),
                 trail_step_pct=float(state.get("trail_step_pct", 0.10)),
                 position_side=side,
+                risk_style=str(state.get("risk_style") or "balanced"),
+                adaptive_enabled=bool(state.get("adaptive_exits_enabled", 1)),
+                target_r_multiple=float(state.get("target_r_multiple", 1.45)),
             )
             # Quantity is stored as actual contracts, not lots. Max-lot
             # enforcement happens before order construction.
@@ -373,6 +442,9 @@ class OptionStateLedger:
                         "trailing_sl_enabled": 1,
                         "trail_trigger_pct": 0.20,
                         "trail_step_pct": 0.10,
+                        "risk_style": "balanced",
+                        "adaptive_exits_enabled": 1,
+                        "target_r_multiple": 1.45,
                         "cooldown_minutes": 5,
                         "max_trades_day": 3,
                         "required_capital": 0.0,
@@ -390,6 +462,9 @@ class OptionStateLedger:
                     trail_trigger_pct=float(state["trail_trigger_pct"]),
                     trail_step_pct=float(state["trail_step_pct"]),
                     position_side=side,
+                    risk_style=str(state.get("risk_style") or "balanced"),
+                    adaptive_enabled=bool(state.get("adaptive_exits_enabled", 1)),
+                    target_r_multiple=float(state.get("target_r_multiple", 1.45)),
                 )
                 self.db.option_open_positions.update_one(
                     {"strategy_id": strategy_id},
@@ -436,6 +511,9 @@ class OptionStateLedger:
                     trail_trigger_pct=float(state["trail_trigger_pct"]),
                     trail_step_pct=float(state["trail_step_pct"]),
                     position_side=side,
+                    risk_style=str(state.get("risk_style") or "balanced"),
+                    adaptive_enabled=bool(state.get("adaptive_exits_enabled", 1)),
+                    target_r_multiple=float(state.get("target_r_multiple", 1.45)),
                 )
             else:
                 target_price = float(pos["target_price"])
@@ -621,6 +699,9 @@ class OptionStateLedger:
                     "trailing_sl_enabled": bool(row.get("trailing_sl_enabled", 1)),
                     "trail_trigger_pct": row.get("trail_trigger_pct", 0.20),
                     "trail_step_pct": row.get("trail_step_pct", 0.10),
+                    "risk_style": row.get("risk_style", "balanced"),
+                    "adaptive_exits_enabled": bool(row.get("adaptive_exits_enabled", 1)),
+                    "target_r_multiple": row.get("target_r_multiple", 1.45),
                     "cooldown_minutes": row.get("cooldown_minutes", 5),
                     "max_trades_day": row.get("max_trades_day", 3),
                     "required_capital": row.get("required_capital", 0.0),

@@ -5,6 +5,7 @@ import uuid
 import json
 import asyncio
 import requests
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -16,6 +17,8 @@ from core import db, get_current_user
 import time
 
 _STRATEGY_SCORES_CACHE: Dict[str, Dict[str, Any]] = {}
+logger = logging.getLogger(__name__)
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 agent_router = APIRouter(prefix="/agent", tags=["AI Agent"])
@@ -167,7 +170,35 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]]) -> str:
+def _count_rows(tool_results: List[Dict[str, Any]], tool_name: str, key: Optional[str] = None) -> int:
+    tool = next((t for t in tool_results if t.get("name") == tool_name and t.get("status") == "ok"), None)
+    data = tool.get("data") if tool else None
+    if key and isinstance(data, dict):
+        data = data.get(key)
+    return len(data) if isinstance(data, list) else 0
+
+
+def _local_agent_summary(tool_results: List[Dict[str, Any]]) -> str:
+    upstox = next((t.get("data") for t in tool_results if t.get("name") == "get_upstox_status" and t.get("status") == "ok"), {})
+    risk = next((t.get("data") for t in tool_results if t.get("name") == "get_risk_snapshot" and t.get("status") == "ok"), {})
+    market = next((t.get("data") for t in tool_results if t.get("name") == "get_market_data_status" and t.get("status") == "ok"), {})
+    log_data = next((t.get("data") for t in tool_results if t.get("name") == "get_logs_errors" and t.get("status") == "ok"), {})
+
+    return "\n".join([
+        "Local read-only summary:",
+        f"- Upstox connected: {bool(upstox.get('connected') or upstox.get('is_connected'))}",
+        f"- Market open/feed active: {bool(market.get('market_open'))}",
+        f"- Active strategies checked: {_count_rows(tool_results, 'get_active_strategies')}",
+        f"- Recent orders checked: {_count_rows(tool_results, 'get_orders')}",
+        f"- Local positions checked: {_count_rows(tool_results, 'get_positions', 'local_positions')}",
+        f"- Strategy positions checked: {_count_rows(tool_results, 'get_positions', 'strategy_positions')}",
+        f"- Today PnL: {risk.get('total_pnl', 'unavailable')} ({risk.get('mode', 'mode unavailable')})",
+        f"- Strategy errors: {len(log_data.get('strategy_errors') or []) if isinstance(log_data, dict) else 0}",
+        f"- Rejected orders: {len(log_data.get('recent_rejected_orders') or []) if isinstance(log_data, dict) else 0}",
+    ])
+
+
+def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]], gemini_error: Optional[str] = None) -> str:
     failed = [t for t in tool_results if t.get("status") != "ok"]
     ok_tools = [t["name"] for t in tool_results if t.get("status") == "ok"]
     if failed:
@@ -177,9 +208,20 @@ def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]]) -> str:
             f"Available read-only tools: {', '.join(ok_tools) or 'none'}.\n"
             f"Missing or failed data: {missing}."
         )
+    if not os.environ.get("GEMINI_API_KEY"):
+        return (
+            "Gemini is not configured yet, so I cannot do the deeper AI interpretation.\n\n"
+            f"{_local_agent_summary(tool_results)}\n\n"
+            "Fix: set `GEMINI_API_KEY` in the backend environment and restart the API. "
+            f"If you do not set `GEMINI_MODEL`, QuantG will use `{DEFAULT_GEMINI_MODEL}`."
+        )
+    detail = f"\n\nGemini error: {gemini_error[:240]}" if gemini_error else ""
     return (
-        "I am unsure because Gemini is not configured or did not return a usable response. "
-        "The read-only QuantG data was collected successfully, but I need Gemini to interpret it clearly."
+        "I collected the read-only QuantG data, but Gemini did not return a usable interpretation.\n\n"
+        f"{_local_agent_summary(tool_results)}\n\n"
+        "Fix: check that `GEMINI_API_KEY` is valid, the backend can reach Google AI Studio, "
+        f"and `GEMINI_MODEL` is a supported model such as `{DEFAULT_GEMINI_MODEL}`."
+        f"{detail}"
     )
 
 
@@ -188,7 +230,7 @@ def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], r
     if not api_key:
         return _local_agent_reply(message, tool_results)
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     timeout = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
     history_text = "\n".join(
         f"{'User' if row.get('role') == 'user' else 'Agent'}: {str(row.get('content') or '')[:1000]}"
@@ -228,7 +270,7 @@ Read-only tool results JSON:
     data = res.json()
     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
     text = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
-    return text or _local_agent_reply(message, tool_results)
+    return text or _local_agent_reply(message, tool_results, "empty candidate text")
 
 
 async def _gemini_agent_reply(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
@@ -238,8 +280,9 @@ async def _gemini_agent_reply(message: str, tool_results: List[Dict[str, Any]], 
             asyncio.to_thread(_gemini_agent_reply_sync, message, tool_results, recent_messages),
             timeout=timeout + 2,
         )
-    except Exception:
-        return _local_agent_reply(message, tool_results)
+    except Exception as exc:
+        logger.warning("Gemini read-only agent reply failed: %s", exc)
+        return _local_agent_reply(message, tool_results, str(exc))
 
 
 @router.get("/chat/{session_id}")
@@ -254,7 +297,7 @@ async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
 @router.get("/status")
 async def ai_status(user=Depends(get_current_user)):
     configured = bool(os.environ.get("GEMINI_API_KEY"))
-    gemini_model = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash"
+    gemini_model = os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
     return {
         "provider": "google-ai-studio-rest" if configured else "local-fallback",
         "model": gemini_model if configured else "quantg-local-rules",
@@ -262,6 +305,7 @@ async def ai_status(user=Depends(get_current_user)):
         "google_genai_sdk_available": False,
         "sdk_error": None,
         "transport": "rest",
+        "setup_hint": None if configured else "Set GEMINI_API_KEY in the backend environment and restart the API.",
     }
 
 
@@ -343,7 +387,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         "role": "assistant",
         "content": reply,
         "provider": provider,
-        "model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash") if provider == "google-ai-studio" else "quantg-local-rules",
+        "model": os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL) if provider == "google-ai-studio" else "quantg-local-rules",
         "created_at": _utc_now(),
         "user_id": user["id"],
         "session_id": req.session_id,

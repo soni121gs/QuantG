@@ -166,5 +166,8 @@ class StrategyRuntimeSettingsReq(BaseModel):
     time_exit_minutes: Optional[int] = None
     indicator_exit_enabled: Optional[bool] = None
     exit_mode: Optional[str] = None
+    risk_style: Optional[str] = None
+    adaptive_exits_enabled: Optional[bool] = None
+    target_r_multiple: Optional[float] = None
     broker: Optional[str] = None
     mode: Optional[str] = None

@@ -112,6 +112,9 @@ const EngineStrategyCard = ({ row, onSave }) => {
     time_exit_minutes: row.time_exit_minutes ?? risk.time_exit_minutes ?? 35,
     indicator_exit_enabled: row.indicator_exit_enabled ?? risk.indicator_exit_enabled ?? true,
     exit_mode: row.exit_mode ?? risk.exit_mode ?? "tp_sl_tsl_or_signal",
+    risk_style: row.risk_style ?? risk.risk_style ?? "balanced",
+    adaptive_exits_enabled: row.adaptive_exits_enabled ?? risk.adaptive_exits_enabled ?? true,
+    target_r_multiple: row.target_r_multiple ?? risk.target_r_multiple ?? 1.45,
   });
 
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
@@ -151,6 +154,22 @@ const EngineStrategyCard = ({ row, onSave }) => {
           <RuntimeInput label="Max trades" value={form.max_trades_day} onChange={(v) => update("max_trades_day", v)} />
           <RuntimeInput label="Daily loss" value={form.daily_loss_limit} onChange={(v) => update("daily_loss_limit", v)} />
           <RuntimeInput label="Time exit" value={form.time_exit_minutes} onChange={(v) => update("time_exit_minutes", v)} />
+          <RuntimeInput label="Target R" value={form.target_r_multiple} onChange={(v) => update("target_r_multiple", v)} />
+          <label className="col-span-2 space-y-1 md:col-span-1">
+            <span className="qd-section-title text-[9px]">Risk style</span>
+            <select
+              value={form.risk_style}
+              onChange={(e) => update("risk_style", e.target.value)}
+              className="w-full rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-2 font-mono text-xs text-white"
+            >
+              <option value="micro_scalp">Micro scalp</option>
+              <option value="momentum">Momentum</option>
+              <option value="breakout">Breakout</option>
+              <option value="volatile_breakout">Volatile breakout</option>
+              <option value="pullback">Pullback</option>
+              <option value="balanced">Balanced</option>
+            </select>
+          </label>
           <label className="col-span-2 space-y-1 md:col-span-2">
             <span className="qd-section-title text-[9px]">Exit mode</span>
             <select
@@ -170,6 +189,10 @@ const EngineStrategyCard = ({ row, onSave }) => {
           <label className="flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
             <input type="checkbox" checked={form.indicator_exit_enabled} onChange={(e) => update("indicator_exit_enabled", e.target.checked)} />
             Signal exit
+          </label>
+          <label className="flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
+            <input type="checkbox" checked={form.adaptive_exits_enabled} onChange={(e) => update("adaptive_exits_enabled", e.target.checked)} />
+            Adaptive exits
           </label>
           <button
             type="button"

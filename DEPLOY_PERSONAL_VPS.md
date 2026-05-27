@@ -55,7 +55,7 @@ KOTAK_ORDER_MAX_ATTEMPTS=1
 
 # Google AI Studio / Gemini API for QuantBot
 GEMINI_API_KEY=your_google_ai_studio_api_key
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 GEMINI_TIMEOUT_SEC=20
 
 # Kotak Neo V2 session unlock

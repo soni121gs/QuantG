@@ -77,7 +77,7 @@ JWT_SECRET=$(openssl rand -base64 32)
 MONGO_URL=mongodb://admin:admin123@mongo:27017
 DB_NAME=quantg
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 GEMINI_TIMEOUT_SEC=20
 
 # Frontend

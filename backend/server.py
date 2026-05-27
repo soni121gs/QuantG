@@ -64,6 +64,7 @@ from order_lifecycle import (
     canonical_order_status,
     is_order_active,
 )
+from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
@@ -112,7 +113,7 @@ COMMODITY_REQUIRED_CAPITAL = {
     "CRUDEOILM": 6000.0,
     "NATURALGAS": 18000.0,
 }
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
 
@@ -303,6 +304,9 @@ class StrategyRuntimeSettingsReq(BaseModel):
     time_exit_minutes: Optional[int] = None
     indicator_exit_enabled: Optional[bool] = None
     exit_mode: Optional[str] = None
+    risk_style: Optional[str] = None
+    adaptive_exits_enabled: Optional[bool] = None
+    target_r_multiple: Optional[float] = None
     broker: Optional[str] = None
     mode: Optional[str] = None
 
@@ -1392,18 +1396,129 @@ def run(data):
 
 DEFAULT_STRATEGY_RISK = {
     # Human percent values. The SQLite option ledger stores these as fractions.
-    "stop_loss_pct": 14.0,
-    "take_profit_pct": 28.0,
-    "trail_trigger_pct": 12.0,
-    "trail_step_pct": 7.0,
-    "cooldown_minutes": 25,
-    "max_trades_day": 2,
-    "daily_loss_limit": 1000.0,
-    "time_exit_minutes": 35,
+    "stop_loss_pct": 8.0,
+    "take_profit_pct": 12.0,
+    "trail_trigger_pct": 5.5,
+    "trail_step_pct": 3.0,
+    "cooldown_minutes": 15,
+    "max_trades_day": 3,
+    "daily_loss_limit": 750.0,
+    "time_exit_minutes": 22,
     "indicator_exit_enabled": True,
     "exit_mode": "tp_sl_tsl_or_signal",
     "pause_on_issue": True,
+    "risk_style": "balanced",
+    "adaptive_exits_enabled": True,
+    "target_r_multiple": 1.45,
 }
+
+
+RISK_STYLE_PRESETS = {
+    "micro_scalp": {
+        "stop_loss_pct": 5.5,
+        "take_profit_pct": 8.0,
+        "trail_trigger_pct": 3.5,
+        "trail_step_pct": 2.0,
+        "cooldown_minutes": 7,
+        "max_trades_day": 4,
+        "daily_loss_limit": 450.0,
+        "time_exit_minutes": 10,
+        "target_r_multiple": 1.25,
+    },
+    "momentum": {
+        "stop_loss_pct": 7.0,
+        "take_profit_pct": 11.0,
+        "trail_trigger_pct": 5.0,
+        "trail_step_pct": 2.8,
+        "cooldown_minutes": 12,
+        "max_trades_day": 3,
+        "daily_loss_limit": 650.0,
+        "time_exit_minutes": 18,
+        "target_r_multiple": 1.45,
+    },
+    "breakout": {
+        "stop_loss_pct": 8.5,
+        "take_profit_pct": 14.0,
+        "trail_trigger_pct": 6.0,
+        "trail_step_pct": 3.4,
+        "cooldown_minutes": 18,
+        "max_trades_day": 2,
+        "daily_loss_limit": 800.0,
+        "time_exit_minutes": 25,
+        "target_r_multiple": 1.55,
+    },
+    "volatile_breakout": {
+        "stop_loss_pct": 10.0,
+        "take_profit_pct": 17.0,
+        "trail_trigger_pct": 7.5,
+        "trail_step_pct": 4.2,
+        "cooldown_minutes": 22,
+        "max_trades_day": 2,
+        "daily_loss_limit": 950.0,
+        "time_exit_minutes": 30,
+        "target_r_multiple": 1.6,
+    },
+    "pullback": {
+        "stop_loss_pct": 7.5,
+        "take_profit_pct": 12.0,
+        "trail_trigger_pct": 5.5,
+        "trail_step_pct": 3.0,
+        "cooldown_minutes": 20,
+        "max_trades_day": 2,
+        "daily_loss_limit": 700.0,
+        "time_exit_minutes": 28,
+        "target_r_multiple": 1.45,
+    },
+}
+
+
+def _classify_strategy_risk_style(template: Dict[str, Any]) -> str:
+    text = " ".join(
+        str(template.get(key) or "")
+        for key in ("name", "description", "market_suitability", "underlying", "instrument_group")
+    ).lower()
+    underlying = str(template.get("underlying") or "").upper()
+    if any(token in text for token in ("hft", "scalper", "quick", "micro", "mini")):
+        return "micro_scalp"
+    if underlying in {"CRUDEOIL", "NATURALGAS"} or any(token in text for token in ("volatility", "breakout", "expansion", "channel")):
+        return "volatile_breakout" if underlying in COMMODITY_UNDERLYINGS else "breakout"
+    if any(token in text for token in ("rsi", "pullback", "reversion", "swing")):
+        return "pullback"
+    return "momentum"
+
+
+def _strategy_risk_profile(template: Dict[str, Any]) -> Dict[str, Any]:
+    style = str(template.get("risk_style") or _classify_strategy_risk_style(template))
+    risk = {
+        **DEFAULT_STRATEGY_RISK,
+        **RISK_STYLE_PRESETS.get(style, RISK_STYLE_PRESETS["momentum"]),
+        **dict(template.get("risk") or {}),
+    }
+    risk["risk_style"] = style
+    risk["adaptive_exits_enabled"] = True
+    risk["trailing_sl_enabled"] = True
+    return risk
+
+
+def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk") -> Dict[str, Any]:
+    return {
+        f"{prefix}.stop_loss_pct": risk["stop_loss_pct"],
+        f"{prefix}.stoploss_pct": risk["stop_loss_pct"],
+        f"{prefix}.take_profit_pct": risk["take_profit_pct"],
+        f"{prefix}.target_pct": risk["take_profit_pct"],
+        f"{prefix}.trailing_sl_enabled": bool(risk.get("trailing_sl_enabled", True)),
+        f"{prefix}.trail_trigger_pct": risk["trail_trigger_pct"],
+        f"{prefix}.trail_step_pct": risk["trail_step_pct"],
+        f"{prefix}.cooldown_minutes": risk["cooldown_minutes"],
+        f"{prefix}.max_trades_day": risk["max_trades_day"],
+        f"{prefix}.daily_loss_limit": risk["daily_loss_limit"],
+        f"{prefix}.time_exit_minutes": risk["time_exit_minutes"],
+        f"{prefix}.indicator_exit_enabled": bool(risk.get("indicator_exit_enabled", True)),
+        f"{prefix}.exit_mode": risk.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
+        f"{prefix}.risk_style": risk.get("risk_style", "balanced"),
+        f"{prefix}.adaptive_exits_enabled": bool(risk.get("adaptive_exits_enabled", True)),
+        f"{prefix}.target_r_multiple": float(risk.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"]),
+    }
 
 
 RETAIL_LIVE_STATE_CODE = """def run(data):
@@ -3117,6 +3232,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "lots": template["lots"],
         "required_capital": required_capital,
     }
+    risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}
     return {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -3136,7 +3252,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             "exchange": "MCX" if is_commodity else instrument_group,
             "options": options_block,
             "commodity_options": options_block if is_commodity else None,
-            "risk": {**dict(DEFAULT_STRATEGY_RISK), "required_capital": required_capital},
+            "risk": risk_profile,
         },
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -3275,27 +3391,34 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
             "broker": "upstox",
             "mode": strategy_mode,
             "visual_config.options.enabled": True,
-            "visual_config.risk.stop_loss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
-            "visual_config.risk.stoploss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
-            "visual_config.risk.take_profit_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
-            "visual_config.risk.target_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
-            "visual_config.risk.trailing_sl_enabled": True,
-            "visual_config.risk.trail_trigger_pct": DEFAULT_STRATEGY_RISK["trail_trigger_pct"],
-            "visual_config.risk.trail_step_pct": DEFAULT_STRATEGY_RISK["trail_step_pct"],
-            "visual_config.risk.cooldown_minutes": DEFAULT_STRATEGY_RISK["cooldown_minutes"],
-            "visual_config.risk.max_trades_day": DEFAULT_STRATEGY_RISK["max_trades_day"],
-            "visual_config.risk.daily_loss_limit": DEFAULT_STRATEGY_RISK["daily_loss_limit"],
-            "visual_config.risk.time_exit_minutes": DEFAULT_STRATEGY_RISK["time_exit_minutes"],
-            "visual_config.risk.indicator_exit_enabled": DEFAULT_STRATEGY_RISK["indicator_exit_enabled"],
-            "visual_config.risk.exit_mode": DEFAULT_STRATEGY_RISK["exit_mode"],
         }, "$unset": {
             "last_data_source": "",
             "last_error": "",
             "last_filter_reason": "",
         }},
     )
+    personalised_risk_count = 0
+    existing_rows = await db.strategies.find({"user_id": user_id}, {"_id": 0}).to_list(500)
+    for row in existing_rows:
+        visual_config = row.get("visual_config") or {}
+        options_config = visual_config.get("options") or {}
+        template_like = {
+            **row,
+            "underlying": options_config.get("underlying") or visual_config.get("symbol") or row.get("instrument_group"),
+            "risk": visual_config.get("risk") or {},
+        }
+        risk_profile = _strategy_risk_profile(template_like)
+        if row.get("required_capital") is not None:
+            risk_profile["required_capital"] = float(row.get("required_capital") or 0)
+        res = await db.strategies.update_one(
+            {"id": row["id"], "user_id": user_id},
+            {"$set": _risk_update_fields(risk_profile)},
+        )
+        personalised_risk_count += int(res.modified_count or 0)
     template_sync_count = 0
     for template in DEFAULT_OPTION_STRATEGIES:
+        risk_profile = _strategy_risk_profile(template)
+        risk_profile["required_capital"] = float(template.get("required_capital") or 0)
         res = await db.strategies.update_one(
             {"user_id": user_id, "name": template["name"]},
             {"$set": {
@@ -3310,19 +3433,7 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.strike_mode": template.get("strike_mode", "ATM_BUY"),
                 "visual_config.options.otm_points": int(template.get("otm_points") or 0),
                 "visual_config.options.lots": int(template.get("lots") or 1),
-                "visual_config.risk.stop_loss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
-                "visual_config.risk.stoploss_pct": DEFAULT_STRATEGY_RISK["stop_loss_pct"],
-                "visual_config.risk.take_profit_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
-                "visual_config.risk.target_pct": DEFAULT_STRATEGY_RISK["take_profit_pct"],
-                "visual_config.risk.trailing_sl_enabled": True,
-                "visual_config.risk.trail_trigger_pct": DEFAULT_STRATEGY_RISK["trail_trigger_pct"],
-                "visual_config.risk.trail_step_pct": DEFAULT_STRATEGY_RISK["trail_step_pct"],
-                "visual_config.risk.cooldown_minutes": DEFAULT_STRATEGY_RISK["cooldown_minutes"],
-                "visual_config.risk.max_trades_day": DEFAULT_STRATEGY_RISK["max_trades_day"],
-                "visual_config.risk.daily_loss_limit": DEFAULT_STRATEGY_RISK["daily_loss_limit"],
-                "visual_config.risk.time_exit_minutes": DEFAULT_STRATEGY_RISK["time_exit_minutes"],
-                "visual_config.risk.indicator_exit_enabled": DEFAULT_STRATEGY_RISK["indicator_exit_enabled"],
-                "visual_config.risk.exit_mode": DEFAULT_STRATEGY_RISK["exit_mode"],
+                **_risk_update_fields(risk_profile),
                 "default_strategy_version": "retail-balanced-v3",
             }, "$unset": {
                 "last_filter_reason": "",
@@ -3334,6 +3445,7 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
         "users": int(user_res.modified_count or 0),
         "strategies": int(strat_res.modified_count or 0),
         "templates_synced": template_sync_count,
+        "personalised_risk": personalised_risk_count,
     }
 
 
@@ -3350,6 +3462,37 @@ def _ledger_pct(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return pct / 100.0 if pct > 1 else pct
+
+
+def _clamp_float(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, float]:
+    stop = float(risk["stop_loss_pct"])
+    target = float(risk["take_profit_pct"])
+    trigger = float(risk["trail_trigger_pct"])
+    step = float(risk["trail_step_pct"])
+    if not risk.get("adaptive_exits_enabled", True) or entry <= 0:
+        return {"stop": stop, "target": target, "trigger": trigger, "step": step}
+
+    style = str(risk.get("risk_style") or "balanced")
+    bounds = {
+        "micro_scalp": (3.5, 7.5, 1.15, 1.35),
+        "momentum": (4.5, 9.5, 1.25, 1.55),
+        "breakout": (5.5, 11.5, 1.35, 1.70),
+        "volatile_breakout": (6.5, 13.5, 1.40, 1.85),
+        "pullback": (4.5, 9.0, 1.25, 1.55),
+        "balanced": (4.5, 10.0, 1.25, 1.55),
+    }
+    min_stop, max_stop, min_r, max_r = bounds.get(style, bounds["balanced"])
+    premium_factor = 1.18 if entry < 75 else 0.88 if entry > 250 else 1.0
+    stop = _clamp_float(stop * premium_factor, min_stop, max_stop)
+    r_multiple = _clamp_float(float(risk.get("target_r_multiple") or min_r), min_r, max_r)
+    target = _clamp_float(max(target, stop * r_multiple), stop * min_r, stop * max_r)
+    trigger = _clamp_float(min(trigger, stop * 0.75), 2.5, max(3.0, stop * 0.95))
+    step = _clamp_float(min(step, stop * 0.45), 1.5, max(2.0, stop * 0.65))
+    return {"stop": stop, "target": target, "trigger": trigger, "step": step}
 
 
 def _risk_pct(risk: Dict[str, Any], *keys: str, default: float) -> float:
@@ -3370,6 +3513,8 @@ def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     target_pct = _risk_pct(raw, "take_profit_pct", "target_pct", "tp_pct", default=DEFAULT_STRATEGY_RISK["take_profit_pct"])
     trail_trigger_pct = _risk_pct(raw, "trail_trigger_pct", default=DEFAULT_STRATEGY_RISK["trail_trigger_pct"])
     trail_step_pct = _risk_pct(raw, "trail_step_pct", default=DEFAULT_STRATEGY_RISK["trail_step_pct"])
+    risk_style = str(raw.get("risk_style") or DEFAULT_STRATEGY_RISK["risk_style"])
+    target_r_multiple = float(raw.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"])
     raw.update({
         "stop_loss_pct": stop_pct,
         "stoploss_pct": stop_pct,
@@ -3384,6 +3529,9 @@ def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "time_exit_minutes": int(raw.get("time_exit_minutes") or DEFAULT_STRATEGY_RISK["time_exit_minutes"]),
         "indicator_exit_enabled": bool(raw.get("indicator_exit_enabled", DEFAULT_STRATEGY_RISK["indicator_exit_enabled"])),
         "exit_mode": raw.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
+        "risk_style": risk_style,
+        "adaptive_exits_enabled": bool(raw.get("adaptive_exits_enabled", DEFAULT_STRATEGY_RISK["adaptive_exits_enabled"])),
+        "target_r_multiple": target_r_multiple,
     })
     return raw
 
@@ -3396,16 +3544,17 @@ def _position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None)
     side = str(position.get("position_side") or "LONG").upper()
     stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
     target_price = risk.get("target_price") or risk.get("take_profit")
+    dynamic = _adaptive_risk_percentages(entry, risk)
     if stop_price in (None, ""):
-        stop_pct = float(risk["stop_loss_pct"])
+        stop_pct = dynamic["stop"]
         stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
     if target_price in (None, ""):
-        target_pct = float(risk["take_profit_pct"])
+        target_pct = dynamic["target"]
         target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
     trailing_sl = risk.get("trailing_sl")
     if risk.get("trailing_sl_enabled") and ltp and ltp > 0:
-        trigger_pct = float(risk["trail_trigger_pct"])
-        step_pct = float(risk["trail_step_pct"])
+        trigger_pct = dynamic["trigger"]
+        step_pct = dynamic["step"]
         if side == "SHORT" and ltp <= entry * (1 - trigger_pct / 100):
             candidate = ltp * (1 + step_pct / 100)
             trailing_sl = min(float(trailing_sl or candidate), candidate)
@@ -3438,6 +3587,9 @@ def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
         trailing_sl_enabled=bool(risk.get("trailing_sl_enabled", True)),
         trail_trigger_pct=_ledger_pct(risk.get("trail_trigger_pct"), 0.20),
         trail_step_pct=_ledger_pct(risk.get("trail_step_pct"), 0.10),
+        risk_style=str(risk.get("risk_style") or DEFAULT_STRATEGY_RISK["risk_style"]),
+        adaptive_exits_enabled=bool(risk.get("adaptive_exits_enabled", True)),
+        target_r_multiple=float(risk.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"]),
         cooldown_minutes=int(risk.get("cooldown_minutes") or 5),
         max_trades_day=int(risk.get("max_trades_day") or 3),
         required_capital=float(required_capital or 0),
@@ -4603,6 +4755,9 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
         "time_exit_minutes": req.time_exit_minutes,
         "indicator_exit_enabled": req.indicator_exit_enabled,
         "exit_mode": req.exit_mode,
+        "risk_style": req.risk_style,
+        "adaptive_exits_enabled": req.adaptive_exits_enabled,
+        "target_r_multiple": req.target_r_multiple,
     }
     for key, value in mapping.items():
         if value is not None:
@@ -5469,6 +5624,139 @@ async def _resolve_order_fill_hint(
     return 0.0
 
 
+async def _record_pretrade_risk_event(user_id: str, payload: Dict[str, Any]) -> None:
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+    try:
+        await db.risk_events.insert_one(doc)
+    except Exception as exc:
+        logger.warning("risk event persistence failed: %s", exc)
+
+
+async def _market_snapshot_for_intent(
+    user_id: str,
+    intent: "OrderIntent",
+    *,
+    option_contract: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    instr = intent.instrument
+    snapshot: Dict[str, Any] = {"ltp": None, "tick_time": None, "bid": None, "ask": None, "source": "unavailable"}
+    gateway = await get_user_upstox_gateway(user_id)
+    token = str(instr.instrument_token or "").strip()
+    tick = gateway.latest_tick(token) if gateway and token else None
+    if not tick and gateway:
+        tick = gateway.latest_tick_by_symbol(instr.tradingsymbol)
+    if tick:
+        raw = tick.get("raw") if isinstance(tick.get("raw"), dict) else {}
+        snapshot.update({
+            "ltp": tick.get("ltp"),
+            "tick_time": tick.get("received_at") or tick.get("last_trade_time") or tick.get("tick_time"),
+            "bid": tick.get("bid") or tick.get("bidP") or raw.get("bid") or raw.get("bid_price") or raw.get("bidP"),
+            "ask": tick.get("ask") or tick.get("askP") or raw.get("ask") or raw.get("ask_price") or raw.get("askP"),
+            "source": "upstox-cache",
+        })
+    if snapshot.get("ltp") in (None, "") and option_contract and option_contract.get("ltp"):
+        snapshot.update({"ltp": option_contract.get("ltp"), "source": "option-contract"})
+    return snapshot
+
+
+async def _pre_trade_risk_gate(
+    user_id: str,
+    intent: "OrderIntent",
+    *,
+    settings: Dict[str, Any],
+    strategy_id: Optional[str],
+    paper: bool,
+    fill_price_hint: float,
+    option_contract: Optional[Dict[str, Any]],
+    lot_size: int,
+) -> Dict[str, Any]:
+    risk = _normalize_strategy_risk(await _get_strategy_risk(user_id, strategy_id)) if strategy_id else _normalize_strategy_risk(DEFAULT_STRATEGY_RISK)
+    stop_price = intent.stop_loss
+    if stop_price is None and fill_price_hint > 0:
+        prices = _position_risk_prices({
+            "average_buy_price": fill_price_hint,
+            "position_side": "SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
+            "tp_sl_tsl_config": risk,
+        })
+        stop_price = prices.get("stop_loss")
+
+    market_snapshot = await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
+    live_ltp = float(market_snapshot.get("ltp") or fill_price_hint or 0)
+    if not paper and not market_snapshot.get("tick_time"):
+        payload = {
+            "event": "PRETRADE_BLOCK",
+            "strategy_id": strategy_id,
+            "symbol": intent.instrument.tradingsymbol,
+            "reason": "market data timestamp unavailable",
+            "market_snapshot": market_snapshot,
+            "risk_style": risk.get("risk_style"),
+        }
+        await _record_pretrade_risk_event(user_id, payload)
+        raise HTTPException(status_code=400, detail="Pre-trade blocked: market data timestamp unavailable")
+    quality = evaluate_market_data_quality(
+        ltp=live_ltp,
+        tick_time=market_snapshot.get("tick_time"),
+        bid=market_snapshot.get("bid"),
+        ask=market_snapshot.get("ask"),
+        reference_price=fill_price_hint if fill_price_hint > 0 else None,
+        risk_style=str(risk.get("risk_style") or "balanced"),
+    )
+    if not paper and not quality.get("ok"):
+        payload = {
+            "event": "PRETRADE_BLOCK",
+            "strategy_id": strategy_id,
+            "symbol": intent.instrument.tradingsymbol,
+            "reason": quality.get("reason"),
+            "market_quality": quality,
+            "risk_style": risk.get("risk_style"),
+        }
+        await _record_pretrade_risk_event(user_id, payload)
+        raise HTTPException(status_code=400, detail=f"Pre-trade blocked: {quality.get('reason')}")
+
+    funds_row = {"available_cash": settings.get("per_strategy_capital") or settings.get("max_position_size") or 0}
+    if not paper:
+        funds_row = await funds({"id": user_id})
+    equity = float(settings.get("per_strategy_capital") or settings.get("max_position_size") or 0)
+    free_margin = float(funds_row.get("available_cash") or equity or 0)
+    size = compute_position_size(SizeInputs(
+        equity=equity,
+        free_margin=free_margin,
+        requested_qty=int(intent.quantity),
+        lot_size=max(1, int(lot_size or 1)),
+        entry_price=float(fill_price_hint or live_ltp or 0),
+        stop_loss_price=float(stop_price or 0) if stop_price else None,
+        max_position_value=float(settings.get("max_position_size") or equity or 0),
+        daily_loss_limit=float(settings.get("max_daily_loss") or 0),
+        risk_style=str(risk.get("risk_style") or "balanced"),
+    ))
+
+    event_payload = {
+        "event": "PRETRADE_PASS" if size.allowed else "PRETRADE_BLOCK",
+        "strategy_id": strategy_id,
+        "symbol": intent.instrument.tradingsymbol,
+        "intent": intent.intent,
+        "requested_qty": int(intent.quantity),
+        "final_qty": int(size.quantity),
+        "reason": size.reason,
+        "risk_style": risk.get("risk_style"),
+        "risk_budget": size.risk_budget,
+        "unit_loss_at_stop": size.unit_loss_at_stop,
+        "order_value": size.order_value,
+        "caps": size.caps,
+        "market_quality": quality,
+        "paper": paper,
+    }
+    await _record_pretrade_risk_event(user_id, event_payload)
+    if not size.allowed:
+        raise HTTPException(status_code=400, detail=f"Pre-trade blocked: {size.reason}")
+    return {**event_payload, "allowed": True, "quantity": int(size.quantity)}
+
+
 # ---------------------------------------------------------------------------
 # _submit_order_intent  –  dispatch live order to the correct broker adapter
 # ---------------------------------------------------------------------------
@@ -5970,24 +6258,26 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     strategy_id = await _strategy_source_id(source)
     fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
+    pretrade_risk: Optional[Dict[str, Any]] = None
     if _intent_is_entry(intent.intent):
         await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
         await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
         if intent.intent in ("OPEN_LONG", "OPEN_SHORT") and fill_price_hint <= 0 and not paper:
             raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {instr.tradingsymbol}; order blocked.")
-        if fill_price_hint > 0 and intent.quantity * fill_price_hint > settings["max_position_size"] and intent.intent in ("OPEN_LONG", "OPEN_SHORT"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Order value INR {intent.quantity * fill_price_hint:.0f} exceeds max position size INR {settings['max_position_size']:.0f}. Adjust on Profile.",
-            )
-        if not paper:
-            funds_row = await funds({"id": user_id})
-            available_cash = float(funds_row.get("available_cash") or 0)
-            if fill_price_hint > 0 and available_cash > 0 and intent.quantity * fill_price_hint > available_cash:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"margin insufficient: order value INR {intent.quantity * fill_price_hint:.0f} exceeds available Upstox margin INR {available_cash:.0f}.",
-                )
+        pretrade_risk = await _pre_trade_risk_gate(
+            user_id,
+            intent,
+            settings=settings,
+            strategy_id=strategy_id,
+            paper=paper,
+            fill_price_hint=fill_price_hint,
+            option_contract=option_contract,
+            lot_size=int(resolution.get("lot_size") or 1),
+        )
+        if int(pretrade_risk.get("quantity") or intent.quantity) < int(intent.quantity):
+            intent.quantity = int(pretrade_risk["quantity"])
+            if resolution.get("lot_size"):
+                resolution["lots"] = max(1, int(intent.quantity) // max(1, int(resolution.get("lot_size") or 1)))
 
     if idempotency_key:
         existing_idem = await db.orders.find_one(
@@ -6074,6 +6364,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         "exchange": instr.exchange,
         "asset_type": "option" if instr.segment == "OPTIONS" else ("commodity" if instr.segment == "COMMODITY" else "equity"),
         "order_intent": intent.model_dump(),
+        "pretrade_risk": pretrade_risk,
         "instrument": instr.model_dump(),
         "segment": instr.segment,
         "stop_loss": intent.stop_loss,
@@ -7610,6 +7901,9 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             "trailing_sl_enabled": ledger_row.get("trailing_sl_enabled"),
             "trail_trigger_pct": round(float(ledger_row.get("trail_trigger_pct") or 0) * 100, 2),
             "trail_step_pct": round(float(ledger_row.get("trail_step_pct") or 0) * 100, 2),
+            "risk_style": ledger_row.get("risk_style") or visual_risk.get("risk_style", "balanced"),
+            "adaptive_exits_enabled": ledger_row.get("adaptive_exits_enabled", visual_risk.get("adaptive_exits_enabled", True)),
+            "target_r_multiple": ledger_row.get("target_r_multiple", visual_risk.get("target_r_multiple", DEFAULT_STRATEGY_RISK["target_r_multiple"])),
             "cooldown_minutes": ledger_row.get("cooldown_minutes"),
             "max_trades_day": ledger_row.get("max_trades_day"),
             "risk_settings": {**(ledger_row.get("risk_settings", {}) or {}), **visual_risk},
@@ -9526,6 +9820,8 @@ async def startup():
         ("trades", [("user_id", 1), ("closed_at", -1)], {}),
         ("order_events", [("order_id", 1), ("created_at", 1)], {}),
         ("order_events", [("user_id", 1), ("created_at", -1)], {}),
+        ("risk_events", [("user_id", 1), ("created_at", -1)], {}),
+        ("risk_events", [("strategy_id", 1), ("created_at", -1)], {}),
         ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("system_config", "_id", {}),
         ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
