@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
     <meta name="theme-color" content="#050505" />
-    <meta name="description" content="QuantG v11.0 - Algorithmic trading terminal with multi-broker controls, Python strategies, and AI bot." />
+    <meta name="description" content="QuantG v12 - Algorithmic trading terminal with multi-broker controls, Python strategies, and AI bot." />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
@@ -15,7 +15,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap" rel="stylesheet" />
-    <title>QuantG v11.0 - Algo Trading Terminal</title>
+    <title>QuantG v12 - Algo Trading Terminal</title>
     <script>
       window.addEventListener("error", function (e) {
         if (e.error instanceof DOMException && e.error.name === "DataCloneError" && e.message && e.message.includes("PerformanceServerTiming")) {
@@ -24,7 +24,8 @@
         }
       }, true);
     </script>
-    <script>
+    <!-- SW registration — bump BUILD_VER when rebuilding to force cache bust -->
+    <script data-build-ver="v12">
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
           navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("SW failed", e));

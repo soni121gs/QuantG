@@ -112,7 +112,14 @@ export default function Layout({ children }) {
                 <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
               <span className="font-head font-bold tracking-tight text-white text-base">
-                QUANT<span className="text-[var(--qd-accent)]">G</span> {APP_VERSION_LABEL}
+                QUANT<span className="text-[var(--qd-accent)]">G</span>
+              </span>
+              <span
+                className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
+                data-testid="version-badge"
+                title="QuantG Terminal Version"
+              >
+                {APP_VERSION_LABEL}
               </span>
             </div>
             <div className="hidden md:flex items-center gap-2 text-xs">
@@ -212,12 +219,20 @@ export default function Layout({ children }) {
             ))}
           </nav>
           <div className="mt-auto p-3 text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)]">
-            <div className="flex items-center gap-1 mb-2">
-              <span className="w-2 h-2 bg-[var(--qd-accent)] rounded-full animate-pulse" />
-              Advanced Trading
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1 mb-0">
+                <span className="w-2 h-2 bg-[var(--qd-accent)] rounded-full animate-pulse" />
+                Advanced Trading
+              </div>
+              <span
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
+                data-testid="sidebar-version-badge"
+              >
+                {APP_VERSION_LABEL}
+              </span>
             </div>
-            <div className="text-[8px] text-[var(--qd-text-2)]">
-              {APP_VERSION_LABEL} / Real-time / Live
+            <div className="text-[8px] text-[var(--qd-text-2)] mt-1.5">
+              QuantG Terminal · Real-time · Live
             </div>
           </div>
         </aside>

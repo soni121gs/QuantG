@@ -1,5 +1,6 @@
-/* QuantG Service Worker — offline shell + installable PWA */
-const CACHE = "quantg-v1";
+/* QuantG Service Worker v12 — offline shell + installable PWA */
+/* Bump CACHE name on every release to force old bundle eviction */
+const CACHE = "quantg-v12";
 const SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
