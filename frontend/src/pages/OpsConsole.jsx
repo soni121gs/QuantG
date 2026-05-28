@@ -24,6 +24,7 @@ export default function OpsConsole() {
   const [busy, setBusy] = useState("");
   const [simulatedLatency, setSimulatedLatency] = useState(12);
   const [pendingUsers, setPendingUsers] = useState([]);
+  const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
 
   const loadPendingUsers = async () => {
     if (user?.role !== "owner") return;
@@ -32,6 +33,16 @@ export default function OpsConsole() {
       setPendingUsers(r.data);
     } catch (e) {
       console.error("Failed to load pending users", e);
+    }
+  };
+
+  const loadNeedsReview = async () => {
+    try {
+      const r = await api.get("/orders?include_stale=true");
+      const filtered = r.data.filter(o => o.status === "UNKNOWN_NEEDS_REVIEW");
+      setNeedsReviewOrders(filtered);
+    } catch (e) {
+      console.error("Failed to load needs review orders", e);
     }
   };
 
@@ -74,9 +85,11 @@ export default function OpsConsole() {
   useEffect(() => {
     load().catch(() => {});
     loadPendingUsers().catch(() => {});
+    loadNeedsReview().catch(() => {});
     const t = setInterval(() => {
       load().catch(() => {});
       loadPendingUsers().catch(() => {});
+      loadNeedsReview().catch(() => {});
     }, 4000);
     return () => clearInterval(t);
   }, [user]);
@@ -227,6 +240,62 @@ export default function OpsConsole() {
                         Reject
                       </button>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* NEEDS REVIEW DESK */}
+      {needsReviewOrders.length > 0 && (
+        <div className="qd-card p-6 border-[var(--qd-loss)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden" data-testid="needs-review-panel">
+          <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-loss)]/5 rounded-full blur-[100px] pointer-events-none" />
+          <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="text-[var(--qd-loss)] animate-bounce" size={20} />
+              <h2 className="text-lg font-head font-extrabold text-white">Manual Reconciliation Required</h2>
+              <span className="text-xs font-mono bg-[var(--qd-loss)]/15 border border-[var(--qd-loss)]/30 text-[var(--qd-loss)] px-2 py-0.5 rounded-full font-bold">
+                {needsReviewOrders.length} UNRESOLVED
+              </span>
+            </div>
+            <span className="text-xs font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
+              Needs Immediate Review
+            </span>
+          </div>
+
+          <div className="qd-table-wrap relative z-10">
+            <table className="w-full text-left text-xs font-mono border-collapse">
+              <thead>
+                <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                  <th className="py-2.5">SYMBOL</th>
+                  <th className="py-2.5">ORDER ID</th>
+                  <th className="py-2.5">MODE</th>
+                  <th className="py-2.5">SIDE</th>
+                  <th className="py-2.5">QTY</th>
+                  <th className="py-2.5">REASON / MSG</th>
+                  <th className="py-2.5">TIMESTAMP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {needsReviewOrders.map((o) => (
+                  <tr key={o.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <td className="py-3 text-white font-semibold">{o.symbol || o.tradingsymbol}</td>
+                    <td className="py-3 text-[var(--qd-text-2)]">{o.broker_order_id || o.id}</td>
+                    <td className="py-3">
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded uppercase font-bold ${
+                        o.mode === "live" ? "bg-red-500/10 text-red-300 border border-red-500/20" : "bg-amber-500/10 text-amber-300 border border-amber-500/20"
+                      }`}>
+                        {o.mode}
+                      </span>
+                    </td>
+                    <td className={`py-3 font-bold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                      {o.side}
+                    </td>
+                    <td className="py-3 text-white">{o.qty || o.quantity}</td>
+                    <td className="py-3 text-[var(--qd-warn)] max-w-xs truncate animate-pulse" title={o.status_message}>{o.status_message}</td>
+                    <td className="py-3 text-[var(--qd-text-3)]">{fmt(o.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -530,6 +599,20 @@ export default function OpsConsole() {
             busy={busy === "recover"}
             onClick={() => run("recover", "/ops/auto-recover")}
           />
+          <ActionCard
+            icon={RefreshCw}
+            title="Reconcile Orders"
+            text="Fetch live Upstox order book and synchronize local order lifecycle states."
+            busy={busy === "reconcile"}
+            onClick={() => run("reconcile", "/ops/orders/sync")}
+          />
+          <ActionCard
+            icon={Trash2}
+            title="Clear Stale Paper Orders"
+            text="Instantly clean up all local pending paper orders and release position locks."
+            busy={busy === "clear-paper"}
+            onClick={() => run("clear-paper", "/ops/paper-orders/clear-stale")}
+          />
         </div>
       </div>
 
@@ -645,6 +728,8 @@ function actionMessage(key, data) {
   if (key === "ticker") return data.started ? `Market Ticker connection reloaded for ${data.tokens || 0} subscriptions.` : `Ticker startup skipped: ${data.reason || "active"}`;
   if (key === "clear") return `Halt registers flushed on ${data.updated_strategies || 0} strategies.`;
   if (key === "recover") return `Automated connection recovery checks executed. Checked tickers and pools.`;
+  if (key === "reconcile") return `Order reconciliation complete: synced statuses, resolved stale orders.`;
+  if (key === "clear-paper") return `Successfully cleared paper orders.`;
   if (String(key).startsWith("plan-")) return "Remediation fix deployed successfully.";
   if (key === "squareoff") return `Squareoff dispatch complete: ${data.closed?.length || 0} closed, ${data.failed?.length || 0} rejected by broker.`;
   return "Handshake complete.";

@@ -31,9 +31,7 @@ from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr
 
 import kite_helper
-import kotak_helper
 import upstox_helper
-from kotak_gateway import KotakNeoGateway
 from brokers.upstox_gateway import UpstoxGateway, extract_order_id as extract_upstox_order_id
 from brokers import upstox_gateway as upstox_gateway_utils
 import options_helper
@@ -133,7 +131,7 @@ _RATE_LIMIT_LAST: Dict[str, float] = {}
 _LOG_THROTTLE_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
-_KOTAK_GATEWAYS: Dict[str, KotakNeoGateway] = {}
+_KOTAK_GATEWAYS: Dict[str, Any] = {}
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
 _UPSTOX_TOKEN_VALIDATION_CACHE: Dict[str, Dict[str, Any]] = {}
 COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
@@ -6245,6 +6243,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         "filled_at": now,
         "mode": "paper",
     }
+    logger.info(
+        "Trade Fill (Accounting Ledger): user_id=%s strategy_id=%s symbol=%s side=%s qty=%d price=%.2f realised_pnl=%.2f before_qty=%d after_qty=%d",
+        user_id, locked.get("strategy_id"), symbol, locked.get("side"), qty, float(fill_price or 0), net_realised, before_qty, after_qty
+    )
     try:
         await db.trade_fills.insert_one(fill_doc)
     except DuplicateKeyError:
@@ -6387,9 +6389,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     instr = intent.instrument
     if instr.exchange not in SUPPORTED_ORDER_EXCHANGES:
         raise HTTPException(status_code=400, detail=f"exchange must be one of {sorted(SUPPORTED_ORDER_EXCHANGES)}")
-    if not paper and order_type == "MARKET" and not _is_order_market_open(instr.exchange):
+    if not paper and not _is_order_market_open(instr.exchange):
         market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
-        raise HTTPException(status_code=400, detail=f"Live MARKET orders are blocked outside {market_name} market hours.")
+        raise HTTPException(status_code=400, detail=f"Live orders are blocked outside {market_name} market hours.")
 
     strategy_id = await _strategy_source_id(source)
     fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
@@ -7120,98 +7122,7 @@ def _normalize_kotak_order_status(status: Any) -> Optional[str]:
 
 
 async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
-    gateway = _KOTAK_GATEWAYS.get(user_id)
-    if not gateway:
-        return {"checked": 0, "updated": 0}
-    if not _check_and_update_sync_throttle(user_id, "kotak"):
-        return {"checked": 0, "updated": 0, "throttled": True}
-    updates = gateway.latest_orders()
-    report_count = 0
-    if gateway.status().get("authenticated"):
-        report = await asyncio.to_thread(gateway.order_report)
-        if report.get("ok"):
-            for item in _kotak_order_items(report.get("response")):
-                normalized = KotakNeoGateway.normalize_order_report_item(item)
-                order_id = normalized.get("order_id") or _extract_kotak_order_id(item)
-                if order_id:
-                    updates[str(order_id)] = normalized
-            report_count = len(updates)
-    updated = 0
-    now = datetime.now(timezone.utc).isoformat()
-    for order_id, row in updates.items():
-        status = _normalize_kotak_order_status(row.get("status"))
-        set_doc = {
-            "updated_at": now,
-            "status_message": status,
-        }
-        if status:
-            set_doc["status"] = canonical_order_status(status, filled_qty=row.get("filled_qty"), pending_qty=row.get("pending_qty"))
-            set_doc["legacy_status"] = status
-            set_doc["broker_status"] = status
-        if row.get("filled_qty") not in (None, ""):
-            try:
-                set_doc["filled_qty"] = int(float(row.get("filled_qty")))
-            except Exception:
-                set_doc["filled_qty"] = row.get("filled_qty")
-        if row.get("pending_qty") not in (None, ""):
-            try:
-                set_doc["pending_qty"] = int(float(row.get("pending_qty")))
-            except Exception:
-                set_doc["pending_qty"] = row.get("pending_qty")
-        if row.get("average_price") not in (None, ""):
-            try:
-                avg = float(row.get("average_price"))
-                if avg > 0:
-                    set_doc["price"] = avg
-            except Exception:
-                pass
-        res = await db.orders.update_many(
-            {"user_id": user_id, "broker": "kotak_neo", "broker_order_id": str(order_id)},
-            {"$set": set_doc},
-        )
-        updated += res.modified_count
-        await _advance_pending_order_from_broker(
-            user_id=user_id,
-            broker_order_id=str(order_id),
-            status=str(status or ""),
-            avg_price=float(set_doc.get("price") or 0),
-            filled_qty=int(set_doc.get("filled_qty") or 0) if set_doc.get("filled_qty") not in (None, "") else None,
-            status_message=str(row.get("status") or status or ""),
-        )
-        if set_doc.get("status") == ORDER_FILLED:
-            avg_price = float(set_doc.get("price") or 0)
-            filled_qty = set_doc.get("filled_qty")
-            pos_set = {"status": "FILLED", "updated_at": now}
-            if avg_price > 0:
-                pos_set["average_buy_price"] = avg_price
-            if filled_qty not in (None, ""):
-                pos_set["quantity"] = int(filled_qty)
-                pos_set["open_quantity"] = int(filled_qty)
-            await db.strategy_positions.update_many(
-                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": pos_set},
-            )
-            exit_positions = await db.strategy_positions.find(
-                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
-                {"_id": 0},
-            ).to_list(20)
-            for pos in exit_positions:
-                await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
-        elif set_doc.get("status") in {ORDER_CANCELLED, ORDER_REJECTED}:
-            await db.strategy_positions.update_many(
-                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": {"status": set_doc.get("status"), "legacy_status": status, "updated_at": now, "broker_status_message": row.get("status")},
-                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
-            )
-            exit_positions = await db.strategy_positions.find(
-                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
-                {"_id": 0, "id": 1},
-            ).to_list(20)
-            for pos in exit_positions:
-                await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
-    result = {"checked": len(updates), "updated": updated, "report_checked": report_count}
-    await _record_broker_sync_state(user_id, "kotak_neo", result)
-    return result
+    return {"checked": 0, "updated": 0}
 
 
 async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> Dict[str, int]:
@@ -7332,20 +7243,21 @@ async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> D
         if broker_order_id and broker_order_id in reported_order_ids:
             continue
 
-        stale_status = "BROKER_NOT_FOUND" if broker_order_id else "STALE"
+        stale_status = "UNKNOWN_NEEDS_REVIEW"
         message = (
-            "Local stale Upstox order cleared: broker no longer reports this order."
+            "Stale unresolved pending order: broker no longer reports this order."
             if broker_order_id else
-            "Local stale Upstox order cleared: no broker order id was ever recorded."
+            "Stale unresolved pending order: no broker order id was ever recorded."
         )
+        logger.info("Order reconciliation user_id=%s: local order %s marked as UNKNOWN_NEEDS_REVIEW. Reason: %s", user_id, row["id"], message)
         res = await db.orders.update_one(
             {"user_id": user_id, "id": row["id"]},
             {"$set": {
-                "status": ORDER_REJECTED,
+                "status": "UNKNOWN_NEEDS_REVIEW",
                 "legacy_status": stale_status,
                 "broker_status": stale_status,
                 "status_message": message,
-                "visibility": "hidden",
+                "visibility": "visible",
                 "updated_at": now,
             }},
         )
@@ -8268,72 +8180,11 @@ async def get_user_kite(user_id: str):
 
 
 async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
-    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
-    consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
-    consumer_secret = decrypt_secret(keys.get("api_secret")) if keys else None
-    status = kotak_helper.status_from_keys(keys, consumer_key)
-    gateway = _KOTAK_GATEWAYS.get(user_id)
-    if gateway:
-        gw_status = gateway.status()
-        gateway_error = gw_status.get("last_error")
-        status.update({
-            "connected": bool(gw_status.get("authenticated")),
-            "authenticated": bool(gw_status.get("authenticated")),
-            "state": gw_status.get("state"),
-            "gateway": gw_status,
-            "reason": None if gw_status.get("authenticated") else (gateway_error or status.get("reason")),
-        })
-    mobile_number = os.environ.get("KOTAK_MOBILE_NUMBER") or (decrypt_secret(keys.get("mobile_number")) if keys else None)
-    password = os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN") or (decrypt_secret(keys.get("mpin")) if keys else None)
-    totp_secret_key = os.environ.get("KOTAK_TOTP_SECRET_KEY") or (decrypt_secret(keys.get("totp_secret_key")) if keys else None)
-    required_values = {
-        "KOTAK_CONSUMER_SECRET": os.environ.get("KOTAK_CONSUMER_SECRET") or consumer_secret,
-        "KOTAK_MOBILE_NUMBER": mobile_number,
-        "KOTAK_UCC": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "KOTAK_PASSWORD_OR_MPIN": password,
-        "KOTAK_TOTP_SECRET_KEY": totp_secret_key,
-    }
-    missing_env = [k for k, value in required_values.items() if not value]
-    status["env_ready"] = not missing_env
-    status["missing_env"] = missing_env
-    status["consumer_secret_saved"] = bool(consumer_secret or os.environ.get("KOTAK_CONSUMER_SECRET"))
-    status["credentials_source"] = {
-        "consumer_secret": "env" if os.environ.get("KOTAK_CONSUMER_SECRET") else ("saved" if consumer_secret else "missing"),
-        "mobile_number": "env" if os.environ.get("KOTAK_MOBILE_NUMBER") else ("saved" if mobile_number else "missing"),
-        "ucc": "env" if os.environ.get("KOTAK_UCC") else ("saved" if (keys or {}).get("user_id_at_broker") else "missing"),
-        "password_or_mpin": "env" if (os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN")) else ("saved" if password else "missing"),
-        "totp_secret_key": "env" if os.environ.get("KOTAK_TOTP_SECRET_KEY") else ("saved" if totp_secret_key else "missing"),
-    }
-    return status
+    return {"connected": False, "reason": "kotak_neo_removed"}
 
 
-async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[KotakNeoGateway]:
-    cached = _KOTAK_GATEWAYS.get(user_id)
-    if not fresh and cached:
-        cached_status = cached.status()
-        if cached_status.get("initialized") or cached_status.get("state") in {"CLIENT_CREATED", "LOGIN_DONE", "TWO_FA_DONE", "READY"}:
-            return cached
-        logger.info("Dropping uninitialized Kotak gateway from cache for user=%s state=%s", user_id, cached_status.get("state"))
-        _KOTAK_GATEWAYS.pop(user_id, None)
-    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "kotak_neo"})
-    consumer_key = decrypt_secret(keys.get("api_key")) if keys else None
-    consumer_secret = decrypt_secret(keys.get("api_secret")) if keys else None
-    if not consumer_key:
-        return None
-    config = {
-        "consumer_key": consumer_key,
-        "consumer_secret": os.environ.get("KOTAK_CONSUMER_SECRET") or consumer_secret,
-        "neo_fin_key": os.environ.get("KOTAK_NEO_FIN_KEY"),
-        "mobile_number": os.environ.get("KOTAK_MOBILE_NUMBER") or decrypt_secret(keys.get("mobile_number")),
-        "username": os.environ.get("KOTAK_USERNAME") or os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "ucc": os.environ.get("KOTAK_UCC") or (keys or {}).get("user_id_at_broker"),
-        "password": os.environ.get("KOTAK_PASSWORD") or os.environ.get("KOTAK_MPIN") or decrypt_secret(keys.get("mpin")),
-        "mpin": os.environ.get("KOTAK_MPIN") or os.environ.get("KOTAK_PASSWORD") or decrypt_secret(keys.get("mpin")),
-        "totp_secret_key": os.environ.get("KOTAK_TOTP_SECRET_KEY") or decrypt_secret(keys.get("totp_secret_key")),
-    }
-    gateway = KotakNeoGateway(config=config)
-    _KOTAK_GATEWAYS[user_id] = gateway
-    return gateway
+async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[Any]:
+    return None
 
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
@@ -8776,45 +8627,7 @@ def _collect_kotak_instruments(node: Any, out: Optional[List[Dict[str, Any]]] = 
 
 
 async def _start_user_kotak_ticker(user_id: str, symbols: Optional[List[str]] = None, exchange: str = "NSE") -> Dict[str, Any]:
-    gateway = await get_user_kotak_gateway(user_id)
-    if not gateway:
-        return {"started": False, "reason": "kotak_not_configured"}
-    status = gateway.status()
-    if not status.get("authenticated"):
-        return {"started": False, "reason": "kotak_not_authenticated", "status": status}
-
-    target_symbols = [s.upper() for s in (symbols or [s["symbol"] for s in SYMBOLS])]
-    segment = _kotak_exchange_segment(exchange)
-    tokens: List[Dict[str, Any]] = []
-    failures: List[Dict[str, str]] = []
-    for symbol in target_symbols:
-        try:
-            result = await asyncio.to_thread(gateway.search_scrip, exchange_segment=segment, symbol=symbol)
-            if not result.get("ok"):
-                failures.append({"symbol": symbol, "reason": result.get("error", "search_failed")})
-                continue
-            candidates = _collect_kotak_instruments(result.get("response"))
-            exact = next((c for c in candidates if c.get("symbol") == symbol), None)
-            chosen = exact or (candidates[0] if candidates else None)
-            if chosen:
-                chosen["symbol"] = symbol
-                chosen["exchange_segment"] = chosen.get("exchange_segment") or segment
-                tokens.append(chosen)
-            else:
-                failures.append({"symbol": symbol, "reason": "no_token_found"})
-        except Exception as exc:
-            failures.append({"symbol": symbol, "reason": str(exc)})
-
-    if not tokens:
-        return {"started": False, "reason": "no_kotak_tokens_resolved", "failures": failures[:8], "status": gateway.status()}
-    result = await asyncio.to_thread(gateway.subscribe_symbols, tokens)
-    return {
-        "started": bool(result.get("ok")),
-        "tokens": len(result.get("tokens") or tokens),
-        "failures": failures[:8],
-        "status": gateway.status(),
-        "result": result,
-    }
+    return {"started": False, "reason": "kotak_neo_removed"}
 
 
 async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -9109,152 +8922,7 @@ async def zerodha_status(user=Depends(get_current_user)):
     return status
 
 
-@api.get("/kotak/status")
-async def kotak_status(user=Depends(get_current_user)):
-    return await get_user_kotak_status(user["id"])
 
-
-@api.get("/broker/kotak/status")
-async def broker_kotak_status(user=Depends(get_current_user)):
-    status = await get_user_kotak_status(user["id"])
-    gateway = status.get("gateway") or {}
-    return {
-        "authenticated": bool(status.get("authenticated") or status.get("connected")),
-        "state": status.get("state") or gateway.get("state") or "DISCONNECTED",
-        "connected": bool(status.get("connected")),
-        "ready": bool(gateway.get("ready")),
-        "reason": status.get("reason"),
-        "last_error": gateway.get("last_error"),
-        "status": status,
-    }
-
-
-@api.get("/kotak/diagnostics")
-async def kotak_diagnostics(user=Depends(get_current_user)):
-    status = await get_user_kotak_status(user["id"])
-    gateway = _KOTAK_GATEWAYS.get(user["id"])
-    order_sync = await _sync_kotak_order_statuses(user["id"]) if gateway else {"checked": 0, "updated": 0}
-    return {
-        "ok": bool(status.get("connected")),
-        "status": status,
-        "order_sync": order_sync,
-        "supported_segments": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"],
-        "commodity_note": "For MCX, use the exact Kotak trading symbol from scrip search, for example a current GOLD/CRUDEOIL futures symbol.",
-        "gateway_diagnostics": gateway.diagnostics() if gateway else None,
-    }
-
-
-@api.post("/kotak/login")
-async def kotak_login(req: KotakLoginReq = None, user=Depends(get_current_user)):
-    req = req or KotakLoginReq()
-    existing = _KOTAK_GATEWAYS.get(user["id"])
-    existing_status = existing.status() if existing else {}
-    gateway = await get_user_kotak_gateway(
-        user["id"],
-        fresh=bool(existing_status and not existing_status.get("initialized")),
-    )
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Save Kotak Neo Consumer Key, Consumer Secret, mobile, MPIN/password, and TOTP secret first.")
-    status = gateway.status()
-    if status.get("state") in {"READY", "FAILED"}:
-        result = await asyncio.to_thread(gateway.reconnect, req.current_otp)
-    else:
-        result = await asyncio.to_thread(gateway.authenticate, req.current_otp)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Kotak login failed"))
-    return {"ok": True, "status": gateway.status()}
-
-
-@api.post("/kotak/reconnect")
-async def kotak_reconnect(req: KotakLoginReq = None, user=Depends(get_current_user)):
-    req = req or KotakLoginReq()
-    gateway = await get_user_kotak_gateway(user["id"])
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
-    result = await asyncio.to_thread(gateway.reconnect, req.current_otp)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Kotak reconnect failed"))
-    return {"ok": True, "status": gateway.status()}
-
-
-@api.post("/kotak/error/clear")
-async def kotak_clear_error(user=Depends(get_current_user)):
-    gateway = _KOTAK_GATEWAYS.get(user["id"])
-    if gateway:
-        return await asyncio.to_thread(gateway.clear_error)
-    return {"ok": True, "status": await get_user_kotak_status(user["id"])}
-
-
-@api.post("/kotak/repair")
-async def kotak_repair(user=Depends(get_current_user)):
-    gateway = _KOTAK_GATEWAYS.pop(user["id"], None)
-    if gateway:
-        try:
-            await asyncio.to_thread(gateway.logout)
-        except Exception as exc:
-            logger.warning("Kotak repair logout skipped: %s", exc)
-    new_gateway = await get_user_kotak_gateway(user["id"], fresh=True)
-    return {
-        "ok": True,
-        "message": "Kotak gateway reset. Enter a fresh OTP and click Connect Kotak.",
-        "status": new_gateway.status() if new_gateway else await get_user_kotak_status(user["id"]),
-    }
-
-
-@api.post("/kotak/logout")
-async def kotak_logout(user=Depends(get_current_user)):
-    gateway = _KOTAK_GATEWAYS.pop(user["id"], None)
-    if not gateway:
-        return {"ok": True, "message": "no_active_kotak_gateway"}
-    return await asyncio.to_thread(gateway.logout)
-
-
-@api.post("/kotak/subscribe")
-async def kotak_subscribe(req: KotakSubscribeReq, user=Depends(get_current_user)):
-    gateway = await get_user_kotak_gateway(user["id"])
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
-    result = await asyncio.to_thread(gateway.subscribe_symbols, req.instruments)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Kotak subscribe failed"))
-    return {"ok": True, "status": gateway.status(), "tokens": result.get("tokens", [])}
-
-
-@api.get("/kotak/search-scrip")
-async def kotak_search_scrip(
-    exchange: str = "MCX",
-    symbol: str = "",
-    expiry: Optional[str] = None,
-    option_type: Optional[str] = None,
-    strike_price: Optional[str] = None,
-    user=Depends(get_current_user),
-):
-    gateway = await get_user_kotak_gateway(user["id"])
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
-    segment = _kotak_exchange_segment(exchange)
-    result = await asyncio.to_thread(
-        gateway.search_scrip,
-        exchange_segment=segment,
-        symbol=symbol,
-        expiry=expiry,
-        option_type=option_type,
-        strike_price=strike_price,
-    )
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Kotak scrip search failed"))
-    return {"ok": True, "exchange_segment": segment, "response": result.get("response")}
-
-
-@api.post("/kotak/order-feed/start")
-async def kotak_start_order_feed(user=Depends(get_current_user)):
-    gateway = await get_user_kotak_gateway(user["id"])
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Kotak Neo is not configured.")
-    result = await asyncio.to_thread(gateway.subscribe_order_feed)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Kotak order feed failed"))
-    return {"ok": True, "status": gateway.status()}
 
 
 @api.get("/broker/upstox/config")
@@ -10214,10 +9882,17 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
     logger.info("Broker reconciliation loop started interval=%ss", interval)
     while not stop_event.is_set():
         try:
-            users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
-            for user_row in users:
-                user_id = user_row["id"]
-                await _sync_upstox_order_statuses(user_id)
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            is_weekday = ist_now.weekday() < 5
+            minutes_now = ist_now.hour * 60 + ist_now.minute
+            # NSE (09:15 - 15:30) and MCX (09:00 - 23:30)
+            in_market_hours = is_weekday and (9 * 60 <= minutes_now <= 23 * 60 + 30)
+
+            if in_market_hours:
+                users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                for user_row in users:
+                    user_id = user_row["id"]
+                    await _sync_upstox_order_statuses(user_id)
         except Exception as e:
             logger.warning(f"broker reconciliation error: {e}")
         slept = 0
@@ -10366,8 +10041,12 @@ async def startup():
         async for user_row in db.users.find({}, {"id": 1}):
             await seed_default_strategies_for_user(user_row["id"])
             await migrate_user_to_v12_upstox(user_row["id"])
+            try:
+                await _sync_upstox_order_statuses(user_row["id"], force=True)
+            except Exception as sync_err:
+                logger.warning("Startup order sync failed for user %s: %s", user_row["id"], sync_err)
     except Exception as e:
-        logger.warning(f"default strategy seeding skipped: {e}")
+        logger.warning(f"default strategy seeding/reconciliation skipped: {e}")
 
     # Background strategy runner — uses REAL Kite candles when user is connected,
     # falls back to MOCK 5-min intraday candles only when no broker session.

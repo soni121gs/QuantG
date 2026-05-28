@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import requests
 
-import kite_helper
+from brokers import normalization
 from brokers.upstox_market_data_v3 import UpstoxMarketDataFeedV3
 
 
@@ -179,12 +179,12 @@ class UpstoxGateway:
     def get_order_book(self) -> Dict[str, Any]:
         payload = self._request("GET", "/v2/order/retrieve-all")
         items = order_items(payload)
-        normalized = [kite_helper.normalize_order_update(item, broker="upstox") for item in items]
+        normalized = [normalization.normalize_order_update(item, broker="upstox") for item in items]
         return {"data": normalized, "orders": normalized, "raw": payload}
 
     def get_positions(self) -> Dict[str, Any]:
         payload = self._request("GET", "/v2/portfolio/short-term-positions")
-        normalized = kite_helper.normalize_positions_payload(payload, broker="upstox")
+        normalized = normalization.normalize_positions_payload(payload, broker="upstox")
         return {"data": normalized, "net": normalized.get("net") or [], "raw": payload}
 
     def get_margins(self) -> Dict[str, Any]:
@@ -350,7 +350,7 @@ class UpstoxGateway:
                                 "raw": node,
                                 "source": "REST",
                                 "feed": "upstox-rest",
-                            }
+                             }
                             if normalized["timestamp_source"] == "server_received_at":
                                 import time
                                 now_ts = time.time()
@@ -535,11 +535,11 @@ def order_items(payload: Any) -> List[Dict[str, Any]]:
 
 
 def normalize_positions_response(payload: Any) -> Dict[str, List[Dict[str, Any]]]:
-    return kite_helper.normalize_positions_payload(payload, broker="upstox")
+    return normalization.normalize_positions_payload(payload, broker="upstox")
 
 
 def normalize_order_items(payload: Any) -> List[Dict[str, Any]]:
-    return [kite_helper.normalize_order_update(item, broker="upstox") for item in order_items(payload)]
+    return [normalization.normalize_order_update(item, broker="upstox") for item in order_items(payload)]
 
 
 def position_items(payload: Any) -> List[Dict[str, Any]]:

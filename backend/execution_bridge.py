@@ -8,7 +8,7 @@ import time
 
 from pydantic import BaseModel, Field, field_validator
 
-import kite_helper
+from brokers import normalization
 
 logger = logging.getLogger("quantg.execution_bridge")
 
@@ -40,7 +40,6 @@ class BrokerOrderRateLimiter:
 _BROKER_LIMITERS = {
     "zerodha": BrokerOrderRateLimiter(10, 400),
     "upstox": BrokerOrderRateLimiter(10, 400),
-    "kotak": BrokerOrderRateLimiter(10, 400),
 }
 
 
@@ -174,7 +173,6 @@ def normalize_broker_failure(exc: Exception) -> str:
     return text
 
 
-KotakPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
 UpstoxPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
 KitePlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
 UpstoxTokenFn = Callable[[str, str, str], Optional[str]]
@@ -184,7 +182,6 @@ async def submit_order(
     user_id: str,
     payload: ExecutionDispatchPayload,
     *,
-    place_kotak: KotakPlaceFn,
     place_upstox: UpstoxPlaceFn,
     place_kite: KitePlaceFn,
     resolve_upstox_token: UpstoxTokenFn,
@@ -209,31 +206,7 @@ async def submit_order(
         await limiter.acquire()
 
     try:
-        if broker == "kotak_neo":
-            result = await place_kotak(
-                user_id,
-                trading_symbol=validated.tradingsymbol,
-                exchange=validated.exchange,
-                side=validated.side,
-                quantity=validated.quantity,
-                order_type=validated.order_type,
-                product=validated.product,
-                price=validated.price,
-                tag=validated.tag,
-            )
-            broker_order_id = result.get("broker_order_id") or result.get("order_id")
-            if result.get("ok") is False:
-                raise RuntimeError(result.get("error") or "Kotak order rejected")
-            return {
-                "ok": True,
-                "status": "PENDING_BROKER",
-                "broker_order_id": broker_order_id,
-                "raw": result.get("raw") or result.get("response"),
-                "attempts": int(result.get("attempts") or 1),
-                "recovered": bool(result.get("recovered")),
-                "error": None,
-                "dispatch": validated.model_dump(),
-            }
+
 
         if broker == "upstox":
             token = resolve_upstox_token(validated.exchange, validated.tradingsymbol, validated.instrument_token)
@@ -310,7 +283,7 @@ async def submit_order(
 
 
 def normalize_order_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    status = kite_helper.normalize_order_status(row.get("status")) or str(row.get("status") or "OPEN").upper()
+    status = normalization.normalize_order_status(row.get("status")) or str(row.get("status") or "OPEN").upper()
     return {
         "id": row.get("id"),
         "broker_order_id": row.get("broker_order_id"),

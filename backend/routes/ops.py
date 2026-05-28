@@ -25,13 +25,11 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
 @router.post("/ticker/restart")
 async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user), request: Request = None):
     # Import settings to check broker pref
-    from server import get_user_settings, _start_user_kotak_ticker, _start_user_ticker, _start_user_upstox_ticker, app
+    from server import get_user_settings, _start_user_ticker, _start_user_upstox_ticker, app
     
     settings = await get_user_settings(user["id"])
     if settings.get("data_broker") == "upstox":
         return await _start_user_upstox_ticker(user["id"])
-    if settings.get("data_broker") == "kotak_neo":
-        return await _start_user_kotak_ticker(user["id"])
         
     tick_manager = getattr(app.state, "tick_manager", None)
     if tick_manager:
@@ -53,7 +51,6 @@ async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_use
         _ORDER_SYNC_CACHE, 
         _sync_kite_order_statuses, 
         _stale_local_open_orders, 
-        _sync_kotak_order_statuses, 
         _sync_upstox_order_statuses,
         _sync_strategy_positions_with_broker
     )
@@ -62,10 +59,9 @@ async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_use
     _ORDER_SYNC_CACHE.pop(user["id"], None)
     sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0, "reason": status.get("reason", "zerodha_not_connected")}
     stale = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": status.get("reason", "zerodha_not_connected")}
-    kotak_sync = await _sync_kotak_order_statuses(user["id"])
     upstox_sync = await _sync_upstox_order_statuses(user["id"], force=True)
     position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
-    return {"ok": True, "sync": sync, "stale": stale, "kotak_sync": kotak_sync, "upstox_sync": upstox_sync, "position_sync": position_sync}
+    return {"ok": True, "sync": sync, "stale": stale, "upstox_sync": upstox_sync, "position_sync": position_sync}
 
 
 @router.post("/auto-recover")
@@ -79,9 +75,6 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         _sync_upstox_order_statuses,
         _start_user_upstox_ticker,
         _start_user_ticker,
-        _KOTAK_GATEWAYS,
-        _sync_kotak_order_statuses,
-        _start_user_kotak_ticker,
         ops_diagnostics
     )
     
@@ -96,21 +89,10 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
         actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
     else:
         actions.append({"name": "zerodha_session", "skipped": True, "reason": kite_status.get("reason", "not_connected")})
-
+ 
     actions.append({"name": "upstox_order_sync", "result": await _sync_upstox_order_statuses(user["id"], force=True)})
     actions.append({"name": "upstox_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
     actions.append({"name": "upstox_market_ticker", "result": await _start_user_upstox_ticker(user["id"])})
-
-    kotak_gateway = _KOTAK_GATEWAYS.get(user["id"])
-    if kotak_gateway and kotak_gateway.status().get("authenticated"):
-        actions.append({"name": "kotak_order_sync", "result": await _sync_kotak_order_statuses(user["id"])})
-        actions.append({"name": "kotak_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
-        order_feed = await asyncio.to_thread(kotak_gateway.subscribe_order_feed)
-        actions.append({"name": "kotak_order_feed", "result": order_feed})
-        market_feed = await _start_user_kotak_ticker(user["id"])
-        actions.append({"name": "kotak_market_ticker", "result": market_feed})
-    else:
-        actions.append({"name": "kotak_order_feed", "skipped": True, "reason": "not_connected"})
 
     diagnostics = await ops_diagnostics(user=user)
     return {"ok": True, "actions": actions, "recovery_plan": diagnostics.get("recovery_plan")}
@@ -196,3 +178,36 @@ async def reject_user(user_id: str, user=Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found or cannot be rejected")
     return {"ok": True, "message": "User registration rejected and deleted."}
+
+
+@router.post("/paper-orders/clear-stale")
+async def ops_clear_stale_paper_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    from server import ORDER_ACTIVE_STATUSES, LEGACY_OPEN_STATUSES, ORDER_CANCELLED
+    active_statuses = list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
+    
+    res = await db.orders.update_many(
+        {"user_id": user["id"], "mode": "paper", "status": {"$in": active_statuses}},
+        {"$set": {
+            "status": ORDER_CANCELLED,
+            "legacy_status": "CANCELLED",
+            "broker_status": "CANCELLED",
+            "status_message": "Paper order cleared manually via Ops console.",
+            "updated_at": now
+        }}
+    )
+    
+    await db.strategy_positions.update_many(
+        {"user_id": user["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}, "mode": "paper"},
+        {"$set": {
+            "status": "CANCELLED",
+            "broker_status_message": "Paper position cleared manually via Ops console.",
+            "updated_at": now
+        },
+         "$unset": {"active_instrument_key": "", "active_strategy_key": ""}}
+    )
+    
+    await db.strategy_position_locks.delete_many({"user_id": user["id"]})
+    
+    return {"ok": True, "cleared_orders": res.modified_count}
+
