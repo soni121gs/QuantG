@@ -54,6 +54,7 @@ from order_lifecycle import (
     ORDER_CANCELLED,
     ORDER_REJECTED,
     ORDER_CLOSED,
+    ORDER_UNKNOWN_NEEDS_REVIEW,
     ORDER_ACTIVE_STATUSES,
     ORDER_TERMINAL_STATUSES,
     LEGACY_OPEN_STATUSES,
@@ -480,7 +481,7 @@ MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
 MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
 SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO", "MCX", "CDS"}
 ACTIVE_STRATEGY_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "FILLED", "OPEN", "EXITING"}
-STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND"}
+STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND", "UNKNOWN_NEEDS_REVIEW"}
 
 
 def _last_nse_session_close_utc(now_utc: Optional[datetime] = None) -> datetime:
@@ -7048,6 +7049,95 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
     _ORDER_SYNC_CACHE.pop(user_id, None)
     return {"fixed": fixed + missing_fixed, "broker_closed_fixed": fixed, "missing_from_broker_fixed": missing_fixed, "checked": len(rows)}
 
+async def _reconcile_stale_orders_for_user(user_id: str) -> Dict[str, int]:
+    """Broker-agnostic stale order reconciliation.
+
+    Finds ALL active orders (any broker) that are older than 10 minutes
+    but not reported by the broker. Distinguishes between:
+      - STALE: no broker_order_id was ever recorded
+      - BROKER_NOT_FOUND: broker has an order_id but doesn't report it
+      - UNKNOWN_NEEDS_REVIEW: uncertain state
+
+    Releases strategy position locks for stale orders and logs reconciliation.
+    """
+    now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(minutes=10)
+    rows = await db.orders.find({
+        "user_id": user_id,
+        "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)},
+        "visibility": {"$ne": "hidden"},
+    }, {"_id": 0, "id": 1, "broker_order_id": 1, "created_at": 1, "strategy_id": 1, "strategy_name": 1, "status": 1, "broker": 1, "mode": 1, "updated_at": 1}).to_list(500)
+    stale_count = 0
+    for row in rows:
+        created_at = row.get("created_at")
+        created_dt = None
+        if isinstance(created_at, datetime):
+            created_dt = created_at.astimezone(timezone.utc)
+        elif isinstance(created_at, str):
+            try:
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                created_dt = None
+        if not created_dt or created_dt >= stale_before:
+            continue
+
+        # Parse updated_at — if the broker sync recently confirmed this order
+        # (updated_at >= stale_before), skip it: it's still alive at the broker.
+        updated_at = row.get("updated_at")
+        updated_dt = None
+        if isinstance(updated_at, datetime):
+            updated_dt = updated_at.astimezone(timezone.utc)
+        elif isinstance(updated_at, str):
+            try:
+                updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                updated_dt = None
+        if updated_dt and updated_dt >= stale_before:
+            continue
+
+        broker_order_id = str(row.get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            stale_status = "STALE"
+            message = "Local stale order: no broker order id was ever recorded."
+        else:
+            stale_status = "BROKER_NOT_FOUND"
+            message = "Local stale order: broker no longer reports this order id."
+
+        logger.info("Stale reconciliation user_id=%s: order %s status=%s -> %s reason=%s broker=%s",
+                    user_id, row["id"], row.get("status"), stale_status, message, row.get("broker"))
+
+        await db.orders.update_one(
+            {"user_id": user_id, "id": row["id"]},
+            {"$set": {
+                "status": stale_status,
+                "legacy_status": stale_status,
+                "broker_status": stale_status,
+                "status_message": message,
+                "visibility": "hidden",
+                "updated_at": now.isoformat(),
+            }},
+        )
+        stale_count += 1
+
+        # Update associated strategy positions
+        await db.strategy_positions.update_many(
+            {"user_id": user_id, "entry_order_id": row["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
+            {"$set": {"status": stale_status, "updated_at": now.isoformat(), "broker_status_message": message},
+             "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+        )
+
+        # Release strategy position locks
+        if row.get("strategy_id"):
+            await db.strategy_position_locks.delete_many({
+                "user_id": user_id,
+                "strategy_id": row["strategy_id"],
+            })
+
+    if stale_count:
+        logger.warning("Stale reconciliation user_id=%s: marked %d orders as stale/broker_not_found", user_id, stale_count)
+    return {"checked": len(rows), "fixed": stale_count}
+
+
 
 def _kotak_order_items(payload: Any) -> List[Dict[str, Any]]:
     if isinstance(payload, list):
@@ -9893,6 +9983,7 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
                 for user_row in users:
                     user_id = user_row["id"]
                     await _sync_upstox_order_statuses(user_id)
+                    await _reconcile_stale_orders_for_user(user_id)
         except Exception as e:
             logger.warning(f"broker reconciliation error: {e}")
         slept = 0
@@ -10039,12 +10130,17 @@ async def startup():
     # it keeps custom/old strategies intact and only inserts missing v10 presets.
     try:
         async for user_row in db.users.find({}, {"id": 1}):
-            await seed_default_strategies_for_user(user_row["id"])
-            await migrate_user_to_v12_upstox(user_row["id"])
+            user_id = user_row["id"]
+            await seed_default_strategies_for_user(user_id)
+            await migrate_user_to_v12_upstox(user_id)
             try:
-                await _sync_upstox_order_statuses(user_row["id"], force=True)
+                await _sync_upstox_order_statuses(user_id, force=True)
             except Exception as sync_err:
-                logger.warning("Startup order sync failed for user %s: %s", user_row["id"], sync_err)
+                logger.warning("Startup order sync failed for user %s: %s", user_id, sync_err)
+            try:
+                await _reconcile_stale_orders_for_user(user_id)
+            except Exception as reconcile_err:
+                logger.warning("Startup stale order reconciliation failed for user %s: %s", user_id, reconcile_err)
     except Exception as e:
         logger.warning(f"default strategy seeding/reconciliation skipped: {e}")
 
