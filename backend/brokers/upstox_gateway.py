@@ -32,6 +32,7 @@ class UpstoxGateway:
         self,
         *,
         access_token: Optional[str] = None,
+        refresh_token: Optional[str] = None,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
         redirect_uri: Optional[str] = None,
@@ -40,6 +41,7 @@ class UpstoxGateway:
     ) -> None:
         import threading
         self.access_token = access_token or os.environ.get("UPSTOX_ACCESS_TOKEN")
+        self._refresh_token = refresh_token or os.environ.get("UPSTOX_REFRESH_TOKEN")
         self.api_key = api_key or os.environ.get("UPSTOX_API_KEY")
         self.api_secret = api_secret or os.environ.get("UPSTOX_API_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get("UPSTOX_REDIRECT_URI")
@@ -48,6 +50,11 @@ class UpstoxGateway:
         self.last_request_at: Optional[str] = None
         self.last_order_response: Optional[Any] = None
         self.sandbox = sandbox or os.environ.get("UPSTOX_SANDBOX", "").lower() in ("true", "1", "yes")
+
+        # Track token refresh state
+        self._token_refresh_count = 0
+        self._token_refresh_last_error: Optional[str] = None
+        self._token_refresh_last_at: Optional[str] = None
 
         # Dynamic endpoints to support Sandbox vs Live
         self.api_base_url = "https://api-sandbox.upstox.com" if self.sandbox else "https://api.upstox.com"
@@ -62,12 +69,71 @@ class UpstoxGateway:
             access_token_getter=lambda: self.access_token,
             api_base_url=self.api_base_url,
             timeout=self.timeout,
+            refresh_token_callback=self._feed_auth_refresh,
         )
         self._ws_running = False
         self._ws_thread = None
         self._lock = threading.RLock()
         self.ticks = 0
         self.last_tick_at: Optional[str] = None
+
+    def _feed_auth_refresh(self) -> bool:
+        """Called by the feed when authorize fails — attempt to refresh the access token."""
+        try:
+            logger.info("Feed triggered token refresh for gateway")
+            result = self.refresh_access_token()
+            if result.get("ok"):
+                logger.info("Feed token refreshed successfully via gateway")
+                return True
+            logger.warning("Feed token refresh failed via gateway: %s", result.get("error"))
+            return False
+        except Exception as exc:
+            logger.warning("Feed token refresh exception: %s", exc)
+            return False
+
+    def refresh_access_token(self) -> Dict[str, Any]:
+        """Refresh the Upstox access token using the stored refresh token."""
+        if not self._refresh_token:
+            self._token_refresh_last_error = "no_refresh_token"
+            logger.warning("Upstox token refresh skipped: no refresh token available")
+            return {"ok": False, "error": "no_refresh_token"}
+        if not self.api_key or not self.api_secret:
+            self._token_refresh_last_error = "missing_api_credentials"
+            logger.warning("Upstox token refresh skipped: missing api_key/secret")
+            return {"ok": False, "error": "missing_api_credentials"}
+        try:
+            response = requests.post(
+                self.token_url,
+                headers={"accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "refresh_token": self._refresh_token,
+                    "client_id": self.api_key,
+                    "client_secret": self.api_secret,
+                    "grant_type": "refresh_token",
+                },
+                timeout=self.timeout,
+            )
+            payload = self._decode_response(response)
+            new_token = payload.get("access_token")
+            if new_token:
+                self.access_token = str(new_token)
+                self._refresh_token = payload.get("refresh_token", self._refresh_token)
+                self._token_refresh_count += 1
+                self._token_refresh_last_error = None
+                self._token_refresh_last_at = datetime.now(timezone.utc).isoformat()
+                logger.info("Upstox access token refreshed successfully refresh_count=%s", self._token_refresh_count)
+                return {
+                    "ok": True,
+                    "access_token": str(new_token),
+                    "refresh_token": self._refresh_token,
+                    "expires_in": payload.get("expires_in"),
+                }
+            self._token_refresh_last_error = "empty_token_in_response"
+            return {"ok": False, "error": "empty_token_in_response", "payload": payload}
+        except Exception as exc:
+            self._token_refresh_last_error = str(exc)[:500]
+            logger.warning("Upstox token refresh failed: %s", self._token_refresh_last_error)
+            return {"ok": False, "error": self._token_refresh_last_error}
 
     @property
     def connected(self) -> bool:
@@ -83,6 +149,7 @@ class UpstoxGateway:
             }.items()
             if not value
         ]
+        feed_st = self._feed_v3.status()
         return {
             "connected": self.connected,
             "authenticated": self.connected,
@@ -95,7 +162,11 @@ class UpstoxGateway:
             "last_tick_at": self.last_tick_at,
             "subscribed_tokens": len(self._subscribed_tokens),
             "ws_running": self._ws_running,
-            "feed_status": self._feed_v3.status(),
+            "feed_status": feed_st,
+            "refresh_token_present": bool(self._refresh_token),
+            "token_refresh_count": self._token_refresh_count,
+            "token_refresh_last_error": self._token_refresh_last_error,
+            "token_refresh_last_at": self._token_refresh_last_at,
         }
 
     def build_login_url(self, *, state: Optional[str] = None, redirect_uri: Optional[str] = None) -> str:
@@ -135,6 +206,13 @@ class UpstoxGateway:
         token = payload.get("access_token") if isinstance(payload, dict) else None
         if token:
             self.access_token = str(token)
+            # Also capture refresh_token if returned
+            rt = payload.get("refresh_token")
+            if rt:
+                self._refresh_token = str(rt)
+                logger.info("Upstox refresh_token captured from code exchange")
+            else:
+                logger.info("Upstox code exchange did not return refresh_token (token-only grant)")
         return payload
 
     def place_order(

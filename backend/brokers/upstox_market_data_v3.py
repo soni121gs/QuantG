@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import threading
 import time
 import uuid
@@ -233,6 +234,11 @@ def build_subscription_payload(instrument_keys: Iterable[str], mode: str = "ltpc
 
 _last_warn_time: Dict[str, float] = {}
 
+_RECONNECT_BASE_DELAY = 2.0
+_RECONNECT_MAX_DELAY = 60.0
+_RECONNECT_JITTER_FACTOR = 0.25
+_RECONNECT_MAX_CONSECUTIVE_FAILURES = 50
+
 
 def decode_feed_response(raw: bytes) -> Dict[str, Any]:
     message = FeedResponse()
@@ -290,10 +296,12 @@ class UpstoxMarketDataFeedV3:
         access_token_getter: Callable[[], Optional[str]],
         api_base_url: str,
         timeout: float = 15,
+        refresh_token_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._access_token_getter = access_token_getter
         self._api_base_url = api_base_url.rstrip("/")
         self._timeout = timeout
+        self._refresh_token_callback = refresh_token_callback
         self._lock = threading.RLock()
         self._subscribed: Dict[str, str] = {}
         self._ticks: Dict[str, Dict[str, Any]] = {}
@@ -305,6 +313,7 @@ class UpstoxMarketDataFeedV3:
         self._last_error: Optional[str] = None
         self._last_tick_time: Optional[str] = None
         self._reconnects = 0
+        self._consecutive_failures = 0
         self._first_tick_logged = False
 
     def status(self) -> Dict[str, Any]:
@@ -367,13 +376,34 @@ class UpstoxMarketDataFeedV3:
         )
         payload = response.json() if response.content else {}
         if response.status_code >= 400:
+            # Try token refresh before failing
+            if self._refresh_token_callback is not None:
+                logger.info("Upstox feed authorize failed; attempting token refresh auth_status=%s", response.status_code)
+                refreshed = self._refresh_token_callback()
+                if refreshed:
+                    logger.info("Token refreshed after feed authorize failure; retrying authorize")
+                    token = self._access_token_getter()
+                    if token:
+                        response = requests.get(
+                            f"{self._api_base_url}/v3/feed/market-data-feed/authorize",
+                            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                            timeout=self._timeout,
+                        )
+                        payload = response.json() if response.content else {}
+                        if response.status_code < 400:
+                            url = ((payload.get("data") or {}).get("authorized_redirect_uri") if isinstance(payload, dict) else None)
+                            if url:
+                                logger.info("Upstox feed authorize succeeded after token refresh")
+                                return str(url)
             raise RuntimeError(f"Upstox feed authorize failed {response.status_code}: {payload}")
         url = ((payload.get("data") or {}).get("authorized_redirect_uri") if isinstance(payload, dict) else None)
         if not url:
             raise RuntimeError("Upstox feed authorize did not return authorized_redirect_uri")
+        logger.info("Upstox V3 feed authorize succeeded")
         return str(url)
 
     def _run_forever(self) -> None:
+        delay = _RECONNECT_BASE_DELAY
         while True:
             with self._lock:
                 if not self._running:
@@ -384,6 +414,7 @@ class UpstoxMarketDataFeedV3:
                 if websocket is None:
                     raise RuntimeError("websocket-client is not installed. Run pip install -r backend/requirements.txt.")
                 url = self.authorize_url()
+                logger.info("Upstox V3 feed connecting attempt=%s", self._reconnects)
                 self._ws_app = websocket.WebSocketApp(
                     url,
                     on_open=self._on_open,
@@ -392,28 +423,52 @@ class UpstoxMarketDataFeedV3:
                     on_close=self._on_close,
                 )
                 self._ws_app.run_forever(skip_utf8_validation=True, ping_interval=20, ping_timeout=10)
+                # If we get here, the connection closed cleanly — reset delay
+                with self._lock:
+                    self._consecutive_failures = 0
+                delay = _RECONNECT_BASE_DELAY
             except Exception as exc:
                 with self._lock:
                     self._last_error = str(exc)[:1000]
                     self._connected = False
-                    self._state = "disconnected"
-                logger.warning("Upstox V3 feed connection failed: %s", exc)
-            with self._lock:
-                should_run = self._running
-            if should_run:
-                time.sleep(3)
+                    self._state = "reconnecting"
+                    self._consecutive_failures += 1
+                logger.warning("Upstox V3 feed connection failed attempt=%s error=%s consecutive_failures=%s", self._reconnects, exc, self._consecutive_failures)
+                # Give up after too many consecutive failures
+                if self._consecutive_failures >= _RECONNECT_MAX_CONSECUTIVE_FAILURES:
+                    logger.error("Upstox V3 feed giving up after %s consecutive failures; stopping reconnect loop", self._consecutive_failures)
+                    with self._lock:
+                        self._running = False
+                        self._state = "dead"
+                        self._last_error = f"{_RECONNECT_MAX_CONSECUTIVE_FAILURES} consecutive failures, giving up"
+                    break
+                # Exponential backoff with jitter
+                delay = min(delay * 1.5, _RECONNECT_MAX_DELAY)
+                jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)
+                actual_delay = max(0.5, delay + jitter)
+                logger.info("Upstox V3 feed reconnecting in %.1fs (attempt %s)", actual_delay, self._reconnects)
+                with self._lock:
+                    should_run = self._running
+                if should_run:
+                    time.sleep(actual_delay)
+            else:
+                with self._lock:
+                    should_run = self._running
+                if should_run:
+                    time.sleep(_RECONNECT_BASE_DELAY)
 
     def _on_open(self, ws: Any) -> None:
         with self._lock:
             self._connected = True
             self._state = "connected"
             self._last_error = None
+            self._consecutive_failures = 0
             modes: Dict[str, list[str]] = {}
             for key, mode in self._subscribed.items():
                 modes.setdefault(mode, []).append(key)
             for mode, keys in modes.items():
                 self._send_subscription_locked(keys, mode)
-        logger.info("Upstox V3 feed connected; subscribed=%s", sum(len(v) for v in modes.values()))
+        logger.info("Upstox V3 feed connected; subscribed=%s reconnects=%s", sum(len(v) for v in modes.values()), self._reconnects)
 
     def _send_subscription_locked(self, keys: Iterable[str], mode: str) -> None:
         if not self._ws_app or not self._ws_app.sock:

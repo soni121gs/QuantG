@@ -8282,6 +8282,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
     api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
     access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
+    refresh_token = os.environ.get("UPSTOX_REFRESH_TOKEN") or (decrypt_secret(keys.get("refresh_token")) if keys else None)
     redirect_uri = _upstox_redirect_uri(None, keys)
     status = upstox_helper.status_from_keys(keys, api_key)
     gateway = _UPSTOX_GATEWAYS.get(user_id)
@@ -8305,6 +8306,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
                 api_key=api_key,
                 api_secret=api_secret,
                 access_token=access_token,
+                refresh_token=refresh_token,
                 redirect_uri=redirect_uri,
                 sandbox=bool(keys.get("is_sandbox")) if keys else False,
             )
@@ -8352,7 +8354,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "last_auth_time": (keys or {}).get("access_token_obtained_at"),
         "reconnect_required": not token_valid,
         "live_trading_enabled": bool(token_valid),
-        "feed_running": bool(((gateway_status or {}).get("feed_status") or {}).get("connected") or (gateway_status or {}).get("ws_running")),
+        "feed_running": bool(((gateway_status or {}).get("feed_status") or {}).get("connected")),
         "feed_status": (gateway_status or {}).get("feed_status"),
         "env_ready": not missing,
         "missing_env": missing,
@@ -8371,6 +8373,7 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
     api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)
     access_token = os.environ.get("UPSTOX_ACCESS_TOKEN") or (decrypt_secret(keys.get("access_token")) if keys else None)
+    refresh_token = os.environ.get("UPSTOX_REFRESH_TOKEN") or (decrypt_secret(keys.get("refresh_token")) if keys else None)
     redirect_uri = _upstox_redirect_uri(None, keys)
     if not api_key and not access_token:
         logger.warning("Upstox gateway not initialized for user=%s: no_keys", user_id)
@@ -8383,6 +8386,7 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
         api_key=api_key,
         api_secret=api_secret,
         access_token=access_token,
+        refresh_token=refresh_token,
         redirect_uri=redirect_uri,
         sandbox=bool(keys.get("is_sandbox")) if keys else False,
     )
@@ -9085,19 +9089,25 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     access_token = token_response.get("access_token")
     if not access_token:
         raise HTTPException(status_code=400, detail="Upstox token response did not include access_token.")
+    
+    refresh_token = token_response.get("refresh_token")
+    set_fields = {
+        "access_token": encrypt_secret(str(access_token)),
+        "upstox_user_id": token_response.get("user_id"),
+        "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
+        "token_response_meta": {
+            k: v for k, v in token_response.items()
+            if k not in {"access_token", "refresh_token", "extended_token"}
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if refresh_token:
+        set_fields["refresh_token"] = encrypt_secret(str(refresh_token))
+
     await db.broker_keys.update_one(
         {"user_id": user_id, "broker": "upstox"},
         {
-            "$set": {
-                "access_token": encrypt_secret(str(access_token)),
-                "upstox_user_id": token_response.get("user_id"),
-                "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
-                "token_response_meta": {
-                    k: v for k, v in token_response.items()
-                    if k not in {"access_token", "extended_token"}
-                },
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
+            "$set": set_fields,
             "$setOnInsert": {
                 "id": str(uuid.uuid4()),
                 "user_id": user_id,
