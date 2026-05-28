@@ -341,11 +341,33 @@ class UpstoxMarketDataFeedV3:
         keys = [str(key).strip() for key in instrument_keys if str(key).strip()]
         if not keys:
             return {"ok": False, "reason": "no_instruments_supplied"}
+        
+        mode = mode or "ltpc"
+        to_subscribe = []
+        skipped_count = 0
+        
         with self._lock:
             for key in keys:
-                self._subscribed[key] = mode or "ltpc"
-            if self._connected and self._ws_app and self._ws_app.sock:
-                self._send_subscription_locked(keys, mode)
+                if self._subscribed.get(key) == mode:
+                    skipped_count += 1
+                else:
+                    self._subscribed[key] = mode
+                    to_subscribe.append(key)
+            
+            if to_subscribe:
+                if self._connected and self._ws_app and self._ws_app.sock:
+                    self._send_subscription_locked(to_subscribe, mode)
+                logger.info(
+                    "Upstox V3 subscription sent mode=%s instrument_count=%s (skipped=%s duplicate), total_subscribed=%s",
+                    mode, len(to_subscribe), skipped_count, len(self._subscribed)
+                )
+            else:
+                if skipped_count > 0:
+                    logger.debug(
+                        "Upstox V3 subscription skipped (all %s instruments were duplicates), total_subscribed=%s",
+                        skipped_count, len(self._subscribed)
+                    )
+            
             if not self._running:
                 self._running = True
                 self._state = "reconnecting"
@@ -357,6 +379,8 @@ class UpstoxMarketDataFeedV3:
         with self._lock:
             self._running = False
             self._state = "disconnected"
+            self._subscribed.clear()
+            self._ticks.clear()
             app = self._ws_app
         if app:
             try:
@@ -468,7 +492,10 @@ class UpstoxMarketDataFeedV3:
                 modes.setdefault(mode, []).append(key)
             for mode, keys in modes.items():
                 self._send_subscription_locked(keys, mode)
-        logger.info("Upstox V3 feed connected; subscribed=%s reconnects=%s", sum(len(v) for v in modes.values()), self._reconnects)
+        logger.info(
+            "Upstox V3 feed connected; reconnect resubscribed=%s across %s modes (attempt %s)",
+            sum(len(v) for v in modes.values()), len(modes), self._reconnects
+        )
 
     def _send_subscription_locked(self, keys: Iterable[str], mode: str) -> None:
         if not self._ws_app or not self._ws_app.sock:

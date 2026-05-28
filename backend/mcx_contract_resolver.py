@@ -150,14 +150,17 @@ def _normalize_underlying(value: Any) -> str:
 
 
 def _row_underlying(row: Dict[str, Any]) -> str:
+    symbol = str(row.get("trading_symbol") or row.get("tradingsymbol") or "").upper().replace(" ", "")
+    # Check trading symbol prefix first for mini contracts like CRUDEOILM
+    for underlying in sorted(SUPPORTED_MCX_UNDERLYINGS, key=len, reverse=True):
+        if symbol.startswith(underlying):
+            return underlying
+            
+    # Fallback to underlying fields
     for field in ("underlying_symbol", "underlying", "asset_symbol", "root_symbol", "name"):
         value = _normalize_underlying(row.get(field))
         if value in SUPPORTED_MCX_UNDERLYINGS:
             return value
-    symbol = str(row.get("trading_symbol") or row.get("tradingsymbol") or "").upper().replace(" ", "")
-    for underlying in sorted(SUPPORTED_MCX_UNDERLYINGS, key=len, reverse=True):
-        if symbol.startswith(underlying):
-            return underlying
     return ""
 
 

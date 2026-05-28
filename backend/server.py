@@ -769,6 +769,18 @@ async def _fetch_strategy_history(
                         "latest_candle_age_sec": candle_freshness.get("age_sec"),
                         "interval": interval,
                     }
+            
+            # Raise explicit error instead of silently falling back to mock candles
+            resolved_tokens = [k for k in token_candidates if k]
+            raise ValueError(
+                f"Upstox V3 historical data failed for symbol '{sym_upper}' on exchange '{exchange}' ({interval}). "
+                f"Resolved tokens: {resolved_tokens}. "
+                f"Please ensure the MCX instrument master cache is seeded, or check your internet connection."
+            )
+        else:
+            raise ValueError(
+                f"Upstox data broker selected but gateway is not connected or initialized for user {user_id}."
+            )
 
     if kite:
 
@@ -4266,9 +4278,9 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
         except Exception as e:
             logger.warning("MCX instrument token resolve exception: %s", e)
         
-        # Fallback ONLY when the cache is not fully loaded/seeded (as in some mock/test runs)
-        logger.warning("MCX instrument resolution failed: no master contract found for %s. Using test-compatible fallback.", symbol)
-        return f"MCX_FO|{symbol}"
+        # Remove silent fallback and log resolution failure
+        logger.error("MCX instrument resolution failed: no master contract found for symbol %s in DB cache.", symbol)
+        return None
     if "|" in symbol and "_" in symbol.split("|", 1)[0]:
         return symbol
     return None
