@@ -28,7 +28,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, validator
 
 import kite_helper
 import upstox_helper
@@ -114,7 +114,37 @@ app = FastAPI(title="QuantG Algo Trading API", version=APP_VERSION)
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
-logging.basicConfig(level=logging.INFO)
+# ---------------------------------------------------------------------------
+# Structured logging (JSON, rotating) — Gate 6 observability requirement
+# Falls back to basicConfig if python-json-logger is not installed.
+# ---------------------------------------------------------------------------
+try:
+    import logging.handlers
+    from pythonjsonlogger import jsonlogger  # type: ignore
+    _json_handler = logging.handlers.RotatingFileHandler(
+        "quantg.log", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    _json_handler.setFormatter(
+        jsonlogger.JsonFormatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    _stream_handler = logging.StreamHandler()
+    _stream_handler.setFormatter(jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    logging.root.setLevel(logging.INFO)
+    logging.root.handlers = [_json_handler, _stream_handler]
+except ImportError:
+    # python-json-logger not installed — add it to requirements.txt: python-json-logger>=2.0
+    import logging.handlers
+    logging.basicConfig(level=logging.INFO)
+    _rotate_handler = logging.handlers.RotatingFileHandler(
+        "quantg.log", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    logging.root.addHandler(_rotate_handler)
 logger = logging.getLogger("quantdesk")
 
 OPTION_LEDGER_PATH = os.environ.get("OPTION_LEDGER_PATH") or str(ROOT_DIR / "runtime_state.sqlite3")
@@ -132,7 +162,7 @@ _RATE_LIMIT_LAST: Dict[str, float] = {}
 _LOG_THROTTLE_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
-_KOTAK_GATEWAYS: Dict[str, Any] = {}
+_KOTAK_GATEWAYS: Dict[str, Any] = {}  # Kotak broker — deprecated; kept to prevent AttributeError on startup
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
 _UPSTOX_TOKEN_VALIDATION_CACHE: Dict[str, Dict[str, Any]] = {}
 COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
@@ -283,6 +313,11 @@ class BacktestReq(BaseModel):
     days: int = 60
     options: Optional[Dict[str, Any]] = None  # {enabled, underlying, strike_mode, lots, ...}
     engine: str = "local"  # "local" or "backtrader"
+
+    @validator("days")
+    def clamp_days(cls, v: int) -> int:
+        """Prevent absurdly long backtests that could overwhelm the Upstox API rate limits."""
+        return max(1, min(365, v))
 
 
 
@@ -829,6 +864,15 @@ async def _fetch_strategy_history(
                 logger.warning(f"Intraday timeframe {interval} not available for {sym_upper}; blocking daily candle fallback for safety.")
 
     if allow_mock:
+        # SAFETY: mock candles are ONLY permitted when the caller explicitly opted in
+        # AND the strategy is in paper mode. The check below is a belt-and-suspenders
+        # guard: if somehow allow_mock is True for a live strategy, raise hard rather
+        # than silently feeding random-walk data to a real-money order engine.
+        if strategy is not None and (strategy.get("mode") == "live"):
+            raise ValueError(
+                f"Mock candle data is BLOCKED for live strategy '{strategy.get('name', sym_upper)}'. "
+                "Reconnect Upstox or switch the strategy to paper mode before retrying."
+            )
         sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None) or next((s for s in COMMODITY_SYMBOLS if s["symbol"] == sym_upper), None)
         if sym:
             if interval == "day":
@@ -5205,8 +5249,38 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     sym = next((s for s in SYMBOLS if s["symbol"] == target_symbol.upper()), SYMBOLS[0])
     history = await _fetch_strategy_history(user["id"], target_symbol, days=req.days, interval="day")
     data = history["data"]
+    source = history.get("source", "")
+
+    # Gate 5: Never run a backtest on mock/simulated data — the results would be
+    # meaningless and could give false confidence before going live.
+    if "mock" in str(source).lower():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Backtest blocked: price data source is '{source}' (simulated). "
+                "Connect Upstox and ensure real historical data is available before running a backtest."
+            ),
+        )
+
     if not data:
         raise HTTPException(status_code=400, detail=f"No price data for {target_symbol}")
+
+    # Candle integrity check: sort order, duplicates, and OHLC sanity
+    dates_seen: set = set()
+    for i, candle in enumerate(data):
+        d = candle.get("date", "")
+        if d in dates_seen:
+            raise HTTPException(status_code=400, detail=f"Backtest blocked: duplicate candle date '{d}' at index {i}.")
+        dates_seen.add(d)
+        h = float(candle.get("high") or 0)
+        l = float(candle.get("low") or 0)
+        c = float(candle.get("close") or 0)
+        o = float(candle.get("open") or 0)
+        if h < l or h <= 0 or l <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Backtest blocked: invalid OHLC at candle {i} (date={d}): high={h}, low={l}."
+            )
     signals: List[dict] = []
     try:
         signals = _safe_run_python(code, data)
@@ -9690,7 +9764,7 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
                 status_code=400,
                 detail="Live trading disabled: Reconnect Upstox required before switching to LIVE.",
             )
-        # Find if user has MCX strategies
+        # Find if user has MCX strategies (used to pick which session to check)
         strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
         has_mcx = any(
             s.get("instrument_group") == "MCX"
@@ -9698,9 +9772,22 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
             or "MCX" in str(s.get("symbol")).upper()
             for s in strategies
         )
-        
-        # Check market hours (Bypassed to allow live mode activation at any time)
-        market_open = True
+
+        # Gate: live mode may only be enabled during market hours.
+        # Check MCX session first if the user has MCX strategies; otherwise NSE.
+        if has_mcx:
+            market_open = _is_order_market_open("MCX")
+        else:
+            market_open = _is_nse_market_open()
+        if not market_open:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Live trading can only be enabled during market hours "
+                    "(NSE 09:15•13:30 IST, MCX 09:00•23:30 IST, Mon–Fri). "
+                    "Switch to LIVE during an active trading session."
+                ),
+            )
 
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")

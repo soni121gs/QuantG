@@ -100,8 +100,10 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
 
 @router.post("/emergency-stop")
 async def ops_emergency_stop(req: OpsActionReq = None, user=Depends(get_current_user)):
+    if user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Access denied: Owner role required for emergency stop.")
     from server import option_ledger
-    
+
     now = datetime.now(timezone.utc).isoformat()
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "id": 1}).to_list(500)
     for row in strategies:
@@ -125,14 +127,17 @@ async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)
 
 @router.post("/strategies/enable-all")
 async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_current_user)):
+    if user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Access denied: Owner role required to bulk-enable strategies.")
     from server import option_ledger, _sync_option_ledger_strategy
-    
-    rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+
+    # Only re-enable strategies that were previously PAUSED — never touch draft or custom-stopped ones
+    rows = await db.strategies.find({"user_id": user["id"], "status": "paused"}, {"_id": 0}).to_list(500)
     for row in rows:
         _sync_option_ledger_strategy(row)
         option_ledger.set_kill_switch(False, strategy_id=row["id"])
     res = await db.strategies.update_many(
-        {"user_id": user["id"]},
+        {"user_id": user["id"], "status": "paused"},
         {"$set": {"status": "live"}, "$unset": {"last_error": "", "last_signal_validation": ""}},
     )
     return {"ok": True, "enabled_strategies": res.modified_count, "ledger_enabled": len(rows)}

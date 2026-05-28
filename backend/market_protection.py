@@ -297,8 +297,15 @@ class FakeSignalFilter:
         if len(recent_signals) > 0:
             last_signal = recent_signals[-1]
             if last_signal.get("action") != action:
-                # Opposite direction - check if it's too recent
-                bars_since = (len(data) - data.index(signal)) if signal in data else 5
+                # Opposite direction - check if it's too recent.
+                # NOTE: `signal` is a strategy output dict, NOT a candle from `data`.
+                # Use the signal's declared `bar_index` if present, otherwise assume 2 bars
+                # (conservative: if we don't know, treat it as a recent whipsaw).
+                sig_bar = signal.get("bar_index")
+                if sig_bar is not None and isinstance(sig_bar, int) and 0 <= sig_bar < len(data):
+                    bars_since = len(data) - 1 - sig_bar
+                else:
+                    bars_since = 2  # conservative default: treat as recent
                 if bars_since < 3:
                     penalty = 15 if is_hft else 25
                     confidence -= penalty

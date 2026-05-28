@@ -305,7 +305,14 @@ Read-only tool results JSON:
         },
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    res = requests.post(url, params={"key": api_key}, json=payload, timeout=timeout)
+    # Send API key as header, NOT as a URL query param.
+    # Query params appear in server/proxy access logs — using a header keeps it out of logs.
+    res = requests.post(
+        url,
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+    )
     res.raise_for_status()
     data = res.json()
     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])

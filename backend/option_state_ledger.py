@@ -114,13 +114,14 @@ class OptionStateLedger:
         default_db = os.environ.get("DB_NAME", "quantg")
         
         path_str = str(db_path)
-        # If it's a test environment (path contains temporary pytest or test folders)
-        if "pytest" in path_str or "temp" in path_str.lower() or "tmp" in path_str.lower() or "test" in path_str.lower():
-            # Use an isolated test database
+        # Use an explicit env var for test isolation — NEVER infer from path strings.
+        # The old path-heuristic ("test" in path) could silently wipe production data
+        # if the install directory contained the word "test".
+        if os.environ.get("QUANTG_TEST_DB", "").lower() in ("1", "true", "yes"):
             self.db_name = f"{default_db}_test"
         else:
             self.db_name = default_db
-            
+
         try:
             self.client = MongoClient(mongo_uri, serverSelectionTimeoutMS=1500)
             self.client.admin.command('ping')
@@ -131,11 +132,7 @@ class OptionStateLedger:
                 self.client = MongoClient(fallback_uri)
             else:
                 self.client = MongoClient(mongo_uri)
-        
-        # If it's a test database, drop it first to ensure clean, isolated slate!
-        if self.db_name.endswith("_test"):
-            self.client.drop_database(self.db_name)
-            
+
         self.db = self.client[self.db_name]
         self._lock = threading.Lock()
         logger.info("OptionStateLedger initialized using MongoDB client targeting: %s", self.db_name)

@@ -181,7 +181,14 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
         except Exception as e:
             logger.exception(f"runner loop error fetching strategies: {e}")
             strategies = []
-        for s in strategies:
+        for idx, s in enumerate(strategies):
+            # Renew the distributed lock every 20 strategies to prevent TTL expiry
+            # during a large batch (90s TTL can expire if each strategy takes ~450ms).
+            if idx > 0 and idx % 20 == 0:
+                renewed = await _acquire_lock(db)
+                if not renewed:
+                    logger.warning("runner lost lock mid-batch at strategy index %d — stopping tick early", idx)
+                    break
             try:
                 code = s.get("python_code") or ""
                 eval_set: Dict[str, Any] = {
@@ -205,7 +212,16 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 if opt_cfg_early.get("enabled"):
                     symbol = (opt_cfg_early.get("underlying") or "NIFTY").upper()
                 else:
-                    symbol = (vc.get("symbol") or "RELIANCE").upper()
+                    raw_sym = vc.get("symbol")
+                    if not raw_sym:
+                        # No symbol configured — skip with a clear error rather than silently
+                        # evaluating against a wrong default. This prevents RELIANCE candles
+                        # being used as a proxy for an unrelated strategy.
+                        await db.strategies.update_one({"id": s["id"]},
+                                                       {"$set": {**eval_set, "last_error": "No symbol configured. Set a trading symbol in strategy settings to enable scanning."},
+                                                        "$inc": inc_set})
+                        continue
+                    symbol = raw_sym.upper()
                 # last 60 daily candles for context
                 try:
                     history = await get_price_history(s["user_id"], symbol, days=60, strategy=s)

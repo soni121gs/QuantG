@@ -13,8 +13,8 @@ logger = logging.getLogger("quantg.execution_state")
 
 OPEN_ORDER_STATUSES = set(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
 TERMINAL_ORDER_STATUSES = set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES | {"FAILED"})
-DEFAULT_STOP_LOSS_PCT = 22.0
-DEFAULT_TAKE_PROFIT_PCT = 45.0
+DEFAULT_STOP_LOSS_PCT = 8.0   # Tightened from 22% — protects against large runaway losses
+DEFAULT_TAKE_PROFIT_PCT = 20.0  # Reduced from 45% to maintain a sensible 2.5:1 R:R ratio
 
 
 def _pct(row: Dict[str, Any], *keys: str, default: float) -> float:
@@ -160,7 +160,7 @@ class ExecutionStateManager:
                 "take_profit": take_profit,
                 "entry_order_id": row.get("entry_order_id"),
                 "broker_order_id": row.get("entry_broker_order_id") or row.get("broker_order_id"),
-                "mode": row.get("mode") or "live",
+                "mode": row.get("mode") or "paper",  # default to paper — never assume live
             })
         return out
 
