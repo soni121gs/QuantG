@@ -37,6 +37,7 @@ from brokers import upstox_gateway as upstox_gateway_utils
 import options_helper
 import backtrader_runner
 import strategy_runner
+from signal_manager import signal_manager_loop
 from mcx_contract_resolver import MCXContractResolver, mcx_instrument_refresh_loop
 from option_state_ledger import OptionStateLedger
 from execution_bridge import payload_from_intent, submit_order as bridge_submit_order
@@ -3802,11 +3803,20 @@ async def _reserve_strategy_position(
             detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
         )
 
+    # Resolve symbol_group
+    vc = (row or {}).get("visual_config") or {}
+    opt_cfg = vc.get("options") or {}
+    if opt_cfg.get("enabled"):
+        symbol_group = str(opt_cfg.get("underlying") or "NIFTY").upper()
+    else:
+        symbol_group = str(vc.get("symbol") or trading_symbol).upper()
+
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "strategy_id": strategy_id,
         "instrument_key": instrument_key,
+        "symbol_group": symbol_group,
         "active_instrument_key": _active_key(user_id, instrument_key),
         "active_strategy_key": _active_key(user_id, strategy_id),
         "instrument_token": instrument_token,
@@ -6488,7 +6498,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                             exchange: str = "NSE",
                             stop_loss: Optional[float] = None,
                             take_profit: Optional[float] = None,
-                            idempotency_key: Optional[str] = None) -> dict:
+                            idempotency_key: Optional[str] = None,
+                            signal_id: Optional[str] = None) -> dict:
     side = (side or "").upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
@@ -6653,6 +6664,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "execution_recovered": False,
             "source": source,
             "strategy_id": strategy_id,
+            "signal_id": signal_id,
             "created_at": now,
             "updated_at": now,
             "exchange": instr.exchange,
@@ -10287,6 +10299,9 @@ async def startup():
         ("strategy_positions", "active_instrument_key", {"unique": True, "sparse": True}),
         ("strategy_positions", "active_strategy_key", {"unique": True, "sparse": True}),
         ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
+        ("signals", "id", {"unique": True}),
+        ("signals", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
+        ("signals", [("strategy_id", 1), ("created_at", -1)], {}),
         ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
         ("trade_fills", "order_id", {"unique": True}),
         ("trade_fills", [("user_id", 1), ("filled_at", -1)], {}),
@@ -10406,6 +10421,10 @@ async def startup():
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
                                     app.state.runner_stop, _resolve_option, _close_strategy_positions)
     )
+    app.state.signal_manager_stop = asyncio.Event()
+    app.state.signal_manager_task = asyncio.create_task(
+        signal_manager_loop(db, _place_order_core, app.state.signal_manager_stop)
+    )
     app.state.health_stop = asyncio.Event()
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
     app.state.position_monitor_stop = asyncio.Event()
@@ -10428,6 +10447,12 @@ async def shutdown():
         app.state.runner_stop.set()
         if app.state.runner_task:
             await asyncio.wait_for(app.state.runner_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.signal_manager_stop.set()
+        if app.state.signal_manager_task:
+            await asyncio.wait_for(app.state.signal_manager_task, timeout=3.0)
     except Exception:
         pass
     try:

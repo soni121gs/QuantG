@@ -365,51 +365,47 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             {"$set": {**eval_set, "last_error": str(e)[:200],
                                       "last_signals_count": signals_count},
                              "$inc": inc_set})
-                        continue
-
-                # Trigger order using injected fn — it applies paper_mode + risk limits
+                                  # Insert signal into db.signals collection instead of placing order directly
                 try:
                     target_symbol = option_contract["tradingsymbol"] if option_contract else symbol
-                    idem_seed = f"strategy:{s['id']}:{last_sig_date}:{action}:{target_symbol}"
-                    place_kwargs: Dict[str, Any] = dict(
-                        user_id=s["user_id"],
-                        symbol=symbol,
-                        side=action,
-                        qty=int(opt_cfg.get("lots") or 1) if option_contract else None,
-                        order_type="MARKET",
-                        product=None,
-                        source=f"strategy:{s['id']}",
-                        idempotency_key=idem_seed,
-                    )
-                    if option_contract:
-                        place_kwargs["option_contract"] = option_contract
-                    await place_order_fn(**place_kwargs)
-                    log_target = target_symbol
+                    option_type = option_contract.get("option_type") if option_contract else None
+                    signal_id = str(uuid.uuid4())
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    
+                    signal_doc = {
+                        "id": signal_id,
+                        "user_id": s["user_id"],
+                        "strategy_id": s["id"],
+                        "symbol": symbol,
+                        "target_symbol": target_symbol,
+                        "option_type": option_type,
+                        "action": action,
+                        "confidence": float(signal_validation.get("confidence", 85.0)),
+                        "trend_context": signal_validation.get("trend") or {},
+                        "visual_config": s.get("visual_config") or {},
+                        "option_contract": option_contract,
+                        "status": "PENDING",
+                        "rejection_reason": None,
+                        "order_id": None,
+                        "created_at": now_str,
+                        "processed_at": None,
+                    }
+                    
+                    await db.signals.insert_one(signal_doc)
+                    
                     await db.strategies.update_one(
                         {"id": s["id"]},
                         {"$set": {**eval_set,
-                                  "last_signal_at": datetime.now(timezone.utc).isoformat(),
+                                  "last_signal_at": now_str,
                                   "last_signal_action": action,
                                   "last_signals_count": signals_count,
                                   "last_fired_signal_date": last_sig_date,
-                                  "last_traded_symbol": log_target},
+                                  "last_traded_symbol": target_symbol},
                          "$inc": {**inc_set, "signals_fired": 1}},
                     )
-                    logger.info(f"strategy {s['id']} → {action} {log_target}")
+                    logger.info(f"strategy {s['id']} → queued PENDING {action} signal {signal_id} for {target_symbol}")
                 except Exception as e:
-                    block_reason = _entry_block_reason(e)
-                    if block_reason:
-                        await db.strategies.update_one(
-                            {"id": s["id"]},
-                            {"$set": {**eval_set,
-                                      "last_signals_count": signals_count,
-                                      "last_signal_action": action,
-                                      "last_filter_reason": f"Entry skipped: {block_reason}"},
-                             "$unset": {"last_error": ""},
-                             "$inc": inc_set},
-                        )
-                        continue
-                    logger.warning(f"order failed for strategy {s['id']}: {e}")
+                    logger.warning(f"Failed to queue signal for strategy {s['id']}: {e}")
                     await db.strategies.update_one(
                         {"id": s["id"]},
                         {"$set": {**eval_set, "last_error": str(e)[:200]},
