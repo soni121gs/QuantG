@@ -69,16 +69,16 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
             data = await db.orders.find(
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
-            ).sort("created_at", -1).to_list(100)
+            ).sort("created_at", -1).to_list(15)
         elif name == "get_positions":
             local_positions = await db.positions.find(
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
-            ).to_list(100)
+            ).to_list(15)
             strategy_positions = await db.strategy_positions.find(
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
-            ).sort("updated_at", -1).to_list(100)
+            ).sort("updated_at", -1).to_list(15)
             data = {
                 "local_positions": local_positions,
                 "strategy_positions": strategy_positions,
@@ -91,7 +91,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                     "user_id": 0,
                     "python_code": 0,
                 },
-            ).sort("created_at", -1).to_list(200)
+            ).sort("created_at", -1).to_list(25)
             data = [
                 row for row in rows
                 if str(row.get("status") or "").lower() in {"live", "active", "running", "paused"}
@@ -113,15 +113,15 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
             strategy_errors = await db.strategies.find(
                 {"user_id": user["id"], "last_error": {"$nin": [None, ""]}},
                 {"_id": 0, "id": 1, "name": 1, "status": 1, "last_error": 1, "last_evaluated_at": 1, "last_signal_at": 1},
-            ).sort("updated_at", -1).to_list(50)
+            ).sort("updated_at", -1).to_list(10)
             position_errors = await db.strategy_positions.find(
                 {"user_id": user["id"], "last_error": {"$nin": [None, ""]}},
                 {"_id": 0, "id": 1, "strategy_id": 1, "symbol": 1, "status": 1, "last_error": 1, "updated_at": 1},
-            ).sort("updated_at", -1).to_list(50)
+            ).sort("updated_at", -1).to_list(10)
             rejected_orders = await db.orders.find(
                 {"user_id": user["id"], "status": {"$in": ["REJECTED", "rejected", "FAILED", "failed"]}},
                 {"_id": 0, "user_id": 0},
-            ).sort("created_at", -1).to_list(50)
+            ).sort("created_at", -1).to_list(10)
             data = {
                 "strategy_errors": strategy_errors,
                 "position_errors": position_errors,

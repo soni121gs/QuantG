@@ -278,5 +278,37 @@ class TestParseMarketTimestamp(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestPaperModeIsolation(unittest.TestCase):
+
+    def test_paper_mode_blocks_submit_order_intent(self):
+        """Task 1 check: _submit_order_intent should raise error if user is in paper mode."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from server import _submit_order_intent
+        
+        async def run_test():
+            mock_settings = AsyncMock(return_value={"paper_mode": True})
+            with patch("server.get_user_settings", mock_settings):
+                mock_intent = MagicMock()
+                with self.assertRaises(RuntimeError) as ctx:
+                    await _submit_order_intent("user-1", mock_intent, order_type="MARKET", product="MIS", price=None, tag="tag")
+                self.assertIn("Attempted to submit a broker order while in PAPER mode", str(ctx.exception))
+                
+        asyncio.run(run_test())
+
+    def test_live_order_blocks_apply_paper_fill(self):
+        """Task 1 check: _apply_paper_fill_to_position should raise error if order mode is live."""
+        import asyncio
+        from server import _apply_paper_fill_to_position
+        
+        async def run_test():
+            live_order = {"id": "ord-1", "user_id": "user-1", "mode": "live"}
+            with self.assertRaises(RuntimeError) as ctx:
+                await _apply_paper_fill_to_position(live_order, 100.0)
+            self.assertIn("Attempted to apply simulated paper fill to a LIVE order", str(ctx.exception))
+            
+        asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

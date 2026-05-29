@@ -876,10 +876,10 @@ async def _fetch_strategy_history(
         # AND the strategy is in paper mode. The check below is a belt-and-suspenders
         # guard: if somehow allow_mock is True for a live strategy, raise hard rather
         # than silently feeding random-walk data to a real-money order engine.
-        if strategy is not None and (strategy.get("mode") == "live"):
+        if strategy is not None:
             raise ValueError(
-                f"Mock candle data is BLOCKED for live strategy '{strategy.get('name', sym_upper)}'. "
-                "Reconnect Upstox or switch the strategy to paper mode before retrying."
+                f"Mock candle data is BLOCKED for strategy '{strategy.get('name', sym_upper)}'. "
+                "Mock candle fallbacks are disabled in production scanning paths."
             )
         sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None) or next((s for s in COMMODITY_SYMBOLS if s["symbol"] == sym_upper), None)
         if sym:
@@ -6048,6 +6048,10 @@ async def _submit_order_intent(
     the execution path used by strategies and manual orders is intentionally
     Upstox-only.
     """
+    settings = await get_user_settings(user_id)
+    if settings.get("paper_mode", True):
+        raise RuntimeError("CRITICAL ERROR: Attempted to submit a broker order while in PAPER mode.")
+
     instr = intent.instrument
     side = _intent_side(intent.intent)
     qty = int(intent.quantity)
@@ -6282,6 +6286,9 @@ def _paper_delta(intent_name: str, quantity: int) -> int:
 
 async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: float) -> Dict[str, Any]:
     """Apply a paper fill exactly once and write immutable fill/trade records."""
+    if order_doc.get("mode") != "paper":
+        raise RuntimeError("CRITICAL ERROR: Attempted to apply simulated paper fill to a LIVE order.")
+
     order_id = order_doc["id"]
     user_id = order_doc["user_id"]
     now_dt = datetime.now(timezone.utc)
@@ -8254,28 +8261,8 @@ async def _resolve_option_for_strategy(
 
     # 2. Fabricate contract details in Paper Mode if live lookup failed or gateway is offline
     if not instrument_token:
-        if not is_paper:
-            logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
-            return None
-
-        # Build mock details
-        if underlying in COMMODITY_UNDERLYINGS:
-            ist_now = datetime.now(timezone.utc) + IST_OFFSET
-            month_offset = 1 if ist_now.day > 18 else 0
-            target_date = ist_now
-            if month_offset > 0:
-                target_date = ist_now + timedelta(days=15)
-                if target_date.month == ist_now.month:
-                    target_date = ist_now + timedelta(days=32)
-            yy = target_date.strftime("%y")
-            mmm = target_date.strftime("%b").upper()
-            tradingsymbol = f"{underlying.upper()}{yy}{mmm}{strike}{opt_type}"
-            instrument_token = f"PAPER_MCX|{tradingsymbol}"
-            expiry_dt = target_date
-        else:
-            expiry_str = expiry_dt.strftime("%y%m%d")
-            tradingsymbol = f"{underlying}{expiry_str}{strike}{opt_type}"
-            instrument_token = f"PAPER_FO|{tradingsymbol}"
+        logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
+        return None
 
     resolved_contract = {
         "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
@@ -8478,28 +8465,7 @@ def _nse_token(sym: str) -> str:
     return f"NSE:{sym}"
 
 
-async def get_user_kite(user_id: str):
-    """Return (kite_instance, status_dict). kite is None if not connected/expired."""
-    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "zerodha"})
-    access_token = decrypt_secret(keys.get("access_token")) if keys else None
-    api_key = decrypt_secret(keys.get("api_key")) if keys else None
-    if not keys or not access_token:
-        return None, {"connected": False, "reason": "no_token"}
-    if not kite_helper.is_token_valid(keys.get("access_token_expires_at")):
-        return None, {"connected": False, "reason": "expired", "kite_user_id": keys.get("kite_user_id")}
-    if not api_key:
-        return None, {"connected": False, "reason": "credential_decrypt_failed"}
-    kite = kite_helper.make_kite(api_key, access_token)
-    return kite, {"connected": True, "kite_user_id": keys.get("kite_user_id"),
-                  "expires_at": keys["access_token_expires_at"]}
-
-
-async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
-    return {"connected": False, "reason": "kotak_neo_removed"}
-
-
-async def get_user_kotak_gateway(user_id: str, fresh: bool = False) -> Optional[Any]:
-    return None
+from brokers.quarantine import get_user_kite, get_user_kotak_status, get_user_kotak_gateway
 
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:

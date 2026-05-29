@@ -29,7 +29,7 @@ class TestOptionSelectionLtp(unittest.IsolatedAsyncioTestCase):
     @patch("server.get_user_settings", new_callable=AsyncMock)
     @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
     async def test_resolve_option_for_strategy_paper_fallback(self, mock_get_gateway, mock_get_settings):
-        """Verify fallback to fabricated token when gateway is disconnected."""
+        """Verify fallback to fabricated token is blocked when gateway is disconnected."""
         mock_get_settings.return_value = {"paper_mode": True}
         mock_get_gateway.return_value = None  # Gateway offline
 
@@ -41,11 +41,7 @@ class TestOptionSelectionLtp(unittest.IsolatedAsyncioTestCase):
             strike_mode="ATM_BUY",
         )
 
-        self.assertIsNotNone(contract)
-        self.assertTrue(contract["instrument_token"].startswith("PAPER_FO|"))
-        self.assertEqual(contract["underlying"], "NIFTY")
-        self.assertEqual(contract["option_type"], "CE")
-        self.assertIsNone(contract.get("ltp"))  # Fabricated contract has no LTP
+        self.assertIsNone(contract)
 
     @patch("server.get_user_settings", new_callable=AsyncMock)
     @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
