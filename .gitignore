@@ -95,3 +95,6 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Local scratch scripts
+backend/scratch/
