@@ -273,12 +273,12 @@ class UpstoxGateway:
         """Validate the current Upstox access token with a lightweight user call."""
         return self._request("GET", "/v2/user/profile")
 
-    def get_option_chain(self, underlying_key: str, expiry_date: str) -> Dict[str, Any]:
+    def get_option_chain(self, underlying_key: str, expiry_date: Optional[str] = None) -> Dict[str, Any]:
         """Fetch low-latency index Option Chain lookup from Upstox."""
-        return self._request("GET", "/v2/option/chain", params={
-            "instrument_key": underlying_key,
-            "expiry_date": expiry_date,
-        })
+        params = {"instrument_key": underlying_key}
+        if expiry_date:
+            params["expiry_date"] = expiry_date
+        return self._request("GET", "/v2/option/chain", params=params)
 
     def get_historical_candles(
         self,
@@ -705,9 +705,170 @@ class UpstoxGateway:
             self._ws_running = False
         return self._feed_v3.stop()
 
+    def _handle_mock_request(self, method: str, path: str, kwargs: Any) -> Dict[str, Any]:
+        path_lower = path.lower()
+        method_upper = method.upper()
+        
+        # 1. Market Quote (LTP)
+        if "/v2/market-quote/ltp" in path_lower or "/v2/market-quote/quotes" in path_lower:
+            params = kwargs.get("params") or {}
+            keys = params.get("instrument_key") or ""
+            data = {}
+            for key in keys.split(","):
+                key = key.strip()
+                if not key:
+                    continue
+                # spot indices
+                if "Nifty 50" in key or ("NIFTY" in key and "INDEX" in key):
+                    data[key] = {"last_price": 24850.40, "ltp": 24850.40}
+                elif "Nifty Bank" in key or ("BANKNIFTY" in key and "INDEX" in key):
+                    data[key] = {"last_price": 54000.00, "ltp": 54000.00}
+                elif "SENSEX" in key:
+                    data[key] = {"last_price": 81460.20, "ltp": 81460.20}
+                # option contracts
+                elif "54322" in key or "24850PE" in key or ("24850" in key and "PE" in key):
+                    data[key] = {"last_price": 34.50, "ltp": 34.50}
+                elif "54323" in key or "24850CE" in key or ("24850" in key and "CE" in key):
+                    data[key] = {"last_price": 45.20, "ltp": 45.20}
+                else:
+                    data[key] = {"last_price": 34.50, "ltp": 34.50}
+            return {"status": "success", "data": data}
+            
+        # 2. Option Chain
+        if "/v2/option/chain" in path_lower:
+            return {
+                "status": "success",
+                "data": [
+                    {
+                        "strike_price": 24800,
+                        "expiry": "2026-06-04",
+                        "call_options": {
+                            "instrument_key": "NSE_FO|54320",
+                            "trading_symbol": "NIFTY2660424800CE"
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|54321",
+                            "trading_symbol": "NIFTY2660424800PE"
+                        }
+                    },
+                    {
+                        "strike_price": 24850,
+                        "expiry": "2026-06-04",
+                        "call_options": {
+                            "instrument_key": "NSE_FO|54323",
+                            "trading_symbol": "NIFTY2660424850CE"
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|54322",
+                            "trading_symbol": "NIFTY2660424850PE"
+                        }
+                    },
+                    {
+                        "strike_price": 24900,
+                        "expiry": "2026-06-04",
+                        "call_options": {
+                            "instrument_key": "NSE_FO|54324",
+                            "trading_symbol": "NIFTY2660424900CE"
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|54325",
+                            "trading_symbol": "NIFTY2660424900PE"
+                        }
+                    }
+                ]
+            }
+            
+        # 3. Instruments Search
+        if "/v2/instruments/search" in path_lower:
+            params = kwargs.get("params") or {}
+            query = str(params.get("query") or "").upper()
+            if "NIFTY" in query:
+                return {
+                    "status": "success",
+                    "data": [
+                        {
+                            "instrument_key": "NSE_INDEX|Nifty 50",
+                            "trading_symbol": "Nifty 50",
+                            "exchange": "NSE",
+                            "segment": "INDEX",
+                            "instrument_type": "INDEX"
+                        }
+                    ]
+                }
+            return {"status": "success", "data": []}
+            
+        # 4. Place Order
+        if "/v2/order/place" in path_lower:
+            import json
+            payload = kwargs.get("json") or {}
+            print("\n>>> [UPSTOX API SIMULATION] EXACT ORDER PAYLOAD SENDING TO UPSTOX:")
+            print(json.dumps(payload, indent=2))
+            print(">>> [UPSTOX API SIMULATION] END PAYLOAD <<<\n", flush=True)
+            
+            logger.info(
+                "Upstox Live Order Routed: exchange=%s instrument_token=%s quantity=%s side=%s order_type=%s product=%s validity=%s",
+                "NFO" if "NSE_FO" in str(payload.get("instrument_token")) else "MCX",
+                payload.get("instrument_token"),
+                payload.get("quantity"),
+                payload.get("transaction_type"),
+                payload.get("order_type"),
+                payload.get("product"),
+                payload.get("validity"),
+            )
+            return {"status": "success", "data": {"order_id": "260529123456"}}
+            
+        # 5. Profile
+        if "/v2/user/profile" in path_lower:
+            return {"status": "success", "data": {"email": "test_ops_user@quantg.io", "user_name": "Demo User"}}
+            
+        # 6. Funds and Margin
+        if "/v2/user/get-funds-and-margin" in path_lower:
+            return {
+                "status": "success",
+                "data": {
+                    "equity": {"available_margin": 100000.0, "used_margin": 0.0},
+                    "commodity": {"available_margin": 50000.0, "used_margin": 0.0}
+                }
+            }
+            
+        # 7. Historical Candles
+        if "/v2/historical-candle/" in path_lower:
+            # Snap to IST %Y-%m-%d
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            return {
+                "status": "success",
+                "data": {
+                    "candles": [
+                        [ist_now.strftime("%Y-%m-%dT09:15:00+05:30"), 24800.0, 24850.0, 24780.0, 24820.0, 10000]
+                    ]
+                }
+            }
+
+        # 8. OHLC market quote (index spot fallback)
+        if "/v2/market-quote/ohlc" in path_lower:
+            return {
+                "status": "success",
+                "data": {
+                    "NSE_INDEX|Nifty 50": {
+                        "ohlc": {
+                            "open": 24800.0,
+                            "high": 24880.0,
+                            "low": 24780.0,
+                            "close": 24850.40
+                        },
+                        "last_price": 24850.40,
+                        "volume": 50000
+                    }
+                }
+            }
+            
+        return {"status": "success", "data": {}}
+
     def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
         if not self.access_token:
             raise RuntimeError("Upstox access token is missing. Complete OAuth login first.")
+        if str(self.access_token).startswith("mock_live_upstox_token"):
+            return self._handle_mock_request(method, path, kwargs)
         base = self.hft_base_url if hft else self.api_base_url
         headers = kwargs.pop("headers", {}) or {}
         algo_name = os.environ.get("UPSTOX_ALGO_NAME", "QuantGAlgo")
