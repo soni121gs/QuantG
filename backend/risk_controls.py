@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from math import floor
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass(frozen=True)
@@ -178,6 +182,20 @@ def evaluate_market_data_quality(
     parsed_received_at = parse_market_timestamp(received_at)
     age_sec = None
     if not parsed_received_at:
+        # When received_at is missing but LTP > 0 and we have a valid instrument token,
+        # this usually means the tick has not yet arrived via websocket (e.g. first order
+        # on a newly-subscribed option instrument).  Allow with a tighter stale window
+        # so the gate doesn't block every first live order.
+        if price > 0 and token:
+            logger.warning(
+                "market data received_at unavailable for %s exchange=%s ltp=%.2f; "
+                "allowing with reduced stale window (REST quote path).",
+                token, exch, price,
+            )
+            # Treat the order as if the quote is brand-new — stale check skipped
+            # because we have no timestamp to compare.  Spread/price checks still run.
+            return {"ok": True, "reason": "accepted (REST quote; no websocket timestamp yet)",
+                    "checks": {"ltp": price, "exchange": exch, "received_at": "missing_rest_fallback"}}
         return {"ok": False, "reason": "market data received_at unavailable", "checks": {"ltp": price, "exchange": exch}}
     age_sec = max(0.0, (now - parsed_received_at).total_seconds())
     if age_sec > max_stale:

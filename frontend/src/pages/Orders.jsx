@@ -157,12 +157,24 @@ export default function Orders() {
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">Time</th><th className="px-4 py-2">Strategy</th><th className="px-4 py-2">Symbol</th><th className="px-4 py-2">Seg</th><th className="px-4 py-2">Side</th><th className="px-4 py-2">Qty</th><th className="px-4 py-2">Price</th><th className="px-4 py-2">SL</th><th className="px-4 py-2">TP</th><th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Time</th>
+                <th className="px-4 py-2">Strategy</th>
+                <th className="px-4 py-2">Symbol</th>
+                <th className="px-4 py-2">Seg</th>
+                <th className="px-4 py-2">Side</th>
+                <th className="px-4 py-2">Qty</th>
+                <th className="px-4 py-2">Price</th>
+                <th className="px-4 py-2">SL</th>
+                <th className="px-4 py-2">TP</th>
+                <th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Reason</th>
               </tr>
             </thead>
             <tbody className="font-mono">
               {filtered.map((o) => {
                 const status = o.execution_status || o.status;
+                const isRejected = REJECTED_STATUSES.includes(status);
+                const rejectReason = o.reject_reason || o.error_message || o.status_message || "";
                 return (
                 <tr key={o.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`order-${o.id}`}>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour12: false }) : "-"}</td>
@@ -176,9 +188,21 @@ export default function Orders() {
                   <td className="px-4 py-2.5 text-[var(--qd-profit)]">{o.take_profit != null ? formatINR(o.take_profit) : "-"}</td>
                   <td className={`px-4 py-2.5 ${
                     FILLED_STATUSES.includes(status) ? "text-[var(--qd-profit)]" :
-                    REJECTED_STATUSES.includes(status) ? "text-[var(--qd-loss)]" :
+                    isRejected ? "text-[var(--qd-loss)]" :
                     "text-[var(--qd-warn)]"
-                  }`} title={o.status_message || ""}>{status}</td>
+                  }`}>{status}</td>
+                  <td className="px-4 py-2.5 text-[11px] max-w-[260px]">
+                    {isRejected && rejectReason ? (
+                      <span
+                        className="text-[var(--qd-loss)] break-words leading-tight"
+                        title={rejectReason}
+                      >
+                        {rejectReason.length > 100 ? rejectReason.slice(0, 100) + "…" : rejectReason}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--qd-text-3)]">—</span>
+                    )}
+                  </td>
                 </tr>
               );})}
             </tbody>
@@ -289,4 +313,3 @@ export default function Orders() {
     </div>
   );
 }
-

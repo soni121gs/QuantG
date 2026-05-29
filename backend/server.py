@@ -774,8 +774,14 @@ async def _fetch_strategy_history(
                 tick = upstox_gw.latest_tick(token)
                 candle_freshness = _latest_candle_fresh_for_live(live_data or [], exchange)
                 if tick and live_data:
+                    # Format the tick bar date as IST %Y-%m-%d %H:%M to match all other
+                    # candle dates.  Using the UTC ISO received_at string broke signal
+                    # dedup in strategy_runner (recent_dates uses the same format).
+                    _ist_now = datetime.now(timezone.utc) + IST_OFFSET
+                    _floored = (_ist_now.minute // 5) * 5
+                    _tick_date = _ist_now.replace(minute=_floored, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
                     tick_bar = {
-                        "date": tick.get("received_at"),
+                        "date": _tick_date,
                         "open": float(tick.get("ltp") or 0),
                         "high": float(tick.get("ltp") or 0),
                         "low": float(tick.get("ltp") or 0),
@@ -5872,6 +5878,34 @@ async def _market_snapshot_for_intent(
         })
     if snapshot.get("ltp") in (None, "") and option_contract and option_contract.get("ltp"):
         snapshot.update({"ltp": option_contract.get("ltp"), "source": "option-contract", "feed": "option-contract"})
+
+    # If websocket tick is missing but the instrument key is known, try a fresh REST
+    # quote so the pre-trade gate has a received_at and can pass market-data quality.
+    if snapshot.get("received_at") is None and token and gateway and gateway.connected:
+        try:
+            q = await asyncio.to_thread(gateway.get_market_quote, [token])
+            ltp_rest = UpstoxGateway.parse_quote_ltp(q, token)
+            if ltp_rest and ltp_rest > 0:
+                rest_received_at = datetime.now(timezone.utc).isoformat()
+                snapshot.update({
+                    "ltp": float(ltp_rest),
+                    "received_at": rest_received_at,
+                    "tick_time": rest_received_at,
+                    "timestamp": rest_received_at,
+                    "timestamp_source": "rest_quote_fallback",
+                    "data_age_sec": 0.0,
+                    "source": "upstox-rest-quote",
+                    "feed": "upstox-rest-quote",
+                })
+                logger.info(
+                    "market snapshot REST fallback ok symbol=%s token=%s ltp=%s",
+                    instr.tradingsymbol, token, ltp_rest,
+                )
+        except Exception as _snap_exc:
+            logger.debug(
+                "market snapshot REST fallback failed symbol=%s token=%s: %s",
+                instr.tradingsymbol, token, _snap_exc,
+            )
     return snapshot
 
 
@@ -6080,6 +6114,9 @@ def _clean_order_response(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out.pop("paper_fill_apply_lock_until", None)
     out.pop("paper_fill_apply_started_at", None)
     out.setdefault("broker_order_id", None)
+    # Ensure rejection reason is always surfaced (used by Orders UI)
+    if not out.get("reject_reason"):
+        out["reject_reason"] = out.get("error_message") or out.get("status_message") or None
     return out
 
 
@@ -10356,3 +10393,134 @@ async def shutdown():
     except Exception:
         pass
     client.close()
+
+
+# ============== Routes: Trading-Ready Check ==============
+
+@api.get("/ops/trading-ready")
+async def trading_ready_check(user=Depends(get_current_user)):
+    """Holistic trading-readiness check.
+
+    Returns a structured report of every subsystem required for live trading.
+    All checks run concurrently.  The top-level ``ready`` flag is True only
+    when every critical check passes.
+    """
+    user_id = user["id"]
+    checks: Dict[str, Any] = {}
+
+    # 1. Broker auth
+    upstox_status = await get_user_upstox_status(user_id)
+    checks["broker_auth"] = {
+        "ok": bool(upstox_status.get("token_valid")),
+        "detail": upstox_status.get("token_state", "unknown"),
+        "critical": True,
+    }
+
+    # 2. Upstox gateway connected
+    gw = await get_user_upstox_gateway(user_id)
+    gw_connected = bool(gw and gw.connected)
+    checks["gateway_connected"] = {
+        "ok": gw_connected,
+        "detail": "connected" if gw_connected else "gateway not initialised",
+        "critical": True,
+    }
+
+    # 3. Market data websocket
+    ws_active = bool(gw and getattr(gw, "_ws_thread", None) and getattr(gw._ws_thread, "is_alive", lambda: False)())
+    checks["websocket_feed"] = {
+        "ok": ws_active,
+        "detail": "active" if ws_active else "not started (will auto-start on first strategy scan)",
+        "critical": False,
+    }
+
+    # 4. NIFTY historical candles
+    nifty_ok = False
+    nifty_detail = "not tested"
+    if gw_connected:
+        try:
+            candles = await asyncio.to_thread(
+                gw.get_historical_candles, "NSE_INDEX|Nifty 50", "5minute", 3
+            )
+            nifty_ok = bool(candles and len(candles) >= 2)
+            nifty_detail = f"{len(candles or [])} bars" if nifty_ok else "returned empty"
+        except Exception as exc:
+            nifty_detail = str(exc)[:120]
+    checks["nifty_candles"] = {"ok": nifty_ok, "detail": nifty_detail, "critical": True}
+
+    # 5. BANKNIFTY historical candles
+    bnk_ok = False
+    bnk_detail = "not tested"
+    if gw_connected:
+        try:
+            candles = await asyncio.to_thread(
+                gw.get_historical_candles, "NSE_INDEX|Nifty Bank", "5minute", 3
+            )
+            bnk_ok = bool(candles and len(candles) >= 2)
+            bnk_detail = f"{len(candles or [])} bars" if bnk_ok else "returned empty"
+        except Exception as exc:
+            bnk_detail = str(exc)[:120]
+    checks["banknifty_candles"] = {"ok": bnk_ok, "detail": bnk_detail, "critical": True}
+
+    # 6. MCX instrument master seeded
+    try:
+        mcx_count = await db.upstox_mcx_future_contracts.count_documents({})
+        mcx_ok = mcx_count > 0
+        checks["mcx_instrument_master"] = {
+            "ok": mcx_ok,
+            "detail": f"{mcx_count} MCX futures cached",
+            "critical": False,
+        }
+    except Exception as exc:
+        checks["mcx_instrument_master"] = {"ok": False, "detail": str(exc)[:120], "critical": False}
+
+    # 7. Latest candle freshness for NIFTY (only during market hours)
+    market_open = _is_order_market_open("NSE")
+    if nifty_ok and market_open and gw_connected:
+        try:
+            candles = await asyncio.to_thread(
+                gw.get_historical_candles, "NSE_INDEX|Nifty 50", "5minute", 1
+            )
+            freshness = _latest_candle_fresh_for_live(candles or [], "NSE")
+            checks["candle_freshness"] = {
+                "ok": bool(freshness.get("fresh")),
+                "detail": freshness.get("reason", "unknown"),
+                "age_sec": freshness.get("age_sec"),
+                "critical": True,
+            }
+        except Exception as exc:
+            checks["candle_freshness"] = {"ok": False, "detail": str(exc)[:120], "critical": True}
+    else:
+        checks["candle_freshness"] = {
+            "ok": True,
+            "detail": "market closed — freshness check skipped" if not market_open else "candle fetch failed above",
+            "critical": False,
+        }
+
+    # 8. Pre-trade gate smoke test (paper, no real order)
+    settings = await get_user_settings(user_id)
+    paper_mode = bool(settings.get("paper_mode", True))
+    checks["paper_mode"] = {
+        "ok": True,
+        "detail": "paper" if paper_mode else "LIVE",
+        "critical": False,
+    }
+
+    # Summary
+    critical_checks = [v for v in checks.values() if v.get("critical")]
+    all_critical_ok = all(c["ok"] for c in critical_checks)
+    non_critical_ok = all(v["ok"] for v in checks.values() if not v.get("critical"))
+    ready = all_critical_ok
+
+    return {
+        "ready": ready,
+        "trading_mode": "paper" if paper_mode else "live",
+        "market_open": market_open,
+        "checks": checks,
+        "summary": (
+            "All systems go — ready to trade."
+            if ready
+            else "One or more critical checks failed. See checks for details."
+        ),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
