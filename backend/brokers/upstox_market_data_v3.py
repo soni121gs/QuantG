@@ -247,13 +247,28 @@ def decode_feed_response(raw: bytes) -> Dict[str, Any]:
 
 
 def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-    ltpc = feed.get("ltpc") if isinstance(feed, dict) else None
-    if not ltpc and isinstance(feed, dict):
-        ltpc = (((feed.get("fullFeed") or {}).get("marketFF") or {}).get("ltpc"))
-    if not ltpc and isinstance(feed, dict):
-        ltpc = (((feed.get("fullFeed") or {}).get("indexFF") or {}).get("ltpc"))
-    if not ltpc and isinstance(feed, dict):
-        ltpc = ((feed.get("firstLevelWithGreeks") or {}).get("ltpc"))
+    if not isinstance(feed, dict):
+        return None
+    ltpc = feed.get("ltpc")
+    
+    # Try nested fullFeed / full_feed
+    if not ltpc:
+        full_feed = feed.get("fullFeed") or feed.get("full_feed")
+        if isinstance(full_feed, dict):
+            market_ff = full_feed.get("marketFF") or full_feed.get("market_ff")
+            if isinstance(market_ff, dict):
+                ltpc = market_ff.get("ltpc")
+            if not ltpc:
+                index_ff = full_feed.get("indexFF") or full_feed.get("index_ff")
+                if isinstance(index_ff, dict):
+                    ltpc = index_ff.get("ltpc")
+                    
+    # Try nested firstLevelWithGreeks / first_level_with_greeks
+    if not ltpc:
+        first_level = feed.get("firstLevelWithGreeks") or feed.get("first_level_with_greeks")
+        if isinstance(first_level, dict):
+            ltpc = first_level.get("ltpc")
+            
     if not isinstance(ltpc, dict):
         return None
     ltp = ltpc.get("ltp")
@@ -528,6 +543,12 @@ class UpstoxMarketDataFeedV3:
                     self._ticks[instrument_key] = tick
                     self._last_tick_time = tick["received_at"]
                     updated += 1
+                    logger.info(
+                        "Upstox V3 tick accepted key=%s ltp=%s cache_size=%s",
+                        instrument_key,
+                        tick.get("ltp"),
+                        len(self._ticks),
+                    )
                     logger.debug(
                         "Upstox V3 quote received key=%s ltp=%s timestamp_source=%s received_at=%s",
                         instrument_key,

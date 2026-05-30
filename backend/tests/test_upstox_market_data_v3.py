@@ -81,3 +81,108 @@ def test_gateway_strategy_reads_latest_tick_from_websocket_cache():
     gateway._feed_v3.apply_decoded_message(decode_feed_response(_ltpc_message_bytes("MCX_FO|566995", 101.25)))
     tick = gateway.latest_tick("MCX_FO|566995")
     assert tick["ltp"] == pytest.approx(101.25)
+
+
+def test_camelcase_and_snakecase_feed_tick_extraction():
+    # Test camelCase structure for marketFF and indexFF
+    camel_market_feed = {
+        "fullFeed": {
+            "marketFF": {
+                "ltpc": {"ltp": 250.5, "cp": 248.0, "ltt": 1740729552723, "ltq": 100}
+            }
+        }
+    }
+    tick1 = extract_ltp_tick("NSE_EQ|INE002A01018", camel_market_feed)
+    assert tick1 is not None
+    assert tick1["ltp"] == pytest.approx(250.5)
+
+    camel_index_feed = {
+        "fullFeed": {
+            "indexFF": {
+                "ltpc": {"ltp": 24850.4, "cp": 24800.0, "ltt": 1740729552723}
+            }
+        }
+    }
+    tick2 = extract_ltp_tick("NSE_INDEX|Nifty 50", camel_index_feed)
+    assert tick2 is not None
+    assert tick2["ltp"] == pytest.approx(24850.4)
+
+    camel_greeks_feed = {
+        "firstLevelWithGreeks": {
+            "ltpc": {"ltp": 45.2, "cp": 44.0}
+        }
+    }
+    tick3 = extract_ltp_tick("NSE_FO|54323", camel_greeks_feed)
+    assert tick3 is not None
+    assert tick3["ltp"] == pytest.approx(45.2)
+
+    # Test snake_case structure for market_ff and index_ff
+    snake_market_feed = {
+        "full_feed": {
+            "market_ff": {
+                "ltpc": {"ltp": 250.5, "cp": 248.0, "ltt": 1740729552723, "ltq": 100}
+            }
+        }
+    }
+    tick4 = extract_ltp_tick("NSE_EQ|INE002A01018", snake_market_feed)
+    assert tick4 is not None
+    assert tick4["ltp"] == pytest.approx(250.5)
+
+    snake_index_feed = {
+        "full_feed": {
+            "index_ff": {
+                "ltpc": {"ltp": 24850.4, "cp": 24800.0, "ltt": 1740729552723}
+            }
+        }
+    }
+    tick5 = extract_ltp_tick("NSE_INDEX|Nifty 50", snake_index_feed)
+    assert tick5 is not None
+    assert tick5["ltp"] == pytest.approx(24850.4)
+
+    snake_greeks_feed = {
+        "first_level_with_greeks": {
+            "ltpc": {"ltp": 45.2, "cp": 44.0}
+        }
+    }
+    tick6 = extract_ltp_tick("NSE_FO|54323", snake_greeks_feed)
+    assert tick6 is not None
+    assert tick6["ltp"] == pytest.approx(45.2)
+
+
+def test_apply_decoded_message_populates_tick_cache_and_latest_tick():
+    feed = UpstoxMarketDataFeedV3(access_token_getter=lambda: "token", api_base_url="https://api.upstox.com")
+    
+    # Send a decoded message with both a camelCase and a snake_case feed
+    decoded = {
+        "currentTs": 1740729566039,
+        "feeds": {
+            "NSE_EQ|INE002A01018": {
+                "full_feed": {
+                    "market_ff": {
+                        "ltpc": {"ltp": 255.45, "cp": 250.0}
+                    }
+                }
+            },
+            "NSE_INDEX|Nifty 50": {
+                "fullFeed": {
+                    "indexFF": {
+                        "ltpc": {"ltp": 24852.1, "cp": 24800.0}
+                    }
+                }
+            }
+        }
+    }
+    
+    feed.apply_decoded_message(decoded)
+    
+    # 1. apply_decoded_message populates tick cache
+    assert len(feed.latest_ticks()) == 2
+    
+    # 2. latest_tick returns websocket tick
+    tick1 = feed.latest_tick("NSE_EQ|INE002A01018")
+    assert tick1 is not None
+    assert tick1["ltp"] == pytest.approx(255.45)
+    
+    tick2 = feed.latest_tick("NSE_INDEX|Nifty 50")
+    assert tick2 is not None
+    assert tick2["ltp"] == pytest.approx(24852.1)
