@@ -8541,6 +8541,29 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         }.items()
         if not value
     ]
+    # Determine REST status details
+    if access_token and str(access_token).startswith("mock_live_upstox_token"):
+        rest_status = "mock"
+    else:
+        rest_status = "valid" if token_valid else ("invalid" if token_present else "missing")
+
+    # Determine Feed status details
+    feed_running = bool(((gateway_status or {}).get("feed_status") or {}).get("connected"))
+    if access_token and str(access_token).startswith("mock_live_upstox_token"):
+        feed_status_str = "mock_blocked"
+    elif feed_running:
+        feed_status_str = "connected"
+    elif gateway_status.get("ws_running"):
+        feed_status_str = "connecting"
+    elif (gateway_status.get("last_error") and "401" in str(gateway_status.get("last_error"))) or \
+         ((gateway_status.get("feed_status") or {}).get("last_error") and "401" in str(gateway_status.get("feed_status", {}).get("last_error"))):
+        feed_status_str = "unauthorized"
+    else:
+        feed_status_str = "disconnected"
+
+    # Token expiration and refresh details
+    token_expired = token_present and not token_valid
+
     status.update({
         "connected": bool(token_valid),
         "authenticated": bool(token_valid),
@@ -8557,7 +8580,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "last_auth_time": (keys or {}).get("access_token_obtained_at"),
         "reconnect_required": not token_valid,
         "live_trading_enabled": bool(token_valid),
-        "feed_running": bool(((gateway_status or {}).get("feed_status") or {}).get("connected")),
+        "feed_running": feed_running,
         "feed_status": (gateway_status or {}).get("feed_status"),
         "env_ready": not missing,
         "missing_env": missing,
@@ -8565,6 +8588,14 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "message": "Upstox connected" if token_valid else "Reconnect Upstox required",
         "gateway": gateway_status or None,
         "is_sandbox": bool(keys.get("is_sandbox")) if keys else False,
+        
+        # Enhanced status payload for UI and backend sanity checks
+        "rest_status": rest_status,
+        "feed_status_str": feed_status_str,
+        "token_expired": token_expired,
+        "refresh_token_available": False,
+        "daily_reconnect_required": True,
+        "user_message": "Upstox requires a fresh login daily before market hours. Automatic session refresh is not supported by the broker.",
     })
     return status
 
@@ -9292,6 +9323,11 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     access_token = token_response.get("access_token")
     if not access_token:
         raise HTTPException(status_code=400, detail="Upstox token response did not include access_token.")
+    
+    # Reject mock tokens if in live production mode
+    settings = await get_user_settings(user_id)
+    if not settings.get("paper_mode", True) and str(access_token).startswith("mock_live_upstox_token"):
+        raise HTTPException(status_code=400, detail="Cannot save simulated mock tokens in live production mode.")
     
     refresh_token = token_response.get("refresh_token")
     set_fields = {

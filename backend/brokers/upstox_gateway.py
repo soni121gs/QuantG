@@ -689,6 +689,15 @@ class UpstoxGateway:
             self.last_error = "Ticker startup skipped: no_token"
             logger.warning("Upstox V3 ticker startup skipped: no_token instruments=%s", len(keys))
             return {"ok": False, "started": False, "reason": "no_token", "message": "Reconnect Upstox required"}
+        if str(self.access_token).startswith("mock_live_upstox_token"):
+            self.last_error = "Ticker startup blocked: mock token in use"
+            logger.warning("Upstox V3 ticker startup blocked: mock token detected")
+            return {
+                "ok": False,
+                "started": False,
+                "reason": "mock_token_blocked",
+                "message": "Cannot start real market feed using a mock token. Reconnect live Upstox.",
+            }
         with self._lock:
             current = set(self._subscribed_tokens)
             current.update(keys)

@@ -404,5 +404,89 @@ def run(data):
                     self.fail(f"Strategy template '{strat.get('name')}' raised an error on zero-price candles: {e}")
 
 
+# ─────────────────────────────────────────────────────────────
+# 7. Upstox V3 Feed Authentication Production Fix Tests
+# ─────────────────────────────────────────────────────────────
+
+class TestUpstoxFeedAuthProductionFix(unittest.TestCase):
+
+    def test_mock_token_blocks_real_feed_startup(self):
+        """Verify that a mock token starting with mock_live_upstox_token blocks feed startup."""
+        from brokers.upstox_gateway import UpstoxGateway
+        gw = UpstoxGateway.__new__(UpstoxGateway)
+        gw.access_token = "mock_live_upstox_token_123"
+        gw._subscribed_tokens = []
+        gw._lock = MagicMock()
+        
+        result = gw.start_market_data_ws(["NSE_EQ|INE002A01018"])
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["started"])
+        self.assertEqual(result["reason"], "mock_token_blocked")
+        self.assertIn("mock token", result["message"])
+
+    def test_get_user_upstox_status_detailed_telemetry(self):
+        """Verify that get_user_upstox_status exposes all new telemetry details."""
+        import asyncio
+        from server import get_user_upstox_status
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_keys = MagicMock()
+            mock_keys.find_one = AsyncMock(return_value={
+                "user_id": "test-user",
+                "api_key": "enc_api_key",
+                "api_secret": "enc_api_secret",
+                "access_token": "enc_mock_live_upstox_token_abc",
+            })
+            mock_db.broker_keys = mock_keys
+            
+            with patch("server.db", mock_db), \
+                 patch("server.decrypt_secret", lambda val: val.replace("enc_", "") if val else None), \
+                 patch("server._UPSTOX_GATEWAYS", {}):
+                
+                status = await get_user_upstox_status("test-user")
+                self.assertEqual(status["rest_status"], "mock")
+                self.assertEqual(status["feed_status_str"], "mock_blocked")
+                self.assertFalse(status["token_expired"])
+                self.assertFalse(status["refresh_token_available"])
+                self.assertTrue(status["daily_reconnect_required"])
+                self.assertIn("fresh login daily", status["user_message"])
+                
+        asyncio.run(run_test())
+
+    def test_upstox_callback_rejects_mock_token_in_live_mode(self):
+        """Verify that upstox_callback raises HTTP 400 when storing a mock token in live mode."""
+        import asyncio
+        from fastapi import HTTPException
+        from server import upstox_callback
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_states = MagicMock()
+            mock_states.find_one = AsyncMock(return_value={"user_id": "user-1", "redirect_uri": "http://uri"})
+            mock_states.delete_one = AsyncMock()
+            mock_keys = MagicMock()
+            mock_keys.update_one = AsyncMock()
+            
+            mock_db.broker_oauth_states = mock_states
+            mock_db.broker_keys = mock_keys
+            
+            mock_gw = MagicMock()
+            mock_gw.exchange_code.return_value = {"access_token": "mock_live_upstox_token_abc", "user_id": "upstox-1"}
+            mock_get_gw = AsyncMock(return_value=mock_gw)
+            mock_settings = AsyncMock(return_value={"paper_mode": False})
+            
+            with patch("server.db", mock_db), \
+                 patch("server.get_user_upstox_gateway", mock_get_gw), \
+                 patch("server.get_user_settings", mock_settings):
+                
+                with self.assertRaises(HTTPException) as ctx:
+                    await upstox_callback(code="code123", state="state123")
+                self.assertEqual(ctx.exception.status_code, 400)
+                self.assertIn("Cannot save simulated mock tokens in live production mode", str(ctx.exception.detail))
+                
+        asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
