@@ -638,16 +638,18 @@ class UpstoxGateway:
             return None
         data = payload.get("data")
         if isinstance(data, dict):
-            if instrument_key and instrument_key in data:
-                node = data.get(instrument_key)
-                if isinstance(node, dict):
-                    for field in ("last_price", "ltp", "close", "last_traded_price"):
-                        value = node.get(field)
-                        if value not in (None, ""):
-                            try:
-                                return float(value)
-                            except Exception:
-                                pass
+            if instrument_key:
+                if instrument_key in data:
+                    node = data.get(instrument_key)
+                    if isinstance(node, dict):
+                        for field in ("last_price", "ltp", "close", "last_traded_price"):
+                            value = node.get(field)
+                            if value not in (None, ""):
+                                try:
+                                    return float(value)
+                                except Exception:
+                                    pass
+                return None
             for node in data.values():
                 if isinstance(node, dict):
                     for field in ("last_price", "ltp", "close", "last_traded_price"):
@@ -724,6 +726,26 @@ class UpstoxGateway:
             params = kwargs.get("params") or {}
             keys = params.get("instrument_key") or ""
             data = {}
+            import math
+            import time
+            bucket = int(time.time() // 60)
+            token_to_symbol = {
+                "NSE_EQ|INE002A01018": "RELIANCE",
+                "NSE_EQ|INE467B01029": "TCS",
+                "NSE_EQ|INE040A01034": "HDFCBANK",
+                "NSE_EQ|INE009A01021": "INFY",
+                "NSE_EQ|INE090A01021": "ICICIBANK",
+                "NSE_EQ|INE062A01020": "SBIN",
+                "NSE_EQ|INE238A01034": "AXISBANK",
+                "NSE_EQ|INE154A01025": "ITC",
+                "NSE_EQ|INE018A01030": "LT",
+                "NSE_EQ|INE585B01010": "MARUTI",
+            }
+            base_prices = {
+                "RELIANCE": 2945.50, "TCS": 4120.20, "HDFCBANK": 1672.80,
+                "INFY": 1890.45, "ICICIBANK": 1245.30, "SBIN": 824.10,
+                "AXISBANK": 1180.60, "ITC": 482.95, "LT": 3680.55, "MARUTI": 12450.00
+            }
             for key in keys.split(","):
                 key = key.strip()
                 if not key:
@@ -735,11 +757,20 @@ class UpstoxGateway:
                     data[key] = {"last_price": 54000.00, "ltp": 54000.00}
                 elif "SENSEX" in key:
                     data[key] = {"last_price": 81460.20, "ltp": 81460.20}
-                # option contracts
+                # Option contracts / indices
                 elif "54322" in key or "24850PE" in key or ("24850" in key and "PE" in key):
                     data[key] = {"last_price": 34.50, "ltp": 34.50}
                 elif "54323" in key or "24850CE" in key or ("24850" in key and "CE" in key):
                     data[key] = {"last_price": 45.20, "ltp": 45.20}
+                # Check mapping for mock equities
+                elif key in token_to_symbol:
+                    symbol = token_to_symbol[key]
+                    base = base_prices[symbol]
+                    seed = list(base_prices.keys()).index(symbol)
+                    drift = math.sin(bucket / 11.0 + seed * 1.7) * (base * 0.004)
+                    noise = math.sin(bucket / 5.0 + seed * 8.3) * (base * 0.001)
+                    price = round(base + drift + noise, 2)
+                    data[key] = {"last_price": price, "ltp": price}
                 else:
                     data[key] = {"last_price": 34.50, "ltp": 34.50}
             return {"status": "success", "data": data}

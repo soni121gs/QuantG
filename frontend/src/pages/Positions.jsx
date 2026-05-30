@@ -8,7 +8,7 @@ const statusTone = (status) => {
   const s = (status || "").toUpperCase();
   if (s === "FILLED" || s === "OPEN" || s === "COMPLETE") return "text-[var(--qd-profit)]";
   if (s === "PENDING" || s === "PENDING_BROKER") return "text-[var(--qd-warn)]";
-  if (s === "FAILED" || s === "REJECTED") return "text-[var(--qd-loss)]";
+  if (s === "FAILED" || s === "REJECTED" || s === "ORPHAN" || s === "STALE") return "text-[var(--qd-loss)]";
   return "text-[var(--qd-text-2)]";
 };
 
@@ -94,7 +94,7 @@ export default function Positions() {
                       <td className="px-4 py-2.5">{formatINR(p.ltp)}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-profit)]">{p.take_profit != null ? formatINR(p.take_profit) : "—"}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-loss)]">{p.stop_loss != null ? formatINR(p.stop_loss) : "—"}</td>
-                      <td className={`px-4 py-2.5 text-[10px] uppercase ${statusTone(p.execution_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
+                      <td className={`px-4 py-2.5 text-[10px] uppercase ${statusTone(p.execution_status || p.ledger_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
                       <td className={`px-4 py-2.5 text-right ${pnlTone}`}>{(p.pnl || 0) >= 0 ? "+" : ""}₹{formatINR(p.pnl)}</td>
                       <td className="px-4 py-2.5 text-right">
                         <span className={`text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${

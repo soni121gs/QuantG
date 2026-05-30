@@ -192,38 +192,109 @@ class ExecutionStateManager:
         strategy_rows: List[Dict[str, Any]],
         ledger_risk: Dict[str, Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        by_symbol: Dict[str, Dict[str, Any]] = {}
-        for row in broker_positions:
-            symbol = str(row.get("symbol") or "").upper()
-            if not symbol:
-                continue
-            merged = dict(row)
-            merged["execution_status"] = merged.get("execution_status") or "FILLED"
-            merged["stop_loss"] = row.get("stop_loss")
-            merged["take_profit"] = row.get("take_profit")
-            by_symbol[symbol] = merged
+        # Map strategy rows by strategy_id
+        strategy_by_id = {str(sp.get("strategy_id")): sp for sp in strategy_rows if sp.get("strategy_id")}
+        
+        # Also map strategy rows by symbol for fallback
+        strategy_by_symbol = {str(sp.get("symbol")).upper(): sp for sp in strategy_rows if sp.get("symbol")}
 
+        merged_positions: List[Dict[str, Any]] = []
+
+        # Track which strategy rows have been merged/matched
+        matched_strategy_ids = set()
+        matched_symbols = set()
+
+        for bp in broker_positions:
+            bp_merged = dict(bp)
+            bp_merged["execution_status"] = bp_merged.get("execution_status") or "FILLED"
+            
+            symbol = str(bp.get("symbol") or "").upper()
+            bp_strategy_id = bp.get("strategy_id")
+
+            # Try to find a matching strategy row
+            sp = None
+            if bp_strategy_id and str(bp_strategy_id) in strategy_by_id:
+                sp = strategy_by_id[str(bp_strategy_id)]
+                matched_strategy_ids.add(str(bp_strategy_id))
+            elif symbol in strategy_by_symbol:
+                sp = strategy_by_symbol[symbol]
+                matched_symbols.add(symbol)
+
+            if sp:
+                # We have a matching strategy!
+                ledger = ledger_risk.get(sp.get("strategy_id") or "", {})
+                stop_loss = sp.get("stop_loss") or ledger.get("stop_loss")
+                take_profit = sp.get("take_profit") or ledger.get("take_profit")
+                trailing_sl = ledger.get("trailing_sl")
+
+                bp_merged.update({
+                    "strategy_id": sp.get("strategy_id"),
+                    "strategy_name": sp.get("strategy_name"),
+                    "strategy_position_id": sp.get("id"),
+                    "execution_status": sp.get("execution_status") or sp.get("status") or bp_merged.get("execution_status"),
+                    "position_side": sp.get("position_side") or ledger.get("position_side") or "LONG",
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "trailing_sl": trailing_sl,
+                    "ledger_status": ledger.get("position_status") or "ACTIVE",
+                    "entry_order_id": sp.get("entry_order_id"),
+                    "broker_order_id": sp.get("broker_order_id"),
+                })
+                if ledger.get("ltp") is not None:
+                    bp_merged["ltp"] = ledger.get("ltp")
+                if ledger.get("unrealized_pnl") is not None:
+                    bp_merged["pnl"] = ledger.get("unrealized_pnl")
+            else:
+                # No active strategy row was matched! This is an orphan position.
+                ledger = {}
+                if bp_strategy_id:
+                    ledger = ledger_risk.get(str(bp_strategy_id), {})
+
+                stop_loss = bp.get("stop_loss") or ledger.get("stop_loss")
+                take_profit = bp.get("take_profit") or ledger.get("take_profit")
+                trailing_sl = ledger.get("trailing_sl")
+
+                bp_merged.update({
+                    "strategy_id": bp_strategy_id,
+                    "strategy_name": bp.get("strategy_name") or (f"Orphan ({bp_strategy_id[:8]})" if bp_strategy_id else "Orphan/Stale"),
+                    "strategy_position_id": None,
+                    "execution_status": "ORPHAN",
+                    "ledger_status": ledger.get("position_status") or "ORPHAN",
+                    "position_side": bp.get("position_side") or ledger.get("position_side") or "LONG",
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "trailing_sl": trailing_sl,
+                })
+                if ledger.get("ltp") is not None:
+                    bp_merged["ltp"] = ledger.get("ltp")
+                if ledger.get("unrealized_pnl") is not None:
+                    bp_merged["pnl"] = ledger.get("unrealized_pnl")
+
+            merged_positions.append(bp_merged)
+
+        # Now, check if there are any strategy rows that were not matched by any broker position
         for sp in strategy_rows:
-            symbol = str(sp.get("symbol") or "").upper()
-            if not symbol:
+            sp_sid = str(sp.get("strategy_id") or "")
+            sp_symbol = str(sp.get("symbol") or "").upper()
+            if sp_sid in matched_strategy_ids or sp_symbol in matched_symbols:
                 continue
+
             ledger = ledger_risk.get(sp.get("strategy_id") or "", {})
             stop_loss = sp.get("stop_loss") or ledger.get("stop_loss")
             take_profit = sp.get("take_profit") or ledger.get("take_profit")
             trailing_sl = ledger.get("trailing_sl")
-            base = by_symbol.get(symbol, {
-                "symbol": symbol,
+
+            merged_positions.append({
+                "symbol": sp_symbol,
                 "qty": sp.get("qty") or 0,
                 "avg_price": sp.get("avg_price") or ledger.get("entry_price") or 0,
                 "ltp": ledger.get("ltp") or sp.get("avg_price") or 0,
                 "pnl": ledger.get("unrealized_pnl") or 0,
-                "mode": sp.get("mode") or "live",
+                "mode": sp.get("mode") or "paper",
                 "exchange": sp.get("exchange"),
                 "segment": sp.get("segment"),
                 "instrument_token": sp.get("instrument_token"),
                 "broker": None,
-            })
-            base.update({
                 "strategy_id": sp.get("strategy_id"),
                 "strategy_name": sp.get("strategy_name"),
                 "strategy_position_id": sp.get("id"),
@@ -236,13 +307,8 @@ class ExecutionStateManager:
                 "entry_order_id": sp.get("entry_order_id"),
                 "broker_order_id": sp.get("broker_order_id"),
             })
-            if ledger.get("ltp") is not None:
-                base["ltp"] = ledger.get("ltp")
-            if ledger.get("unrealized_pnl") is not None:
-                base["pnl"] = ledger.get("unrealized_pnl")
-            by_symbol[symbol] = base
 
-        return list(by_symbol.values())
+        return merged_positions
 
     async def build_snapshot(self, user: dict, *, sync: bool = True) -> Dict[str, Any]:
         user_id = user["id"]

@@ -40,7 +40,7 @@ const statusTone = (status) => {
   const s = asStatus(status);
   if (ACTIVE_POSITION_STATES.includes(s)) return "good";
   if (PENDING_POSITION_STATES.includes(s)) return "warn";
-  if (["FAILED", "REJECTED", "BROKER_NOT_FOUND"].includes(s)) return "bad";
+  if (["FAILED", "REJECTED", "BROKER_NOT_FOUND", "ORPHAN", "STALE"].includes(s)) return "bad";
   return "neutral";
 };
 
@@ -301,13 +301,12 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
     </div>
   );
 };
-
 export default function Dashboard() {
   const { positions: execPositions, orders: execOrders, strategyPositions: execStrategyPositions, summary: executionSummary, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
-  const [positions, setPositions] = useState([]);
-  const [orders, setOrders] = useState([]);
+  const positions = execPositions;
+  const orders = execOrders;
   const [funds, setFunds] = useState(null);
   const [telemetry, setTelemetry] = useState(null);
   const [commodities, setCommodities] = useState([]);
@@ -327,8 +326,6 @@ export default function Dashboard() {
       await refreshExecution();
       setPf(p.data);
       setWatch(w.data);
-      setPositions(execPositions);
-      setOrders(execOrders);
       setFunds(f.data);
       setTelemetry(t.data);
       setCommodities(c.data || []);
@@ -336,12 +333,7 @@ export default function Dashboard() {
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
     }
-  }, [execPositions, execOrders, refreshExecution]);
-
-  useEffect(() => {
-    setPositions(execPositions);
-    setOrders(execOrders);
-  }, [execPositions, execOrders]);
+  }, [refreshExecution]);
 
   useEffect(() => {
     load();

@@ -14,6 +14,7 @@ router = APIRouter(prefix="/ops", tags=["Operations"])
 
 class OpsActionReq(BaseModel):
     note: Optional[str] = None
+    confirm: Optional[bool] = False
 
 
 @router.get("/diagnostics")
@@ -215,4 +216,61 @@ async def ops_clear_stale_paper_orders(req: OpsActionReq = None, user=Depends(ge
     await db.strategy_position_locks.delete_many({"user_id": user["id"]})
     
     return {"ok": True, "cleared_orders": res.modified_count}
+
+
+@router.post("/positions/cleanup-orphans")
+async def ops_cleanup_orphan_positions(req: OpsActionReq = None, user=Depends(get_current_user)):
+    user_id = user["id"]
+    
+    # 1. Fetch all positions in db.positions
+    positions = await db.positions.find({"user_id": user_id}).to_list(1000)
+    
+    # 2. Fetch active strategy positions
+    active_sp = await db.strategy_positions.find({
+        "user_id": user_id,
+        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]}
+    }).to_list(1000)
+    
+    active_sp_symbols = {str(sp.get("symbol")).upper() for sp in active_sp if sp.get("symbol")}
+    active_sp_strategy_ids = {str(sp.get("strategy_id")) for sp in active_sp if sp.get("strategy_id")}
+    
+    orphans = []
+    for pos in positions:
+        qty = int(pos.get("qty") or 0)
+        if qty == 0:
+            continue
+        symbol = str(pos.get("symbol")).upper()
+        strategy_id = pos.get("strategy_id")
+        
+        is_orphan = True
+        if strategy_id and str(strategy_id) in active_sp_strategy_ids:
+            is_orphan = False
+        elif symbol in active_sp_symbols:
+            is_orphan = False
+            
+        if is_orphan:
+            orphans.append(pos)
+            
+    # Default is always dry-run. Cleanup requires owner role AND confirm=True
+    confirm = bool(req and req.confirm)
+    is_owner = str(user.get("role")).lower() == "owner"
+    
+    cleaned = 0
+    report = [{"symbol": o["symbol"], "qty": o["qty"], "strategy_id": o.get("strategy_id")} for o in orphans]
+    
+    if confirm:
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Access denied: Owner role required for deletion.")
+        for orphan in orphans:
+            await db.positions.delete_one({"user_id": user_id, "symbol": orphan["symbol"]})
+            cleaned += 1
+            
+    return {
+        "ok": True,
+        "orphans_found": len(orphans),
+        "orphans": report,
+        "cleaned_count": cleaned,
+        "mode": "executed" if (confirm and is_owner) else "dry-run",
+        "message": "Orphan positions cleaned up successfully." if (confirm and is_owner) else "Dry-run completed. No records deleted."
+    }
 
