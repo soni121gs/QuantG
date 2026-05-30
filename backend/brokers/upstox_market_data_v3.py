@@ -458,6 +458,7 @@ class UpstoxMarketDataFeedV3:
                     url,
                     on_open=self._on_open,
                     on_message=self._on_message,
+                    on_data=self._on_data,
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
@@ -520,17 +521,36 @@ class UpstoxMarketDataFeedV3:
         self._ws_app.send(payload, opcode=websocket.ABNF.OPCODE_BINARY)
         logger.info("Upstox V3 subscription sent mode=%s instrument_count=%s", mode, len(keys_list))
 
-    def _on_message(self, ws: Any, message: Any) -> None:
-        if isinstance(message, str):
-            logger.debug("Upstox V3 feed text frame ignored: %s", message[:200])
-            return
+    def _handle_binary_frame(self, raw_bytes: bytes) -> None:
+        raw_len = len(raw_bytes)
+        logger.info("Upstox V3 binary frame received, length=%s", raw_len)
         try:
-            decoded = decode_feed_response(bytes(message))
+            decoded = decode_feed_response(raw_bytes)
+            feed_count = len(decoded.get("feeds") or {})
+            logger.info("Upstox V3 frame decode success, feeds=%s", feed_count)
             self.apply_decoded_message(decoded)
         except Exception as exc:
             with self._lock:
                 self._last_error = f"protobuf decode failed: {exc}"[:1000]
             logger.warning("Upstox V3 feed protobuf decode failed: %s", exc)
+
+    def _on_message(self, ws: Any, message: Any) -> None:
+        if isinstance(message, str):
+            logger.debug("Upstox V3 feed text frame ignored: %s", message[:200])
+            return
+        self._handle_binary_frame(bytes(message))
+
+    def _on_data(self, ws: Any, data: Any, opcode: Any, fin: Any) -> None:
+        is_binary = False
+        try:
+            import websocket
+            if opcode == websocket.ABNF.OPCODE_BINARY:
+                is_binary = True
+        except Exception:
+            if opcode == 2:
+                is_binary = True
+        if is_binary:
+            self._handle_binary_frame(bytes(data))
 
     def apply_decoded_message(self, decoded: Dict[str, Any]) -> None:
         feeds = decoded.get("feeds") or {}

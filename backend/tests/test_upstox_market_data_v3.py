@@ -186,3 +186,29 @@ def test_apply_decoded_message_populates_tick_cache_and_latest_tick():
     tick2 = feed.latest_tick("NSE_INDEX|Nifty 50")
     assert tick2 is not None
     assert tick2["ltp"] == pytest.approx(24852.1)
+
+
+def test_websocket_binary_frame_compatibility_on_message_and_on_data():
+    feed = UpstoxMarketDataFeedV3(access_token_getter=lambda: "token", api_base_url="https://api.upstox.com")
+    
+    # 1. Test binary frame path through on_message
+    raw_bytes_msg = _ltpc_message_bytes("NSE_FO|45450", 221.5)
+    feed._on_message(None, raw_bytes_msg)
+    
+    tick_msg = feed.latest_tick("NSE_FO|45450")
+    assert tick_msg is not None
+    assert tick_msg["ltp"] == pytest.approx(221.5)
+    
+    # 2. Test binary frame path through on_data (opcode 2 / OPCODE_BINARY)
+    raw_bytes_data = _ltpc_message_bytes("MCX_FO|566995", 101.25)
+    feed._on_data(None, raw_bytes_data, opcode=2, fin=True)
+    
+    tick_data = feed.latest_tick("MCX_FO|566995")
+    assert tick_data is not None
+    assert tick_data["ltp"] == pytest.approx(101.25)
+    
+    # 3. Test that both cache mappings are populated correctly and coexist
+    ticks = feed.latest_ticks()
+    assert "NSE_FO|45450" in ticks
+    assert "MCX_FO|566995" in ticks
+    assert len(ticks) == 2
