@@ -379,16 +379,17 @@ class UpstoxGateway:
         from urllib.parse import quote
 
         # Map internal interval names -> Upstox OHLC interval codes
+        # The Upstox /v2/market-quote/ohlc endpoint only supports 'I1', 'I30', and '1d'
         OHLC_INTERVAL_MAP = {
             "1minute": "I1",
             "minute":  "I1",
-            "5minute": "I5",
-            "15minute":"I15",
+            "5minute": "I1",
+            "15minute":"I1",
             "30minute":"I30",
-            "60minute":"I60",
-            "day":     "1D",
+            "60minute":"I1",
+            "day":     "1d",
         }
-        ohlc_interval_code = OHLC_INTERVAL_MAP.get(interval, "I5")
+        ohlc_interval_code = OHLC_INTERVAL_MAP.get(interval, "I1")
         encoded_key = quote(instrument_key)
 
         daily_bars: List[Dict[str, Any]] = []

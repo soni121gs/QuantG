@@ -310,5 +310,99 @@ class TestPaperModeIsolation(unittest.TestCase):
         asyncio.run(run_test())
 
 
+# ─────────────────────────────────────────────────────────────
+# 6. Regression tests for VPS fixes (Task 10/Audit Fixes)
+# ─────────────────────────────────────────────────────────────
+
+class TestRuntimeBugFixesRegression(unittest.TestCase):
+
+    def _make_gateway(self):
+        from brokers.upstox_gateway import UpstoxGateway
+        gw = UpstoxGateway.__new__(UpstoxGateway)
+        gw.access_token = "fake-test-token"
+        gw._tick_cache = {}
+        gw._ws_thread = None
+        return gw
+
+    def test_upstox_ohlc_interval_mapping_regression(self):
+        """Regression test for Fix #1: Verify Upstox index OHLC interval maps strictly to I1/I30/1d."""
+        gw = self._make_gateway()
+        called_paths = []
+
+        def fake_request(method, path, **kwargs):
+            called_paths.append(path)
+            if "day" in path:
+                return {"status": "success", "data": {"candles": []}}
+            if "ohlc" in path:
+                return {"status": "success", "data": {"NSE_INDEX|Nifty 50": {"ohlc": {"open": 24800.0, "high": 24850.0, "low": 24780.0, "close": 24820.0}, "last_price": 24820.0}}}
+            return {"status": "error"}
+
+        gw._request = fake_request
+
+        # 1. 5minute -> must map to I1, not I5
+        called_paths.clear()
+        gw.get_historical_candles("NSE_INDEX|Nifty 50", "5minute", 5)
+        ohlc_call = next((p for p in called_paths if "ohlc" in p), None)
+        self.assertIsNotNone(ohlc_call)
+        self.assertIn("interval=I1", ohlc_call)
+        self.assertNotIn("interval=I5", ohlc_call)
+
+        # 2. 15minute -> must map to I1, not I15
+        called_paths.clear()
+        gw.get_historical_candles("NSE_INDEX|Nifty 50", "15minute", 5)
+        ohlc_call = next((p for p in called_paths if "ohlc" in p), None)
+        self.assertIsNotNone(ohlc_call)
+        self.assertIn("interval=I1", ohlc_call)
+        self.assertNotIn("interval=I15", ohlc_call)
+
+        # 3. 30minute -> must map to I30
+        called_paths.clear()
+        gw.get_historical_candles("NSE_INDEX|Nifty 30", "30minute", 5)
+        ohlc_call = next((p for p in called_paths if "ohlc" in p), None)
+        self.assertIsNotNone(ohlc_call)
+        self.assertIn("interval=I30", ohlc_call)
+
+        # 4. 60minute -> must map to I1, not I60
+        called_paths.clear()
+        gw.get_historical_candles("NSE_INDEX|Nifty 50", "60minute", 5)
+        ohlc_call = next((p for p in called_paths if "ohlc" in p), None)
+        self.assertIsNotNone(ohlc_call)
+        self.assertIn("interval=I1", ohlc_call)
+        self.assertNotIn("interval=I60", ohlc_call)
+
+    def test_strategy_runner_safe_zero_division_regression(self):
+        """Regression test for Fix #2: Verify safe strategy sandbox error handling with division-by-zero."""
+        from strategy_runner import _safe_run
+        
+        # 1. Custom bad strategy with division-by-zero
+        bad_code = """
+def run(data):
+    x = 1 / 0
+    return []
+"""
+        res = _safe_run(bad_code, [{"date": "2026-05-29 15:00", "close": 100.0}])
+        self.assertEqual(res, [], "Expected _safe_run to catch ZeroDivisionError gracefully and return []")
+
+    def test_seeded_strategies_division_by_zero_immunity(self):
+        """Regression test for Fix #2: Verify default seeded strategies are immune to division by zero on zero price data."""
+        from server import DEFAULT_OPTION_STRATEGIES
+        from safe_exec import safe_run_strategy
+
+        # Mock candles where close prices are 0.0 (which would trigger the entry_price division bug)
+        mock_zero_candles = [
+            {"date": f"2026-05-29 09:{m:02d}", "close": 0.0, "open": 0.0, "high": 0.0, "low": 0.0, "volume": 100}
+            for m in range(50)
+        ]
+
+        for strat in DEFAULT_OPTION_STRATEGIES:
+            code = strat.get("python_code") or ""
+            if "def run" in code:
+                try:
+                    res = safe_run_strategy(code, mock_zero_candles)
+                    self.assertIsInstance(res, list, f"Strategy '{strat.get('name')}' must return a list")
+                except Exception as e:
+                    self.fail(f"Strategy template '{strat.get('name')}' raised an error on zero-price candles: {e}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

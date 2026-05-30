@@ -1717,12 +1717,12 @@ DEFAULT_OPTION_STRATEGIES = [
         bullish = closes[i] > ema8 > ema21 and momentum > range12 * 0.18
         bearish = closes[i] < ema8 < ema21 and momentum < -range12 * 0.18
         if position == "LONG":
-            pnl = (closes[i] - entry) / entry * 100
+            pnl = (closes[i] - entry) / entry * 100 if entry else 0.0
             if closes[i] < ema8 or pnl <= -0.35 or pnl >= 0.8:
                 signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NIFTY option exit'})
                 position = "NONE"
         elif position == "SHORT":
-            pnl = (entry - closes[i]) / entry * 100
+            pnl = (entry - closes[i]) / entry * 100 if entry else 0.0
             if closes[i] > ema8 or pnl <= -0.35 or pnl >= 0.8:
                 signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NIFTY put exit'})
                 position = "NONE"
@@ -1759,12 +1759,12 @@ DEFAULT_OPTION_STRATEGIES = [
         bearish = closes[i] < channel_low and closes[i-1] - closes[i] > avg_range * 0.35
         mid = (channel_high + channel_low) / 2
         if position == "LONG":
-            pnl = (closes[i] - entry) / entry * 100
+            pnl = (closes[i] - entry) / entry * 100 if entry else 0.0
             if closes[i] < mid or pnl <= -0.4 or pnl >= 0.9:
                 signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY option exit'})
                 position = "NONE"
         elif position == "SHORT":
-            pnl = (entry - closes[i]) / entry * 100
+            pnl = (entry - closes[i]) / entry * 100 if entry else 0.0
             if closes[i] > mid or pnl <= -0.4 or pnl >= 0.9:
                 signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY put exit'})
                 position = "NONE"
@@ -1876,7 +1876,7 @@ DEFAULT_OPTION_STRATEGIES = [
         std = (variance) ** 0.5
         upper = sma + 2 * std
         lower = sma - 2 * std
-        width = (upper - lower) / sma
+        width = (upper - lower) / sma if sma else 0.0
         
         if width < 0.02:
             if closes[i] > upper:
@@ -3151,12 +3151,12 @@ CRUDEOIL_HFT_VOLATILITY_CODE = """def run(data):
         bearish_entry = is_compressed and closes[i] < channel_low and vol_surge
         
         if position == "LONG":
-            pnl = (closes[i] - entry_price) / entry_price * 100
+            pnl = (closes[i] - entry_price) / entry_price * 100 if entry_price else 0.0
             if closes[i] < channel_low or pnl <= -0.4 or pnl >= 1.0:
                 signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Crude Vol Long Exit'})
                 position = "NONE"
         elif position == "SHORT":
-            pnl = (entry_price - closes[i]) / entry_price * 100
+            pnl = (entry_price - closes[i]) / entry_price * 100 if entry_price else 0.0
             if closes[i] > channel_high or pnl <= -0.4 or pnl >= 1.0:
                 signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Crude Vol Short Exit'})
                 position = "NONE"
