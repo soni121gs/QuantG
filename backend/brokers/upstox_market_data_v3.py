@@ -161,8 +161,11 @@ def _build_feed_response_class():
     field.type = descriptor_pb2.FieldDescriptorProto.TYPE_ENUM
     field.type_name = ".com.upstox.marketdatafeederv3udapi.rpc.proto.RequestMode"
 
-    market_entry = file_proto.message_type.add()
-    market_entry.name = "MarketInfo_SegmentStatusEntry"
+    market_info_msg = file_proto.message_type.add()
+    market_info_msg.name = "MarketInfo"
+    
+    market_entry = market_info_msg.nested_type.add()
+    market_entry.name = "SegmentStatusEntry"
     market_entry.options.map_entry = True
     for field_name, number, field_type, type_name in [
         ("key", 1, descriptor_pb2.FieldDescriptorProto.TYPE_STRING, None),
@@ -175,12 +178,19 @@ def _build_feed_response_class():
         field.type = field_type
         if type_name:
             field.type_name = type_name
-    add_message("MarketInfo", [
-        ("segmentStatus", 1, descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE, ".com.upstox.marketdatafeederv3udapi.rpc.proto.MarketInfo_SegmentStatusEntry", True),
-    ])
 
-    feeds_entry = file_proto.message_type.add()
-    feeds_entry.name = "FeedResponse_FeedsEntry"
+    field = market_info_msg.field.add()
+    field.name = "segmentStatus"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    field.type_name = ".com.upstox.marketdatafeederv3udapi.rpc.proto.MarketInfo.SegmentStatusEntry"
+
+    feed_response_msg = file_proto.message_type.add()
+    feed_response_msg.name = "FeedResponse"
+    
+    feeds_entry = feed_response_msg.nested_type.add()
+    feeds_entry.name = "FeedsEntry"
     feeds_entry.options.map_entry = True
     for field_name, number, field_type, type_name in [
         ("key", 1, descriptor_pb2.FieldDescriptorProto.TYPE_STRING, None),
@@ -193,12 +203,37 @@ def _build_feed_response_class():
         field.type = field_type
         if type_name:
             field.type_name = type_name
-    add_message("FeedResponse", [
-        ("type", 1, descriptor_pb2.FieldDescriptorProto.TYPE_ENUM, ".com.upstox.marketdatafeederv3udapi.rpc.proto.Type", False),
-        ("feeds", 2, descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE, ".com.upstox.marketdatafeederv3udapi.rpc.proto.FeedResponse_FeedsEntry", True),
-        ("currentTs", 3, descriptor_pb2.FieldDescriptorProto.TYPE_INT64, None, False),
-        ("marketInfo", 4, descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE, ".com.upstox.marketdatafeederv3udapi.rpc.proto.MarketInfo", False),
-    ])
+
+    # type field
+    f_type = feed_response_msg.field.add()
+    f_type.name = "type"
+    f_type.number = 1
+    f_type.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    f_type.type = descriptor_pb2.FieldDescriptorProto.TYPE_ENUM
+    f_type.type_name = ".com.upstox.marketdatafeederv3udapi.rpc.proto.Type"
+
+    # feeds field
+    f_feeds = feed_response_msg.field.add()
+    f_feeds.name = "feeds"
+    f_feeds.number = 2
+    f_feeds.label = descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED
+    f_feeds.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    f_feeds.type_name = ".com.upstox.marketdatafeederv3udapi.rpc.proto.FeedResponse.FeedsEntry"
+
+    # currentTs field
+    f_ts = feed_response_msg.field.add()
+    f_ts.name = "currentTs"
+    f_ts.number = 3
+    f_ts.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    f_ts.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT64
+
+    # marketInfo field
+    f_mi = feed_response_msg.field.add()
+    f_mi.name = "marketInfo"
+    f_mi.number = 4
+    f_mi.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    f_mi.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    f_mi.type_name = ".com.upstox.marketdatafeederv3udapi.rpc.proto.MarketInfo"
 
     pool = descriptor_pool.DescriptorPool()
     pool.Add(file_proto)
@@ -325,8 +360,8 @@ class UpstoxMarketDataFeedV3:
         self._running = False
         self._connected = False
         self._state = "disconnected"
-        self._last_error: Optional[str] = None
-        self._last_tick_time: Optional[str] = None
+        self._last_error = None
+        self._last_tick_time = None
         self._reconnects = 0
         self._consecutive_failures = 0
         self._first_tick_logged = False
@@ -526,6 +561,13 @@ class UpstoxMarketDataFeedV3:
         logger.info("Upstox V3 binary frame received, length=%s", raw_len)
         try:
             decoded = decode_feed_response(raw_bytes)
+            frame_type = decoded.get("type")
+            
+            # Silent handling of market_info welcome frames
+            if frame_type == "market_info" or frame_type == 2:
+                logger.info("Upstox V3 handshake successful: segment status received (%s bytes)", raw_len)
+                return
+
             feed_count = len(decoded.get("feeds") or {})
             logger.info("Upstox V3 frame decode success, feeds=%s", feed_count)
             self.apply_decoded_message(decoded)

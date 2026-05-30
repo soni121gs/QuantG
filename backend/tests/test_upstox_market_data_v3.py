@@ -212,3 +212,37 @@ def test_websocket_binary_frame_compatibility_on_message_and_on_data():
     assert "NSE_FO|45450" in ticks
     assert "MCX_FO|566995" in ticks
     assert len(ticks) == 2
+
+
+def test_protobuf_nested_descriptor_layout():
+    # Verify nesting of FeedsEntry inside FeedResponse
+    feed_response_desc = FeedResponse.DESCRIPTOR
+    nested_types = feed_response_desc.nested_types
+    nested_names = [nt.name for nt in nested_types]
+    assert "FeedsEntry" in nested_names
+
+    # Verify feeds field points to the nested FeedsEntry type
+    feeds_field = feed_response_desc.fields_by_name["feeds"]
+    assert feeds_field.message_type.name == "FeedsEntry"
+    assert feeds_field.message_type.containing_type == feed_response_desc
+
+
+def test_market_info_handshake_frame_silenced(caplog):
+    import logging
+    feed = UpstoxMarketDataFeedV3(access_token_getter=lambda: "token", api_base_url="https://api.upstox.com")
+    
+    # Simulate a market_info frame by serializing a FeedResponse with type=2 (market_info)
+    message = FeedResponse()
+    message.type = 2  # market_info
+    message.currentTs = 1740729566039
+    message.marketInfo.segmentStatus["NSE"] = 2  # NORMAL_OPEN
+    raw_bytes = message.SerializeToString()
+    
+    with caplog.at_level(logging.INFO):
+        feed._on_message(None, raw_bytes)
+        
+    # Check that it printed handshake successful log
+    assert any("handshake successful: segment status received" in record.message for record in caplog.records)
+    
+    # Assert tick cache was NOT updated (remains empty)
+    assert len(feed.latest_ticks()) == 0
