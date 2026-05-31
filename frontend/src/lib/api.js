@@ -10,7 +10,7 @@ export const API =
   process.env.REACT_APP_API_BASE ||
   normalizeApiBase(process.env.REACT_APP_API_URL) ||
   normalizeApiBase(process.env.REACT_APP_BACKEND_URL) ||
-  "http://localhost:8000/api";
+  "/api";
 
 export const api = axios.create({ baseURL: API });
 

@@ -26,7 +26,7 @@ git push origin main
 SSH into your Contabo live trading VPS (`82.180.145.183`) as `root` and execute these commands:
 ```bash
 # 1. Navigate to your live app folder on the VPS
-cd /root/QuantG
+cd /app/quantg/QuantG
 
 # 2. Pull the newly pushed changes from GitHub
 git pull
