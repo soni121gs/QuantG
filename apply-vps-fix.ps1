@@ -22,15 +22,17 @@ if (Test-Path -LiteralPath $Bundle) {
     Remove-Item -LiteralPath $Bundle -Force
 }
 
+# The deployment file list (removed non-existent strategy_runner_v2.py)
 $Files = @(
     "backend/server.py",
+    "backend/position_reconciler.py",
     "backend/strategy_runner.py",
-    "backend/strategy_runner_v2.py",
     "docker-compose.yml",
     "frontend/Dockerfile.static",
     "frontend/src/contexts/AuthContext.jsx",
     "frontend/src/pages/Auth.jsx",
     "frontend/src/pages/AIBot.jsx",
+    "frontend/src/pages/Dashboard.jsx",
     "frontend/src/lib/api.js",
     "frontend/.env.production",
     "frontend/nginx.conf",
@@ -38,7 +40,34 @@ $Files = @(
     "quantg_debug.sh"
 )
 
-& tar -czf $Bundle -C $LocalRoot @Files
+# Robustness check: Ensure all files exist and are not empty paths
+$ValidFiles = @()
+foreach ($File in $Files) {
+    if ([string]::IsNullOrWhiteSpace($File)) {
+        continue
+    }
+    
+    # Ignore temporary verifier files
+    if ($File -like "*_integrity.json" -or $File -like "before_integrity.json" -or $File -like "during_integrity.json" -or $File -like "after_integrity.json") {
+        Write-Host "Ignoring temporary verifier file: $File" -ForegroundColor Yellow
+        continue
+    }
+
+    $FullPath = Join-Path $LocalRoot $File
+    if (-not (Test-Path $FullPath)) {
+        Write-Host "❌ CRITICAL ERROR: Required file/directory is missing: $File" -ForegroundColor Red
+        throw "Missing required path for deployment: $File"
+    }
+    
+    $ValidFiles += $File
+}
+
+if ($ValidFiles.Count -eq 0) {
+    throw "No files to package."
+}
+
+Write-Host "Packaging $($ValidFiles.Count) files/directories..." -ForegroundColor Green
+& tar -czf $Bundle -C $LocalRoot @ValidFiles
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to create deploy bundle."
 }
@@ -51,14 +80,34 @@ ssh $Vps "set -e; mkdir -p $RemoteRoot; tar -xzf /tmp/quantg-vps-fix.tgz -C $Rem
 
 Write-Host "Checking public endpoints..."
 $Checks = @(
+    "https://www.quantgtrade.com",
+    "https://www.quantgtrade.com/api/",
     "http://82.180.145.183",
-    "http://82.180.145.183/api/",
-    "http://82.180.145.183:8000/docs"
+    "http://82.180.145.183/api/"
 )
 
 foreach ($Url in $Checks) {
-    $Response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20
-    Write-Host "$Url -> HTTP $($Response.StatusCode)"
+    try {
+        $Response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20
+        Write-Host "$Url -> HTTP $($Response.StatusCode) (OK)" -ForegroundColor Green
+    }
+    catch [System.Net.WebException] {
+        $ExceptionResponse = $_.Exception.Response
+        if ($ExceptionResponse) {
+            $StatusCode = [int]$ExceptionResponse.StatusCode
+            if ($StatusCode -in 200..399) {
+                Write-Host "$Url -> HTTP $StatusCode (OK Redirect)" -ForegroundColor Green
+            } else {
+                Write-Host "$Url -> HTTP $StatusCode (Failed)" -ForegroundColor Red
+                Write-Warning "Endpoint returned error code: $StatusCode"
+            }
+        } else {
+            Write-Host "$Url -> Connection Failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "$Url -> Unexpected Error: $_" -ForegroundColor Yellow
+    }
 }
 
-Write-Host "Done. Test in browser: http://82.180.145.183"
+Write-Host "Done. Test in browser: https://www.quantgtrade.com"
