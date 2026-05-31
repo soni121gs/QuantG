@@ -89,10 +89,26 @@ $Checks = @(
 foreach ($Url in $Checks) {
     try {
         $Response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20
-        Write-Host "$Url -> HTTP $($Response.StatusCode) (OK)" -ForegroundColor Green
+        $StatusCode = [int]$Response.StatusCode
+        if ($StatusCode -in 200..399) {
+            Write-Host "$Url -> HTTP $StatusCode (OK)" -ForegroundColor Green
+        } else {
+            Write-Host "$Url -> HTTP $StatusCode (Failed)" -ForegroundColor Red
+        }
     }
-    catch [System.Net.WebException] {
-        $ExceptionResponse = $_.Exception.Response
+    catch {
+        $StatusCode = $null
+        $ExceptionResponse = $null
+        
+        # Robustly extract the HTTP response regardless of PowerShell wrapping
+        if ($_.Exception) {
+            if ($_.Exception.Response) {
+                $ExceptionResponse = $_.Exception.Response
+            } elseif ($_.Exception.InnerException -and $_.Exception.InnerException.Response) {
+                $ExceptionResponse = $_.Exception.InnerException.Response
+            }
+        }
+        
         if ($ExceptionResponse) {
             $StatusCode = [int]$ExceptionResponse.StatusCode
             if ($StatusCode -in 200..399) {
@@ -102,11 +118,14 @@ foreach ($Url in $Checks) {
                 Write-Warning "Endpoint returned error code: $StatusCode"
             }
         } else {
-            Write-Host "$Url -> Connection Failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            # Text-based fallback to catch 308/redirects inside the exception string
+            $ErrorMessage = $_.ToString()
+            if ($ErrorMessage -like "*(308)*" -or $ErrorMessage -like "*Permanent Redirect*") {
+                Write-Host "$Url -> HTTP 308 (OK Redirect)" -ForegroundColor Green
+            } else {
+                Write-Host "$Url -> Connection Failed: $ErrorMessage" -ForegroundColor Yellow
+            }
         }
-    }
-    catch {
-        Write-Host "$Url -> Unexpected Error: $_" -ForegroundColor Yellow
     }
 }
 
