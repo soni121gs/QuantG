@@ -53,16 +53,23 @@ class ConflictResolver:
                 active_groups.add(group)
 
         for und, sigs in by_underlying.items():
-            # 1. Check One-Active-Position-Per-Symbol-Group rule
-            if one_active_position_per_symbol_group and und in active_groups:
-                for sig in sigs:
+            # 1. Check One-Active-Position-Per-Symbol-Group rule on a per-signal basis
+            filtered_sigs = []
+            for sig in sigs:
+                vc = sig.get("visual_config") or {}
+                one_active_pos = vc.get("risk", {}).get("one_active_position_per_symbol_group", one_active_position_per_symbol_group)
+                if one_active_pos and und in active_groups:
                     if sig.get("action") == "BUY":
                         sig["status"] = "BLOCKED"
                         sig["rejection_reason"] = "symbol-group-active-position-exists"
                         rejected_or_filtered.append(sig)
                     else:
                         # Exits (SELL) are allowed to bypass the group-level lockout
-                        approved.append(sig)
+                        filtered_sigs.append(sig)
+                else:
+                    filtered_sigs.append(sig)
+
+            if not filtered_sigs:
                 continue
 
             # 2. Check CE/PE Clashing
@@ -70,7 +77,7 @@ class ConflictResolver:
             pe_buys: List[Dict[str, Any]] = []
             exits: List[Dict[str, Any]] = []
 
-            for sig in sigs:
+            for sig in filtered_sigs:
                 action = str(sig.get("action") or "").upper()
                 if action == "SELL":
                     exits.append(sig)
@@ -194,12 +201,13 @@ class SignalManager:
         # 2. Max trades limits
         max_trades = int(risk.get("max_trades_per_day") or 0)
         if max_trades > 0:
-            now_utc = datetime.now(timezone.utc)
-            local_midnight = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            ist_midnight_utc = ist_midnight - timedelta(hours=5, minutes=30)
             processed_count = await db.signals.count_documents({
                 "strategy_id": strategy_id,
                 "status": "PROCESSED",
-                "created_at": {"$gte": local_midnight.isoformat()}
+                "created_at": {"$gte": ist_midnight_utc.isoformat()}
             })
             if processed_count >= max_trades:
                 return False, "max-trades-day-reached"
@@ -340,13 +348,18 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 # Route direct strategy-level parameters
                                 order_res = await place_order_fn(**place_kwargs)
                                 
+                                now_str = datetime.now(timezone.utc).isoformat()
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
                                     {"$set": {
                                         "status": "PROCESSED",
                                         "order_id": order_res.get("id"),
-                                        "processed_at": datetime.now(timezone.utc).isoformat()
+                                        "processed_at": now_str
                                     }}
+                                )
+                                await db.strategies.update_one(
+                                    {"id": sig["strategy_id"], "user_id": user_id},
+                                    {"$set": {"last_signal_at": now_str}}
                                 )
                             except Exception as exec_err:
                                 logger.warning(f"Failed order placement for signal {sig['id']}: {exec_err}")

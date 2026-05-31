@@ -396,7 +396,6 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one(
                         {"id": s["id"]},
                         {"$set": {**eval_set,
-                                  "last_signal_at": now_str,
                                   "last_signal_action": action,
                                   "last_signals_count": signals_count,
                                   "last_fired_signal_date": last_sig_date,

@@ -265,3 +265,58 @@ async def test_signal_manager_max_trades_reached():
     ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
     assert not ok
     assert reason == "max-trades-day-reached"
+
+
+def test_conflict_resolver_strategy_specific_override():
+    # Strategy position already active in group "NIFTY"
+    active_pos = {
+        "id": "pos-active",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol_group": "NIFTY",
+        "symbol": "NIFTY2660524900CE",
+        "status": "FILLED",
+    }
+
+    # Signal A: Strategy has override one_active_position_per_symbol_group = False
+    sig_override_false = {
+        "id": "sig-override-false",
+        "user_id": "user-1",
+        "strategy_id": "strat-2",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY2660524950CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 95.0,
+        "visual_config": {"risk": {"one_active_position_per_symbol_group": False}},
+        "status": "PENDING",
+    }
+
+    # Signal B: Strategy has override one_active_position_per_symbol_group = True
+    sig_override_true = {
+        "id": "sig-override-true",
+        "user_id": "user-1",
+        "strategy_id": "strat-3",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY2660524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 92.0,
+        "visual_config": {"risk": {"one_active_position_per_symbol_group": True}},
+        "status": "PENDING",
+    }
+
+    approved, rejected_or_filtered = ConflictResolver.resolve(
+        pending_signals=[sig_override_false, sig_override_true],
+        active_positions=[active_pos],
+        one_active_position_per_symbol_group=True # global setting is True
+    )
+
+    # sig_override_false should be approved because strategy-level risk setting overrides global True
+    assert sig_override_false in approved
+
+    # sig_override_true should be blocked because it respects one_active_position_per_symbol_group = True
+    assert sig_override_true in rejected_or_filtered
+    assert sig_override_true["status"] == "BLOCKED"
+    assert sig_override_true["rejection_reason"] == "symbol-group-active-position-exists"
+

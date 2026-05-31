@@ -4834,13 +4834,18 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
         parsed_trades.sort(key=lambda x: x[0])
         
         # Calculate PnL periods
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        ist_now = datetime.now(timezone.utc).astimezone(ist_tz)
+        ist_today = ist_now.date()
         for dt, pnl in parsed_trades:
-            age_days = (now_dt - dt).days
-            if age_days == 0:
+            ist_dt = dt.astimezone(ist_tz)
+            ist_date = ist_dt.date()
+            if ist_date == ist_today:
                 pnl_today += pnl
-            if age_days < 7:
+            delta_days = (ist_today - ist_date).days
+            if delta_days < 7:
                 pnl_week += pnl
-            if age_days < 30:
+            if delta_days < 30:
                 pnl_month += pnl
                 
         # Calculate Max Drawdown
@@ -5587,12 +5592,21 @@ def _options_premium_at_exit(entry_premium: float, current_spot: float, entry_sp
 
 
 # ============== Routes: Orders & Positions ==============
+def get_ist_midnight_utc_iso() -> str:
+    """Return the UTC ISO timestamp corresponding to the start of today in IST (00:00:00 IST)."""
+    now_utc = datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ist_midnight_utc = ist_midnight - IST_OFFSET
+    return ist_midnight_utc.isoformat()
+
+
 async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
     """Refuse new orders if today's realised loss already exceeds max_daily_loss.
     Computed from db.orders (paper mode) — tracks realised_pnl on closing trades."""
     if not max_loss or max_loss <= 0:
         return
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_start = get_ist_midnight_utc_iso()
     orders = await db.orders.find({
         "user_id": user_id,
         "created_at": {"$gte": today_start},
@@ -5610,7 +5624,7 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
 async def _check_trade_count_guard(user_id: str, max_trades: int) -> None:
     if not max_trades or max_trades <= 0:
         return
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_start = get_ist_midnight_utc_iso()
     trades = await db.orders.count_documents({
         "user_id": user_id,
         "created_at": {"$gte": today_start},
@@ -5802,6 +5816,10 @@ async def _build_order_intent(
     exchange = (exchange or "NSE").upper()
     symbol_upper = symbol.upper().strip()
 
+    strategy_id = await _strategy_source_id(source)
+    if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
+        strategy_id = "manual_recovery"
+
     # ----- option contract path -----
     if option_contract and option_contract.get("tradingsymbol"):
         tsym = str(option_contract["tradingsymbol"]).upper().strip()
@@ -5809,9 +5827,33 @@ async def _build_order_intent(
         opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
         token = str(option_contract.get("instrument_token") or tsym)
         broker_side = str(option_contract.get("transaction_type") or side or "BUY").upper()
-        source_text = str(source or "").lower()
-        is_exit_source = any(part in source_text for part in ("exit", "squareoff", "stop-loss", "take-profit", "trailing-sl", "time-exit"))
-        asset_class = "OPTION_LONG" if broker_side == "BUY" or is_exit_source else "OPTION_SHORT"
+        instrument_key = f"{opt_exchange}:{tsym}"
+
+        # Dynamic intent and asset class resolution from active database position
+        active_pos = None
+        if strategy_id:
+            active_pos = await db.strategy_positions.find_one({
+                "user_id": user_id,
+                "strategy_id": strategy_id,
+                "instrument_key": instrument_key,
+                "status": {"$in": ["PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}
+            })
+
+        if active_pos:
+            pos_side = str(active_pos.get("position_side") or "LONG").upper()
+            if pos_side == "SHORT":
+                intent_str = "CLOSE_SHORT" if broker_side == "BUY" else "OPEN_SHORT"
+                asset_class = "OPTION_SHORT"
+            else:
+                intent_str = "CLOSE_LONG" if broker_side == "SELL" else "OPEN_LONG"
+                asset_class = "OPTION_LONG"
+        else:
+            if broker_side == "BUY":
+                intent_str = "OPEN_LONG"
+                asset_class = "OPTION_LONG"
+            else:
+                intent_str = "OPEN_SHORT"
+                asset_class = "OPTION_SHORT"
 
         lot_size = int(option_contract.get("lot_size") or options_helper.LOT_SIZES.get((option_contract.get("underlying") or "").upper(), 1))
         lots = max(1, int(qty or 1))
@@ -5825,10 +5867,6 @@ async def _build_order_intent(
             instrument_token=token,
             asset_class=asset_class,
         )
-
-        # Determine intent
-        strategy_id = await _strategy_source_id(source)
-        intent_str = _infer_intent(broker_side, strategy_id, user_id, instr, asset_class)
 
         intent = OrderIntent(
             instrument=instr,
@@ -5864,6 +5902,26 @@ async def _build_order_intent(
         if resolved:
             token = resolved
 
+    instrument_key = f"{exchange}:{symbol_upper}"
+    active_pos = None
+    if strategy_id:
+        active_pos = await db.strategy_positions.find_one({
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "instrument_key": instrument_key,
+            "status": {"$in": ["PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}
+        })
+
+    eval_side = str(side or "BUY").upper()
+    if active_pos:
+        pos_side = str(active_pos.get("position_side") or "LONG").upper()
+        if pos_side == "SHORT":
+            intent_str = "CLOSE_SHORT" if eval_side == "BUY" else "OPEN_SHORT"
+        else:
+            intent_str = "CLOSE_LONG" if eval_side == "SELL" else "OPEN_LONG"
+    else:
+        intent_str = "OPEN_LONG" if eval_side == "BUY" else "OPEN_SHORT"
+
     final_qty = int(qty or settings.get("default_qty", 1))
 
     instr = InstrumentRef(
@@ -5874,9 +5932,6 @@ async def _build_order_intent(
         instrument_token=token,
         asset_class=asset_class,
     )
-
-    strategy_id = await _strategy_source_id(source)
-    intent_str = _infer_intent(side, strategy_id, user_id, instr, asset_class)
 
     intent = OrderIntent(
         instrument=instr,

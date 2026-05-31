@@ -33,6 +33,10 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def ist_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+
 def iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
@@ -350,16 +354,19 @@ class OptionStateLedger:
             if current_state == STATE_COOLDOWN and cooldown_until and cooldown_until > now:
                 return LedgerDecision(False, "cooldown-active", current_state)
 
-            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Start of today in IST, converted to a UTC ISO timestamp for trade journal query
+            ist_today = ist_now()
+            ist_midnight = ist_today.replace(hour=0, minute=0, second=0, microsecond=0)
+            ist_midnight_utc = ist_midnight - timedelta(hours=5, minutes=30)
             trades_today = self.db.option_trade_journal.count_documents({
                 "strategy_id": strategy_id,
-                "exit_time": {"$gte": iso(day_start)}
+                "exit_time": {"$gte": iso(ist_midnight_utc)}
             })
             if int(trades_today) >= int(state.get("max_trades_day", 3)):
                 return LedgerDecision(False, "max-trades-day-reached", current_state)
 
             daily_pnl = self.db.option_daily_pnl.find_one({
-                "trade_date": now.date().isoformat(),
+                "trade_date": ist_today.date().isoformat(),
                 "strategy_id": strategy_id
             })
             daily_loss_limit = float(risk["daily_loss_limit"]) if risk else 0.0
@@ -584,7 +591,7 @@ class OptionStateLedger:
             )
 
             self.db.option_daily_pnl.update_one(
-                {"trade_date": now.date().isoformat(), "strategy_id": strategy_id},
+                {"trade_date": ist_now().date().isoformat(), "strategy_id": strategy_id},
                 {
                     "$inc": {"realised_pnl": pnl, "trades": 1},
                     "$setOnInsert": {"unrealised_pnl": 0.0}
@@ -655,7 +662,7 @@ class OptionStateLedger:
                 unrealised = round((float(ltp) - entry) * qty, 2)
 
             self.db.option_daily_pnl.update_one(
-                {"trade_date": utc_now().date().isoformat(), "strategy_id": strategy_id},
+                {"trade_date": ist_now().date().isoformat(), "strategy_id": strategy_id},
                 {
                     "$set": {"unrealised_pnl": unrealised},
                     "$setOnInsert": {"realised_pnl": 0.0, "trades": 0}
@@ -678,7 +685,7 @@ class OptionStateLedger:
             risk_rows = {risk["strategy_id"]: risk for risk in self.db.option_risk_settings.find({})}
             pnl_rows = {
                 pnl["strategy_id"]: pnl
-                for pnl in self.db.option_daily_pnl.find({"trade_date": utc_now().date().isoformat()})
+                for pnl in self.db.option_daily_pnl.find({"trade_date": ist_now().date().isoformat()})
             }
 
             out = {}
