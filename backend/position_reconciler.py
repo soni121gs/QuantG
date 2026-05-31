@@ -22,6 +22,8 @@ async def create_manual_recovery_strategy_if_missing(user_id: str, paper_mode: b
             "id": "manual_recovery",
             "user_id": user_id,
             "name": "MANUAL_RECOVERY",
+            "description": "Manual position recovery override tool",
+            "kind": "visual",
             "status": "live",
             "broker": "upstox",
             "mode": "paper" if paper_mode else "live",
