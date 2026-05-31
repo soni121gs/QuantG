@@ -336,6 +336,49 @@ class ExecutionStateManager:
         open_orders = [o for o in orders if o.get("status") in OPEN_ORDER_STATUSES]
         failed_orders = [o for o in orders if o.get("status") == "FAILED"]
 
+        # Calculate position integrity health metrics for the dashboard
+        broker_active = [p for p in positions if int(p.get("qty") or 0) != 0]
+        active_sp_symbols = {str(sp.get("symbol")).upper() for sp in strategy_rows if sp.get("symbol")}
+        active_sp_strategy_ids = {str(sp.get("strategy_id")) for sp in strategy_rows if sp.get("strategy_id")}
+        
+        orphan_positions_count = 0
+        missing_sl_count = 0
+        missing_tp_count = 0
+        strategy_mismatches_count = 0
+        
+        for bp in broker_active:
+            symbol = str(bp.get("symbol") or "").upper()
+            strategy_id = bp.get("strategy_id")
+            
+            is_orphan = True
+            if strategy_id and str(strategy_id) in active_sp_strategy_ids:
+                is_orphan = False
+            elif symbol in active_sp_symbols:
+                is_orphan = False
+                
+            if is_orphan:
+                orphan_positions_count += 1
+                
+        for sp in strategy_rows:
+            symbol = str(sp.get("symbol") or "").upper()
+            
+            has_sl = sp.get("stop_loss") is not None
+            has_tp = sp.get("take_profit") is not None
+            
+            if not has_sl:
+                missing_sl_count += 1
+            if not has_tp:
+                missing_tp_count += 1
+                
+            bp_match = next((p for p in broker_active if str(p.get("symbol")).upper() == symbol), None)
+            if not bp_match:
+                strategy_mismatches_count += 1
+            else:
+                bp_qty = abs(int(bp_match.get("qty") or 0))
+                sp_qty = int(sp.get("qty") or 0)
+                if bp_qty != sp_qty:
+                    strategy_mismatches_count += 1
+
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "paper_mode": bool(settings.get("paper_mode", True)),
@@ -352,6 +395,13 @@ class ExecutionStateManager:
                 "open_orders": len(open_orders),
                 "failed_orders": len(failed_orders),
                 "total_unrealized_pnl": round(sum(float(p.get("pnl") or 0) for p in positions), 2),
+                "position_integrity": {
+                    "orphans": orphan_positions_count,
+                    "missing_sl": missing_sl_count,
+                    "missing_tp": missing_tp_count,
+                    "strategy_mismatches": strategy_mismatches_count,
+                    "failed_orders": len(failed_orders),
+                }
             },
         }
 

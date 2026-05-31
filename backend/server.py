@@ -4756,6 +4756,120 @@ async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
     }
 
 
+@api.get("/strategies/leaderboard")
+async def strategy_leaderboard(user=Depends(get_current_user)):
+    user_id = user["id"]
+    
+    # Fetch all strategies
+    strategies = await db.strategies.find({"user_id": user_id}).to_list(1000)
+    
+    # Fetch closed paper trades
+    paper_trades = await db.trades.find({"user_id": user_id}).to_list(5000)
+    
+    # Fetch option trades from journal
+    option_trades = await db.option_trade_journal.find({"strategy_id": {"$in": [s["id"] for s in strategies]}}).to_list(5000)
+    
+    # Group trades by strategy
+    trades_by_strat: Dict[str, List[Dict[str, Any]]] = {s["id"]: [] for s in strategies}
+    
+    for t in paper_trades:
+        sid = t.get("strategy_id")
+        if sid in trades_by_strat:
+            trades_by_strat[sid].append({
+                "pnl": float(t.get("realised_pnl") or t.get("gross_realised_pnl") or 0),
+                "closed_at": t.get("closed_at") or t.get("exit_time"),
+            })
+            
+    for ot in option_trades:
+        sid = ot.get("strategy_id")
+        if sid in trades_by_strat:
+            trades_by_strat[sid].append({
+                "pnl": float(ot.get("pnl") or 0),
+                "closed_at": ot.get("exit_time"),
+            })
+            
+    leaderboard = []
+    now_dt = datetime.now(timezone.utc)
+    
+    for strat in strategies:
+        sid = strat["id"]
+        s_trades = trades_by_strat[sid]
+        
+        total_trades = len(s_trades)
+        wins = sum(1 for t in s_trades if t["pnl"] > 0)
+        win_rate = round((wins / total_trades) * 100, 2) if total_trades > 0 else 0.0
+        
+        pnl_today = 0.0
+        pnl_week = 0.0
+        pnl_month = 0.0
+        
+        # Sort trades chronologically to calculate drawdown
+        parsed_trades = []
+        for t in s_trades:
+            close_time = t["closed_at"]
+            dt = None
+            if close_time:
+                try:
+                    if isinstance(close_time, datetime):
+                        dt = close_time
+                    else:
+                        # Strip fractional seconds timezone offsets if fromisoformat fails
+                        val_str = close_time.replace("Z", "+00:00")
+                        if "." in val_str and "+" in val_str:
+                            parts = val_str.split("+")
+                            base = parts[0]
+                            tz = parts[1]
+                            if len(base.split(".")[-1]) > 6:
+                                base = base.split(".")[0] + "." + base.split(".")[-1][:6]
+                            val_str = base + "+" + tz
+                        dt = datetime.fromisoformat(val_str)
+                except Exception:
+                    pass
+            if dt:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                parsed_trades.append((dt, t["pnl"]))
+                
+        # Sort chronologically
+        parsed_trades.sort(key=lambda x: x[0])
+        
+        # Calculate PnL periods
+        for dt, pnl in parsed_trades:
+            age_days = (now_dt - dt).days
+            if age_days == 0:
+                pnl_today += pnl
+            if age_days < 7:
+                pnl_week += pnl
+            if age_days < 30:
+                pnl_month += pnl
+                
+        # Calculate Max Drawdown
+        max_drawdown = 0.0
+        peak = 0.0
+        running_pnl = 0.0
+        for _, pnl in parsed_trades:
+            running_pnl += pnl
+            if running_pnl > peak:
+                peak = running_pnl
+            drawdown = peak - running_pnl
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                
+        leaderboard.append({
+            "strategy_id": sid,
+            "strategy_name": strat.get("name"),
+            "trades": total_trades,
+            "win_rate": win_rate,
+            "pnl_today": round(pnl_today, 2),
+            "pnl_week": round(pnl_week, 2),
+            "pnl_month": round(pnl_month, 2),
+            "max_drawdown": round(max_drawdown, 2),
+        })
+        
+    leaderboard.sort(key=lambda x: (x["win_rate"], x["trades"]), reverse=True)
+    return leaderboard
+
+
 @api.get("/strategies/{sid}", response_model=StrategyOut)
 async def get_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
@@ -6230,21 +6344,33 @@ async def _insert_order_intent(order_doc: Dict[str, Any]) -> tuple[Dict[str, Any
 
 
 async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dict[str, Any]:
+    lower_msg = str(message or "").lower()
+    reason_code = "FAILED_ORDER: broker rejection"
+    if "margin" in lower_msg or "capital" in lower_msg or "balance" in lower_msg or "insufficient" in lower_msg:
+        reason_code = "FAILED_ORDER: insufficient margin"
+    elif "already has active strategy position" in lower_msg or "already reserved" in lower_msg or "duplicate position" in lower_msg or "re-entry blocked" in lower_msg:
+        reason_code = "FAILED_ORDER: duplicate position"
+    elif "symbol mismatch" in lower_msg or "invalid-upstox-key" in lower_msg or "exchange must be" in lower_msg or "symbol not found" in lower_msg:
+        reason_code = "FAILED_ORDER: symbol mismatch"
+    elif "stale" in lower_msg or "quality" in lower_msg or "websocket disconnected" in lower_msg or "ltp unavailable" in lower_msg:
+        reason_code = "FAILED_ORDER: stale market data"
+        
     now = datetime.now(timezone.utc).isoformat()
     row = await db.orders.find_one_and_update(
         {"id": order_id, "user_id": user_id},
         {"$set": {
-            "status": ORDER_REJECTED,
-            "legacy_status": "REJECTED",
-            "execution_status": ORDER_REJECTED,
-            "status_message": message,
+            "status": "FAILED",
+            "legacy_status": "FAILED",
+            "execution_status": "FAILED",
+            "status_message": reason_code,
             "error_message": message,
+            "reject_reason": reason_code,
             "updated_at": now,
         }, "$unset": {"placement_owner": "", "placement_lock_until": ""}},
         projection={"_id": 0},
         return_document=ReturnDocument.AFTER,
     )
-    await _append_order_event(order_id, user_id, "ORDER_REJECTED", {"message": message})
+    await _append_order_event(order_id, user_id, "ORDER_REJECTED", {"message": message, "reason_code": reason_code})
     return row or {}
 
 
@@ -6340,6 +6466,16 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
 
     pos = await db.positions.find_one({"user_id": user_id, "symbol": symbol})
     before_qty = int((pos or {}).get("qty") or 0)
+    
+    # Cap exit delta to prevent negative quantities on exit
+    if intent_name in {"CLOSE_LONG", "CLOSE_SHORT"}:
+        if before_qty > 0 and intent_name == "CLOSE_LONG":
+            delta = -min(before_qty, qty)
+        elif before_qty < 0 and intent_name == "CLOSE_SHORT":
+            delta = min(abs(before_qty), qty)
+        else:
+            delta = 0
+            
     before_avg = float((pos or {}).get("avg_price") or 0)
     after_qty = before_qty + delta
     qty_closed = 0
@@ -6515,7 +6651,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     settings = dict(await get_user_settings(user_id))
     strategy_id = await _strategy_source_id(source)
+    if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
+        strategy_id = "manual_recovery"
+
     if strategy_id:
+        if strategy_id == "manual_recovery":
+            from position_reconciler import create_manual_recovery_strategy_if_missing
+            await create_manual_recovery_strategy_if_missing(user_id, bool(settings.get("paper_mode", True)))
         strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if strat:
             if strat.get("mode") in ("paper", "live"):
@@ -6539,92 +6681,101 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 detail="Live trading disabled: Reconnect Upstox required before placing live orders.",
             )
 
-    resolution = await _build_order_intent(
-        user_id=user_id,
-        symbol=symbol,
-        side=side,
-        qty=qty,
-        source=source,
-        exchange=exchange,
-        settings=settings,
-        option_contract=option_contract,
-        price=price,
-        stop_loss=stop_loss,
-        take_profit=take_profit,
-    )
-    intent: OrderIntent = resolution["intent"]
-    instr = intent.instrument
-    if instr.exchange not in SUPPORTED_ORDER_EXCHANGES:
-        raise HTTPException(status_code=400, detail=f"exchange must be one of {sorted(SUPPORTED_ORDER_EXCHANGES)}")
-    if not paper and not _is_order_market_open(instr.exchange):
-        market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
-        raise HTTPException(status_code=400, detail=f"Live orders are blocked outside {market_name} market hours.")
-
-    strategy_id = await _strategy_source_id(source)
-    fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
-    pretrade_risk: Optional[Dict[str, Any]] = None
-    if _intent_is_entry(intent.intent):
-        await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
-        await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
-        if intent.intent in ("OPEN_LONG", "OPEN_SHORT") and fill_price_hint <= 0 and not paper:
-            raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {instr.tradingsymbol}; order blocked.")
-        pretrade_risk = await _pre_trade_risk_gate(
-            user_id,
-            intent,
-            settings=settings,
-            strategy_id=strategy_id,
-            paper=paper,
-            fill_price_hint=fill_price_hint,
-            option_contract=option_contract,
-            lot_size=int(resolution.get("lot_size") or 1),
-        )
-        if int(pretrade_risk.get("quantity") or intent.quantity) < int(intent.quantity):
-            intent.quantity = int(pretrade_risk["quantity"])
-            if resolution.get("lot_size"):
-                resolution["lots"] = max(1, int(intent.quantity) // max(1, int(resolution.get("lot_size") or 1)))
-
-    if idempotency_key:
-        existing_idem = await db.orders.find_one(
-            {"user_id": user_id, "idempotency_key": _scoped_idempotency_key(user_id, idempotency_key)},
-            {"_id": 0},
-        )
-        if existing_idem and not (
-            existing_idem.get("mode") == "live"
-            and existing_idem.get("status") == ORDER_NEW
-            and not existing_idem.get("broker_order_id")
-            and str(existing_idem.get("placement_lock_until") or "") < datetime.now(timezone.utc).isoformat()
-        ):
-            if existing_idem.get("mode") == "paper" and not existing_idem.get("paper_fill_applied"):
-                existing_idem = await _apply_paper_fill_to_position(
-                    existing_idem,
-                    float(existing_idem.get("price") or existing_idem.get("expected_price") or 0),
-                )
-            return _clean_order_response(existing_idem)
-
-    instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+    order_inserted = False
     position_reservation = None
     exit_position_record = None
-    if strategy_id and _intent_is_entry(intent.intent):
-        position_reservation = await _reserve_strategy_position(
-            user_id=user_id,
-            strategy_id=strategy_id,
-            instrument_key=instrument_key,
-            trading_symbol=instr.tradingsymbol,
-            exchange=instr.exchange,
-            instrument_token=instr.instrument_token,
-            quantity=int(intent.quantity),
-            entry_price=float(fill_price_hint or 0),
-            source=source,
-        )
-    if strategy_id and _intent_is_exit(intent.intent):
-        exit_position_record = await _open_strategy_position_for_exit(
-            user_id=user_id,
-            strategy_id=strategy_id,
-            instrument_key=instrument_key,
-        )
-        intent.quantity = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or intent.quantity)
+    intent = None
 
     try:
+        resolution = await _build_order_intent(
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            source=source,
+            exchange=exchange,
+            settings=settings,
+            option_contract=option_contract,
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        intent = resolution["intent"]
+        instr = intent.instrument
+        if instr.exchange not in SUPPORTED_ORDER_EXCHANGES:
+            raise HTTPException(status_code=400, detail=f"exchange must be one of {sorted(SUPPORTED_ORDER_EXCHANGES)}")
+        if not paper and not _is_order_market_open(instr.exchange):
+            market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
+            raise HTTPException(status_code=400, detail=f"Live orders are blocked outside {market_name} market hours.")
+        if paper and _intent_is_entry(intent.intent) and not _is_order_market_open(instr.exchange):
+            if os.environ.get("QUANTG_BYPASS_MARKET_HOURS") != "true":
+                market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
+                raise HTTPException(status_code=400, detail=f"Paper entry orders are blocked outside {market_name} market hours.")
+
+        strategy_id = await _strategy_source_id(source)
+        if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
+            strategy_id = "manual_recovery"
+        fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
+        pretrade_risk = None
+        if _intent_is_entry(intent.intent):
+            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
+            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
+            if intent.intent in ("OPEN_LONG", "OPEN_SHORT") and fill_price_hint <= 0 and not paper:
+                raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {instr.tradingsymbol}; order blocked.")
+            pretrade_risk = await _pre_trade_risk_gate(
+                user_id,
+                intent,
+                settings=settings,
+                strategy_id=strategy_id,
+                paper=paper,
+                fill_price_hint=fill_price_hint,
+                option_contract=option_contract,
+                lot_size=int(resolution.get("lot_size") or 1),
+            )
+            if int(pretrade_risk.get("quantity") or intent.quantity) < int(intent.quantity):
+                intent.quantity = int(pretrade_risk["quantity"])
+                if resolution.get("lot_size"):
+                    resolution["lots"] = max(1, int(intent.quantity) // max(1, int(resolution.get("lot_size") or 1)))
+
+        if idempotency_key:
+            existing_idem = await db.orders.find_one(
+                {"user_id": user_id, "idempotency_key": _scoped_idempotency_key(user_id, idempotency_key)},
+                {"_id": 0},
+            )
+            if existing_idem and not (
+                existing_idem.get("mode") == "live"
+                and existing_idem.get("status") == ORDER_NEW
+                and not existing_idem.get("broker_order_id")
+                and str(existing_idem.get("placement_lock_until") or "") < datetime.now(timezone.utc).isoformat()
+            ):
+                if existing_idem.get("mode") == "paper" and not existing_idem.get("paper_fill_applied"):
+                    existing_idem = await _apply_paper_fill_to_position(
+                        existing_idem,
+                        float(existing_idem.get("price") or existing_idem.get("expected_price") or 0),
+                    )
+                return _clean_order_response(existing_idem)
+
+        instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+        if strategy_id and _intent_is_entry(intent.intent):
+            position_reservation = await _reserve_strategy_position(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                instrument_key=instrument_key,
+                trading_symbol=instr.tradingsymbol,
+                exchange=instr.exchange,
+                instrument_token=instr.instrument_token,
+                quantity=int(intent.quantity),
+                entry_price=float(fill_price_hint or 0),
+                source=source,
+            )
+        if strategy_id and _intent_is_exit(intent.intent):
+            exit_position_record = await _open_strategy_position_for_exit(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                instrument_key=instrument_key,
+            )
+            intent.quantity = int(exit_position_record.get("open_quantity") or exit_position_record.get("quantity") or intent.quantity)
+
         resolved_product = (product or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))).upper()
         execution_tag = _new_execution_tag(strategy_id)
         broker_order_id = None
@@ -6695,6 +6846,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 "lot_size": resolution.get("lot_size"),
             })
         order_doc, inserted = await _insert_order_intent(order_doc)
+        order_inserted = True
         execution_tag = order_doc.get("execution_tag") or execution_tag
         if not inserted:
             if order_doc.get("mode") == "paper" and not order_doc.get("paper_fill_applied"):
@@ -6801,6 +6953,50 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             await _cancel_strategy_reservation(position_reservation, str(exc))
         if exit_position_record:
             await _reopen_strategy_position_after_exit_reject(exit_position_record["id"], user_id, str(exc))
+            
+        # Classify and log failed orders for pre-submission rejections
+        if not order_inserted:
+            message = exc.detail if hasattr(exc, "detail") else str(exc)
+            lower_msg = str(message).lower()
+            
+            reason_code = "FAILED_ORDER: broker rejection"
+            if "margin" in lower_msg or "capital" in lower_msg or "balance" in lower_msg or "insufficient" in lower_msg:
+                reason_code = "FAILED_ORDER: insufficient margin"
+            elif "already has active strategy position" in lower_msg or "already reserved" in lower_msg or "duplicate position" in lower_msg or "re-entry blocked" in lower_msg:
+                reason_code = "FAILED_ORDER: duplicate position"
+            elif "symbol mismatch" in lower_msg or "invalid-upstox-key" in lower_msg or "exchange must be" in lower_msg or "symbol not found" in lower_msg:
+                reason_code = "FAILED_ORDER: symbol mismatch"
+            elif "stale" in lower_msg or "quality" in lower_msg or "websocket disconnected" in lower_msg or "ltp unavailable" in lower_msg:
+                reason_code = "FAILED_ORDER: stale market data"
+                
+            now = datetime.now(timezone.utc).isoformat()
+            failed_order_doc = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "idempotency_key": _scoped_idempotency_key(user_id, idempotency_key) if idempotency_key else f"idem:failed:{uuid.uuid4().hex}",
+                "symbol": symbol,
+                "side": side,
+                "qty": int(qty or 0),
+                "filled_qty": 0,
+                "pending_qty": 0,
+                "status": "FAILED",
+                "legacy_status": "FAILED",
+                "execution_status": "FAILED",
+                "status_message": reason_code,
+                "error_message": message,
+                "reject_reason": reason_code,
+                "mode": "paper" if paper else "live",
+                "broker": "paper" if paper else "upstox",
+                "source": source,
+                "strategy_id": strategy_id,
+                "created_at": now,
+                "updated_at": now,
+                "exchange": exchange,
+            }
+            try:
+                await db.orders.insert_one(failed_order_doc)
+            except Exception as insert_err:
+                logger.warning("Failed to insert failed order log: %s", insert_err)
         raise
 
 
@@ -7842,6 +8038,84 @@ async def list_positions(user=Depends(get_current_user)):
 async def execution_snapshot(sync: bool = False, user=Depends(get_current_user)):
     """Unified execution state for UI polling: positions, orders, SL/TP, broker sync meta."""
     return await execution_state_manager.build_snapshot(user, sync=sync)
+
+
+@api.get("/debug/position-integrity")
+async def position_integrity_report(user=Depends(get_current_user)):
+    user_id = user["id"]
+    settings = await get_user_settings(user_id)
+    
+    # 1. Fetch broker/paper positions
+    broker_positions = await _fetch_broker_positions_for_user(user, settings)
+    broker_active = [p for p in broker_positions if int(p.get("qty") or p.get("quantity") or 0) != 0]
+    
+    # 2. Fetch strategy positions
+    active_sp = await db.strategy_positions.find({
+        "user_id": user_id,
+        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]}
+    }).to_list(1000)
+    
+    active_sp_symbols = {str(sp.get("symbol")).upper(): sp for sp in active_sp if sp.get("symbol")}
+    active_sp_strategy_ids = {str(sp.get("strategy_id")) for sp in active_sp if sp.get("strategy_id")}
+    
+    # Counts
+    orphan_positions = 0
+    missing_sl = 0
+    missing_tp = 0
+    strategy_mismatches = 0
+    
+    # Detect orphans
+    for bp in broker_active:
+        symbol = str(bp.get("symbol") or "").upper()
+        strategy_id = bp.get("strategy_id")
+        
+        is_orphan = True
+        if strategy_id and str(strategy_id) in active_sp_strategy_ids:
+            is_orphan = False
+        elif symbol in active_sp_symbols:
+            is_orphan = False
+            
+        if is_orphan:
+            orphan_positions += 1
+            
+    # Detect missing SL/TP and mismatches
+    for sp in active_sp:
+        symbol = str(sp.get("symbol") or "").upper()
+        tp_sl = sp.get("tp_sl_tsl_config") or {}
+        
+        has_sl = tp_sl.get("stop_loss") is not None or tp_sl.get("stoploss_price") is not None
+        has_tp = tp_sl.get("take_profit") is not None or tp_sl.get("target_price") is not None
+        
+        if not has_sl:
+            missing_sl += 1
+        if not has_tp:
+            missing_tp += 1
+            
+        # Detect mismatch
+        bp_match = next((p for p in broker_active if str(p.get("symbol")).upper() == symbol), None)
+        if not bp_match:
+            strategy_mismatches += 1
+        else:
+            bp_qty = abs(int(bp_match.get("qty") or bp_match.get("quantity") or 0))
+            sp_qty = int(sp.get("open_quantity") or sp.get("quantity") or 0)
+            if bp_qty != sp_qty:
+                strategy_mismatches += 1
+                
+    # Detect failed orders
+    failed_orders_count = await db.orders.count_documents({
+        "user_id": user_id,
+        "status": "FAILED"
+    })
+    
+    return {
+        "total_positions": len(broker_active),
+        "orphan_positions": orphan_positions,
+        "missing_sl": missing_sl,
+        "missing_tp": missing_tp,
+        "strategy_mismatches": strategy_mismatches,
+        "failed_orders": failed_orders_count
+    }
+
 
 
 @api.get("/portfolio/holdings")
@@ -10234,16 +10508,22 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
     logger.info("Broker reconciliation loop started interval=%ss", interval)
     while not stop_event.is_set():
         try:
-            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            is_weekday = ist_now.weekday() < 5
-            minutes_now = ist_now.hour * 60 + ist_now.minute
-            # NSE (09:15 - 15:30) and MCX (09:00 - 23:30)
-            in_market_hours = is_weekday and (9 * 60 <= minutes_now <= 23 * 60 + 30)
+            users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+            for user_row in users:
+                user_id = user_row["id"]
+                # 30-second Position Reconciliation Loop and safety self-heal
+                try:
+                    from position_reconciler import reconcile_and_repair_positions
+                    await reconcile_and_repair_positions(user_id)
+                except Exception as rec_err:
+                    logger.warning("Background position reconciliation failed for user %s: %s", user_id, rec_err)
 
-            if in_market_hours:
-                users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
-                for user_row in users:
-                    user_id = user_row["id"]
+                ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+                is_weekday = ist_now.weekday() < 5
+                minutes_now = ist_now.hour * 60 + ist_now.minute
+                in_market_hours = is_weekday and (9 * 60 <= minutes_now <= 23 * 60 + 30)
+
+                if in_market_hours:
                     await _sync_upstox_order_statuses(user_id)
                     await _reconcile_stale_orders_for_user(user_id)
         except Exception as e:
@@ -10398,6 +10678,15 @@ async def startup():
             user_id = user_row["id"]
             await seed_default_strategies_for_user(user_id)
             await migrate_user_to_v12_upstox(user_id)
+            
+            # Executing startup self-heal
+            try:
+                from position_reconciler import reconcile_and_repair_positions
+                await reconcile_and_repair_positions(user_id)
+                logger.info("Startup self-heal completed successfully for user %s", user_id)
+            except Exception as self_heal_err:
+                logger.warning("Startup self-heal failed for user %s: %s", user_id, self_heal_err)
+
             try:
                 await _sync_upstox_order_statuses(user_id, force=True)
             except Exception as sync_err:

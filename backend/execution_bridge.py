@@ -308,4 +308,6 @@ def normalize_order_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "stop_loss": row.get("stop_loss"),
         "take_profit": row.get("take_profit"),
         "instrument_token": (row.get("instrument") or {}).get("instrument_token") or row.get("instrument_token"),
+        "reject_reason": row.get("reject_reason"),
+        "error_message": row.get("error_message"),
     }

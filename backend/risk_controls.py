@@ -98,6 +98,8 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     daily_loss_limit = _positive(inputs.daily_loss_limit)
     style = str(inputs.risk_style or "balanced")
 
+    print(f"[DEBUG_SIZE] requested={requested}, entry={entry}, equity={equity}, free_margin={free_margin}, daily_loss_limit={daily_loss_limit}", flush=True)
+
     if requested <= 0:
         return SizeResult(False, 0, "requested quantity is zero", 0.0, 0.0, 0.0, {})
     if entry <= 0:
@@ -122,6 +124,9 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     }
     quantity = min(caps.values()) if caps else 0
     order_value = round(quantity * entry, 2)
+
+    if qty_margin < requested:
+        return SizeResult(False, 0, "insufficient margin", risk_budget, unit_loss, order_value, caps)
 
     if quantity < lot_size:
         return SizeResult(False, 0, "risk budget, margin, or max position cap allows less than one lot", risk_budget, unit_loss, order_value, caps)

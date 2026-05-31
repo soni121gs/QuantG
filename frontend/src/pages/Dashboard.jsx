@@ -590,6 +590,71 @@ export default function Dashboard() {
             />
           </section>
 
+          {/* Position Integrity Status */}
+          <div className="qd-card p-5">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
+              <div>
+                <div className="qd-section-title">// HEALTH CHECK</div>
+                <h2 className="mt-1 font-head text-xl font-semibold text-white">Position Integrity</h2>
+              </div>
+              <span className={`inline-flex items-center rounded border px-2.5 py-1 font-mono text-xs font-bold uppercase tracking-wider ${
+                (executionSummary.summary?.position_integrity?.orphans || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.failed_orders || 0) === 0
+                  ? "border-[rgba(0,230,118,0.38)] bg-[rgba(0,230,118,0.1)] text-[var(--qd-profit)]"
+                  : "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
+              }`}>
+                {(executionSummary.summary?.position_integrity?.orphans || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 &&
+                (executionSummary.summary?.position_integrity?.failed_orders || 0) === 0
+                  ? "Healthy"
+                  : "Attention Required"}
+              </span>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 mt-4 md:grid-cols-5 text-center font-mono">
+              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
+                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Orphans</div>
+                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                  {executionSummary.summary?.position_integrity?.orphans ?? 0}
+                </div>
+                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+              </div>
+              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
+                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing SL</div>
+                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                  {executionSummary.summary?.position_integrity?.missing_sl ?? 0}
+                </div>
+                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+              </div>
+              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
+                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing TP</div>
+                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                  {executionSummary.summary?.position_integrity?.missing_tp ?? 0}
+                </div>
+                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+              </div>
+              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
+                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Ledger Mismatches</div>
+                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                  {executionSummary.summary?.position_integrity?.strategy_mismatches ?? 0}
+                </div>
+                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+              </div>
+              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
+                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Failed Orders</div>
+                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                  {executionSummary.summary?.position_integrity?.failed_orders ?? 0}
+                </div>
+                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+              </div>
+            </div>
+          </div>
+
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
             {/* Strategy summaries and engines */}
             <div className="space-y-4">
