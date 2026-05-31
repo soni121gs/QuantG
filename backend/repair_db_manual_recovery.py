@@ -1,6 +1,8 @@
+import os
 from pymongo import MongoClient
 
-client = MongoClient('mongodb://localhost:27017')
+mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+client = MongoClient(mongo_url)
 db = client['quantg']
 
 print("=== REPAIRING MANUAL_RECOVERY MONGO RECORDS ===")
