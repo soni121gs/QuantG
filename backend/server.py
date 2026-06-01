@@ -5695,6 +5695,9 @@ def _closed_order_statuses() -> set:
     return set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES)
 
 
+ORDER_SKIPPED = "SKIPPED"
+
+
 async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
     if not kite or not tag:
         return None
@@ -5851,7 +5854,7 @@ async def _build_order_intent(
         tsym = str(option_contract["tradingsymbol"]).upper().strip()
         seg = "OPTIONS"
         opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
-        token = str(option_contract.get("instrument_token") or tsym)
+        token = str(option_contract.get("instrument_token") or option_contract.get("instrument_key") or tsym)
         broker_side = str(option_contract.get("transaction_type") or side or "BUY").upper()
         instrument_key = _instrument_key(opt_exchange, tsym, token)
 
@@ -6008,8 +6011,8 @@ async def _resolve_order_fill_hint(
     # Try option premium LTP from option_contract
     if option_contract and option_contract.get("ltp"):
         return float(option_contract["ltp"])
-    if option_contract and execution_broker == "upstox" and option_contract.get("instrument_token"):
-        token = str(option_contract.get("instrument_token"))
+    if option_contract and execution_broker == "upstox" and (option_contract.get("instrument_token") or option_contract.get("instrument_key")):
+        token = str(option_contract.get("instrument_token") or option_contract.get("instrument_key"))
         gateway = await get_user_upstox_gateway(user_id)
         if gateway and gateway.connected:
             try:
@@ -6232,6 +6235,151 @@ async def _pre_trade_risk_gate(
     if not size.allowed:
         raise HTTPException(status_code=400, detail=f"Pre-trade blocked: {size.reason}")
     return {**event_payload, "allowed": True, "quantity": int(size.quantity)}
+
+
+def _paper_price_trace(
+    intent: "OrderIntent",
+    *,
+    option_contract: Optional[Dict[str, Any]],
+    market_snapshot: Dict[str, Any],
+    signal_id: Optional[str],
+) -> Dict[str, Any]:
+    instr = intent.instrument
+    return {
+        "signal_id": signal_id,
+        "signal_action": _intent_side(intent.intent),
+        "selected_symbol": instr.tradingsymbol,
+        "expiry": (option_contract or {}).get("expiry"),
+        "strike": (option_contract or {}).get("strike"),
+        "option_type": (option_contract or {}).get("option_type"),
+        "exchange": instr.exchange,
+        "instrument_token": instr.instrument_token,
+        "instrument_key": market_snapshot.get("instrument_key") or instr.instrument_token,
+        "ltp_source": market_snapshot.get("source"),
+        "ltp_value": market_snapshot.get("ltp"),
+        "quote_timestamp": market_snapshot.get("timestamp") or market_snapshot.get("tick_time"),
+        "quote_received_at": market_snapshot.get("received_at"),
+        "quote_age_sec": market_snapshot.get("data_age_sec"),
+        "cached_quote_exists": market_snapshot.get("source") in {"upstox-cache", "option-contract"},
+        "token_subscribed": bool(market_snapshot.get("instrument_key") and market_snapshot.get("feed") == "upstox-cache"),
+        "resolver_reason": market_snapshot.get("block_reason") or "price unavailable",
+    }
+
+
+async def _persist_paper_skipped_order(
+    *,
+    user_id: str,
+    intent: "OrderIntent",
+    order_type: str,
+    product: Optional[str],
+    price: Optional[float],
+    source: str,
+    strategy_id: Optional[str],
+    option_contract: Optional[Dict[str, Any]],
+    resolution: Dict[str, Any],
+    idempotency_key: Optional[str],
+    signal_id: Optional[str],
+    market_snapshot: Dict[str, Any],
+    reason: str = "price unavailable",
+) -> Dict[str, Any]:
+    """Persist a terminal paper simulator skip without using rejection logic."""
+    instr = intent.instrument
+    scoped_idempotency = _scoped_idempotency_key(user_id, idempotency_key)
+    existing = await db.orders.find_one(
+        {"user_id": user_id, "idempotency_key": scoped_idempotency, "mode": "paper"},
+        {"_id": 0},
+    )
+    if existing:
+        return existing
+
+    now = datetime.now(timezone.utc).isoformat()
+    trace = _paper_price_trace(
+        intent,
+        option_contract=option_contract,
+        market_snapshot=market_snapshot,
+        signal_id=signal_id,
+    )
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "idempotency_key": scoped_idempotency,
+        "client_idempotency_key": str(idempotency_key or ""),
+        "symbol": instr.tradingsymbol,
+        "side": _intent_side(intent.intent),
+        "qty": int(intent.quantity or 0),
+        "filled_qty": 0,
+        "pending_qty": 0,
+        "order_type": order_type,
+        "requested_price": float(price or 0),
+        "expected_price": 0.0,
+        "price": 0.0,
+        "brokerage": 0.0,
+        "slippage": 0.0,
+        "product": product,
+        "status": ORDER_SKIPPED,
+        "legacy_status": ORDER_SKIPPED,
+        "execution_status": ORDER_SKIPPED,
+        "status_message": f"SKIPPED: {reason}",
+        "skip_reason": reason,
+        "mode": "paper",
+        "broker": "paper",
+        "source": source,
+        "strategy_id": strategy_id,
+        "signal_id": signal_id,
+        "created_at": now,
+        "updated_at": now,
+        "exchange": instr.exchange,
+        "asset_type": "option" if instr.segment == "OPTIONS" else ("commodity" if instr.segment == "COMMODITY" else "equity"),
+        "order_intent": intent.model_dump(),
+        "instrument": instr.model_dump(),
+        "segment": instr.segment,
+        "paper_skip": True,
+        "paper_skip_trace": trace,
+        "market_snapshot": market_snapshot,
+    }
+    if option_contract:
+        doc.update({
+            "underlying": option_contract.get("underlying"),
+            "option_type": option_contract.get("option_type"),
+            "strike": option_contract.get("strike"),
+            "expiry": option_contract.get("expiry"),
+            "instrument_token": option_contract.get("instrument_token"),
+            "instrument_key": option_contract.get("instrument_key") or option_contract.get("instrument_token"),
+            "entry_spot": option_contract.get("spot"),
+            "lots": resolution.get("lots"),
+            "lot_size": resolution.get("lot_size"),
+        })
+    try:
+        await db.orders.insert_one(doc)
+    except DuplicateKeyError:
+        existing = await db.orders.find_one(
+            {"user_id": user_id, "idempotency_key": scoped_idempotency, "mode": "paper"},
+            {"_id": 0},
+        )
+        if existing:
+            return existing
+        raise
+    await _append_order_event(doc["id"], user_id, "PAPER_SIGNAL_SKIPPED", {"reason": reason, **trace})
+    logger.warning(
+        "Paper execution skipped strategy_id=%s signal_id=%s action=%s symbol=%s expiry=%s strike=%s option_type=%s exchange=%s token=%s ltp_source=%s ltp=%s quote_ts=%s subscribed=%s cached=%s reason=%s",
+        strategy_id,
+        signal_id,
+        trace.get("signal_action"),
+        trace.get("selected_symbol"),
+        trace.get("expiry"),
+        trace.get("strike"),
+        trace.get("option_type"),
+        trace.get("exchange"),
+        trace.get("instrument_key"),
+        trace.get("ltp_source"),
+        trace.get("ltp_value"),
+        trace.get("quote_timestamp"),
+        trace.get("token_subscribed"),
+        trace.get("cached_quote_exists"),
+        reason,
+    )
+    doc.pop("_id", None)
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -6557,7 +6705,12 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     expected = float(locked.get("expected_price") or locked.get("requested_price") or fill_price or 0)
     slippage = round(abs(float(fill_price or 0) - expected) * qty, 2) if expected > 0 else 0.0
 
-    pos = await db.positions.find_one({"user_id": user_id, "symbol": symbol})
+    paper_position_query = {
+        "user_id": user_id,
+        "symbol": symbol,
+        "$or": [{"mode": "paper"}, {"mode": {"$exists": False}}],
+    }
+    pos = await db.positions.find_one(paper_position_query)
     before_qty = int((pos or {}).get("qty") or 0)
     
     # Cap exit delta to prevent negative quantities on exit
@@ -6591,7 +6744,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     net_realised = round(gross_realised - brokerage, 2) if qty_closed else 0.0
 
     if after_qty == 0:
-        await db.positions.delete_one({"user_id": user_id, "symbol": symbol})
+        await db.positions.delete_one(paper_position_query)
     elif pos:
         await db.positions.update_one(
             {"_id": pos["_id"]},
@@ -6602,6 +6755,8 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
                 "asset_type": locked.get("asset_type"),
                 "exchange": locked.get("exchange"),
                 "strategy_id": locked.get("strategy_id"),
+                "mode": "paper",
+                "broker": "paper",
             }},
         )
     else:
@@ -6616,6 +6771,8 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "asset_type": locked.get("asset_type"),
             "exchange": locked.get("exchange"),
             "strategy_id": locked.get("strategy_id"),
+            "mode": "paper",
+            "broker": "paper",
         })
 
     fill_doc = {
@@ -6809,6 +6966,31 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
             strategy_id = "manual_recovery"
         fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
+        if paper and _intent_is_entry(intent.intent) and fill_price_hint <= 0:
+            market_snapshot = await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
+            snapshot_ltp = float(market_snapshot.get("ltp") or 0)
+            if snapshot_ltp > 0:
+                fill_price_hint = snapshot_ltp
+            if fill_price_hint <= 0:
+                resolved_product_for_skip = (
+                    product
+                    or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
+                )
+                return _clean_order_response(await _persist_paper_skipped_order(
+                    user_id=user_id,
+                    intent=intent,
+                    order_type=order_type,
+                    product=str(resolved_product_for_skip).upper(),
+                    price=price,
+                    source=source,
+                    strategy_id=strategy_id,
+                    option_contract=option_contract,
+                    resolution=resolution,
+                    idempotency_key=idempotency_key,
+                    signal_id=signal_id,
+                    market_snapshot=market_snapshot,
+                    reason="price unavailable",
+                ))
         pretrade_risk = None
         if _intent_is_entry(intent.intent):
             await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
@@ -7052,8 +7234,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if exit_position_record:
             await _reopen_strategy_position_after_exit_reject(exit_position_record["id"], user_id, str(exc))
             
-        # Classify and log failed orders for pre-submission rejections
-        if not order_inserted:
+        # Classify and log failed live pre-submission rejections. Paper simulator
+        # skips are recorded explicitly before this point and must not become
+        # broker-style FAILED_ORDER rows.
+        if not order_inserted and not paper:
             message = exc.detail if hasattr(exc, "detail") else str(exc)
             reason_code = _classify_rejection_reason(message)
             now = datetime.now(timezone.utc).isoformat()
@@ -10351,6 +10535,11 @@ async def reset_paper_trading(user=Depends(get_current_user)):
     # 1. Fetch all user strategies to get their strategy IDs
     user_strategies = await db.strategies.find({"user_id": user_id}).to_list(1000)
     strategy_ids = [s["id"] for s in user_strategies]
+    paper_strategy_ids = [
+        s["id"] for s in user_strategies
+        if str(s.get("mode") or "paper").lower() == "paper"
+    ]
+    paper_ledger_strategy_ids = paper_strategy_ids or strategy_ids
     
     # 2. Clear paper orders
     orders_res = await db.orders.delete_many({"user_id": user_id, "mode": "paper"})
@@ -10358,34 +10547,59 @@ async def reset_paper_trading(user=Depends(get_current_user)):
     # 3. Clear paper strategy positions
     sp_res = await db.strategy_positions.delete_many({"user_id": user_id, "mode": "paper"})
     
-    # 4. Clear fallback/paper positions in db.positions
-    pos_res = await db.positions.delete_many({"user_id": user_id})
+    # 4. Clear fallback/paper positions in db.positions without touching live broker positions
+    pos_res = await db.positions.delete_many({
+        "user_id": user_id,
+        "$or": [
+            {"mode": "paper"},
+            {"broker": "paper"},
+            {
+                "mode": {"$exists": False},
+                "broker_order_id": {"$in": [None, ""]},
+                "strategy_id": {"$in": strategy_ids},
+            },
+        ],
+    })
     
-    # 5. Clear strategy position locks for the user
-    locks_res = await db.strategy_position_locks.delete_many({"user_id": user_id})
+    # 5. Clear paper strategy position locks/reservations for the user
+    locks_res = await db.strategy_position_locks.delete_many({
+        "user_id": user_id,
+        "strategy_id": {"$in": strategy_ids},
+    })
     
-    # 6. Clear stale signals for the user
-    sig_res = await db.signals.delete_many({"user_id": user_id})
+    # 6. Clear stale paper signals for the user
+    sig_res = await db.signals.delete_many({
+        "user_id": user_id,
+        "$or": [
+            {"mode": "paper"},
+            {
+                "mode": {"$exists": False},
+                "strategy_id": {"$in": paper_strategy_ids or strategy_ids},
+                "status": {"$in": ["PENDING", "FILTERED", "REJECTED", "SKIPPED"]},
+            },
+        ],
+    })
     
     # 7. Clear paper trading backtest/history stats
     history_res = await db.paper_trading_history.delete_many({"user_id": user_id})
     
     # 8. Clear closed paper trades
-    trades_res = await db.trades.delete_many({"user_id": user_id})
+    trades_res = await db.trades.delete_many({"user_id": user_id, "mode": "paper"})
+    fills_res = await db.trade_fills.delete_many({"user_id": user_id, "mode": "paper"})
     
     # 9. Clean up options-ledger collections for user's strategies
-    open_opt_res = await db.option_open_positions.delete_many({"strategy_id": {"$in": strategy_ids}})
-    opt_pnl_res = await db.option_daily_pnl.delete_many({"strategy_id": {"$in": strategy_ids}})
-    opt_journal_res = await db.option_trade_journal.delete_many({"strategy_id": {"$in": strategy_ids}})
+    open_opt_res = await db.option_open_positions.delete_many({"strategy_id": {"$in": paper_ledger_strategy_ids}})
+    opt_pnl_res = await db.option_daily_pnl.delete_many({"strategy_id": {"$in": paper_ledger_strategy_ids}})
+    opt_journal_res = await db.option_trade_journal.delete_many({"strategy_id": {"$in": paper_ledger_strategy_ids}})
     
     # Reset options strategy states back to IDLE
     await db.option_strategy_states.update_many(
-        {"strategy_id": {"$in": strategy_ids}},
+        {"strategy_id": {"$in": paper_ledger_strategy_ids}},
         {"$set": {"state": "IDLE", "cooldown_until": None}}
     )
     
-    # 10. Clean up user risk events
-    risk_events_res = await db.risk_events.delete_many({"user_id": user_id})
+    # 10. Clean up paper risk/stat events only
+    risk_events_res = await db.risk_events.delete_many({"user_id": user_id, "paper": True})
     
     return {
         "ok": True,
@@ -10398,6 +10612,7 @@ async def reset_paper_trading(user=Depends(get_current_user)):
             "signals": sig_res.deleted_count,
             "stats_history": history_res.deleted_count,
             "closed_trades": trades_res.deleted_count,
+            "trade_fills": fills_res.deleted_count,
             "option_open_positions": open_opt_res.deleted_count,
             "option_daily_pnl": opt_pnl_res.deleted_count,
             "option_trade_journal": opt_journal_res.deleted_count,

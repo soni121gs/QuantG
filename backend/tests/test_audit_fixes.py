@@ -332,6 +332,7 @@ class TestAuditFixes(unittest.TestCase):
             mock_db.signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=10))
             mock_db.paper_trading_history.delete_many = AsyncMock(return_value=MagicMock(deleted_count=3))
             mock_db.trades.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
+            mock_db.trade_fills.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
             mock_db.option_open_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
             mock_db.option_daily_pnl.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
             mock_db.option_trade_journal.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
@@ -349,7 +350,18 @@ class TestAuditFixes(unittest.TestCase):
                 
                 # Check user scope in queries
                 mock_db.orders.delete_many.assert_called_with({"user_id": "user-123", "mode": "paper"})
-                mock_db.positions.delete_many.assert_called_with({"user_id": "user-123"})
+                mock_db.positions.delete_many.assert_called_with({
+                    "user_id": "user-123",
+                    "$or": [
+                        {"mode": "paper"},
+                        {"broker": "paper"},
+                        {
+                            "mode": {"$exists": False},
+                            "broker_order_id": {"$in": [None, ""]},
+                            "strategy_id": {"$in": ["strat-1"]},
+                        },
+                    ],
+                })
                 mock_db.option_open_positions.delete_many.assert_called_with({"strategy_id": {"$in": ["strat-1"]}})
 
         asyncio.run(run_test())

@@ -349,18 +349,23 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 order_res = await place_order_fn(**place_kwargs)
                                 
                                 now_str = datetime.now(timezone.utc).isoformat()
+                                final_signal_status = "SKIPPED" if str(order_res.get("status") or "").upper() == "SKIPPED" else "PROCESSED"
+                                signal_update = {
+                                    "status": final_signal_status,
+                                    "order_id": order_res.get("id"),
+                                    "processed_at": now_str,
+                                }
+                                if final_signal_status == "SKIPPED":
+                                    signal_update["rejection_reason"] = order_res.get("skip_reason") or "price unavailable"
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
-                                    {"$set": {
-                                        "status": "PROCESSED",
-                                        "order_id": order_res.get("id"),
-                                        "processed_at": now_str
-                                    }}
+                                    {"$set": signal_update}
                                 )
-                                await db.strategies.update_one(
-                                    {"id": sig["strategy_id"], "user_id": user_id},
-                                    {"$set": {"last_signal_at": now_str}}
-                                )
+                                if final_signal_status == "PROCESSED":
+                                    await db.strategies.update_one(
+                                        {"id": sig["strategy_id"], "user_id": user_id},
+                                        {"$set": {"last_signal_at": now_str}}
+                                    )
                             except Exception as exec_err:
                                 logger.warning(f"Failed order placement for signal {sig['id']}: {exec_err}")
                                 await db.signals.update_one(

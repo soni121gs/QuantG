@@ -376,6 +376,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "id": signal_id,
                         "user_id": s["user_id"],
                         "strategy_id": s["id"],
+                        "mode": "paper" if is_paper_mode else "live",
                         "symbol": symbol,
                         "target_symbol": target_symbol,
                         "option_type": option_type,
