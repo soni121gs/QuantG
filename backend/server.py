@@ -5604,15 +5604,26 @@ def get_ist_midnight_utc_iso() -> str:
     return ist_midnight_utc.isoformat()
 
 
-async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
+def get_trading_day_window_ist() -> tuple[str, str]:
+    """Return today's start and end ISO timestamps in UTC corresponding to the IST trading day (00:00:00 to 24:00:00 IST)."""
+    now_utc = datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ist_midnight_utc = ist_midnight - IST_OFFSET
+    ist_tomorrow_midnight_utc = ist_midnight_utc + timedelta(days=1)
+    return ist_midnight_utc.isoformat(), ist_tomorrow_midnight_utc.isoformat()
+
+
+async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "paper") -> None:
     """Refuse new orders if today's realised loss already exceeds max_daily_loss.
     Computed from db.orders (paper mode) — tracks realised_pnl on closing trades."""
     if not max_loss or max_loss <= 0:
         return
-    today_start = get_ist_midnight_utc_iso()
+    start, end = get_trading_day_window_ist()
     orders = await db.orders.find({
         "user_id": user_id,
-        "created_at": {"$gte": today_start},
+        "mode": mode,
+        "created_at": {"$gte": start, "$lt": end},
         "status": {"$in": [ORDER_FILLED, ORDER_CLOSED, "COMPLETE"]},
     }, {"_id": 0}).to_list(500)
     realised = sum(float(o.get("realised_pnl") or 0) for o in orders)
@@ -5624,14 +5635,26 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float) -> None:
         )
 
 
-async def _check_trade_count_guard(user_id: str, max_trades: int) -> None:
+async def _check_trade_count_guard(user_id: str, max_trades: int, mode: str = "paper") -> None:
     if not max_trades or max_trades <= 0:
         return
-    today_start = get_ist_midnight_utc_iso()
+    start, end = get_trading_day_window_ist()
+    excluded_statuses = [
+        ORDER_REJECTED,
+        ORDER_CANCELLED,
+        "REJECTED",
+        "CANCELLED",
+        "FAILED",
+        "STALE",
+        "BROKER_NOT_FOUND",
+        "BLOCKED",
+        "SKIPPED"
+    ]
     trades = await db.orders.count_documents({
         "user_id": user_id,
-        "created_at": {"$gte": today_start},
-        "status": {"$nin": [ORDER_REJECTED, ORDER_CANCELLED, "REJECTED", "CANCELLED", "STALE", "BROKER_NOT_FOUND"]},
+        "mode": mode,
+        "created_at": {"$gte": start, "$lt": end},
+        "status": {"$nin": excluded_statuses},
     })
     if trades >= int(max_trades):
         raise HTTPException(
@@ -6788,8 +6811,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
         pretrade_risk = None
         if _intent_is_entry(intent.intent):
-            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0))
-            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0))
+            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
+            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0), mode="paper" if paper else "live")
             if intent.intent in ("OPEN_LONG", "OPEN_SHORT") and fill_price_hint <= 0 and not paper:
                 raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {instr.tradingsymbol}; order blocked.")
             pretrade_risk = await _pre_trade_risk_gate(
@@ -8249,9 +8272,14 @@ async def portfolio(user=Depends(get_current_user)):
 @api.get("/risk/dashboard")
 async def risk_dashboard(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
-    day = datetime.now(timezone.utc).date().isoformat()
+    mode = "paper" if settings.get("paper_mode", True) else "live"
+    start, end = get_trading_day_window_ist()
     orders = await db.orders.find(
-        {"user_id": user["id"], "created_at": {"$gte": day}},
+        {
+            "user_id": user["id"],
+            "mode": mode,
+            "created_at": {"$gte": start, "$lt": end},
+        },
         {"_id": 0},
     ).to_list(1000)
     positions = await list_positions(user)
@@ -8259,11 +8287,26 @@ async def risk_dashboard(user=Depends(get_current_user)):
     open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
     loss_limit = float(settings.get("max_daily_loss") or 0)
     gross_order_value = round(sum(abs(float(o.get("price") or 0) * int(o.get("qty") or 0)) for o in orders), 2)
-    trades_used = len([o for o in orders if canonical_order_status(o.get("status")) not in {ORDER_REJECTED, ORDER_CANCELLED}])
+    
+    excluded_statuses = {
+        ORDER_REJECTED,
+        ORDER_CANCELLED,
+        "REJECTED",
+        "CANCELLED",
+        "FAILED",
+        "STALE",
+        "BROKER_NOT_FOUND",
+        "BLOCKED",
+        "SKIPPED"
+    }
+    trades_used = len([
+        o for o in orders 
+        if o.get("status") not in excluded_statuses
+    ])
     max_trades = int(settings.get("max_trades_per_day") or 0)
     return {
-        "date": day,
-        "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
+        "date": datetime.now(timezone.utc).date().isoformat(),
+        "mode": mode.upper(),
         "daily_loss_limit": loss_limit,
         "realised_pnl": realised,
         "open_pnl": open_pnl,
@@ -10298,6 +10341,69 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
     return await get_profile(user=user)
+
+
+@api.post("/profile/reset-paper")
+async def reset_paper_trading(user=Depends(get_current_user)):
+    user_id = user["id"]
+    logger.info(f"Initiating paper trading reset for user_id={user_id}")
+    
+    # 1. Fetch all user strategies to get their strategy IDs
+    user_strategies = await db.strategies.find({"user_id": user_id}).to_list(1000)
+    strategy_ids = [s["id"] for s in user_strategies]
+    
+    # 2. Clear paper orders
+    orders_res = await db.orders.delete_many({"user_id": user_id, "mode": "paper"})
+    
+    # 3. Clear paper strategy positions
+    sp_res = await db.strategy_positions.delete_many({"user_id": user_id, "mode": "paper"})
+    
+    # 4. Clear fallback/paper positions in db.positions
+    pos_res = await db.positions.delete_many({"user_id": user_id})
+    
+    # 5. Clear strategy position locks for the user
+    locks_res = await db.strategy_position_locks.delete_many({"user_id": user_id})
+    
+    # 6. Clear stale signals for the user
+    sig_res = await db.signals.delete_many({"user_id": user_id})
+    
+    # 7. Clear paper trading backtest/history stats
+    history_res = await db.paper_trading_history.delete_many({"user_id": user_id})
+    
+    # 8. Clear closed paper trades
+    trades_res = await db.trades.delete_many({"user_id": user_id})
+    
+    # 9. Clean up options-ledger collections for user's strategies
+    open_opt_res = await db.option_open_positions.delete_many({"strategy_id": {"$in": strategy_ids}})
+    opt_pnl_res = await db.option_daily_pnl.delete_many({"strategy_id": {"$in": strategy_ids}})
+    opt_journal_res = await db.option_trade_journal.delete_many({"strategy_id": {"$in": strategy_ids}})
+    
+    # Reset options strategy states back to IDLE
+    await db.option_strategy_states.update_many(
+        {"strategy_id": {"$in": strategy_ids}},
+        {"$set": {"state": "IDLE", "cooldown_until": None}}
+    )
+    
+    # 10. Clean up user risk events
+    risk_events_res = await db.risk_events.delete_many({"user_id": user_id})
+    
+    return {
+        "ok": True,
+        "detail": "Paper trading environment reset successfully. Live configurations intact.",
+        "purged": {
+            "orders": orders_res.deleted_count,
+            "strategy_positions": sp_res.deleted_count,
+            "broker_positions": pos_res.deleted_count,
+            "position_locks": locks_res.deleted_count,
+            "signals": sig_res.deleted_count,
+            "stats_history": history_res.deleted_count,
+            "closed_trades": trades_res.deleted_count,
+            "option_open_positions": open_opt_res.deleted_count,
+            "option_daily_pnl": opt_pnl_res.deleted_count,
+            "option_trade_journal": opt_journal_res.deleted_count,
+            "risk_events": risk_events_res.deleted_count,
+        }
+    }
 
 
 @api.post("/profile/change-password")

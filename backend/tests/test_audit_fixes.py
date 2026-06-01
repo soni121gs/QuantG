@@ -302,6 +302,58 @@ class TestAuditFixes(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_get_trading_day_window_ist(self):
+        """Verify get_trading_day_window_ist returns correct IST day boundaries in UTC."""
+        from server import get_trading_day_window_ist
+        start, end = get_trading_day_window_ist()
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+        self.assertEqual(end_dt - start_dt, timedelta(days=1))
+        # start must be at 18:30 UTC of previous day
+        self.assertEqual(start_dt.hour, 18)
+        self.assertEqual(start_dt.minute, 30)
+
+    def test_reset_paper_trading(self):
+        """Verify reset_paper_trading endpoint calls purge on correct collections for user."""
+        async def run_test():
+            from server import reset_paper_trading
+            mock_db = MagicMock()
+            
+            # Mock return value of db.strategies.find
+            mock_cursor = MagicMock()
+            mock_cursor.to_list = AsyncMock(return_value=[{"id": "strat-1"}])
+            mock_db.strategies.find = MagicMock(return_value=mock_cursor)
+            
+            # Mock delete_many and update_many
+            mock_db.orders.delete_many = AsyncMock(return_value=MagicMock(deleted_count=5))
+            mock_db.strategy_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
+            mock_db.positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
+            mock_db.strategy_position_locks.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
+            mock_db.signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=10))
+            mock_db.paper_trading_history.delete_many = AsyncMock(return_value=MagicMock(deleted_count=3))
+            mock_db.trades.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
+            mock_db.option_open_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
+            mock_db.option_daily_pnl.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
+            mock_db.option_trade_journal.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
+            mock_db.option_strategy_states.update_many = AsyncMock()
+            mock_db.risk_events.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
+            
+            with patch("server.db", mock_db):
+                user = {"id": "user-123", "email": "test@quantg.com"}
+                res = await reset_paper_trading(user=user)
+                
+                self.assertTrue(res["ok"])
+                self.assertEqual(res["purged"]["orders"], 5)
+                self.assertEqual(res["purged"]["strategy_positions"], 2)
+                self.assertEqual(res["purged"]["broker_positions"], 1)
+                
+                # Check user scope in queries
+                mock_db.orders.delete_many.assert_called_with({"user_id": "user-123", "mode": "paper"})
+                mock_db.positions.delete_many.assert_called_with({"user_id": "user-123"})
+                mock_db.option_open_positions.delete_many.assert_called_with({"strategy_id": {"$in": ["strat-1"]}})
+
+        asyncio.run(run_test())
+
 
 if __name__ == "__main__":
     unittest.main()
