@@ -1038,10 +1038,12 @@ async def _fetch_strategy_history(
         # guard: if somehow allow_mock is True for a live strategy, raise hard rather
         # than silently feeding random-walk data to a real-money order engine.
         if strategy is not None:
-            raise ValueError(
-                f"Mock candle data is BLOCKED for strategy '{strategy.get('name', sym_upper)}'. "
-                "Mock candle fallbacks are disabled in production scanning paths."
-            )
+            strategy_mode = strategy.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
+            if strategy_mode != "paper":
+                raise ValueError(
+                    f"Mock candle data is BLOCKED for strategy '{strategy.get('name', sym_upper)}'. "
+                    "Mock candle fallbacks are disabled in production scanning paths."
+                )
         sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None) or next((s for s in COMMODITY_SYMBOLS if s["symbol"] == sym_upper), None)
         if sym:
             if interval == "day":
@@ -6474,6 +6476,20 @@ async def _pre_trade_risk_gate(
     option_contract: Optional[Dict[str, Any]],
     lot_size: int,
 ) -> Dict[str, Any]:
+    # LIVE-MODE HARD GUARD: A simulated (PAPER_SIMULATED_CONTRACT) option contract must
+    # never reach the live execution engine. Reject immediately if this is a live order
+    # with a fabricated paper contract.
+    if not paper and option_contract and option_contract.get("simulated"):
+        contract_src = option_contract.get("source", "UNKNOWN")
+        sym = option_contract.get("tradingsymbol", "?")
+        logger.critical(
+            "LIVE ORDER BLOCKED: simulated contract '%s' (source=%s) attempted in live mode for user=%s strategy=%s",
+            sym, contract_src, user_id, strategy_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"LIVE ORDER BLOCKED: Option contract '{sym}' is a simulated paper contract (source={contract_src}) and cannot be used in live trading. Reconnect Upstox to resolve a real contract.",
+        )
     risk = _normalize_strategy_risk(await _get_strategy_risk(user_id, strategy_id)) if strategy_id else _normalize_strategy_risk(DEFAULT_STRATEGY_RISK)
     stop_price = intent.stop_loss
     if stop_price is None and fill_price_hint > 0:
@@ -9365,9 +9381,16 @@ async def _resolve_option_for_strategy(
                     logger.warning(f"Upstox instrument search failed: {e}")
 
     # 2. Fabricate contract details in Paper Mode if live lookup failed or gateway is offline
+    _is_simulated_contract = False
     if not instrument_token:
-        logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
-        return None
+        if is_paper and allow_simulated_prices:
+            instrument_token = f"PAPER_{underlying}_{opt_type}_{int(strike)}"
+            tradingsymbol = f"{underlying}{expiry_dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
+            _is_simulated_contract = True
+            logger.info("Fabricating paper option contract %s strike=%s (PAPER_SIMULATED_CONTRACT)", tradingsymbol, strike)
+        else:
+            logger.warning(f"Live Upstox option contract strike {strike} not found in chain; guessing blocked.")
+            return None
 
     resolved_contract = {
         "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
@@ -9382,6 +9405,9 @@ async def _resolve_option_for_strategy(
         "spot": spot,
         "atm_strike": atm,
         "transaction_type": "BUY" if "BUY" in strike_mode else "SELL",
+        # Simulated paper-mode marker — must NEVER be accepted by live execution engine
+        "simulated": _is_simulated_contract,
+        "source": "PAPER_SIMULATED_CONTRACT" if _is_simulated_contract else "LIVE_UPSTOX_CONTRACT",
     }
 
     # Fetch and log LTP for this candidate contract
@@ -11392,17 +11418,25 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
                     continue
                 ltp = await _quote_upstox_instrument_key(user_id, pos.get("instrument_token"))
                 if ltp is None:
+                    settings = await get_user_settings(user_id)
+                    is_paper_pos = pos.get("mode") == "paper"
+                    allow_simulated = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
+                    allow_mock_ltp = is_paper_pos and allow_simulated
                     ltp = await _current_ltp_for_symbol(
                         user_id,
                         symbol,
                         pos.get("exchange") or "NSE",
-                        allow_mock=False,
+                        allow_mock=allow_mock_ltp,
                         execution_broker="upstox",
                     )
                 if ltp is None:
                     await db.strategy_positions.update_one(
                         {"id": pos["id"], "user_id": user_id},
-                        {"$set": {"last_error": "websocket disconnected or LTP unavailable", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                        {"$set": {
+                            "last_ltp": "LTP_UNAVAILABLE",
+                            "last_error": "LTP_UNAVAILABLE: websocket disconnected or price feed offline",
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }},
                     )
                     continue
                 entry = float(pos.get("average_buy_price") or 0)

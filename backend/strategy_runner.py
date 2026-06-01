@@ -229,6 +229,23 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                         "$inc": inc_set})
                         continue
                     symbol = raw_sym.upper()
+                # Enforce market-hours check for this symbol segment
+                try:
+                    from core.market_domains import resolve_domain_by_underlying
+                    from core.market_clock import get_segment_status
+                    domain = resolve_domain_by_underlying(symbol)
+                    clock = get_segment_status(domain.name)
+                    if not clock.get("open"):
+                        # Skip running strategy outside market hours to avoid spamming failed orders
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, 
+                                      "last_filter_reason": f"Market closed: {clock.get('reason')}"},
+                             "$inc": inc_set}
+                        )
+                        continue
+                except Exception as e:
+                    logger.warning(f"Market hours check failed for {symbol}: {e}")
                 # last 60 daily candles for context
                 try:
                     history = await get_price_history(s["user_id"], symbol, days=60, strategy=s)

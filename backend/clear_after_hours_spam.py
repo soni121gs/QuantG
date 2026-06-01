@@ -34,6 +34,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true", help="Apply archive updates. Omit for dry-run.")
     parser.add_argument("--user-id", default="", help="Optional user id scope.")
+    parser.add_argument("--all-history", action="store_true", help="Clean up all historical market hours failed orders.")
     args = parser.parse_args()
 
     client = AsyncIOMotorClient(os.environ["MONGO_URL"])
@@ -45,7 +46,6 @@ async def main() -> None:
     query = {
         "mode": "paper",
         "visibility": {"$ne": "hidden"},
-        "created_at": {"$gte": start, "$lt": end},
         "$or": [
             {"status_message": {"$regex": "market hours|market is closed|outside", "$options": "i"}},
             {"reject_reason": {"$regex": "market hours|market is closed|outside", "$options": "i"}},
@@ -53,6 +53,8 @@ async def main() -> None:
         ],
         **user_filter,
     }
+    if not args.all_history:
+        query["created_at"] = {"$gte": start, "$lt": end}
     rows = await db.orders.find(query, {"_id": 0}).to_list(10000)
     groups = defaultdict(list)
     for row in rows:

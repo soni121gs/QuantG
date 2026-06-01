@@ -110,9 +110,22 @@ def get_market_clock_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, A
     bse = get_segment_status(DomainType.BSE_FO, utc)
     mcx = get_segment_status(DomainType.MCX_FO, utc)
     
-    any_open = nse["open"] or bse["open"] or mcx["open"]
-    all_open = nse["open"] and bse["open"] and mcx["open"]
-    global_status = "OPEN" if all_open else "PARTIAL_OPEN" if any_open else "CLOSED"
+    open_segments = []
+    if nse["open"]:
+        open_segments.append("NSE")
+    if bse["open"]:
+        open_segments.append("BSE")
+    if mcx["open"]:
+        open_segments.append("MCX")
+        
+    if not open_segments:
+        global_status = "CLOSED"
+    elif len(open_segments) == 3:
+        global_status = "ALL OPEN"
+    else:
+        global_status = " & ".join(open_segments) + " OPEN"
+        
+    any_open = len(open_segments) > 0
     
     return {
         "global_status": global_status,
