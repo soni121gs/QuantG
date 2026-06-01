@@ -125,11 +125,13 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     quantity = min(caps.values()) if caps else 0
     order_value = round(quantity * entry, 2)
 
-    if qty_margin < requested:
-        return SizeResult(False, 0, "insufficient margin", risk_budget, unit_loss, order_value, caps)
-
     if quantity < lot_size:
-        return SizeResult(False, 0, "risk budget, margin, or max position cap allows less than one lot", risk_budget, unit_loss, order_value, caps)
+        reason = "risk budget, margin, or max position cap allows less than one lot"
+        if caps.get("margin", 0) < lot_size:
+            reason = "insufficient margin"
+        elif caps.get("risk", 0) < lot_size:
+            reason = "insufficient risk budget"
+        return SizeResult(False, 0, reason, risk_budget, unit_loss, order_value, caps)
     if quantity < requested:
         return SizeResult(True, quantity, f"quantity reduced from {requested} to {quantity} by pre-trade risk caps", risk_budget, unit_loss, order_value, caps)
     return SizeResult(True, quantity, "accepted", risk_budget, unit_loss, order_value, caps)

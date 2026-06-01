@@ -196,7 +196,7 @@ def test_conflict_resolver_symbol_group_blocking():
     assert sig_buy["rejection_reason"] == "symbol-group-active-position-exists"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_signal_manager_cooldown_active():
     db = MagicMock()
     
@@ -219,7 +219,7 @@ async def test_signal_manager_cooldown_active():
     assert reason == "cooldown-active"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_signal_manager_cooldown_expired_is_approved():
     db = MagicMock()
     
@@ -242,7 +242,7 @@ async def test_signal_manager_cooldown_expired_is_approved():
     assert reason is None
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_signal_manager_max_trades_reached():
     db = MagicMock()
     

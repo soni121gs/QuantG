@@ -4524,6 +4524,9 @@ async def _place_upstox_order(
     broker_order_id = extract_upstox_order_id(result)
     if not broker_order_id:
         logger.warning("Upstox order response did not include order id: %s", result)
+    import json
+    logger.info("Upstox live order successful. Full response: %s", json.dumps(result))
+    print(f"\n>>> [UPSTOX LIVE ORDER RESPONSE] FULL BROKER RESPONSE: {json.dumps(result, indent=2)}\n", flush=True)
     return {
         "ok": True,
         "broker_order_id": broker_order_id,
@@ -5827,7 +5830,7 @@ async def _build_order_intent(
         opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
         token = str(option_contract.get("instrument_token") or tsym)
         broker_side = str(option_contract.get("transaction_type") or side or "BUY").upper()
-        instrument_key = f"{opt_exchange}:{tsym}"
+        instrument_key = _instrument_key(opt_exchange, tsym, token)
 
         # Dynamic intent and asset class resolution from active database position
         active_pos = None
@@ -6398,18 +6401,30 @@ async def _insert_order_intent(order_doc: Dict[str, Any]) -> tuple[Dict[str, Any
         raise
 
 
-async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dict[str, Any]:
+def _classify_rejection_reason(message: str) -> str:
     lower_msg = str(message or "").lower()
-    reason_code = "FAILED_ORDER: broker rejection"
     if "margin" in lower_msg or "capital" in lower_msg or "balance" in lower_msg or "insufficient" in lower_msg:
-        reason_code = "FAILED_ORDER: insufficient margin"
-    elif "already has active strategy position" in lower_msg or "already reserved" in lower_msg or "duplicate position" in lower_msg or "re-entry blocked" in lower_msg:
-        reason_code = "FAILED_ORDER: duplicate position"
-    elif "symbol mismatch" in lower_msg or "invalid-upstox-key" in lower_msg or "exchange must be" in lower_msg or "symbol not found" in lower_msg:
-        reason_code = "FAILED_ORDER: symbol mismatch"
-    elif "stale" in lower_msg or "quality" in lower_msg or "websocket disconnected" in lower_msg or "ltp unavailable" in lower_msg:
-        reason_code = "FAILED_ORDER: stale market data"
-        
+        return "FAILED_ORDER: insufficient margin"
+    if "already has active" in lower_msg or "already reserved" in lower_msg or "duplicate position" in lower_msg or "re-entry blocked" in lower_msg:
+        return "FAILED_ORDER: duplicate position"
+    if "symbol mismatch" in lower_msg or "invalid-upstox-key" in lower_msg or "exchange must be" in lower_msg or "symbol not found" in lower_msg or "instrument not found" in lower_msg:
+        return "FAILED_ORDER: symbol mismatch"
+    if "stale" in lower_msg or "quality" in lower_msg or "websocket disconnected" in lower_msg or "ltp unavailable" in lower_msg:
+        return "FAILED_ORDER: stale market data"
+    if "no stored open strategy position" in lower_msg or "sell blocked" in lower_msg or "no open position" in lower_msg:
+        return "FAILED_ORDER: no open position"
+    if "market hours" in lower_msg or "outside" in lower_msg:
+        return "FAILED_ORDER: market hours"
+    if "live trading disabled" in lower_msg or "reconnect upstox" in lower_msg:
+        return "FAILED_ORDER: live trading disabled"
+    
+    # Append the real rejection details to the broker rejection message for the UI
+    msg_suffix = message[:120] + "..." if len(message) > 120 else message
+    return f"FAILED_ORDER: broker rejection - {msg_suffix}"
+
+
+async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dict[str, Any]:
+    reason_code = _classify_rejection_reason(message)
     now = datetime.now(timezone.utc).isoformat()
     row = await db.orders.find_one_and_update(
         {"id": order_id, "user_id": user_id},
@@ -6811,6 +6826,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 return _clean_order_response(existing_idem)
 
         instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+        logger.info(
+            "Resolved instrument token before order submission: exchange=%s symbol=%s instrument_token=%s instrument_key=%s",
+            instr.exchange, instr.tradingsymbol, instr.instrument_token, instrument_key
+        )
+        print(f"\n>>> [ORDER SUBMISSION DIAGNOSTIC] RESOLVED INSTRUMENT KEY: {instrument_key} for {instr.exchange}:{instr.tradingsymbol} with token {instr.instrument_token}\n", flush=True)
         if strategy_id and _intent_is_entry(intent.intent):
             position_reservation = await _reserve_strategy_position(
                 user_id=user_id,
@@ -7012,18 +7032,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # Classify and log failed orders for pre-submission rejections
         if not order_inserted:
             message = exc.detail if hasattr(exc, "detail") else str(exc)
-            lower_msg = str(message).lower()
-            
-            reason_code = "FAILED_ORDER: broker rejection"
-            if "margin" in lower_msg or "capital" in lower_msg or "balance" in lower_msg or "insufficient" in lower_msg:
-                reason_code = "FAILED_ORDER: insufficient margin"
-            elif "already has active strategy position" in lower_msg or "already reserved" in lower_msg or "duplicate position" in lower_msg or "re-entry blocked" in lower_msg:
-                reason_code = "FAILED_ORDER: duplicate position"
-            elif "symbol mismatch" in lower_msg or "invalid-upstox-key" in lower_msg or "exchange must be" in lower_msg or "symbol not found" in lower_msg:
-                reason_code = "FAILED_ORDER: symbol mismatch"
-            elif "stale" in lower_msg or "quality" in lower_msg or "websocket disconnected" in lower_msg or "ltp unavailable" in lower_msg:
-                reason_code = "FAILED_ORDER: stale market data"
-                
+            reason_code = _classify_rejection_reason(message)
             now = datetime.now(timezone.utc).isoformat()
             failed_order_doc = {
                 "id": str(uuid.uuid4()),
@@ -9892,7 +9901,7 @@ async def diagnostics_health(user=Depends(get_current_user)):
         
     # 4. Recent Rejected Orders Reasons
     rejected_orders = await db.orders.find(
-        {"user_id": user_id, "status": {"$in": ["REJECTED", "CANCELLED"]}},
+        {"user_id": user_id, "status": {"$in": ["REJECTED", "CANCELLED", "FAILED"]}},
         {"_id": 0}
     ).sort("created_at", -1).limit(5).to_list(5)
     
