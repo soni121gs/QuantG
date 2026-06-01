@@ -201,6 +201,13 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": eval_set, "$inc": inc_set})
                     continue
+                if s.get("halted") or s.get("is_halted"):
+                    await db.strategies.update_one(
+                        {"id": s["id"]},
+                        {"$set": {**eval_set, "last_filter_reason": s.get("halt_reason") or "Strategy halted."},
+                         "$inc": inc_set},
+                    )
+                    continue
                 # Resolve the symbol whose PRICE HISTORY the strategy will analyse.
                 # When options mode is enabled, we MUST evaluate the strategy
                 # against the UNDERLYING's spot price (NIFTY/BANKNIFTY/SENSEX) —
@@ -316,7 +323,15 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 # Determine if this strategy trades OPTIONS instead of equity
                 opt_cfg = (vc or {}).get("options") or {}
                 option_contract = None
-                option_buying_mode = bool(opt_cfg.get("enabled")) and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
+                instrument_type = str(
+                    opt_cfg.get("instrument_type")
+                    or opt_cfg.get("contract_type")
+                    or s.get("instrument_type")
+                    or s.get("asset_class")
+                    or ""
+                ).upper()
+                option_resolution_requested = bool(opt_cfg.get("enabled")) and instrument_type not in {"FUTURE", "FUTURES", "FUTCOM", "COMMODITY_FUTURE"}
+                option_buying_mode = option_resolution_requested and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
                 if option_buying_mode and action == "SELL":
                     # In option-buying strategies a SELL signal has two meanings:
                     # with an active position it is an exit, while flat it is a PE entry.
@@ -339,7 +354,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                              "$inc": inc_set},
                         )
                         continue
-                if opt_cfg.get("enabled") and resolve_option_fn:
+                if option_resolution_requested and resolve_option_fn:
                     try:
                         option_contract = await resolve_option_fn(
                             user_id=s["user_id"],
@@ -351,10 +366,19 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             strategy=s,
                         )
                         if not option_contract:
+                            underlying_name = opt_cfg.get("underlying", "NIFTY")
+                            is_mcx_underlying = str(underlying_name).upper() in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+                            clear_reason = (
+                                f"{underlying_name} contract unresolved: check Upstox MCX_FO permission / instrument master."
+                                if is_mcx_underlying else
+                                f"Upstox option contract resolution failed for {underlying_name}. Check OAuth, exchange segment permission, and instrument search logs."
+                            )
                             await db.strategies.update_one(
                                 {"id": s["id"]},
                                 {"$set": {**eval_set,
-                                          "last_error": f"Upstox option contract resolution failed for {opt_cfg.get('underlying', 'NIFTY')}. Check OAuth, exchange segment permission, and instrument search logs.",
+                                          "last_error": clear_reason,
+                                          "halted": True,
+                                          "halt_reason": "CONTRACT_RESOLUTION_FAILED",
                                           "last_signals_count": signals_count},
                                  "$inc": inc_set})
                             continue
@@ -385,6 +409,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "trend_context": signal_validation.get("trend") or {},
                         "visual_config": s.get("visual_config") or {},
                         "option_contract": option_contract,
+                        "exchange": (option_contract.get("exchange") if option_contract else ("MCX" if str(symbol).upper() in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"} else "NSE")),
                         "status": "PENDING",
                         "rejection_reason": None,
                         "order_id": None,

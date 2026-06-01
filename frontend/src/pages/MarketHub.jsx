@@ -14,11 +14,12 @@ export default function MarketHub() {
   const [comparison, setComparison] = useState(null);
   const [feed, setFeed] = useState(null);
   const [indicators, setIndicators] = useState(null);
+  const [marketSession, setMarketSession] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, c, cmp, f, ind] = await Promise.all([
+    const [h, r, j, c, cmp, f, ind, s] = await Promise.all([
       api.get("/broker/health").catch(err => { console.error("health failed", err); return { data: null }; }),
       api.get("/risk/dashboard").catch(err => { console.error("risk failed", err); return { data: null }; }),
       api.get("/trade-journal").catch(err => { console.error("journal failed", err); return { data: null }; }),
@@ -26,6 +27,7 @@ export default function MarketHub() {
       api.get("/strategies/live-backtest-comparison").catch(err => { console.error("comparison failed", err); return { data: null }; }),
       api.get("/market/feed-comparison").catch(err => { console.error("feed failed", err); return { data: null }; }),
       api.get(`/market/indicators/${underlying}`).catch(err => { console.error("indicators failed", err); return { data: null }; }),
+      api.get("/market/session-status").catch(err => { console.error("session failed", err); return { data: null }; }),
     ]);
     if (h.data) setHealth(h.data);
     if (r.data) setRisk(r.data);
@@ -34,6 +36,7 @@ export default function MarketHub() {
     if (cmp.data) setComparison(cmp.data);
     if (f.data) setFeed(f.data);
     if (ind.data) setIndicators(ind.data);
+    if (s.data) setMarketSession(s.data);
   }, [underlying]);
 
   useEffect(() => {
@@ -93,13 +96,19 @@ export default function MarketHub() {
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Metric label="Mode" value={risk?.mode || "-"} tone={risk?.mode === "LIVE" ? "loss" : "warn"} />
-        <Metric label="Market" value={risk?.market_open ? "OPEN" : "CLOSED"} tone={risk?.market_open ? "profit" : "warn"} />
+        <Metric label="Market" value={marketSession?.global_status || (risk?.market_open ? "OPEN" : "CLOSED")} tone={(marketSession?.global_status === "OPEN" || risk?.market_open) ? "profit" : "warn"} />
         <Metric label="P&L Today" value={`₹${formatINR(risk?.total_pnl || 0)}`} tone={(risk?.total_pnl || 0) >= 0 ? "profit" : "loss"} />
         <Metric label="Trades" value={`${risk?.trades_used ?? 0}/${risk?.max_trades_per_day ?? "-"}`} />
         <Metric label="Risk Left" value={risk?.loss_remaining == null ? "-" : `₹${formatINR(risk.loss_remaining)}`} tone="warn" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        {feed?.simulated_warning && (
+          <div className="rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)] xl:col-span-2">
+            {feed.simulated_warning}
+          </div>
+        )}
+
         <section className="qd-card p-4">
           <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><HeartPulse size={16} /> Broker Health</h2>
           <div className="space-y-3">
@@ -162,6 +171,7 @@ export default function MarketHub() {
           <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><BookOpen size={16} /> Trade Journal</h2>
           <div className="grid grid-cols-2 gap-2 mb-3">
             <Small label="Orders" value={journal?.summary?.orders ?? 0} />
+            <Small label="Skipped" value={journal?.summary?.skipped_signals ?? 0} />
             <Small label="Win Rate" value={`${journal?.summary?.win_rate ?? 0}%`} />
           </div>
           <div className="space-y-2 max-h-52 overflow-y-auto pr-1">

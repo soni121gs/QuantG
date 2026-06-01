@@ -93,18 +93,19 @@ def test_paper_mode_session_enforcement_logic():
 async def test_place_order_core_paper_market_gating():
     """Verify that _place_order_core rejects paper entry orders outside hours but accepts exits."""
     from unittest.mock import patch, MagicMock, AsyncMock
-    from fastapi import HTTPException
     from server import _place_order_core
     
     # Mock all required database and helper methods
     with patch("server.get_user_settings", new_callable=AsyncMock) as mock_settings, \
          patch("server.db.strategies.find_one", new_callable=AsyncMock) as mock_strat, \
          patch("server._is_order_market_open", return_value=False), \
+         patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": False, "status": "CLOSED", "reason": "NSE market closed"}), \
+         patch("server._persist_paper_skipped_order", new_callable=AsyncMock, return_value={"id": "skip-1", "status": "SKIPPED_SIGNAL", "mode": "paper"}), \
          patch("server._build_order_intent", new_callable=AsyncMock) as mock_intent:
          
          # Mock user settings
          mock_settings.return_value = {"paper_mode": True, "execution_broker": "upstox"}
-         mock_strat.return_value = {"id": "strat_1", "mode": "paper"}
+         mock_strat.return_value = {"id": "strat_1", "mode": "paper", "status": "live"}
          
          # Mock return values for _build_order_intent
          mock_instr = MagicMock()
@@ -135,7 +136,7 @@ async def test_place_order_core_paper_market_gating():
              "take_profit": None
          }
          
-         # Case 1: Entry order ("OPEN_LONG") -> Should raise HTTPException
+         # Case 1: Entry order ("OPEN_LONG") -> Should be skipped without an order row
          mock_intent_obj.intent = "OPEN_LONG"
          mock_intent.return_value = {
              "intent": mock_intent_obj,
@@ -143,16 +144,14 @@ async def test_place_order_core_paper_market_gating():
              "lots": 1
          }
          
-         with pytest.raises(HTTPException) as exc_info:
-             await _place_order_core(
-                 user_id="user_123",
-                 symbol="RELIANCE",
-                 side="BUY",
-                 qty=10,
-                 source="strategy:strat_1"
-             )
-         assert exc_info.value.status_code == 400
-         assert "Paper entry orders are blocked outside" in exc_info.value.detail
+         res_skip = await _place_order_core(
+             user_id="user_123",
+             symbol="RELIANCE",
+             side="BUY",
+             qty=10,
+             source="strategy:strat_1"
+         )
+         assert res_skip["status"] == "SKIPPED_SIGNAL"
          
          # Case 2: Exit order ("CLOSE_LONG") -> Should proceed past the time-window check
          # (It will raise an exception later on, e.g. on missing DB inserts, but it shouldn't raise the out-of-hours block)
@@ -166,6 +165,8 @@ async def test_place_order_core_paper_market_gating():
          # We mock db.orders.insert_one and other downstream methods to avoid side effects
          with patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=100.0), \
               patch("server._open_strategy_position_for_exit", new_callable=AsyncMock) as mock_exit_record, \
+              patch("server._mark_strategy_position_exiting", new_callable=AsyncMock), \
+              patch("server._close_strategy_position_record", new_callable=AsyncMock), \
               patch("server._insert_order_intent", new_callable=AsyncMock) as mock_insert, \
               patch("server._apply_paper_fill_to_position", new_callable=AsyncMock) as mock_fill:
               
@@ -238,15 +239,17 @@ async def test_paper_trading_e2e_flow():
 
     # 2. Mock and patch required database and helper functions to run E2E flow in-memory
     mock_db = MagicMock()
-    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper"})
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper", "status": "live"})
     mock_db.strategies.update_one = AsyncMock()
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.signals.count_documents = AsyncMock(return_value=0)
+    mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.strategy_positions.update_one = AsyncMock()
 
     with patch("server.get_user_settings", new_callable=AsyncMock) as mock_settings, \
          patch("server.db", mock_db), \
          patch("server._is_order_market_open", return_value=True), \
+         patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": True, "status": "OPEN", "reason": "test open"}), \
          patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=100.0), \
          patch("server._reserve_strategy_position", new_callable=AsyncMock) as mock_reserve, \
          patch("server._activate_strategy_position", new_callable=AsyncMock) as mock_activate, \

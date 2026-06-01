@@ -43,7 +43,7 @@ _BROKER_LIMITERS = {
 }
 
 
-SUPPORTED_SEGMENTS = {"EQUITY", "OPTIONS", "FUTURES", "COMMODITY"}
+SUPPORTED_SEGMENTS = {"EQUITY", "OPTIONS", "FUTURES", "COMMODITY", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_FO"}
 SUPPORTED_ORDER_TYPES = {"MARKET", "LIMIT"}
 SUPPORTED_SIDES = {"BUY", "SELL"}
 
@@ -114,18 +114,18 @@ def segment_from_exchange(exchange: str, asset_class: str = "DIRECT") -> str:
     exch = (exchange or "NSE").upper()
     asset = (asset_class or "DIRECT").upper()
     if asset in {"OPTION_LONG", "OPTION_SHORT"}:
-        return "OPTIONS"
+        return "BSE_FO" if exch in {"BFO", "BSE"} else "MCX_FO" if exch == "MCX" else "NSE_FO"
     if exch == "MCX":
-        return "COMMODITY"
+        return "MCX_FO"
     if exch in {"NFO", "BFO", "CDS"}:
-        return "FUTURES"
-    return "EQUITY"
+        return "BSE_FO" if exch == "BFO" else "NSE_FO"
+    return "BSE_EQ" if exch == "BSE" else "NSE_EQ"
 
 
 def default_product(segment: str, exchange: str, requested: Optional[str] = None) -> str:
     if requested:
         return str(requested).upper()
-    if segment in {"OPTIONS", "FUTURES", "COMMODITY"} or (exchange or "").upper() in {"NFO", "BFO", "MCX", "CDS"}:
+    if segment in {"OPTIONS", "FUTURES", "COMMODITY", "NSE_FO", "BSE_FO", "MCX_FO"} or (exchange or "").upper() in {"NFO", "BFO", "MCX", "CDS"}:
         return "NRML"
     return "MIS"
 

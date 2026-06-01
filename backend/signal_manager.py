@@ -343,20 +343,23 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     source=f"strategy:{sig['strategy_id']}",
                                     idempotency_key=f"sig:{sig['id']}",
                                     option_contract=option_contract,
+                                    exchange=option_contract.get("exchange") if option_contract else sig.get("exchange", "NSE"),
                                 )
                                 
                                 # Route direct strategy-level parameters
                                 order_res = await place_order_fn(**place_kwargs)
                                 
                                 now_str = datetime.now(timezone.utc).isoformat()
-                                final_signal_status = "SKIPPED" if str(order_res.get("status") or "").upper() == "SKIPPED" else "PROCESSED"
+                                order_status = str(order_res.get("status") or "").upper()
+                                final_signal_status = "SKIPPED_SIGNAL" if order_status in {"SKIPPED", "SKIPPED_SIGNAL"} else "PROCESSED"
                                 signal_update = {
                                     "status": final_signal_status,
-                                    "order_id": order_res.get("id"),
+                                    "order_id": order_res.get("id") if final_signal_status == "PROCESSED" else None,
+                                    "skipped_signal_id": order_res.get("id") if final_signal_status == "SKIPPED_SIGNAL" else None,
                                     "processed_at": now_str,
                                 }
-                                if final_signal_status == "SKIPPED":
-                                    signal_update["rejection_reason"] = order_res.get("skip_reason") or "price unavailable"
+                                if final_signal_status == "SKIPPED_SIGNAL":
+                                    signal_update["rejection_reason"] = order_res.get("skip_reason") or order_res.get("reason_code") or "preflight skipped"
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
                                     {"$set": signal_update}

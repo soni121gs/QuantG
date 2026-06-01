@@ -39,6 +39,7 @@ export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = false
 
   const positions = snapshot?.positions || [];
   const orders = snapshot?.orders || [];
+  const skippedSignals = snapshot?.skipped_signals || [];
   const openOrders = snapshot?.open_orders || [];
   const failedOrders = snapshot?.failed_orders || [];
   const strategyPositions = snapshot?.strategy_positions || [];
@@ -48,6 +49,7 @@ export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = false
     snapshot,
     positions,
     orders,
+    skippedSignals,
     openOrders,
     failedOrders,
     strategyPositions,
@@ -57,6 +59,7 @@ export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = false
     refresh,
     paperMode: Boolean(snapshot?.paper_mode),
     executionBroker: snapshot?.execution_broker || "upstox",
+    marketSession: snapshot?.market_session,
     generatedAt: snapshot?.generated_at,
   };
 }

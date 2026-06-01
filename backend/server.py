@@ -55,6 +55,9 @@ from order_lifecycle import (
     ORDER_CANCELLED,
     ORDER_REJECTED,
     ORDER_CLOSED,
+    ORDER_PAPER_CREATED,
+    ORDER_PAPER_FILLED,
+    ORDER_SKIPPED_SIGNAL,
     ORDER_UNKNOWN_NEEDS_REVIEW,
     ORDER_ACTIVE_STATUSES,
     ORDER_TERMINAL_STATUSES,
@@ -166,11 +169,12 @@ _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
 _KOTAK_GATEWAYS: Dict[str, Any] = {}  # Kotak broker — deprecated; kept to prevent AttributeError on startup
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
 _UPSTOX_TOKEN_VALIDATION_CACHE: Dict[str, Dict[str, Any]] = {}
-COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
+COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
 COMMODITY_REQUIRED_CAPITAL = {
     "CRUDEOIL": 30000.0,
     "CRUDEOILM": 6000.0,
     "NATURALGAS": 18000.0,
+    "NATGASMINI": 6000.0,
 }
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
@@ -354,6 +358,19 @@ class OrderIntent(BaseModel):
     take_profit: Optional[float] = None
 
 
+class ExecutionPreflightResult(BaseModel):
+    ok: bool
+    status: str
+    reason_code: Optional[str] = None
+    reason: Optional[str] = None
+    strategy_id: Optional[str] = None
+    symbol: Optional[str] = None
+    resolved_instrument: Optional[Dict[str, Any]] = None
+    segment: Optional[str] = None
+    ltp: Optional[float] = None
+    market_session: Optional[Dict[str, Any]] = None
+
+
 class StrategyRuntimeSettingsReq(BaseModel):
     max_lot: Optional[int] = 1
     target_pct: Optional[float] = None
@@ -506,6 +523,7 @@ COMMODITY_SYMBOLS = [
     {"symbol": "CRUDEOIL", "name": "MCX Crude Oil", "base": 6550.0, "exchange": "MCX"},
     {"symbol": "CRUDEOILM", "name": "MCX Crude Oil Mini", "base": 6550.0, "exchange": "MCX"},
     {"symbol": "NATURALGAS", "name": "MCX Natural Gas", "base": 245.0, "exchange": "MCX"},
+    {"symbol": "NATGASMINI", "name": "MCX Natural Gas Mini", "base": 245.0, "exchange": "MCX"},
 ]
 
 # Mock ticks should move during market hours, then freeze. This keeps paper PnL
@@ -518,6 +536,148 @@ MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
 SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO", "MCX", "CDS"}
 ACTIVE_STRATEGY_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "FILLED", "OPEN", "EXITING"}
 STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND", "UNKNOWN_NEEDS_REVIEW"}
+MARKET_HOLIDAYS_IST = {
+    item.strip()
+    for item in (os.environ.get("MARKET_HOLIDAYS_IST") or os.environ.get("MARKET_HOLIDAYS") or "").split(",")
+    if item.strip()
+}
+SEGMENT_MARKET_WINDOWS = {
+    "NSE_EQ": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE equity"),
+    "BSE_EQ": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE equity"),
+    "NSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
+    "BSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
+    "MCX_FO": (MCX_OPEN_MINUTE, MCX_CLOSE_MINUTE, "MCX commodity"),
+}
+
+
+def _ist_date_key(now_utc: Optional[datetime] = None) -> str:
+    return ((now_utc or datetime.now(timezone.utc)) + IST_OFFSET).date().isoformat()
+
+
+def _ist_iso_for_minute(day: Any, minute: int) -> str:
+    return f"{day.isoformat()}T{minute // 60:02d}:{minute % 60:02d}:00+05:30"
+
+
+def _is_trading_holiday(day: Any) -> bool:
+    return day.isoformat() in MARKET_HOLIDAYS_IST
+
+
+def _next_segment_open(segment: str, now_utc: Optional[datetime] = None) -> Optional[str]:
+    window = SEGMENT_MARKET_WINDOWS.get(segment)
+    if not window:
+        return None
+    open_minute, close_minute, _ = window
+    ist_now = (now_utc or datetime.now(timezone.utc)) + IST_OFFSET
+    today_minutes = ist_now.hour * 60 + ist_now.minute
+    for offset in range(0, 14):
+        day = ist_now.date() + timedelta(days=offset)
+        if day.weekday() >= 5 or _is_trading_holiday(day):
+            continue
+        if offset == 0 and today_minutes <= close_minute:
+            if today_minutes <= open_minute:
+                return _ist_iso_for_minute(day, open_minute)
+            if open_minute <= today_minutes <= close_minute:
+                return _ist_iso_for_minute(day, open_minute)
+            continue
+        return _ist_iso_for_minute(day, open_minute)
+    return None
+
+
+def _segment_session_status(segment: str, now_utc: Optional[datetime] = None) -> Dict[str, Any]:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    day = ist_now.date()
+    minutes = ist_now.hour * 60 + ist_now.minute
+    window = SEGMENT_MARKET_WINDOWS.get(segment)
+    if not window:
+        return {
+            "segment": segment,
+            "status": "CLOSED",
+            "open": False,
+            "reason": "Unsupported market segment",
+            "next_open": None,
+            "next_close": None,
+        }
+    open_minute, close_minute, label = window
+    holiday = _is_trading_holiday(day)
+    weekday = day.weekday() < 5
+    open_now = weekday and not holiday and open_minute <= minutes <= close_minute
+    if open_now:
+        reason = f"{label} market is open"
+    elif not weekday:
+        reason = f"{label} market is closed for weekend"
+    elif holiday:
+        reason = f"{label} market is closed for configured holiday"
+    elif minutes < open_minute:
+        reason = f"{label} market opens at {open_minute // 60:02d}:{open_minute % 60:02d} IST"
+    else:
+        reason = f"{label} market closed after {close_minute // 60:02d}:{close_minute % 60:02d} IST"
+    return {
+        "segment": segment,
+        "status": "OPEN" if open_now else "CLOSED",
+        "open": open_now,
+        "reason": reason,
+        "open_time": f"{open_minute // 60:02d}:{open_minute % 60:02d}",
+        "close_time": f"{close_minute // 60:02d}:{close_minute % 60:02d}",
+        "next_open": _next_segment_open(segment, now_utc) if not open_now else None,
+        "next_close": _ist_iso_for_minute(day, close_minute) if open_now else None,
+    }
+
+
+def market_session_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, Any]:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    segments = {
+        key: _segment_session_status(key, now_utc)
+        for key in ("NSE_FO", "BSE_FO", "MCX_FO", "NSE_EQ", "BSE_EQ")
+    }
+    open_count = sum(1 for row in segments.values() if row["open"])
+    any_open = open_count > 0
+    global_status = "OPEN" if open_count == len(segments) else "PARTIAL_OPEN" if any_open else "CLOSED"
+    first_closed = next((row for row in segments.values() if not row["open"]), None)
+    return {
+        "global_status": global_status,
+        "current_ist_time": (now_utc + IST_OFFSET).isoformat(),
+        "timezone": "Asia/Kolkata",
+        "reason": "All configured segments are open" if global_status == "OPEN" else "Only some segments are open" if global_status == "PARTIAL_OPEN" else ((first_closed or {}).get("reason") or "Markets closed"),
+        "next_open": min([row["next_open"] for row in segments.values() if row.get("next_open")] or [None]),
+        "next_close": min([row["next_close"] for row in segments.values() if row.get("next_close")] or [None]),
+        "segments": segments,
+        **segments,
+    }
+
+
+def _execution_segment_for(exchange: str, asset_class: Optional[str] = None, symbol: str = "", option_contract: Optional[Dict[str, Any]] = None) -> str:
+    exch = (exchange or "NSE").upper()
+    asset = (asset_class or "").upper()
+    opt_type = str((option_contract or {}).get("option_type") or (option_contract or {}).get("instrument_type") or "").upper()
+    symbol_upper = (symbol or "").upper()
+    is_option = asset in {"OPTION_LONG", "OPTION_SHORT"} or opt_type in {"CE", "PE", "OPTCOM"} or symbol_upper.endswith(("CE", "PE"))
+    if exch in {"NFO", "NSE_FO"} or (exch == "NSE" and is_option):
+        return "NSE_FO"
+    if exch in {"BFO", "BSE_FO"} or (exch == "BSE" and is_option):
+        return "BSE_FO"
+    if exch in {"MCX", "MCX_FO"}:
+        return "MCX_FO"
+    if exch == "BSE":
+        return "BSE_EQ"
+    return "NSE_EQ"
+
+
+def _asset_type_for_instrument(instr: "InstrumentRef", option_contract: Optional[Dict[str, Any]] = None) -> str:
+    asset = str(getattr(instr, "asset_class", "") or "").upper()
+    segment = str(getattr(instr, "segment", "") or "").upper()
+    exchange = str(getattr(instr, "exchange", "") or "").upper()
+    symbol = str(getattr(instr, "tradingsymbol", "") or "").upper()
+    if option_contract or asset in {"OPTION_LONG", "OPTION_SHORT"} or symbol.endswith(("CE", "PE")):
+        return "option"
+    if exchange == "MCX" or segment == "MCX_FO":
+        return "commodity"
+    return "equity"
+
+
+def _market_session_for_instrument(instr: "InstrumentRef", option_contract: Optional[Dict[str, Any]] = None, now_utc: Optional[datetime] = None) -> Dict[str, Any]:
+    segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
+    return _segment_session_status(segment, now_utc)
 
 
 def _last_nse_session_close_utc(now_utc: Optional[datetime] = None) -> datetime:
@@ -4076,6 +4236,10 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
                 logger.warning("Upstox LTP failed for %s: %s", symbol, exc)
     if not allow_mock:
         return None
+    allow_simulated = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
+    if not allow_simulated:
+        logger.info("Simulated LTP fallback blocked for %s because allow_simulated_prices is false.", symbol)
+        return None
     all_symbols = [*SYMBOLS, *COMMODITY_SYMBOLS]
     sym = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
     return live_price(sym["base"], all_symbols.index(sym))["price"] if sym else None
@@ -4315,7 +4479,7 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
             ist_today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).date().isoformat()
             
             # 1. Generic underlying (e.g. CRUDEOIL, NATURALGAS)
-            if symbol in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}:
+            if symbol in COMMODITY_UNDERLYINGS:
                 row = sync_db.upstox_mcx_future_contracts.find_one(
                     {
                         "underlying": symbol,
@@ -5648,7 +5812,8 @@ async def _check_trade_count_guard(user_id: str, max_trades: int, mode: str = "p
         "STALE",
         "BROKER_NOT_FOUND",
         "BLOCKED",
-        "SKIPPED"
+        "SKIPPED",
+        "SKIPPED_SIGNAL",
     ]
     trades = await db.orders.count_documents({
         "user_id": user_id,
@@ -5695,7 +5860,165 @@ def _closed_order_statuses() -> set:
     return set(ORDER_TERMINAL_STATUSES | LEGACY_TERMINAL_STATUSES)
 
 
-ORDER_SKIPPED = "SKIPPED"
+ORDER_SKIPPED = ORDER_SKIPPED_SIGNAL
+
+
+def _preflight_response(
+    *,
+    ok: bool,
+    reason_code: Optional[str],
+    reason: Optional[str],
+    strategy_id: Optional[str],
+    intent: Optional["OrderIntent"],
+    option_contract: Optional[Dict[str, Any]],
+    ltp: Optional[float],
+    market_session: Optional[Dict[str, Any]],
+) -> ExecutionPreflightResult:
+    instr = intent.instrument if intent else None
+    resolved = None
+    segment = None
+    symbol = None
+    if instr:
+        segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
+        symbol = instr.tradingsymbol
+        resolved = {
+            "broker": instr.broker,
+            "exchange": instr.exchange,
+            "tradingsymbol": instr.tradingsymbol,
+            "instrument_token": instr.instrument_token,
+            "instrument_key": _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token),
+            "asset_class": instr.asset_class,
+        }
+    return ExecutionPreflightResult(
+        ok=ok,
+        status="READY" if ok else ORDER_SKIPPED_SIGNAL,
+        reason_code=reason_code,
+        reason=reason,
+        strategy_id=strategy_id,
+        symbol=symbol,
+        resolved_instrument=resolved,
+        segment=segment,
+        ltp=float(ltp) if ltp not in (None, "") else None,
+        market_session=market_session,
+    )
+
+
+async def _execution_preflight(
+    *,
+    user_id: str,
+    strategy_id: Optional[str],
+    strategy_row: Optional[Dict[str, Any]],
+    intent: "OrderIntent",
+    settings: Dict[str, Any],
+    paper: bool,
+    option_contract: Optional[Dict[str, Any]],
+    fill_price_hint: float,
+    market_snapshot: Dict[str, Any],
+) -> ExecutionPreflightResult:
+    instr = intent.instrument
+    ltp = float(fill_price_hint or market_snapshot.get("ltp") or 0)
+    market_session = _market_session_for_instrument(instr, option_contract)
+
+    if strategy_id and strategy_id != "manual_recovery":
+        row = strategy_row or await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
+        if not row:
+            return _preflight_response(
+                ok=False, reason_code="INVALID_STRATEGY", reason="Strategy not found or not owned by user.",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+            )
+        status = str(row.get("status") or "").lower()
+        if status != "live":
+            return _preflight_response(
+                ok=False, reason_code="INVALID_STRATEGY", reason=f"Strategy is not active (status={status or 'unknown'}).",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+            )
+        halted_reason = row.get("halt_reason") or row.get("last_halt_reason")
+        last_error = str(row.get("last_error") or "")
+        if row.get("halted") or row.get("is_halted") or "contract resolution failed" in last_error.lower():
+            return _preflight_response(
+                ok=False, reason_code="STRATEGY_HALTED", reason=halted_reason or last_error or "Strategy is halted.",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+            )
+
+    if not instr.tradingsymbol or not instr.instrument_token:
+        return _preflight_response(
+            ok=False, reason_code="INVALID_INSTRUMENT", reason="Instrument could not be resolved.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+        )
+    if option_contract is not None and not (option_contract.get("instrument_key") or option_contract.get("instrument_token")):
+        return _preflight_response(
+            ok=False, reason_code="CONTRACT_RESOLUTION_FAILED", reason="Option contract resolution did not return an Upstox instrument_key.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+        )
+
+    segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
+    if segment not in SEGMENT_MARKET_WINDOWS:
+        return _preflight_response(
+            ok=False, reason_code="INVALID_INSTRUMENT", reason=f"Unsupported exchange segment {segment}.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+        )
+
+    if _intent_is_entry(intent.intent) and not market_session.get("open"):
+        return _preflight_response(
+            ok=False, reason_code="MARKET_CLOSED", reason=market_session.get("reason") or "Market is closed.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+        )
+
+    if _intent_is_entry(intent.intent) and ltp <= 0:
+        return _preflight_response(
+            ok=False, reason_code="PRICE_UNAVAILABLE", reason="No valid Upstox websocket or REST LTP is available.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=None, market_session=market_session,
+        )
+
+    if strategy_id and _intent_is_entry(intent.intent):
+        instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+        existing = await db.strategy_positions.find_one({
+            "user_id": user_id,
+            "$or": [
+                {"active_instrument_key": _active_key(user_id, instrument_key)},
+                {"active_strategy_key": _active_key(user_id, strategy_id)},
+                {"strategy_id": strategy_id, "instrument_key": instrument_key},
+            ],
+            "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
+        })
+        if existing:
+            return _preflight_response(
+                ok=False,
+                reason_code="DUPLICATE_POSITION",
+                reason=f"Duplicate open position blocked for {instr.tradingsymbol}.",
+                strategy_id=strategy_id,
+                intent=intent,
+                option_contract=option_contract,
+                ltp=ltp,
+                market_session=market_session,
+            )
+
+    try:
+        if _intent_is_entry(intent.intent):
+            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
+            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0), mode="paper" if paper else "live")
+    except HTTPException as exc:
+        return _preflight_response(
+            ok=False,
+            reason_code="RISK_QUOTA_EXHAUSTED",
+            reason=str(exc.detail),
+            strategy_id=strategy_id,
+            intent=intent,
+            option_contract=option_contract,
+            ltp=ltp,
+            market_session=market_session,
+        )
+
+    return _preflight_response(
+        ok=True,
+        reason_code=None,
+        reason="Ready for execution.",
+        strategy_id=strategy_id,
+        intent=intent,
+        option_contract=option_contract,
+        ltp=ltp,
+        market_session=market_session,
+    )
 
 
 async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
@@ -5765,20 +6088,18 @@ async def _place_kite_order_with_recovery(
 
 
 def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
-    now_utc = now_utc or datetime.now(timezone.utc)
-    ist_now = now_utc + IST_OFFSET
-    minutes = ist_now.hour * 60 + ist_now.minute
-    return ist_now.weekday() < 5 and NSE_OPEN_MINUTE <= minutes <= NSE_CLOSE_MINUTE
+    return bool(_segment_session_status("NSE_FO", now_utc).get("open"))
 
 
 def _is_order_market_open(exchange: str, now_utc: Optional[datetime] = None) -> bool:
     exchange = (exchange or "NSE").upper()
-    if exchange == "MCX":
-        now_utc = now_utc or datetime.now(timezone.utc)
-        ist_now = now_utc + IST_OFFSET
-        minutes = ist_now.hour * 60 + ist_now.minute
-        return ist_now.weekday() < 5 and MCX_OPEN_MINUTE <= minutes <= MCX_CLOSE_MINUTE
-    return _is_nse_market_open(now_utc)
+    segment = (
+        "MCX_FO" if exchange in {"MCX", "MCX_FO"} else
+        "BSE_FO" if exchange in {"BFO", "BSE_FO"} else
+        "BSE_EQ" if exchange == "BSE" else
+        "NSE_FO"
+    )
+    return bool(_segment_session_status(segment, now_utc).get("open"))
 
 
 def _market_data_age_sec(value: Any, now_utc: Optional[datetime] = None) -> Optional[float]:
@@ -5852,8 +6173,8 @@ async def _build_order_intent(
     # ----- option contract path -----
     if option_contract and option_contract.get("tradingsymbol"):
         tsym = str(option_contract["tradingsymbol"]).upper().strip()
-        seg = "OPTIONS"
         opt_exchange = (option_contract.get("exchange") or exchange or "NFO").upper()
+        seg = _execution_segment_for(opt_exchange, "OPTION_LONG", tsym, option_contract)
         token = str(option_contract.get("instrument_token") or option_contract.get("instrument_key") or tsym)
         broker_side = str(option_contract.get("transaction_type") or side or "BUY").upper()
         instrument_key = _instrument_key(opt_exchange, tsym, token)
@@ -5907,14 +6228,14 @@ async def _build_order_intent(
         return {"intent": intent, "lot_size": lot_size, "lots": lots}
 
     # ----- equity / futures / commodity path -----
-    segment = "EQUITY"
+    segment = _execution_segment_for(exchange, "DIRECT", symbol_upper)
     asset_class = "DIRECT"
     if exchange in ("NFO", "BFO"):
-        segment = "FUTURES"
+        segment = _execution_segment_for(exchange, "FUTURES", symbol_upper)
     elif exchange == "MCX":
-        segment = "COMMODITY"
+        segment = "MCX_FO"
     elif exchange in ("CDS",):
-        segment = "FUTURES"
+        segment = "NSE_FO"
 
     token = symbol_upper
     if execution_broker == "upstox":
@@ -6281,17 +6602,11 @@ async def _persist_paper_skipped_order(
     signal_id: Optional[str],
     market_snapshot: Dict[str, Any],
     reason: str = "price unavailable",
+    reason_code: str = "PRICE_UNAVAILABLE",
+    preflight: Optional[ExecutionPreflightResult] = None,
 ) -> Dict[str, Any]:
-    """Persist a terminal paper simulator skip without using rejection logic."""
+    """Record a deduplicated skipped signal summary without creating an order."""
     instr = intent.instrument
-    scoped_idempotency = _scoped_idempotency_key(user_id, idempotency_key)
-    existing = await db.orders.find_one(
-        {"user_id": user_id, "idempotency_key": scoped_idempotency, "mode": "paper"},
-        {"_id": 0},
-    )
-    if existing:
-        return existing
-
     now = datetime.now(timezone.utc).isoformat()
     trace = _paper_price_trace(
         intent,
@@ -6299,13 +6614,22 @@ async def _persist_paper_skipped_order(
         market_snapshot=market_snapshot,
         signal_id=signal_id,
     )
-    doc = {
+    session_date = _ist_date_key()
+    side = _intent_side(intent.intent)
+    dedupe_key = "|".join([
+        str(strategy_id or "manual"),
+        str(instr.tradingsymbol or "").upper(),
+        side,
+        str(reason_code or "SKIPPED"),
+        session_date,
+    ])
+    doc_seed = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
-        "idempotency_key": scoped_idempotency,
-        "client_idempotency_key": str(idempotency_key or ""),
+        "dedupe_key": dedupe_key,
+        "session_date": session_date,
         "symbol": instr.tradingsymbol,
-        "side": _intent_side(intent.intent),
+        "side": side,
         "qty": int(intent.quantity or 0),
         "filled_qty": 0,
         "pending_qty": 0,
@@ -6316,10 +6640,11 @@ async def _persist_paper_skipped_order(
         "brokerage": 0.0,
         "slippage": 0.0,
         "product": product,
-        "status": ORDER_SKIPPED,
-        "legacy_status": ORDER_SKIPPED,
-        "execution_status": ORDER_SKIPPED,
-        "status_message": f"SKIPPED: {reason}",
+        "status": ORDER_SKIPPED_SIGNAL,
+        "legacy_status": ORDER_SKIPPED_SIGNAL,
+        "execution_status": ORDER_SKIPPED_SIGNAL,
+        "status_message": f"{ORDER_SKIPPED_SIGNAL}: {reason}",
+        "reason_code": reason_code,
         "skip_reason": reason,
         "mode": "paper",
         "broker": "paper",
@@ -6329,16 +6654,18 @@ async def _persist_paper_skipped_order(
         "created_at": now,
         "updated_at": now,
         "exchange": instr.exchange,
-        "asset_type": "option" if instr.segment == "OPTIONS" else ("commodity" if instr.segment == "COMMODITY" else "equity"),
+        "asset_type": _asset_type_for_instrument(instr, option_contract),
         "order_intent": intent.model_dump(),
         "instrument": instr.model_dump(),
-        "segment": instr.segment,
+        "segment": _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract),
         "paper_skip": True,
         "paper_skip_trace": trace,
         "market_snapshot": market_snapshot,
+        "market_session": preflight.market_session if preflight else None,
+        "preflight": preflight.model_dump() if preflight else None,
     }
     if option_contract:
-        doc.update({
+        doc_seed.update({
             "underlying": option_contract.get("underlying"),
             "option_type": option_contract.get("option_type"),
             "strike": option_contract.get("strike"),
@@ -6350,16 +6677,30 @@ async def _persist_paper_skipped_order(
             "lot_size": resolution.get("lot_size"),
         })
     try:
-        await db.orders.insert_one(doc)
-    except DuplicateKeyError:
-        existing = await db.orders.find_one(
-            {"user_id": user_id, "idempotency_key": scoped_idempotency, "mode": "paper"},
-            {"_id": 0},
+        doc = await db.skipped_signals.find_one_and_update(
+            {"user_id": user_id, "dedupe_key": dedupe_key},
+            {
+                "$setOnInsert": doc_seed,
+                "$set": {
+                    "last_seen_at": now,
+                    "updated_at": now,
+                    "last_signal_id": signal_id,
+                    "last_trace": trace,
+                    "market_snapshot": market_snapshot,
+                    "market_session": preflight.market_session if preflight else None,
+                    "preflight": preflight.model_dump() if preflight else None,
+                },
+                "$inc": {"count": 1},
+            },
+            upsert=True,
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
         )
-        if existing:
-            return existing
-        raise
-    await _append_order_event(doc["id"], user_id, "PAPER_SIGNAL_SKIPPED", {"reason": reason, **trace})
+    except AttributeError:
+        doc = doc_seed
+        doc["count"] = 1
+        await db.skipped_signals.insert_one(doc)
+    doc = doc or doc_seed
     logger.warning(
         "Paper execution skipped strategy_id=%s signal_id=%s action=%s symbol=%s expiry=%s strike=%s option_type=%s exchange=%s token=%s ltp_source=%s ltp=%s quote_ts=%s subscribed=%s cached=%s reason=%s",
         strategy_id,
@@ -6661,6 +7002,21 @@ def _paper_delta(intent_name: str, quantity: int) -> int:
     return int(quantity) if intent_name in {"OPEN_LONG", "CLOSE_SHORT"} else -int(quantity)
 
 
+def _assert_position_source_order_doc(order_doc: Dict[str, Any], *, expected_mode: str) -> None:
+    order_id = order_doc.get("id")
+    status = canonical_order_status(order_doc.get("status"))
+    raw_status = str(order_doc.get("status") or "").upper()
+    if not order_id:
+        raise RuntimeError("CRITICAL ERROR: create_position requires source_order_id.")
+    if order_doc.get("mode") != expected_mode:
+        raise RuntimeError("CRITICAL ERROR: position mode does not match source order mode.")
+    if status != ORDER_FILLED and raw_status != ORDER_PAPER_FILLED:
+        raise RuntimeError(
+            f"CRITICAL ERROR: position source order {order_id} is not filled "
+            f"(status={order_doc.get('status')})."
+        )
+
+
 async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: float) -> Dict[str, Any]:
     """Apply a paper fill exactly once and write immutable fill/trade records."""
     if order_doc.get("mode") != "paper":
@@ -6701,6 +7057,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     qty = int(locked.get("qty") or locked.get("quantity") or 0)
     delta = _paper_delta(intent_name, qty)
     symbol = locked["symbol"]
+    locked["status"] = ORDER_PAPER_FILLED
+    locked["execution_status"] = ORDER_PAPER_FILLED
+    locked["legacy_status"] = "COMPLETE"
+    _assert_position_source_order_doc(locked, expected_mode="paper")
     brokerage = float(locked.get("brokerage") or _simulate_paper_brokerage(fill_price, qty))
     expected = float(locked.get("expected_price") or locked.get("requested_price") or fill_price or 0)
     slippage = round(abs(float(fill_price or 0) - expected) * qty, 2) if expected > 0 else 0.0
@@ -6757,6 +7117,9 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
                 "strategy_id": locked.get("strategy_id"),
                 "mode": "paper",
                 "broker": "paper",
+                "source_order_id": order_id,
+                "source_order_status": ORDER_PAPER_FILLED,
+                "status": "POSITION_OPENED",
             }},
         )
     else:
@@ -6773,6 +7136,9 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "strategy_id": locked.get("strategy_id"),
             "mode": "paper",
             "broker": "paper",
+            "source_order_id": order_id,
+            "source_order_status": ORDER_PAPER_FILLED,
+            "status": "POSITION_OPENED",
         })
 
     fill_doc = {
@@ -6826,9 +7192,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     updated = await db.orders.find_one_and_update(
         {"id": order_id, "user_id": user_id},
         {"$set": {
-            "status": ORDER_FILLED,
+            "status": ORDER_PAPER_FILLED,
             "legacy_status": "COMPLETE",
-            "execution_status": ORDER_FILLED,
+            "execution_status": ORDER_PAPER_FILLED,
+            "status_message": "PAPER_FILLED: simulated fill applied",
             "filled_qty": qty,
             "pending_qty": 0,
             "price": float(fill_price or 0),
@@ -6862,7 +7229,7 @@ async def _recover_pending_paper_fills(limit: int = 500) -> int:
         {
             "mode": "paper",
             "paper_fill_applied": {"$ne": True},
-            "status": {"$in": [ORDER_NEW, ORDER_FILLED]},
+            "status": {"$in": [ORDER_NEW, ORDER_PAPER_CREATED, ORDER_FILLED, ORDER_PAPER_FILLED]},
         },
         {"_id": 0},
     ).sort("created_at", 1).limit(limit).to_list(length=limit)
@@ -6903,6 +7270,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     strategy_id = await _strategy_source_id(source)
     if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
         strategy_id = "manual_recovery"
+    strategy_row = None
 
     if strategy_id:
         if strategy_id == "manual_recovery":
@@ -6910,6 +7278,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             await create_manual_recovery_strategy_if_missing(user_id, bool(settings.get("paper_mode", True)))
         strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if strat:
+            strategy_row = strat
             if strat.get("mode") in ("paper", "live"):
                 settings["paper_mode"] = strat.get("mode") == "paper"
             if strat.get("broker"):
@@ -6935,6 +7304,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     position_reservation = None
     exit_position_record = None
     intent = None
+    preflight_blocked = False
 
     try:
         resolution = await _build_order_intent(
@@ -6954,28 +7324,69 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         instr = intent.instrument
         if instr.exchange not in SUPPORTED_ORDER_EXCHANGES:
             raise HTTPException(status_code=400, detail=f"exchange must be one of {sorted(SUPPORTED_ORDER_EXCHANGES)}")
-        if not paper and not _is_order_market_open(instr.exchange):
-            market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
-            raise HTTPException(status_code=400, detail=f"Live orders are blocked outside {market_name} market hours.")
-        if paper and _intent_is_entry(intent.intent) and not _is_order_market_open(instr.exchange):
-            if os.environ.get("QUANTG_BYPASS_MARKET_HOURS") != "true":
-                market_name = "MCX" if instr.exchange == "MCX" else "NSE/BSE"
-                raise HTTPException(status_code=400, detail=f"Paper entry orders are blocked outside {market_name} market hours.")
+        if _intent_is_entry(intent.intent):
+            early_preflight = await _execution_preflight(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                strategy_row=strategy_row,
+                intent=intent,
+                settings=settings,
+                paper=paper,
+                option_contract=option_contract,
+                fill_price_hint=0.0,
+                market_snapshot={},
+            )
+            if not early_preflight.ok and early_preflight.reason_code == "MARKET_CLOSED":
+                resolved_product_for_skip = (
+                    product
+                    or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
+                )
+                if paper:
+                    return _clean_order_response(await _persist_paper_skipped_order(
+                        user_id=user_id,
+                        intent=intent,
+                        order_type=order_type,
+                        product=str(resolved_product_for_skip).upper(),
+                        price=price,
+                        source=source,
+                        strategy_id=strategy_id,
+                        option_contract=option_contract,
+                        resolution=resolution,
+                        idempotency_key=idempotency_key,
+                        signal_id=signal_id,
+                        market_snapshot={},
+                        reason=early_preflight.reason or "market closed",
+                        reason_code=early_preflight.reason_code or "MARKET_CLOSED",
+                        preflight=early_preflight,
+                    ))
+                preflight_blocked = True
+                raise HTTPException(status_code=400, detail=early_preflight.reason or "Market is closed.")
 
         strategy_id = await _strategy_source_id(source)
         if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
             strategy_id = "manual_recovery"
         fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
-        if paper and _intent_is_entry(intent.intent) and fill_price_hint <= 0:
-            market_snapshot = await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
-            snapshot_ltp = float(market_snapshot.get("ltp") or 0)
-            if snapshot_ltp > 0:
-                fill_price_hint = snapshot_ltp
-            if fill_price_hint <= 0:
-                resolved_product_for_skip = (
-                    product
-                    or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
-                )
+        market_snapshot = {"ltp": fill_price_hint, "source": "fill-hint", "feed": "fill-hint"} if fill_price_hint > 0 else await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
+        snapshot_ltp = float(market_snapshot.get("ltp") or 0)
+        if fill_price_hint <= 0 and snapshot_ltp > 0:
+            fill_price_hint = snapshot_ltp
+        preflight = await _execution_preflight(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            strategy_row=strategy_row,
+            intent=intent,
+            settings=settings,
+            paper=paper,
+            option_contract=option_contract,
+            fill_price_hint=fill_price_hint,
+            market_snapshot=market_snapshot,
+        )
+        if not preflight.ok:
+            resolved_product_for_skip = (
+                product
+                or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
+            )
+            if paper:
                 return _clean_order_response(await _persist_paper_skipped_order(
                     user_id=user_id,
                     intent=intent,
@@ -6989,12 +7400,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     idempotency_key=idempotency_key,
                     signal_id=signal_id,
                     market_snapshot=market_snapshot,
-                    reason="price unavailable",
+                    reason=preflight.reason or "preflight skipped",
+                    reason_code=preflight.reason_code or "SKIPPED",
+                    preflight=preflight,
                 ))
+            preflight_blocked = True
+            raise HTTPException(status_code=400, detail=preflight.reason or "Execution preflight failed.")
         pretrade_risk = None
         if _intent_is_entry(intent.intent):
-            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
-            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0), mode="paper" if paper else "live")
             if intent.intent in ("OPEN_LONG", "OPEN_SHORT") and fill_price_hint <= 0 and not paper:
                 raise HTTPException(status_code=400, detail=f"Live LTP unavailable for {instr.tradingsymbol}; order blocked.")
             pretrade_risk = await _pre_trade_risk_gate(
@@ -7076,7 +7489,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "qty": int(intent.quantity),
             "filled_qty": 0,
             "pending_qty": int(intent.quantity),
-            "status_message": "Paper fill pending local accounting" if paper else "Order intent persisted before broker submission",
+            "status_message": "Paper order created; waiting for simulated fill" if paper else "Order intent persisted before broker submission",
             "gross_realised_pnl": 0.0,
             "realised_pnl": 0.0,
             "order_type": order_type,
@@ -7086,7 +7499,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "brokerage": _simulate_paper_brokerage(float(fill_price or 0), int(intent.quantity)) if paper else 0.0,
             "slippage": 0.0,
             "product": resolved_product,
-            "status": ORDER_NEW,
+            "status": ORDER_PAPER_CREATED if paper else ORDER_NEW,
             "legacy_status": "PENDING_LOCAL" if paper else "PENDING_BROKER",
             "mode": "paper" if paper else "live",
             "broker": "paper" if paper else _runtime_broker_name(instr.broker),
@@ -7099,14 +7512,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "created_at": now,
             "updated_at": now,
             "exchange": instr.exchange,
-            "asset_type": "option" if instr.segment == "OPTIONS" else ("commodity" if instr.segment == "COMMODITY" else "equity"),
+            "asset_type": _asset_type_for_instrument(instr, option_contract),
             "order_intent": intent.model_dump(),
             "pretrade_risk": pretrade_risk,
             "instrument": instr.model_dump(),
             "segment": instr.segment,
             "stop_loss": intent.stop_loss,
             "take_profit": intent.take_profit,
-            "execution_status": ORDER_NEW,
+            "execution_status": ORDER_PAPER_CREATED if paper else ORDER_NEW,
             "paper_fill_applied": False if paper else None,
         }
         if broker_order_id:
@@ -7192,7 +7605,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     headers={"X-Order-Id": order_doc.get("id", "")},
                 )
 
-        if strategy_id and _intent_is_entry(intent.intent):
+        if strategy_id and _intent_is_entry(intent.intent) and not paper:
             await _activate_strategy_position(
                 position_reservation,
                 order_id=order_doc["id"],
@@ -7207,7 +7620,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 await db.strategy_positions.update_one(
                     {"id": position_reservation["id"], "user_id": user_id},
                     {"$set": {
-                        "asset_type": order_doc["asset_type"],
+                        "asset_type": order_doc.get("asset_type") or _asset_type_for_instrument(instr, option_contract),
                         "asset_class": instr.asset_class,
                         "position_side": "SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
                         "product": resolved_product,
@@ -7221,11 +7634,38 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 )
         if strategy_id and _intent_is_exit(intent.intent):
             await _mark_strategy_position_exiting(exit_position_record, exit_order_id=order_doc["id"], exit_broker_order_id=broker_order_id)
-            if paper:
-                await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
 
         if paper:
             order_doc = await _apply_paper_fill_to_position(order_doc, float(fill_price or 0))
+            if strategy_id and _intent_is_entry(intent.intent):
+                await _activate_strategy_position(
+                    position_reservation,
+                    order_id=order_doc["id"],
+                    broker_order_id=broker_order_id,
+                    average_buy_price=float(fill_price or 0),
+                    quantity=int(intent.quantity),
+                    paper=True,
+                    stop_loss=intent.stop_loss,
+                    take_profit=intent.take_profit,
+                )
+                if position_reservation:
+                    await db.strategy_positions.update_one(
+                        {"id": position_reservation["id"], "user_id": user_id},
+                        {"$set": {
+                            "asset_type": order_doc.get("asset_type") or _asset_type_for_instrument(instr, option_contract),
+                            "asset_class": instr.asset_class,
+                            "position_side": "SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
+                            "product": resolved_product,
+                            "lot_size": resolution.get("lot_size"),
+                            "lots": resolution.get("lots"),
+                            "underlying": order_doc.get("underlying"),
+                            "option_type": order_doc.get("option_type"),
+                            "strike": order_doc.get("strike"),
+                            "expiry": order_doc.get("expiry"),
+                        }},
+                    )
+            if strategy_id and _intent_is_exit(intent.intent):
+                await _close_strategy_position_record(exit_position_record, exit_price=float(fill_price or 0), reason=source)
 
         return _clean_order_response(order_doc)
     except Exception as exc:
@@ -7237,7 +7677,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # Classify and log failed live pre-submission rejections. Paper simulator
         # skips are recorded explicitly before this point and must not become
         # broker-style FAILED_ORDER rows.
-        if not order_inserted and not paper:
+        if not order_inserted and not paper and not preflight_blocked:
             message = exc.detail if hasattr(exc, "detail") else str(exc)
             reason_code = _classify_rejection_reason(message)
             now = datetime.now(timezone.utc).isoformat()
@@ -8289,7 +8729,10 @@ async def _fetch_broker_positions_for_user(user: dict, settings: dict) -> List[D
                     return out
             except Exception as exc:
                 logger.warning("Upstox positions fetch failed: %s", exc)
-    rows = await db.positions.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(200)
+    rows = await db.positions.find(
+        {"user_id": user_id, "status": {"$ne": "INVALID_POSITION"}, "visibility": {"$ne": "hidden"}},
+        {"_id": 0, "user_id": 0},
+    ).to_list(200)
     out = []
     for r in rows:
         sym = next((s for s in SYMBOLS if s["symbol"] == r["symbol"]), None)
@@ -8308,7 +8751,9 @@ async def list_positions(user=Depends(get_current_user)):
 @api.get("/execution/snapshot")
 async def execution_snapshot(sync: bool = False, user=Depends(get_current_user)):
     """Unified execution state for UI polling: positions, orders, SL/TP, broker sync meta."""
-    return await execution_state_manager.build_snapshot(user, sync=sync)
+    snapshot = await execution_state_manager.build_snapshot(user, sync=sync)
+    snapshot["market_session"] = market_session_snapshot()
+    return snapshot
 
 
 @api.get("/debug/position-integrity")
@@ -8481,13 +8926,15 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "STALE",
         "BROKER_NOT_FOUND",
         "BLOCKED",
-        "SKIPPED"
+        "SKIPPED",
+        "SKIPPED_SIGNAL",
     }
     trades_used = len([
         o for o in orders 
         if o.get("status") not in excluded_statuses
     ])
     max_trades = int(settings.get("max_trades_per_day") or 0)
+    session = market_session_snapshot()
     return {
         "date": datetime.now(timezone.utc).date().isoformat(),
         "mode": mode.upper(),
@@ -8502,14 +8949,17 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "per_strategy_capital": settings.get("per_strategy_capital"),
         "max_position_size": settings.get("max_position_size"),
         "gross_order_value": gross_order_value,
-        "market_open": _is_nse_market_open() or _is_order_market_open("MCX"),
+        "market_open": session["global_status"] == "OPEN",
+        "market_session": session,
     }
 
 
 @api.get("/trade-journal")
 async def trade_journal(user=Depends(get_current_user)):
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
+    skipped = await db.skipped_signals.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
     completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
+    failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
     wins = len([r for r in completed if float(r.get("realised_pnl") or 0) > 0])
     losses = len([r for r in completed if float(r.get("realised_pnl") or 0) < 0])
     total_pnl = round(sum(float(r.get("realised_pnl") or 0) for r in completed), 2)
@@ -8517,12 +8967,18 @@ async def trade_journal(user=Depends(get_current_user)):
         "summary": {
             "orders": len(rows),
             "completed": len(completed),
+            "filled_trades": len(completed),
+            "failed_actual_orders": len(failed_actual),
+            "skipped_signals": sum(int(row.get("count") or 1) for row in skipped),
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / max(1, wins + losses) * 100, 2),
             "realised_pnl": total_pnl,
         },
         "orders": rows,
+        "filled_trades": completed,
+        "failed_actual_orders": failed_actual,
+        "skipped_signals": skipped,
     }
 
 
@@ -8624,6 +9080,7 @@ async def _resolve_option_for_strategy(
     settings = await get_user_settings(user_id)
     strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
     is_paper = strategy_mode == "paper"
+    allow_simulated_prices = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
     execution_broker = "upstox"
 
     upstox_gw = await get_user_upstox_gateway(user_id)
@@ -8688,9 +9145,8 @@ async def _resolve_option_for_strategy(
             except Exception as e:
                 logger.warning(f"Upstox index search failed for {underlying}: {e}")
 
-    # If spot is still unavailable, and it is paper trading, fall back to mock spot price
     if spot is None:
-        if not is_paper:
+        if not is_paper or not allow_simulated_prices:
             logger.warning(f"Live Upstox spot price unavailable for {underlying}; options resolution blocked.")
             return None
         spot = (
@@ -8880,7 +9336,7 @@ async def _resolve_option_for_strategy(
         except Exception as e:
             ltp_reason = f"Error fetching LTP from Quote API: {e}"
 
-    if ltp is None and is_paper:
+    if ltp is None and is_paper and allow_simulated_prices:
         ltp = 34.50
         ltp_reason = "Mock option premium resolved for paper trading."
 
@@ -9000,15 +9456,21 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
             },
         })
     latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])
+    session = market_session_snapshot()
+    data_source = next((t["data_source"] for t in latest_ticks.values() if t.get("data_source")), None)
+    simulated_active = bool(data_source and "simulated" in str(data_source).lower())
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "ledger": "sqlite",
         "market_status": {
-            "is_open": _is_nse_market_open() or _is_order_market_open("MCX"),
+            "is_open": session["global_status"] == "OPEN",
+            "session": session,
             "nifty": latest_ticks.get("NIFTY"),
             "sensex": latest_ticks.get("SENSEX"),
             "last_tick_time": max([t["tick_time"] for t in latest_ticks.values()], default=None),
-            "data_source": next((t["data_source"] for t in latest_ticks.values() if t.get("data_source")), None),
+            "data_source": data_source,
+            "feed_source_label": "Simulated feed" if simulated_active else ("Upstox feed" if data_source else "No price feed"),
+            "simulated_warning": simulated_active,
         },
         "strategies_page_data": strategies_page_data,
     }
@@ -10233,6 +10695,14 @@ async def market_feed_comparison(user=Depends(get_current_user)):
         "configured_data_broker": settings.get("data_broker", "upstox"),
         "recommended_data_broker": recommended,
         "reason": reason,
+        "price_provider_chain": [
+            "Upstox websocket LTP",
+            "Upstox REST quote fallback",
+            "historical candle close only for backtest/simulation profiles",
+            "no price",
+        ],
+        "simulated_feed_allowed": bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true",
+        "simulated_warning": "Simulated feed active - paper results are not market-valid." if bool(settings.get("allow_simulated_prices")) else None,
         "zerodha": {
             "connected": bool(zerodha_tick.get("connected")),
             "last_tick_at": zerodha_last,
@@ -10314,21 +10784,26 @@ async def market_indicators(symbol: str, user=Depends(get_current_user)):
     }
 
 
+@api.get("/market/session-status")
+async def market_session_status():
+    return market_session_snapshot()
+
+
 @api.get("/market/session")
 async def market_session():
-    now_utc = datetime.now(timezone.utc)
-    now_ist = now_utc + IST_OFFSET
+    snapshot = market_session_snapshot()
+    nse = snapshot["segments"]["NSE_FO"]
+    now_ist = datetime.now(timezone.utc) + IST_OFFSET
     minutes = now_ist.hour * 60 + now_ist.minute
-    open_now = _is_nse_market_open(now_utc)
     return {
+        **snapshot,
         "market": "NSE",
-        "timezone": "Asia/Kolkata",
-        "server_time_ist": now_ist.isoformat(),
-        "open": open_now,
-        "status": "OPEN" if open_now else "CLOSED",
-        "open_time": "09:15",
-        "close_time": "15:30",
-        "minutes_to_close": max(0, NSE_CLOSE_MINUTE - minutes) if open_now else None,
+        "server_time_ist": snapshot["current_ist_time"],
+        "open": nse["open"],
+        "status": nse["status"],
+        "open_time": nse["open_time"],
+        "close_time": nse["close_time"],
+        "minutes_to_close": max(0, NSE_CLOSE_MINUTE - minutes) if nse["open"] else None,
     }
 
 
@@ -10575,10 +11050,11 @@ async def reset_paper_trading(user=Depends(get_current_user)):
             {
                 "mode": {"$exists": False},
                 "strategy_id": {"$in": paper_strategy_ids or strategy_ids},
-                "status": {"$in": ["PENDING", "FILTERED", "REJECTED", "SKIPPED"]},
+                "status": {"$in": ["PENDING", "FILTERED", "REJECTED", "SKIPPED", "SKIPPED_SIGNAL"]},
             },
         ],
     })
+    skipped_res = await db.skipped_signals.delete_many({"user_id": user_id})
     
     # 7. Clear paper trading backtest/history stats
     history_res = await db.paper_trading_history.delete_many({"user_id": user_id})
@@ -10610,6 +11086,7 @@ async def reset_paper_trading(user=Depends(get_current_user)):
             "broker_positions": pos_res.deleted_count,
             "position_locks": locks_res.deleted_count,
             "signals": sig_res.deleted_count,
+            "skipped_signals": skipped_res.deleted_count,
             "stats_history": history_res.deleted_count,
             "closed_trades": trades_res.deleted_count,
             "trade_fills": fills_res.deleted_count,
@@ -11003,6 +11480,9 @@ async def startup():
         ("signals", "id", {"unique": True}),
         ("signals", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
         ("signals", [("strategy_id", 1), ("created_at", -1)], {}),
+        ("skipped_signals", [("user_id", 1), ("dedupe_key", 1)], {"unique": True}),
+        ("skipped_signals", [("user_id", 1), ("session_date", -1), ("last_seen_at", -1)], {}),
+        ("skipped_signals", [("strategy_id", 1), ("session_date", -1)], {}),
         ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
         ("trade_fills", "order_id", {"unique": True}),
         ("trade_fills", [("user_id", 1), ("filled_at", -1)], {}),

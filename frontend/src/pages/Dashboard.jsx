@@ -309,6 +309,7 @@ export default function Dashboard() {
   const orders = execOrders;
   const [funds, setFunds] = useState(null);
   const [telemetry, setTelemetry] = useState(null);
+  const [marketSession, setMarketSession] = useState(null);
   const [commodities, setCommodities] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -316,12 +317,13 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [p, w, f, t, c] = await Promise.all([
+      const [p, w, f, t, c, s] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
         api.get("/market/commodities"),
+        api.get("/market/session-status"),
       ]);
       await refreshExecution();
       setPf(p.data);
@@ -329,6 +331,7 @@ export default function Dashboard() {
       setFunds(f.data);
       setTelemetry(t.data);
       setCommodities(c.data || []);
+      setMarketSession(s.data);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -344,7 +347,8 @@ export default function Dashboard() {
   const pnl = executionSummary.total_unrealized_pnl ?? pf?.total_pnl ?? 0;
   const openPositions = executionSummary.open_positions ?? pf?.open_positions ?? positions.length;
   const strategies = useMemo(() => telemetry?.strategies_page_data || [], [telemetry?.strategies_page_data]);
-  const marketOpen = telemetry?.market_status?.is_open;
+  const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;
+  const marketStatusLabel = marketSession?.global_status || (marketOpen ? "OPEN" : "CLOSED");
   const firstRisk = strategies[0]?.risk_settings || {};
   const topWatch = useMemo(() => watch.slice(0, 8), [watch]);
   const openOrders = useMemo(() => orders.filter((o) => BROKER_OPEN_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
@@ -496,7 +500,7 @@ export default function Dashboard() {
 
           <div className="grid grid-cols-2 gap-px bg-[var(--qd-border)] md:grid-cols-4">
             <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Market Status" value={marketOpen ? "OPEN" : "CLOSED"} tone={marketOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
+              <Field label="Market Status" value={marketStatusLabel} tone={marketOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
             </div>
             <div className="bg-[var(--qd-surface)] p-4">
               <Field label="Net Unrealized P&L" value={money(pnl)} tone={toneClass(pnl)} />
@@ -774,8 +778,13 @@ export default function Dashboard() {
                   <Field label="NIFTY Index" value={telemetry?.market_status?.nifty?.ltp ? money(telemetry.market_status.nifty.ltp) : "Waiting"} />
                   <Field label="SENSEX Index" value={telemetry?.market_status?.sensex?.ltp ? money(telemetry.market_status.sensex.ltp) : "Waiting"} />
                   <Field label="Last Tick Time" value={telemetry?.market_status?.last_tick_time ? new Date(telemetry.market_status.last_tick_time).toLocaleTimeString() : "-"} />
-                  <Field label="Telemetry Source" value={telemetry?.market_status?.data_source || "Upstox Feed"} />
+                  <Field label="Telemetry Source" value={telemetry?.market_status?.feed_source_label || telemetry?.market_status?.data_source || "Upstox Feed"} />
                 </div>
+                {telemetry?.market_status?.simulated_warning && (
+                  <div className="mt-3 rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)]">
+                    Simulated feed active - paper results are not market-valid.
+                  </div>
+                )}
               </div>
             </aside>
           </section>
@@ -934,7 +943,13 @@ export default function Dashboard() {
             <KpiCard label="Commodity Feed" value="UPSTOX LIVE" icon={Activity} sub="Realtime High-Frequency Feed" />
             <KpiCard label="MCX Positions" value={commodityPositions.length} icon={PieChart} sub="Active MCX Contracts" />
             <KpiCard label="MCX Orders" value={commodityOrders.length} icon={Power} sub="MCX Orders Filled Today" />
-            <KpiCard label="MCX Status" value="Market Open" icon={Shield} tone="text-[var(--qd-profit)]" sub="Session trades 09:00 - 23:30" />
+            <KpiCard
+              label="MCX Status"
+              value={marketSession?.MCX_FO?.status || "-"}
+              icon={Shield}
+              tone={marketSession?.MCX_FO?.status === "OPEN" ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}
+              sub={marketSession?.MCX_FO?.reason || "Session trades 09:00 - 23:30"}
+            />
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">

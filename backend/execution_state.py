@@ -110,6 +110,24 @@ class ExecutionStateManager:
                     order["strategy_name"] = name_by_id[sid]
         return orders
 
+    async def _load_skipped_signals(self, user_id: str) -> List[Dict[str, Any]]:
+        rows = await self._db.skipped_signals.find(
+            {"user_id": user_id, "visibility": {"$ne": "hidden"}},
+            {"_id": 0, "user_id": 0},
+        ).sort("last_seen_at", -1).to_list(200)
+        strategy_ids = {str(row.get("strategy_id")) for row in rows if row.get("strategy_id")}
+        if strategy_ids:
+            strategies = await self._db.strategies.find(
+                {"user_id": user_id, "id": {"$in": list(strategy_ids)}},
+                {"_id": 0, "id": 1, "name": 1},
+            ).to_list(500)
+            name_by_id = {str(s.get("id")): s.get("name") for s in strategies}
+            for row in rows:
+                sid = str(row.get("strategy_id") or "")
+                if sid and name_by_id.get(sid):
+                    row["strategy_name"] = name_by_id[sid]
+        return rows
+
     async def _load_strategy_positions(self, user_id: str) -> List[Dict[str, Any]]:
         rows = await self._db.strategy_positions.find(
             {
@@ -332,6 +350,7 @@ class ExecutionStateManager:
         ledger_risk = self._ledger_risk_by_strategy()
         positions = self._merge_position_risk(broker_positions, strategy_rows, ledger_risk)
         orders = await self._load_orders(user_id)
+        skipped_signals = await self._load_skipped_signals(user_id)
 
         open_orders = [o for o in orders if o.get("status") in OPEN_ORDER_STATUSES]
         failed_orders = [o for o in orders if o.get("status") == "FAILED"]
@@ -386,6 +405,7 @@ class ExecutionStateManager:
             "sync": sync_meta,
             "positions": positions,
             "orders": orders,
+            "skipped_signals": skipped_signals,
             "open_orders": open_orders,
             "failed_orders": failed_orders,
             "strategy_positions": strategy_rows,
@@ -394,6 +414,7 @@ class ExecutionStateManager:
                 "open_positions": len([p for p in positions if int(p.get("qty") or 0) != 0]),
                 "open_orders": len(open_orders),
                 "failed_orders": len(failed_orders),
+                "skipped_signals": sum(int(row.get("count") or 1) for row in skipped_signals),
                 "total_unrealized_pnl": round(sum(float(p.get("pnl") or 0) for p in positions), 2),
                 "position_integrity": {
                     "orphans": orphan_positions_count,

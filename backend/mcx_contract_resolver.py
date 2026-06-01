@@ -33,7 +33,7 @@ IST_OFFSET = timedelta(hours=5, minutes=30)
 MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
 MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
 
-SUPPORTED_MCX_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS"}
+SUPPORTED_MCX_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
 
 
 def _utc_now() -> datetime:
@@ -143,7 +143,7 @@ def _normalize_underlying(value: Any) -> str:
     text = str(value or "").upper().replace(" ", "").replace("_", "")
     aliases = {
         "NATGAS": "NATURALGAS",
-        "NATURALGASMINI": "NATURALGAS",
+        "NATURALGASMINI": "NATGASMINI",
         "CRUDEOILMINI": "CRUDEOILM",
     }
     return aliases.get(text, text)

@@ -5,11 +5,11 @@ import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
-const FILLED_STATUSES = ["FILLED", "CLOSED", "COMPLETE"];
+const FILLED_STATUSES = ["FILLED", "PAPER_FILLED", "CLOSED", "COMPLETE"];
 const REJECTED_STATUSES = ["CANCELLED", "REJECTED", "FAILED", "BROKER_NOT_FOUND", "STALE"];
 
 export default function Orders() {
-  const { orders, error, refresh, executionBroker } = useExecutionState({ pollMs: 15000 });
+  const { orders, skippedSignals, error, refresh, executionBroker } = useExecutionState({ pollMs: 15000 });
   const [watch, setWatch] = useState([]);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("ALL");
@@ -33,15 +33,27 @@ export default function Orders() {
   }, []);
 
   const visibleOrders = orders.filter((o) => o.visibility !== "hidden");
-  const filtered = visibleOrders.filter((o) => {
+  const filteredOrders = visibleOrders.filter((o) => {
     const status = o.execution_status || o.status;
     if (filter === "ALL") return true;
     if (filter === "OPEN") return OPEN_STATUSES.includes(status);
     if (filter === "COMPLETE") return FILLED_STATUSES.includes(status);
     if (filter === "CANCELLED") return REJECTED_STATUSES.includes(status);
     if (filter === "FAILED") return ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"].includes(status);
+    if (filter === "SKIPPED") return false;
     return true;
   });
+  const filtered = filter === "SKIPPED" ? skippedSignals : filteredOrders;
+  const filterCount = (f) => {
+    if (f === "SKIPPED") return skippedSignals.reduce((sum, row) => sum + Number(row.count || 1), 0);
+    return visibleOrders.filter((o) => {
+      const status = o.execution_status || o.status;
+      if (f === "OPEN") return OPEN_STATUSES.includes(status);
+      if (f === "COMPLETE") return FILLED_STATUSES.includes(status);
+      if (f === "FAILED") return ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"].includes(status);
+      return REJECTED_STATUSES.includes(status);
+    }).length;
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -126,7 +138,7 @@ export default function Orders() {
 
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1" data-testid="order-filter">
-          {["ALL", "OPEN", "COMPLETE", "CANCELLED", "FAILED"].map((f) => (
+          {["ALL", "OPEN", "COMPLETE", "CANCELLED", "FAILED", "SKIPPED"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -135,18 +147,12 @@ export default function Orders() {
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
             >
-              {f} {f !== "ALL" && `- ${visibleOrders.filter((o) => {
-                const status = o.execution_status || o.status;
-                if (f === "OPEN") return OPEN_STATUSES.includes(status);
-                if (f === "COMPLETE") return FILLED_STATUSES.includes(status);
-                if (f === "FAILED") return ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"].includes(status);
-                return REJECTED_STATUSES.includes(status);
-              }).length}`}
+              {f === "SKIPPED" ? "Skipped Signals" : f} {f !== "ALL" && `- ${filterCount(f)}`}
             </button>
           ))}
         </div>
         <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">
-          showing {filtered.length} of {visibleOrders.length}
+          showing {filtered.length} of {filter === "SKIPPED" ? skippedSignals.length : visibleOrders.length}
         </span>
       </div>
 
@@ -171,7 +177,26 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody className="font-mono">
-              {filtered.map((o) => {
+              {filter === "SKIPPED" && filtered.map((o) => (
+                <tr key={o.id || o.dedupe_key} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`skipped-${o.id || o.dedupe_key}`}>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.last_seen_at ? new Date(o.last_seen_at).toLocaleTimeString("en-IN", { hour12: false }) : "-"}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.strategy_name || o.strategy_id || "strategy"}</td>
+                  <td className="px-4 py-2.5 text-white">{o.symbol}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{o.segment || o.exchange || "-"}</td>
+                  <td className={`px-4 py-2.5 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
+                  <td className="px-4 py-2.5">{o.count || 1}</td>
+                  <td className="px-4 py-2.5">{formatINR(o.price || 0)}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-loss)]">-</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-profit)]">-</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-warn)]">SKIPPED</td>
+                  <td className="px-4 py-2.5 text-[11px] max-w-[260px]">
+                    <span className="text-[var(--qd-warn)] break-words leading-tight" title={o.skip_reason || o.reason_code || ""}>
+                      {(o.reason_code || o.skip_reason || "preflight").slice(0, 100)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {filter !== "SKIPPED" && filtered.map((o) => {
                 const status = o.execution_status || o.status;
                 const isRejected = REJECTED_STATUSES.includes(status);
                 const rejectReason = o.reject_reason || o.error_message || o.status_message || "";

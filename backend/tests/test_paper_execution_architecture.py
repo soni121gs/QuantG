@@ -12,9 +12,20 @@ async def test_paper_entry_without_price_is_skipped_not_failed():
     from server import _place_order_core
 
     mock_db = MagicMock()
-    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper"})
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper", "status": "live"})
+    mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.orders.insert_one = AsyncMock()
+    mock_db.skipped_signals.find_one_and_update = AsyncMock(return_value={
+        "id": "skip-1",
+        "status": "SKIPPED_SIGNAL",
+        "execution_status": "SKIPPED_SIGNAL",
+        "skip_reason": "No valid Upstox websocket or REST LTP is available.",
+        "reason_code": "PRICE_UNAVAILABLE",
+        "mode": "paper",
+        "filled_qty": 0,
+        "count": 1,
+    })
     mock_db.order_events.insert_one = AsyncMock()
 
     mock_instr = MagicMock()
@@ -60,6 +71,7 @@ async def test_paper_entry_without_price_is_skipped_not_failed():
     with patch("server.db", mock_db), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS"}), \
          patch("server._is_order_market_open", return_value=True), \
+         patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": True, "status": "OPEN", "reason": "test open"}), \
          patch("server._build_order_intent", new_callable=AsyncMock, return_value={"intent": mock_intent, "lot_size": 1, "lots": 1}), \
          patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=0.0), \
          patch("server._market_snapshot_for_intent", new_callable=AsyncMock, return_value=snapshot), \
@@ -76,17 +88,14 @@ async def test_paper_entry_without_price_is_skipped_not_failed():
             signal_id="sig-test-skip",
         )
 
-    assert result["status"] == "SKIPPED"
-    assert result["status_message"] == "SKIPPED: price unavailable"
+    assert result["status"] == "SKIPPED_SIGNAL"
     assert result["mode"] == "paper"
     assert result["filled_qty"] == 0
     trade_guard.assert_not_called()
     reserve.assert_not_called()
     submit_live.assert_not_called()
-    inserted_doc = mock_db.orders.insert_one.await_args.args[0]
-    assert inserted_doc["status"] == "SKIPPED"
-    assert inserted_doc["broker"] == "paper"
-    assert inserted_doc["paper_skip_trace"]["signal_id"] == "sig-test-skip"
+    mock_db.orders.insert_one.assert_not_called()
+    mock_db.skipped_signals.find_one_and_update.assert_awaited()
 
 
 @pytest.mark.anyio
@@ -94,9 +103,19 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
     import server
 
     mock_db = MagicMock()
-    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper"})
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "1234", "mode": "paper", "status": "live"})
+    mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.orders.insert_one = AsyncMock()
+    mock_db.skipped_signals.find_one_and_update = AsyncMock(return_value={
+        "id": "skip-1",
+        "status": "SKIPPED_SIGNAL",
+        "execution_status": "SKIPPED_SIGNAL",
+        "skip_reason": "No valid Upstox websocket or REST LTP is available.",
+        "reason_code": "PRICE_UNAVAILABLE",
+        "mode": "paper",
+        "filled_qty": 0,
+    })
     mock_db.order_events.insert_one = AsyncMock()
 
     mock_instr = MagicMock()
@@ -126,6 +145,7 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
     with patch("server.db", mock_db), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS"}), \
          patch("server._is_order_market_open", return_value=True), \
+         patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": True, "status": "OPEN", "reason": "test open"}), \
          patch("server._build_order_intent", new_callable=AsyncMock, return_value={"intent": mock_intent, "lot_size": 1, "lots": 1}), \
          patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=0.0), \
          patch("server._market_snapshot_for_intent", new_callable=AsyncMock, return_value={
@@ -152,9 +172,9 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
             user={"id": "user-123", "email": "paper@example.com"},
         )
 
-    assert body["status"] == "SKIPPED"
-    assert body["status_message"] == "SKIPPED: price unavailable"
+    assert body["status"] == "SKIPPED_SIGNAL"
     submit_live.assert_not_called()
+    mock_db.orders.insert_one.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -173,6 +193,7 @@ async def test_paper_position_records_are_mode_scoped():
         "exchange": "NSE",
         "strategy_id": "1234",
         "order_intent": {"intent": "OPEN_LONG"},
+        "status": "PAPER_ORDER_CREATED",
     })
     mock_db.positions.find_one = AsyncMock(return_value=None)
     mock_db.positions.insert_one = AsyncMock()
@@ -189,3 +210,4 @@ async def test_paper_position_records_are_mode_scoped():
     position_doc = mock_db.positions.insert_one.await_args.args[0]
     assert position_doc["mode"] == "paper"
     assert position_doc["broker"] == "paper"
+    assert position_doc["source_order_id"] == "order-1"
