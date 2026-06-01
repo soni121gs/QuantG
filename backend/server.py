@@ -11482,7 +11482,7 @@ api.include_router(agent_router)
 api.include_router(ops_router)
 
 # ============== Boot ==============
-app.include_router(api)
+# (app.include_router(api) moved to the bottom of the file after all routes are registered)
 
 # Parse CORS origins properly - strip whitespace from comma-separated list
 cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()]
@@ -12007,3 +12007,6 @@ async def post_core_kill_switch(user=Depends(get_current_user)):
         upsert=True
     )
     return {"ok": True, "status": "KILL_SWITCH_ACTIVE"}
+
+# ============== Register Router ==============
+app.include_router(api)
