@@ -5905,7 +5905,7 @@ async def _build_order_intent(
         if resolved:
             token = resolved
 
-    instrument_key = f"{exchange}:{symbol_upper}"
+    instrument_key = _instrument_key(exchange, symbol_upper, token)
     active_pos = None
     if strategy_id:
         active_pos = await db.strategy_positions.find_one({
