@@ -7292,6 +7292,78 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     paper = bool(settings.get("paper_mode", True))
     execution_broker = "upstox"
+
+    CORE_ENGINE_ENABLED = os.environ.get("CORE_ENGINE_ENABLED", "false").lower() == "true"
+    CORE_ENGINE_PAPER_ENABLED = os.environ.get("CORE_ENGINE_PAPER_ENABLED", "false").lower() == "true"
+
+    if CORE_ENGINE_ENABLED and CORE_ENGINE_PAPER_ENABLED and paper:
+        from core.risk_manager import RiskManager
+        from core.order_manager import OrderManager
+        from core.execution_router import ExecutionRouter
+        from core.portfolio_ledger import PortfolioLedger
+        from core.market_domains import resolve_domain_by_underlying
+        
+        domain = resolve_domain_by_underlying(symbol)
+        order_mgr = OrderManager(db)
+        session_date = datetime.now(timezone.utc).date().isoformat()
+        signal_candle_time = datetime.now(timezone.utc).strftime("%H:%M")
+        
+        idem_key = idempotency_key or order_mgr.generate_idempotency_key(
+            strategy_id=strategy_id or "manual",
+            market_domain=domain.name.value,
+            symbol=symbol,
+            side=side,
+            session_date=session_date,
+            signal_candle_time=signal_candle_time
+        )
+        
+        if not await order_mgr.verify_and_lock_idempotency(idem_key, user_id):
+            existing = await db.orders.find_one({"user_id": user_id, "idempotency_key": idem_key})
+            if existing:
+                return _clean_order_response(existing)
+            return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block"}
+            
+        risk_mgr = RiskManager(db)
+        risk_res = await risk_mgr.evaluate_order(
+            user_id=user_id,
+            strategy_id=strategy_id or "manual",
+            symbol=symbol,
+            target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
+            side=side,
+            requested_qty=qty or 1,
+            price=price or 100.0,
+            mode="paper",
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            lot_size=domain.get_lot_size(symbol)
+        )
+        
+        if not risk_res["ok"]:
+            from core.event_store import CoreEventStore
+            event_store = CoreEventStore(db)
+            await event_store.log_event("RISK_BLOCKED", strategy_id or "manual", user_id, {"reason": risk_res["reason"], "symbol": symbol})
+            return {"ok": False, "status": "SKIPPED", "reason": risk_res["reason"]}
+            
+        intent_doc = order_mgr.compile_order_intent(
+            strategy_id=strategy_id or "manual",
+            symbol=symbol,
+            target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
+            side=side,
+            quantity=risk_res["quantity"],
+            price=price or 100.0,
+            exchange=domain.exchange,
+            segment=domain.segment,
+            mode="paper",
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            idempotency_key=idem_key
+        )
+        
+        ledger = PortfolioLedger(db)
+        router = ExecutionRouter(db, ledger)
+        order_res = await router.route_intent(user_id, intent_doc)
+        return _clean_order_response(order_res)
+
     if not paper:
         upstox_status = await get_user_upstox_status(user_id)
         if not upstox_status.get("token_valid"):
@@ -10786,12 +10858,14 @@ async def market_indicators(symbol: str, user=Depends(get_current_user)):
 
 @api.get("/market/session-status")
 async def market_session_status():
-    return market_session_snapshot()
+    from core.market_clock import get_market_clock_snapshot
+    return get_market_clock_snapshot()
 
 
 @api.get("/market/session")
 async def market_session():
-    snapshot = market_session_snapshot()
+    from core.market_clock import get_market_clock_snapshot
+    snapshot = get_market_clock_snapshot()
     nse = snapshot["segments"]["NSE_FO"]
     now_ist = datetime.now(timezone.utc) + IST_OFFSET
     minutes = now_ist.hour * 60 + now_ist.minute
@@ -11807,3 +11881,129 @@ async def trading_ready_check(user=Depends(get_current_user)):
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
+# ===========================================================================
+# QUANTG UNIFIED CORE ARCHITECTURE REST APIS
+# ===========================================================================
+
+from core.market_clock import get_market_clock_snapshot
+from core.live_safety_firewall import LiveSafetyFirewall
+from core.backtest_engine import BacktestEngine
+from core.performance_tracker import PerformanceTracker
+
+@api.get("/core/health")
+async def get_core_health():
+    return {
+        "status": "healthy",
+        "engine": "core_unified",
+        "shadow_mode": os.environ.get("CORE_ENGINE_SHADOW_MODE", "true") == "true",
+        "version": "1.0.0"
+    }
+
+@api.get("/core/market-status")
+async def get_core_market_status():
+    return get_market_clock_snapshot()
+
+@api.get("/core/feed-status")
+async def get_core_feed_status(user=Depends(get_current_user)):
+    user_id = user["id"]
+    status = await get_user_upstox_status(user_id)
+    return {
+        "connected": status.get("connected", False),
+        "token_valid": status.get("token_valid", False),
+        "feed_source": "upstox_websocket_v3",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+@api.get("/core/strategies")
+async def get_core_strategies(user=Depends(get_current_user)):
+    user_id = user["id"]
+    return await db.strategies.find({"user_id": user_id}).to_list(length=200)
+
+@api.get("/core/signals")
+async def get_core_signals(user=Depends(get_current_user)):
+    user_id = user["id"]
+    return await db.signals.find({"user_id": user_id}).sort("created_at", -1).to_list(length=200)
+
+@api.get("/core/orders")
+async def get_core_orders(user=Depends(get_current_user)):
+    user_id = user["id"]
+    return await db.orders.find({"user_id": user_id}).sort("created_at", -1).to_list(length=200)
+
+@api.get("/core/positions")
+async def get_core_positions(user=Depends(get_current_user)):
+    user_id = user["id"]
+    return await db.strategy_positions.find({"user_id": user_id}).to_list(length=200)
+
+@api.get("/core/performance")
+async def get_core_performance(user=Depends(get_current_user)):
+    user_id = user["id"]
+    tracker = PerformanceTracker(db)
+    return await tracker.rebuild_leaderboard(user_id)
+
+@api.get("/core/backtests")
+async def get_core_backtests(user=Depends(get_current_user)):
+    user_id = user["id"]
+    return await db.backtest_runs.find().sort("created_at", -1).to_list(length=100)
+
+@api.post("/core/backtests/run")
+async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
+    user_id = user["id"]
+    strategy_id = req.strategy_id
+    if not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_id is required.")
+        
+    strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
+    if not strat:
+        raise HTTPException(status_code=404, detail="Strategy not found.")
+        
+    try:
+        # Generate 250 test intraday candles
+        raw_candles = intraday_series(100.0, 250)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed generating backtest historical bars: {e}")
+        
+    engine = BacktestEngine(db)
+    result = await engine.run_backtest(
+        strategy_id=strategy_id,
+        python_code=strat.get("python_code") or "",
+        candles=raw_candles,
+        strategy_metadata=strat
+    )
+    return result
+
+@api.get("/core/live/readiness")
+async def get_core_live_readiness(user=Depends(get_current_user)):
+    user_id = user["id"]
+    firewall = LiveSafetyFirewall(db)
+    res = await firewall.verify_readiness(user_id, "manual", "NIFTY")
+    return res
+
+@api.post("/core/live/arm")
+async def post_core_live_arm(user=Depends(get_current_user)):
+    user_id = user["id"]
+    await db.live_arm_state.update_one(
+        {"user_id": user_id},
+        {"$set": {"armed": True, "global_live_enabled": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"ok": True, "status": "ARMED"}
+
+@api.post("/core/live/disarm")
+async def post_core_live_disarm(user=Depends(get_current_user)):
+    user_id = user["id"]
+    await db.live_arm_state.update_one(
+        {"user_id": user_id},
+        {"$set": {"armed": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"ok": True, "status": "DISARMED"}
+
+@api.post("/core/kill-switch")
+async def post_core_kill_switch(user=Depends(get_current_user)):
+    await db.risk_state.update_one(
+        {"_id": "global_kill_switch"},
+        {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"ok": True, "status": "KILL_SWITCH_ACTIVE"}
