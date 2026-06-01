@@ -54,6 +54,7 @@ async def main() -> None:
 
     failed_market_hours = await db.orders.count_documents({
         "mode": "paper",
+        "visibility": {"$ne": "hidden"},
         "created_at": {"$gte": start, "$lt": end},
         "$or": [
             {"status_message": {"$regex": "market hours|market is closed|outside", "$options": "i"}},

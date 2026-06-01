@@ -44,6 +44,7 @@ async def main() -> None:
 
     query = {
         "mode": "paper",
+        "visibility": {"$ne": "hidden"},
         "created_at": {"$gte": start, "$lt": end},
         "$or": [
             {"status_message": {"$regex": "market hours|market is closed|outside", "$options": "i"}},
