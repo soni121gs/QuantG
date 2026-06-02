@@ -6391,6 +6391,12 @@ async def _resolve_order_fill_hint(
                     return float(ltp)
             except Exception as exc:
                 logger.warning("Upstox option LTP failed for %s: %s", token, exc)
+    if paper and option_contract:
+        settings = await get_user_settings(user_id)
+        allow_simulated = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
+        if allow_simulated:
+            underlying = option_contract.get("underlying") or getattr(intent, "symbol", None)
+            return float(_get_paper_ltp(str(underlying or intent.instrument.tradingsymbol), option_contract))
 
     instr = intent.instrument
     try:
@@ -6714,7 +6720,6 @@ async def _persist_paper_skipped_order(
         "strategy_id": strategy_id,
         "signal_id": signal_id,
         "created_at": now,
-        "updated_at": now,
         "exchange": instr.exchange,
         "asset_type": _asset_type_for_instrument(instr, option_contract),
         "order_intent": intent.model_dump(),
@@ -7126,6 +7131,24 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     brokerage = float(locked.get("brokerage") or _simulate_paper_brokerage(fill_price, qty))
     expected = float(locked.get("expected_price") or locked.get("requested_price") or fill_price or 0)
     slippage = round(abs(float(fill_price or 0) - expected) * qty, 2) if expected > 0 else 0.0
+    side = str(locked.get("side") or "").upper()
+    trade_value = round(abs(float(fill_price or 0) * qty), 2)
+
+    from core.paper_broker import PaperWallet
+    wallet = PaperWallet(db)
+    if side == "BUY":
+        wallet_amount = round(trade_value + brokerage, 2)
+        if not await wallet.debit(user_id, wallet_amount, order_id):
+            balance = await wallet.get_balance(user_id)
+            raise RuntimeError(
+                f"Insufficient paper funds: need INR {wallet_amount:,.2f}, "
+                f"have INR {balance:,.2f}."
+            )
+        wallet_action = "DEBIT"
+    else:
+        wallet_amount = round(max(0.0, trade_value - brokerage), 2)
+        await wallet.credit(user_id, wallet_amount, order_id)
+        wallet_action = "CREDIT"
 
     paper_position_query = {
         "user_id": user_id,
@@ -7265,6 +7288,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "realised_pnl": net_realised,
             "brokerage": brokerage,
             "slippage": slippage,
+            "trade_value": trade_value,
+            "paper_wallet_applied": True,
+            "paper_wallet_action": wallet_action,
+            "paper_wallet_amount": wallet_amount,
             "paper_fill_applied": True,
             "updated_at": now,
         }, "$unset": {

@@ -290,6 +290,14 @@ async def test_paper_position_records_are_mode_scoped():
     mock_db.trade_fills.insert_one = AsyncMock()
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.order_events.insert_one = AsyncMock()
+    mock_db.paper_wallets.find_one = AsyncMock(return_value={
+        "user_id": "user-123",
+        "balance": 500000.0,
+        "initial_balance": 500000.0,
+        "total_debited": 0.0,
+        "total_credited": 0.0,
+    })
+    mock_db.paper_wallets.update_one = AsyncMock()
 
     with patch("server.db", mock_db):
         await _apply_paper_fill_to_position(
@@ -301,3 +309,7 @@ async def test_paper_position_records_are_mode_scoped():
     assert position_doc["mode"] == "paper"
     assert position_doc["broker"] == "paper"
     assert position_doc["source_order_id"] == "order-1"
+    wallet_update = mock_db.paper_wallets.update_one.await_args.args[1]
+    assert wallet_update["$inc"]["balance"] < 0
+    order_update = mock_db.orders.find_one_and_update.await_args.args[1]
+    assert order_update["$set"]["paper_wallet_applied"] is True
