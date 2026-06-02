@@ -9,6 +9,7 @@ import uuid
 import logging
 
 from core.portfolio_ledger import PortfolioLedger
+from core.paper_broker import PaperWallet
 from execution_bridge import submit_order as bridge_submit_order
 
 logger = logging.getLogger("quantg.execution_router")
@@ -17,26 +18,56 @@ class PaperAdapter:
     def __init__(self, db, ledger: PortfolioLedger):
         self.db = db
         self.ledger = ledger
+        self.wallet = PaperWallet(db)
 
     async def execute(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
-        """Simulates immediate fill execution for paper trades."""
+        """Simulates immediate fill using virtual paper wallet money.
+
+        - BUY: debit wallet by fill_price × qty (rejected if balance < cost)
+        - SELL: credit wallet by fill_price × qty
+        - Slippage and brokerage are also deducted from the wallet.
+        """
         now = datetime.now(timezone.utc).isoformat()
         fill_price = float(intent["requested_price"])
-        
-        # Calculate simulated slippage and brokerage
-        brokerage = round(min(20.0, fill_price * intent["qty"] * 0.0005), 2)
+        qty = int(intent["qty"])
+        side = str(intent["side"]).upper()
+
+        # Simulated slippage and brokerage
         slippage = round(fill_price * 0.0002, 2)
-        final_price = round(fill_price + slippage if intent["side"] == "BUY" else fill_price - slippage, 2)
-        
+        final_price = round(
+            fill_price + slippage if side == "BUY" else fill_price - slippage, 2
+        )
+        brokerage = round(min(20.0, final_price * qty * 0.0005), 2)
+
+        order_id = intent.get("id") or str(uuid.uuid4())
+        trade_value = round(final_price * qty, 2)
+
+        # ------------------------------------------------------------------
+        # Paper wallet balance check & update
+        # ------------------------------------------------------------------
+        if side == "BUY":
+            total_cost = round(trade_value + brokerage, 2)
+            balance_ok = await self.wallet.debit(user_id, total_cost, order_id)
+            if not balance_ok:
+                current_balance = await self.wallet.get_balance(user_id)
+                raise ValueError(
+                    f"Insufficient paper funds: need ₹{total_cost:,.2f}, "
+                    f"have ₹{current_balance:,.2f}. "
+                    f"Reset paper account to restore ₹5,00,000."
+                )
+        else:  # SELL / exit: credit back proceeds
+            proceeds = round(trade_value - brokerage, 2)
+            await self.wallet.credit(user_id, max(0.0, proceeds), order_id)
+
         order_doc = {
-            "id": intent.get("id") or str(uuid.uuid4()),
+            "id": order_id,
             "user_id": user_id,
             "strategy_id": intent["strategy_id"],
             "symbol": intent["symbol"],
             "target_symbol": intent["target_symbol"],
-            "side": intent["side"],
-            "qty": intent["qty"],
-            "filled_qty": intent["qty"],
+            "side": side,
+            "qty": qty,
+            "filled_qty": qty,
             "pending_qty": 0,
             "status": "FILLED",
             "execution_status": "FILLED",
@@ -44,6 +75,7 @@ class PaperAdapter:
             "price": final_price,
             "brokerage": brokerage,
             "slippage": slippage,
+            "trade_value": trade_value,
             "exchange": intent["exchange"],
             "segment": intent["segment"],
             "mode": "paper",
@@ -52,33 +84,34 @@ class PaperAdapter:
             "updated_at": now,
             "idempotency_key": intent.get("idempotency_key"),
             "stop_loss": intent.get("stop_loss"),
-            "take_profit": intent.get("take_profit")
+            "take_profit": intent.get("take_profit"),
         }
-        
+
         # Write to db
         await self.db.orders.insert_one(order_doc)
-        
+
         # Write matching fill record
         fill_id = f"fill_{uuid.uuid4().hex[:12]}"
         fill_doc = {
             "id": fill_id,
-            "order_id": order_doc["id"],
+            "order_id": order_id,
             "strategy_id": intent["strategy_id"],
             "user_id": user_id,
             "symbol": intent["symbol"],
             "target_symbol": intent["target_symbol"],
-            "side": intent["side"],
-            "qty": intent["qty"],
+            "side": side,
+            "qty": qty,
             "price": final_price,
             "brokerage": brokerage,
+            "trade_value": trade_value,
             "mode": "paper",
-            "created_at": now
+            "created_at": now,
         }
         await self.db.fills.insert_one(fill_doc)
-        
+
         # Update Portfolio Ledger (Hard Rule: No fill = no position)
         await self.ledger.process_fill(fill_doc)
-        
+
         return order_doc
 
 class UpstoxLiveAdapter:

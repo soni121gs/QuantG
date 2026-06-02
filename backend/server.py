@@ -715,6 +715,51 @@ def live_price(base: float, seed: int) -> Dict[str, Any]:
     return {"price": price, "change": change, "pct": pct, **bid_ask}
 
 
+# Base prices used by _get_paper_ltp() for realistic paper fills.
+_PAPER_BASE_PRICES: Dict[str, float] = {
+    "RELIANCE":   2945.50,  "TCS":       4120.20,  "HDFCBANK":   1672.80,
+    "INFY":       1890.45,  "ICICIBANK": 1245.30,  "SBIN":        824.10,
+    "AXISBANK":   1180.60,  "ITC":        482.95,  "LT":          3680.55,
+    "MARUTI":    12450.00,  "NIFTY":    24850.40,  "BANKNIFTY": 52340.85,
+    "SENSEX":    81460.20,  "CRUDEOIL":  6550.00,  "CRUDEOILM":  6550.00,
+    "NATURALGAS":  245.00,  "NATGASMINI": 245.00,
+}
+
+
+def _get_paper_ltp(
+    symbol: str,
+    option_contract: Optional[Dict[str, Any]] = None,
+) -> float:
+    """Return a realistic simulated LTP for paper-mode order fills.
+
+    Equity / index: returns mock live_price() (moves with time like the UI quote).
+    Options: simulates a sensible ATM/OTM premium so paper P&L is not ₹100 dummy:
+        NIFTY ATM   ~₹125-150
+        BANKNIFTY   ~₹260
+        CRUDEOIL FO ~₹32
+    OTM options get a discount proportional to their distance from ATM.
+    """
+    sym_upper = str(symbol).upper()
+    base = _PAPER_BASE_PRICES.get(sym_upper, 100.0)
+    seed = abs(hash(sym_upper)) % 97
+    underlying_ltp = live_price(base, seed)["price"]
+
+    if not option_contract:
+        return underlying_ltp
+
+    # Option premium model (paper-only approximation)
+    # ATM premium ≈ 0.5 % of underlying  (empirical rough rule)
+    atm_premium = max(5.0, underlying_ltp * 0.005)
+    # OTM discount: normalise by 2% of underlying as one full strike interval
+    otm_points = abs(float(option_contract.get("otm_points") or 0))
+    otm_discount = min(0.80, otm_points / max(1.0, underlying_ltp * 0.02))
+    premium = atm_premium * (1.0 - otm_discount)
+    # Small deterministic jitter keyed on the contract symbol
+    opt_seed = abs(hash(str(option_contract.get("tradingsymbol") or sym_upper))) % 40
+    jitter = (opt_seed - 20) / 1000.0   # ±2% noise
+    return round(max(5.0, premium * (1.0 + jitter)), 2)
+
+
 def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
     """Daily mock candles — used for /backtest UI which expects day-level data."""
     out = []
@@ -7318,12 +7363,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         from core.execution_router import ExecutionRouter
         from core.portfolio_ledger import PortfolioLedger
         from core.market_domains import resolve_domain_by_underlying
-        
+
         domain = resolve_domain_by_underlying(symbol)
         order_mgr = OrderManager(db)
         session_date = datetime.now(timezone.utc).date().isoformat()
         signal_candle_time = datetime.now(timezone.utc).strftime("%H:%M")
-        
+
         idem_key = idempotency_key or order_mgr.generate_idempotency_key(
             strategy_id=strategy_id or "manual",
             market_domain=domain.name.value,
@@ -7332,41 +7377,52 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             session_date=session_date,
             signal_candle_time=signal_candle_time
         )
-        
+
         if not await order_mgr.verify_and_lock_idempotency(idem_key, user_id):
             existing = await db.orders.find_one({"user_id": user_id, "idempotency_key": idem_key})
             if existing:
                 return _clean_order_response(existing)
             return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block"}
-            
+
+        # Get a realistic paper fill price (not dummy ₹100).
+        # If caller passed a real price (e.g. from Upstox quote), use that.
+        # Otherwise simulate using the symbol's known base price.
+        paper_ltp = price if (price and price > 0) else _get_paper_ltp(symbol, option_contract)
+
         risk_mgr = RiskManager(db)
+        _lot_size = domain.get_lot_size(symbol)
+        # qty from signal_manager is in LOTS (e.g. 1 lot), but compute_position_size
+        # expects quantity in SHARES. Convert: requested_qty_shares = lots * lot_size.
+        # For equity strategies lot_size=1 so this is a no-op.
+        _qty_lots = qty or 1
+        _qty_shares = _qty_lots * _lot_size
         risk_res = await risk_mgr.evaluate_order(
             user_id=user_id,
             strategy_id=strategy_id or "manual",
             symbol=symbol,
             target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
             side=side,
-            requested_qty=qty or 1,
-            price=price or 100.0,
+            requested_qty=_qty_shares,
+            price=paper_ltp,
             mode="paper",
             stop_loss=stop_loss,
             take_profit=take_profit,
-            lot_size=domain.get_lot_size(symbol)
+            lot_size=_lot_size
         )
-        
+
         if not risk_res["ok"]:
             from core.event_store import CoreEventStore
             event_store = CoreEventStore(db)
             await event_store.log_event("RISK_BLOCKED", strategy_id or "manual", user_id, {"reason": risk_res["reason"], "symbol": symbol})
             return {"ok": False, "status": "SKIPPED", "reason": risk_res["reason"]}
-            
+
         intent_doc = order_mgr.compile_order_intent(
             strategy_id=strategy_id or "manual",
             symbol=symbol,
             target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
             side=side,
             quantity=risk_res["quantity"],
-            price=price or 100.0,
+            price=paper_ltp,
             exchange=domain.exchange,
             segment=domain.segment,
             mode="paper",
@@ -7374,7 +7430,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             take_profit=take_profit,
             idempotency_key=idem_key
         )
-        
+
         ledger = PortfolioLedger(db)
         router = ExecutionRouter(db, ledger)
         order_res = await router.route_intent(user_id, intent_doc)
@@ -11176,10 +11232,16 @@ async def reset_paper_trading(user=Depends(get_current_user)):
     
     # 10. Clean up paper risk/stat events only
     risk_events_res = await db.risk_events.delete_many({"user_id": user_id, "paper": True})
-    
+
+    # 11. Reset paper wallet back to ₹5,00,000
+    from core.paper_broker import PaperWallet
+    wallet = PaperWallet(db)
+    wallet_doc = await wallet.reset(user_id)
+
     return {
         "ok": True,
         "detail": "Paper trading environment reset successfully. Live configurations intact.",
+        "paper_wallet": {"balance": wallet_doc["balance"], "currency": "INR"},
         "purged": {
             "orders": orders_res.deleted_count,
             "strategy_positions": sp_res.deleted_count,
@@ -11195,6 +11257,27 @@ async def reset_paper_trading(user=Depends(get_current_user)):
             "option_trade_journal": opt_journal_res.deleted_count,
             "risk_events": risk_events_res.deleted_count,
         }
+    }
+
+
+@api.get("/paper-wallet")
+async def get_paper_wallet(user=Depends(get_current_user)):
+    """Return the user's paper trading wallet balance and P&L summary."""
+    from core.paper_broker import PaperWallet
+    pw = PaperWallet(db)
+    wallet = await pw.get_or_initialize(user["id"])
+    summary = pw.summary(wallet)
+    # Attach recent paper fills for context
+    recent_fills = await db.fills.find(
+        {"user_id": user["id"], "mode": "paper"},
+        {"_id": 0, "id": 1, "side": 1, "symbol": 1, "target_symbol": 1,
+         "qty": 1, "price": 1, "trade_value": 1, "brokerage": 1, "created_at": 1}
+    ).sort("created_at", -1).limit(10).to_list(10)
+    return {
+        "ok": True,
+        "currency": "INR",
+        **summary,
+        "recent_fills": recent_fills,
     }
 
 

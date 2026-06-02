@@ -231,15 +231,17 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     symbol = raw_sym.upper()
                 # Enforce market-hours check for this symbol segment
                 try:
-                    from core.market_domains import resolve_domain_by_underlying
+                    from core.market_domains import resolve_domain_by_underlying, DomainType
                     from core.market_clock import get_segment_status
                     domain = resolve_domain_by_underlying(symbol)
+                    # domain.name is the DomainType enum member (e.g. DomainType.NSE_FO).
+                    # get_segment_status expects a DomainType enum value, not a string.
                     clock = get_segment_status(domain.name)
                     if not clock.get("open"):
                         # Skip running strategy outside market hours to avoid spamming failed orders
                         await db.strategies.update_one(
                             {"id": s["id"]},
-                            {"$set": {**eval_set, 
+                            {"$set": {**eval_set,
                                       "last_filter_reason": f"Market closed: {clock.get('reason')}"},
                              "$inc": inc_set}
                         )
