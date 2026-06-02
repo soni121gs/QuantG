@@ -404,6 +404,7 @@ class ProfileUpdateReq(BaseModel):
     execution_broker: Optional[str] = None
     fallback_broker: Optional[str] = None
     paper_mode: Optional[bool] = None
+    allow_simulated_prices: Optional[bool] = None
 
 
 class ChangePasswordReq(BaseModel):
@@ -9814,6 +9815,10 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
 async def get_user_settings(user_id: str) -> dict:
     """Profile / trading preferences with safe defaults."""
     user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    paper_mode = (user or {}).get("paper_mode", True)
+    allow_simulated = (user or {}).get("allow_simulated_prices")
+    if allow_simulated is None:
+        allow_simulated = bool(paper_mode)
     return {
         "name": (user or {}).get("name", ""),
         "default_qty": (user or {}).get("default_qty", 1),
@@ -9825,7 +9830,8 @@ async def get_user_settings(user_id: str) -> dict:
         "data_broker": "upstox",
         "execution_broker": "upstox",
         "fallback_broker": "none",
-        "paper_mode": (user or {}).get("paper_mode", True),
+        "paper_mode": paper_mode,
+        "allow_simulated_prices": bool(allow_simulated),
     }
 
 
@@ -11270,8 +11276,8 @@ async def _recover_paper_contract_resolution_halts_for_user(user_id: str) -> Dic
         "mode": "paper",
         "$or": [
             {"halt_reason": "CONTRACT_RESOLUTION_FAILED"},
-            {"last_error": {"$regex": "contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
-            {"last_filter_reason": {"$regex": "contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
+            {"last_error": {"$regex": "CONTRACT_RESOLUTION_FAILED|contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
+            {"last_filter_reason": {"$regex": "CONTRACT_RESOLUTION_FAILED|contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
         ],
     }
     rows = await db.strategies.find(query, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(500)
