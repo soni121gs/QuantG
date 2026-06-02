@@ -7387,7 +7387,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # Get a realistic paper fill price (not dummy ₹100).
         # If caller passed a real price (e.g. from Upstox quote), use that.
         # Otherwise simulate using the symbol's known base price.
-        paper_ltp = price if (price and price > 0) else _get_paper_ltp(symbol, option_contract)
+        contract_ltp = float((option_contract or {}).get("ltp") or 0)
+        paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else _get_paper_ltp(symbol, option_contract))
 
         risk_mgr = RiskManager(db)
         _lot_size = domain.get_lot_size(symbol)
@@ -9452,6 +9453,7 @@ async def _resolve_option_for_strategy(
         "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
         "exchange": "MCX" if underlying in COMMODITY_UNDERLYINGS else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
         "instrument_token": instrument_token,
+        "instrument_key": instrument_token,
         "upstox_instrument_token": instrument_token,
         "lot_size": lot_size,
         "strike": strike,
@@ -11258,6 +11260,49 @@ async def reset_paper_trading(user=Depends(get_current_user)):
             "risk_events": risk_events_res.deleted_count,
         }
     }
+
+
+async def _recover_paper_contract_resolution_halts_for_user(user_id: str) -> Dict[str, Any]:
+    """Clear only paper strategy halts caused by option contract resolution failures."""
+    now = datetime.now(timezone.utc).isoformat()
+    query = {
+        "user_id": user_id,
+        "mode": "paper",
+        "$or": [
+            {"halt_reason": "CONTRACT_RESOLUTION_FAILED"},
+            {"last_error": {"$regex": "contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
+            {"last_filter_reason": {"$regex": "contract resolution failed|contract unresolved|option contract resolution failed", "$options": "i"}},
+        ],
+    }
+    rows = await db.strategies.find(query, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(500)
+    res = await db.strategies.update_many(
+        query,
+        {
+            "$set": {
+                "halted": False,
+                "is_halted": False,
+                "last_error": "",
+                "last_filter_reason": "Recovered paper contract-resolution halt; runner will rescan.",
+                "paper_contract_recovered_at": now,
+            },
+            "$unset": {
+                "halt_reason": "",
+                "last_halt_reason": "",
+            },
+        },
+    )
+    return {
+        "ok": True,
+        "matched": res.matched_count,
+        "modified": res.modified_count,
+        "strategies": rows,
+        "recovered_at": now,
+    }
+
+
+@api.post("/profile/recover-paper-contract-halts")
+async def recover_paper_contract_halts(user=Depends(get_current_user)):
+    return await _recover_paper_contract_resolution_halts_for_user(user["id"])
 
 
 @api.get("/paper-wallet")

@@ -28,14 +28,54 @@ class TestOptionSelectionLtp(unittest.IsolatedAsyncioTestCase):
 
     @patch("server.get_user_settings", new_callable=AsyncMock)
     @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
-    async def test_resolve_option_for_strategy_paper_fallback(self, mock_get_gateway, mock_get_settings):
-        """Verify fallback to fabricated token is blocked when gateway is disconnected."""
-        mock_get_settings.return_value = {"paper_mode": True}
+    async def test_resolve_option_for_strategy_paper_fallback_disabled(self, mock_get_gateway, mock_get_settings):
+        """Verify fabricated paper contracts stay blocked when simulation is disabled."""
+        mock_get_settings.return_value = {"paper_mode": True, "allow_simulated_prices": False}
         mock_get_gateway.return_value = None  # Gateway offline
 
         contract = await _resolve_option_for_strategy(
             user_id=self.user_id,
             strategy_row=self.strategy_row,
+            underlying="NIFTY",
+            signal_action="BUY",
+            strike_mode="ATM_BUY",
+        )
+
+        self.assertIsNone(contract)
+
+    @patch("server.get_user_settings", new_callable=AsyncMock)
+    @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
+    async def test_resolve_option_for_strategy_paper_simulated_contract(self, mock_get_gateway, mock_get_settings):
+        """Paper mode can use a complete simulated contract when explicitly enabled."""
+        mock_get_settings.return_value = {"paper_mode": True, "allow_simulated_prices": True}
+        mock_get_gateway.return_value = None
+
+        contract = await _resolve_option_for_strategy(
+            user_id=self.user_id,
+            strategy_row=self.strategy_row,
+            underlying="NIFTY",
+            signal_action="BUY",
+            strike_mode="ATM_BUY",
+        )
+
+        self.assertIsNotNone(contract)
+        self.assertTrue(contract["simulated"])
+        self.assertEqual(contract["source"], "PAPER_SIMULATED_CONTRACT")
+        self.assertTrue(contract["instrument_token"].startswith("PAPER_NIFTY_CE_"))
+        self.assertEqual(contract["instrument_key"], contract["instrument_token"])
+        self.assertEqual(contract["upstox_instrument_token"], contract["instrument_token"])
+        self.assertGreater(contract["ltp"], 0)
+
+    @patch("server.get_user_settings", new_callable=AsyncMock)
+    @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
+    async def test_resolve_option_for_strategy_live_never_simulates(self, mock_get_gateway, mock_get_settings):
+        """Live strategies must not receive fabricated paper contracts."""
+        mock_get_settings.return_value = {"paper_mode": False, "allow_simulated_prices": True}
+        mock_get_gateway.return_value = None
+
+        contract = await _resolve_option_for_strategy(
+            user_id=self.user_id,
+            strategy_row={"mode": "live", "id": "live-strategy-1"},
             underlying="NIFTY",
             signal_action="BUY",
             strike_mode="ATM_BUY",

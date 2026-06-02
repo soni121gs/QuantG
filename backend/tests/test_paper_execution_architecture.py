@@ -69,6 +69,7 @@ async def test_paper_entry_without_price_is_skipped_not_failed():
     }
 
     with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS"}), \
          patch("server._is_order_market_open", return_value=True), \
          patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": True, "status": "OPEN", "reason": "test open"}), \
@@ -143,6 +144,7 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
     mock_intent.model_dump.return_value = {"intent": "OPEN_LONG", "quantity": 1}
 
     with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS"}), \
          patch("server._is_order_market_open", return_value=True), \
          patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": True, "status": "OPEN", "reason": "test open"}), \
@@ -175,6 +177,94 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
     assert body["status"] == "SKIPPED_SIGNAL"
     submit_live.assert_not_called()
     mock_db.orders.insert_one.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
+    import server
+
+    mock_db = MagicMock()
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "nifty-strategy", "mode": "paper", "status": "live"})
+    mock_db.orders.find_one = AsyncMock(return_value=None)
+    mock_db.signals.find_one = AsyncMock(return_value=None)
+
+    option_contract = {
+        "tradingsymbol": "NIFTY26060524900CE",
+        "exchange": "NFO",
+        "instrument_token": "PAPER_NIFTY_CE_24900",
+        "instrument_key": "PAPER_NIFTY_CE_24900",
+        "lot_size": 65,
+        "underlying": "NIFTY",
+        "option_type": "CE",
+        "ltp": 125.0,
+        "simulated": True,
+        "source": "PAPER_SIMULATED_CONTRACT",
+    }
+    captured = {}
+
+    async def fake_evaluate_order(self, **kwargs):
+        captured["risk_kwargs"] = kwargs
+        return {"ok": True, "status": "APPROVED", "reason": "ok", "quantity": kwargs["requested_qty"]}
+
+    async def fake_route_intent(self, user_id, intent_doc):
+        captured["route_user_id"] = user_id
+        captured["intent_doc"] = intent_doc
+        return {
+            "id": "paper-order-1",
+            "status": "FILLED",
+            "mode": "paper",
+            "qty": intent_doc["qty"],
+            "requested_price": intent_doc["requested_price"],
+        }
+
+    with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "true", "CORE_ENGINE_PAPER_ENABLED": "true"}), \
+         patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "allow_simulated_prices": True}), \
+         patch("core.risk_manager.RiskManager.evaluate_order", new=fake_evaluate_order), \
+         patch("core.execution_router.ExecutionRouter.route_intent", new=fake_route_intent):
+        result = await server._place_order_core(
+            user_id="user-123",
+            symbol="NIFTY",
+            side="BUY",
+            qty=1,
+            source="strategy:nifty-strategy",
+            option_contract=option_contract,
+            signal_id="signal-1",
+        )
+
+    assert result["status"] == "FILLED"
+    assert captured["risk_kwargs"]["requested_qty"] == 65
+    assert captured["risk_kwargs"]["lot_size"] == 65
+    assert captured["risk_kwargs"]["price"] == 125.0
+    assert captured["intent_doc"]["qty"] == 65
+    assert captured["intent_doc"]["target_symbol"] == "NIFTY26060524900CE"
+    assert captured["route_user_id"] == "user-123"
+
+
+@pytest.mark.anyio
+async def test_recover_paper_contract_resolution_halts_is_user_and_paper_scoped():
+    import server
+
+    mock_db = MagicMock()
+    recovered_rows = [
+        {"id": "paper-1", "name": "NIFTY Paper", "status": "live"},
+    ]
+    mock_find = MagicMock()
+    mock_find.to_list = AsyncMock(return_value=recovered_rows)
+    mock_db.strategies.find.return_value = mock_find
+    mock_db.strategies.update_many = AsyncMock(return_value=MagicMock(matched_count=1, modified_count=1))
+
+    with patch("server.db", mock_db):
+        result = await server._recover_paper_contract_resolution_halts_for_user("user-123")
+
+    query = mock_db.strategies.update_many.await_args.args[0]
+    update = mock_db.strategies.update_many.await_args.args[1]
+    assert result["matched"] == 1
+    assert query["user_id"] == "user-123"
+    assert query["mode"] == "paper"
+    assert update["$set"]["halted"] is False
+    assert update["$set"]["is_halted"] is False
+    assert "halt_reason" in update["$unset"]
 
 
 @pytest.mark.anyio
