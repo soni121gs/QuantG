@@ -68,6 +68,7 @@ from order_lifecycle import (
     is_order_active,
 )
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality, parse_market_timestamp
+from core.strategy_leaderboard import build_strategy_leaderboard
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
@@ -4974,120 +4975,14 @@ async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
 @api.get("/strategies/leaderboard")
 async def strategy_leaderboard(user=Depends(get_current_user)):
     user_id = user["id"]
-    
-    # Fetch all strategies
-    strategies = await db.strategies.find({"user_id": user_id}).to_list(1000)
-    
-    # Fetch closed paper trades
-    paper_trades = await db.trades.find({"user_id": user_id}).to_list(5000)
-    
-    # Fetch option trades from journal
-    option_trades = await db.option_trade_journal.find({"strategy_id": {"$in": [s["id"] for s in strategies]}}).to_list(5000)
-    
-    # Group trades by strategy
-    trades_by_strat: Dict[str, List[Dict[str, Any]]] = {s["id"]: [] for s in strategies}
-    
-    for t in paper_trades:
-        sid = t.get("strategy_id")
-        if sid in trades_by_strat:
-            trades_by_strat[sid].append({
-                "pnl": float(t.get("realised_pnl") or t.get("gross_realised_pnl") or 0),
-                "closed_at": t.get("closed_at") or t.get("exit_time"),
-            })
-            
-    for ot in option_trades:
-        sid = ot.get("strategy_id")
-        if sid in trades_by_strat:
-            trades_by_strat[sid].append({
-                "pnl": float(ot.get("pnl") or 0),
-                "closed_at": ot.get("exit_time"),
-            })
-            
-    leaderboard = []
-    now_dt = datetime.now(timezone.utc)
-    
-    for strat in strategies:
-        sid = strat["id"]
-        s_trades = trades_by_strat[sid]
-        
-        total_trades = len(s_trades)
-        wins = sum(1 for t in s_trades if t["pnl"] > 0)
-        win_rate = round((wins / total_trades) * 100, 2) if total_trades > 0 else 0.0
-        
-        pnl_today = 0.0
-        pnl_week = 0.0
-        pnl_month = 0.0
-        
-        # Sort trades chronologically to calculate drawdown
-        parsed_trades = []
-        for t in s_trades:
-            close_time = t["closed_at"]
-            dt = None
-            if close_time:
-                try:
-                    if isinstance(close_time, datetime):
-                        dt = close_time
-                    else:
-                        # Strip fractional seconds timezone offsets if fromisoformat fails
-                        val_str = close_time.replace("Z", "+00:00")
-                        if "." in val_str and "+" in val_str:
-                            parts = val_str.split("+")
-                            base = parts[0]
-                            tz = parts[1]
-                            if len(base.split(".")[-1]) > 6:
-                                base = base.split(".")[0] + "." + base.split(".")[-1][:6]
-                            val_str = base + "+" + tz
-                        dt = datetime.fromisoformat(val_str)
-                except Exception:
-                    pass
-            if dt:
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                parsed_trades.append((dt, t["pnl"]))
-                
-        # Sort chronologically
-        parsed_trades.sort(key=lambda x: x[0])
-        
-        # Calculate PnL periods
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        ist_now = datetime.now(timezone.utc).astimezone(ist_tz)
-        ist_today = ist_now.date()
-        for dt, pnl in parsed_trades:
-            ist_dt = dt.astimezone(ist_tz)
-            ist_date = ist_dt.date()
-            if ist_date == ist_today:
-                pnl_today += pnl
-            delta_days = (ist_today - ist_date).days
-            if delta_days < 7:
-                pnl_week += pnl
-            if delta_days < 30:
-                pnl_month += pnl
-                
-        # Calculate Max Drawdown
-        max_drawdown = 0.0
-        peak = 0.0
-        running_pnl = 0.0
-        for _, pnl in parsed_trades:
-            running_pnl += pnl
-            if running_pnl > peak:
-                peak = running_pnl
-            drawdown = peak - running_pnl
-            if drawdown > max_drawdown:
-                max_drawdown = drawdown
-                
-        leaderboard.append({
-            "strategy_id": sid,
-            "strategy_name": strat.get("name"),
-            "trades": total_trades,
-            "win_rate": win_rate,
-            "pnl_today": round(pnl_today, 2),
-            "pnl_week": round(pnl_week, 2),
-            "pnl_month": round(pnl_month, 2),
-            "max_drawdown": round(max_drawdown, 2),
-        })
-        
-    leaderboard.sort(key=lambda x: (x["win_rate"], x["trades"]), reverse=True)
-    return leaderboard
+    strategies = await db.strategies.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
+    strategy_ids = [s["id"] for s in strategies if s.get("id")]
+    closed_trades = await db.trades.find({"user_id": user_id}, {"_id": 0}).to_list(10000)
+    option_trades = await db.option_trade_journal.find(
+        {"strategy_id": {"$in": strategy_ids}},
+        {"_id": 0},
+    ).to_list(10000)
+    return build_strategy_leaderboard(strategies, closed_trades, option_trades)
 
 
 @api.get("/strategies/{sid}", response_model=StrategyOut)

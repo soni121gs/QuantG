@@ -75,6 +75,103 @@ const KpiCard = ({ label, value, sub, icon: Icon, tone, testid }) => (
   </div>
 );
 
+const metric = (row, path, fallback = 0) => {
+  const value = path.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), row);
+  return value ?? fallback;
+};
+
+const profitFactorLabel = (value) => (value == null ? "No losses" : Number(value).toFixed(2));
+
+const StrategyPerformanceTable = ({ rows }) => (
+  <div className="overflow-x-auto">
+    <table className="w-full text-left text-xs">
+      <thead className="bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] uppercase font-mono">
+        <tr>
+          <th className="px-4 py-3">Rank</th>
+          <th className="px-4 py-3">Strategy</th>
+          <th className="px-4 py-3 text-right">Trades</th>
+          <th className="px-4 py-3 text-right">Win</th>
+          <th className="px-4 py-3 text-right">7D</th>
+          <th className="px-4 py-3 text-right">30D</th>
+          <th className="px-4 py-3 text-right">Net P&L</th>
+          <th className="px-4 py-3 text-right">PF</th>
+          <th className="px-4 py-3 text-right">Risk Adj</th>
+          <th className="px-4 py-3 text-right">DD</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-[var(--qd-border)]">
+        {rows.length === 0 ? (
+          <tr><td colSpan="10" className="px-4 py-8 text-center text-[var(--qd-text-3)]">No closed strategy trades yet.</td></tr>
+        ) : rows.map((row) => {
+          const lifetime = row.lifetime || {};
+          const last7 = row.last_7_days || {};
+          const last30 = row.last_30_days || {};
+          return (
+            <tr key={row.strategy_id} className="hover:bg-[var(--qd-surface)]/30">
+              <td className="px-4 py-3 font-mono text-[var(--qd-text-2)]">#{row.rank}</td>
+              <td className="px-4 py-3">
+                <div className="font-semibold text-white">{row.strategy_name}</div>
+                <div className="mt-1 font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{row.recommendation || "NO_DATA"}</div>
+              </td>
+              <td className="px-4 py-3 text-right font-mono text-white">{lifetime.total_trades || 0}</td>
+              <td className="px-4 py-3 text-right font-mono text-white">{Number(lifetime.win_rate || 0).toFixed(1)}%</td>
+              <td className={`px-4 py-3 text-right font-mono ${toneClass(last7.net_pnl)}`}>{money(last7.net_pnl)}</td>
+              <td className={`px-4 py-3 text-right font-mono ${toneClass(last30.net_pnl)}`}>{money(last30.net_pnl)}</td>
+              <td className={`px-4 py-3 text-right font-mono font-bold ${toneClass(lifetime.net_pnl)}`}>{money(lifetime.net_pnl)}</td>
+              <td className="px-4 py-3 text-right font-mono text-white">{profitFactorLabel(lifetime.profit_factor)}</td>
+              <td className={`px-4 py-3 text-right font-mono ${toneClass(row.risk_adjusted_return)}`}>{Number(row.risk_adjusted_return || 0).toFixed(2)}</td>
+              <td className="px-4 py-3 text-right font-mono text-[var(--qd-loss)]">{money(lifetime.max_drawdown)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+);
+
+const HealthScoreList = ({ rows }) => (
+  <div className="space-y-3">
+    {rows.length === 0 ? (
+      <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">No health scores yet.</div>
+    ) : rows.slice(0, 8).map((row) => {
+      const score = Number(row.health_score || 0);
+      const tone = score >= 70 ? "bg-[var(--qd-profit)]" : score >= 45 ? "bg-[var(--qd-warn)]" : "bg-[var(--qd-loss)]";
+      return (
+        <div key={row.strategy_id}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-white">{row.strategy_name}</div>
+              <div className="font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{row.recommendation}</div>
+            </div>
+            <div className="font-mono text-lg font-bold text-white">{score}</div>
+          </div>
+          <div className="mt-2 h-2 rounded bg-[var(--qd-surface-2)]">
+            <div className={`h-2 rounded ${tone}`} style={{ width: `${Math.min(100, Math.max(0, score))}%` }} />
+          </div>
+        </div>
+      );
+    })}
+  </div>
+);
+
+const AllocationList = ({ rows }) => (
+  <div className="space-y-3">
+    {rows.length === 0 ? (
+      <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">No capital increase recommended from current closed-trade history.</div>
+    ) : rows.map((row) => (
+      <div key={row.strategy_id}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="truncate text-sm font-semibold text-white">{row.strategy_name}</div>
+          <div className="font-mono text-lg font-bold text-[var(--qd-profit)]">{row.recommended_percent}%</div>
+        </div>
+        <div className="mt-2 h-2 rounded bg-[var(--qd-surface-2)]">
+          <div className="h-2 rounded bg-[var(--qd-profit)]" style={{ width: `${Math.min(100, Math.max(0, row.recommended_percent))}%` }} />
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 const StatusPill = ({ children, tone = "neutral" }) => {
   const tones = {
     good: "border-[rgba(0,230,118,0.38)] bg-[rgba(0,230,118,0.1)] text-[var(--qd-profit)]",
@@ -311,19 +408,21 @@ export default function Dashboard() {
   const [telemetry, setTelemetry] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
   const [commodities, setCommodities] = useState([]);
+  const [strategyAnalytics, setStrategyAnalytics] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [activeTab, setActiveTab] = useState("overview");
 
   const load = useCallback(async () => {
     try {
-      const [p, w, f, t, c, s] = await Promise.all([
+      const [p, w, f, t, c, s, leaderboard] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
         api.get("/market/commodities"),
         api.get("/market/session-status"),
+        api.get("/strategies/leaderboard"),
       ]);
       await refreshExecution();
       setPf(p.data);
@@ -332,6 +431,7 @@ export default function Dashboard() {
       setTelemetry(t.data);
       setCommodities(c.data || []);
       setMarketSession(s.data);
+      setStrategyAnalytics(leaderboard.data);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -413,6 +513,9 @@ export default function Dashboard() {
 
   const foPositions = useMemo(() => positions.filter((p) => p.option_type || p.symbol.endsWith("CE") || p.symbol.endsWith("PE") || p.exchange === "NFO" || p.exchange === "BFO"), [positions]);
   const foStrategies = useMemo(() => strategies.filter((s) => s.asset_class === "option" || s.strategy_id.includes("Straddle") || s.strategy_id.includes("Scalper") || s.name.includes("Option")), [strategies]);
+  const leaderboardRows = useMemo(() => strategyAnalytics?.leaderboard || [], [strategyAnalytics]);
+  const bestStrategy = strategyAnalytics?.best_strategy;
+  const worstStrategy = strategyAnalytics?.worst_strategy;
 
   const strategySummary = useMemo(() => {
     const counts = strategiesWithExecution.reduce((acc, row) => {
@@ -592,6 +695,111 @@ export default function Dashboard() {
               tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"}
               sub={`${openOrders.length} pending orders, ${failedOrders.length} failed`}
             />
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+            <KpiCard
+              label="Best Strategy"
+              value={bestStrategy?.strategy_name || "-"}
+              icon={TrendingUp}
+              tone="text-[var(--qd-profit)]"
+              sub={bestStrategy ? `${money(metric(bestStrategy, "lifetime.net_pnl"))} lifetime` : "Closed trade history required"}
+            />
+            <KpiCard
+              label="Worst Strategy"
+              value={worstStrategy?.strategy_name || "-"}
+              icon={TrendingDown}
+              tone={worstStrategy ? "text-[var(--qd-loss)]" : "text-white"}
+              sub={worstStrategy ? `${money(metric(worstStrategy, "lifetime.net_pnl"))} lifetime` : "Closed trade history required"}
+            />
+            <KpiCard
+              label="More Capital"
+              value={strategyAnalytics?.capital_allocation?.[0]?.strategy_name || "-"}
+              icon={PieChart}
+              tone={strategyAnalytics?.capital_allocation?.[0] ? "text-[var(--qd-profit)]" : "text-white"}
+              sub={strategyAnalytics?.capital_allocation?.[0] ? `${strategyAnalytics.capital_allocation[0].recommended_percent}% recommended only` : "No increase recommended"}
+            />
+            <KpiCard
+              label="Pause Candidate"
+              value={(leaderboardRows.find((row) => row.recommendation === "PAUSE_REVIEW") || worstStrategy)?.strategy_name || "-"}
+              icon={AlertTriangle}
+              tone={(leaderboardRows.find((row) => row.recommendation === "PAUSE_REVIEW") || worstStrategy) ? "text-[var(--qd-warn)]" : "text-white"}
+              sub="Recommendation only"
+            />
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
+            <div className="qd-card overflow-hidden">
+              <div className="flex items-center justify-between border-b border-[var(--qd-border)] p-5">
+                <div>
+                  <div className="qd-section-title">// Closed trade performance</div>
+                  <h2 className="mt-1 font-head text-xl font-semibold text-white">Strategy Leaderboard</h2>
+                </div>
+                <StatusPill tone={strategyAnalytics?.data_quality?.included_closed_trades ? "good" : "neutral"}>
+                  {strategyAnalytics?.data_quality?.included_closed_trades || 0} Trades
+                </StatusPill>
+              </div>
+              <StrategyPerformanceTable rows={leaderboardRows} />
+              {(strategyAnalytics?.data_quality?.excluded_missing_strategy || strategyAnalytics?.data_quality?.excluded_unknown_strategy || strategyAnalytics?.data_quality?.excluded_missing_close_time) ? (
+                <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-warn)]">
+                  Excluded rows: {strategyAnalytics?.data_quality?.excluded_missing_strategy || 0} missing strategy, {strategyAnalytics?.data_quality?.excluded_unknown_strategy || 0} unknown strategy, {strategyAnalytics?.data_quality?.excluded_missing_close_time || 0} missing close time.
+                </div>
+              ) : null}
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              <div className="qd-card p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="qd-section-title">// Score 0-100</div>
+                    <h2 className="mt-1 font-head text-lg font-semibold text-white">Health Scores</h2>
+                  </div>
+                  <Shield size={18} className="text-[var(--qd-text-3)]" />
+                </div>
+                <HealthScoreList rows={strategyAnalytics?.health_scores || []} />
+              </div>
+
+              <div className="qd-card p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="qd-section-title">// Recommendation only</div>
+                    <h2 className="mt-1 font-head text-lg font-semibold text-white">Capital Allocation</h2>
+                  </div>
+                  <Wallet size={18} className="text-[var(--qd-text-3)]" />
+                </div>
+                <AllocationList rows={strategyAnalytics?.capital_allocation || []} />
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <div className="qd-card p-5">
+              <div className="qd-section-title">// Winners</div>
+              <h2 className="mt-1 font-head text-lg font-semibold text-white">Top Performers</h2>
+              <div className="mt-4 space-y-3">
+                {(strategyAnalytics?.top_performers || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No closed winners yet.</div> : strategyAnalytics.top_performers.map((row) => (
+                  <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.net_pnl)} tone={toneClass(row.lifetime?.net_pnl)} />
+                ))}
+              </div>
+            </div>
+            <div className="qd-card p-5">
+              <div className="qd-section-title">// Losers</div>
+              <h2 className="mt-1 font-head text-lg font-semibold text-white">Worst Performers</h2>
+              <div className="mt-4 space-y-3">
+                {(strategyAnalytics?.worst_performers || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No closed losers yet.</div> : strategyAnalytics.worst_performers.map((row) => (
+                  <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.net_pnl)} tone={toneClass(row.lifetime?.net_pnl)} />
+                ))}
+              </div>
+            </div>
+            <div className="qd-card p-5">
+              <div className="qd-section-title">// Drawdown</div>
+              <h2 className="mt-1 font-head text-lg font-semibold text-white">Drawdown Monitor</h2>
+              <div className="mt-4 space-y-3">
+                {(strategyAnalytics?.drawdown_monitor || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No drawdown history yet.</div> : strategyAnalytics.drawdown_monitor.map((row) => (
+                  <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.max_drawdown)} tone={row.lifetime?.max_drawdown > 0 ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+                ))}
+              </div>
+            </div>
           </section>
 
           {/* Position Integrity Status */}
