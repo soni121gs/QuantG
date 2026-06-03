@@ -140,6 +140,52 @@ class TestOptionSelectionLtp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(contract["expiry"], "2026-06-05")
         self.assertEqual(contract["ltp"], 45.50)
 
+    @patch("server.get_user_settings", new_callable=AsyncMock)
+    @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
+    async def test_real_contract_without_quote_does_not_get_mock_34_ltp(self, mock_get_gateway, mock_get_settings):
+        """A real Upstox contract must not be stamped with the old hardcoded paper LTP."""
+        mock_get_settings.return_value = {"paper_mode": True, "allow_simulated_prices": True}
+
+        gw = UpstoxGateway.__new__(UpstoxGateway)
+        gw.access_token = "fake-token"
+
+        def fake_get_market_quote(keys):
+            if "NSE_INDEX|Nifty 50" in keys:
+                return {"status": "success", "data": {"NSE_INDEX|Nifty 50": {"last_price": 24853.20}}}
+            return {"status": "success", "data": {"NSE_FO|123456": {"last_price": None}}}
+
+        def fake_get_option_chain(underlying_key, expiry_date):
+            return {
+                "status": "success",
+                "data": [{
+                    "strike_price": 24900.00,
+                    "expiry": "2026-06-05",
+                    "call_options": {
+                        "instrument_key": "NSE_FO|123456",
+                        "trading_symbol": "NIFTY2660524900CE",
+                    },
+                }],
+            }
+
+        gw.get_market_quote = fake_get_market_quote
+        gw.get_option_chain = fake_get_option_chain
+        gw.latest_tick = MagicMock(return_value=None)
+        mock_get_gateway.return_value = gw
+
+        contract = await _resolve_option_for_strategy(
+            user_id=self.user_id,
+            strategy_row=self.strategy_row,
+            underlying="NIFTY",
+            signal_action="BUY",
+            strike_mode="ATM_BUY",
+            otm_points=50,
+        )
+
+        self.assertIsNotNone(contract)
+        self.assertFalse(contract["simulated"])
+        self.assertEqual(contract["instrument_token"], "NSE_FO|123456")
+        self.assertNotIn("ltp", contract)
+
     @patch("server.get_user_upstox_gateway", new_callable=AsyncMock)
     async def test_place_upstox_order_rejection_payload_logging(self, mock_get_gateway):
         """Verify order payload logging on exception during order placement."""

@@ -6290,8 +6290,16 @@ async def _resolve_order_fill_hint(
         settings = await get_user_settings(user_id)
         allow_simulated = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
         if allow_simulated:
-            underlying = option_contract.get("underlying") or getattr(intent, "symbol", None)
-            return float(_get_paper_ltp(str(underlying or intent.instrument.tradingsymbol), option_contract))
+            market_session = _market_session_for_instrument(intent.instrument, option_contract)
+            if not market_session.get("open"):
+                underlying = option_contract.get("underlying") or getattr(intent, "symbol", None)
+                return float(_get_paper_ltp(str(underlying or intent.instrument.tradingsymbol), option_contract))
+            logger.warning(
+                "Paper option simulated fill blocked during live market: symbol=%s token=%s session=%s",
+                intent.instrument.tradingsymbol,
+                option_contract.get("instrument_token") or option_contract.get("instrument_key"),
+                market_session.get("segment"),
+            )
 
     instr = intent.instrument
     try:
@@ -9413,7 +9421,7 @@ async def _resolve_option_for_strategy(
         except Exception as e:
             ltp_reason = f"Error fetching LTP from Quote API: {e}"
 
-    if ltp is None and is_paper and allow_simulated_prices:
+    if ltp is None and is_paper and allow_simulated_prices and _is_simulated_contract:
         ltp = 34.50
         ltp_reason = "Mock option premium resolved for paper trading."
 
