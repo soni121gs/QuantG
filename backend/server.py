@@ -114,6 +114,34 @@ JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
 APP_VERSION = "12.0"
+START_TIME = datetime.now(timezone.utc)
+
+def get_git_info():
+    import subprocess
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+    except Exception:
+        commit = "unknown"
+    try:
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+    except Exception:
+        branch = "unknown"
+    try:
+        status = subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+        dirty = bool(status)
+    except Exception:
+        dirty = False
+    return commit, branch, dirty
+
+def get_file_version():
+    try:
+        version_file = ROOT_DIR.parent / "VERSION"
+        if version_file.exists():
+            return version_file.read_text().strip()
+    except Exception:
+        pass
+    return "10.0.0"
+
 
 app = FastAPI(title="QuantG Algo Trading API", version=APP_VERSION)
 api = APIRouter(prefix="/api")
@@ -1120,6 +1148,22 @@ async def health():
 @api.get("/health")
 async def health_check():
     return await health()
+
+
+@api.get("/version")
+async def get_version():
+    commit, branch, dirty = get_git_info()
+    file_ver = get_file_version()
+    uptime_seconds = (datetime.now(timezone.utc) - START_TIME).total_seconds()
+    return {
+        "backend_version": APP_VERSION,
+        "file_version": file_ver,
+        "git_commit": commit,
+        "git_branch": branch,
+        "git_dirty": dirty,
+        "start_time": START_TIME.isoformat(),
+        "up_time_seconds": round(uptime_seconds, 2)
+    }
 
 
 # ============== Routes: Auth (extracted to routes/auth.py) ==============
@@ -4671,6 +4715,15 @@ async def _place_upstox_order(
     is_amo: bool = False,
     market_protection: Optional[float] = -1,
 ) -> Dict[str, Any]:
+    # Inject global safety block
+    live_enabled = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
+    if not live_enabled:
+        raise RuntimeError("Live execution blocked: CORE_ENGINE_LIVE_ENABLED is set to false in the environment.")
+
+    arm_state = await db.live_arm_state.find_one({"user_id": user_id})
+    if not arm_state or not arm_state.get("armed"):
+        raise RuntimeError("Live execution blocked: Broker live execution pathway is not manually armed.")
+
     gateway = await get_user_upstox_gateway(user_id)
     if not gateway:
         raise HTTPException(status_code=400, detail="Upstox is not configured. Save API key/secret and complete OAuth first.")
@@ -5894,15 +5947,21 @@ def _price_integrity_guard(
         return result
     blocked_sources = {"fill-hint", "option-contract", "simulated", "mock", "synthetic", "fallback", "unavailable"}
     if not token or "|" not in token or token.upper().startswith("PAPER_"):
-        result.update(ok=False, reason_code="SKIPPED_CONTRACT_UNRESOLVED", human_reason="Paper option entry blocked: real Upstox instrument_key is missing.")
+        result.update(ok=False, reason_code="INSTRUMENT_UNRESOLVED", human_reason="Paper option entry blocked: real Upstox instrument_key is missing.")
     elif ltp <= 0:
-        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox option LTP is missing or zero.")
+        result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox option LTP is missing or zero.")
     elif source in blocked_sources or any(part in source for part in ("mock", "simulated", "fallback", "synthetic")):
-        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not a real Upstox quote.")
+        result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not a real Upstox quote.")
     elif source not in {"upstox-cache", "upstox-rest-quote"}:
-        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not allowed in normal paper mode.")
+        result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not allowed in normal paper mode.")
     elif not received_at or parse_market_timestamp(received_at) is None:
-        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox quote timestamp is missing.")
+        result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox quote timestamp is missing.")
+    else:
+        dt = parse_market_timestamp(received_at)
+        if dt:
+            age = (datetime.now(timezone.utc) - dt).total_seconds()
+            if age > 60.0:
+                result.update(ok=False, reason_code="STALE_PRICE", human_reason=f"Paper option entry blocked: Upstox quote is stale ({age:.1f}s age > 60s).")
     return result
 
 
@@ -5926,38 +5985,38 @@ async def _execution_preflight(
         row = strategy_row or await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if not row:
             return _preflight_response(
-                ok=False, reason_code="INVALID_STRATEGY", reason="Strategy not found or not owned by user.",
+                ok=False, reason_code="STRATEGY_DISABLED", reason="Strategy not found or not owned by user.",
                 strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
             )
         status = str(row.get("status") or "").lower()
         if status != "live":
             return _preflight_response(
-                ok=False, reason_code="INVALID_STRATEGY", reason=f"Strategy is not active (status={status or 'unknown'}).",
+                ok=False, reason_code="STRATEGY_DISABLED", reason=f"Strategy is not active (status={status or 'unknown'}).",
                 strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
             )
         halted_reason = row.get("halt_reason") or row.get("last_halt_reason")
         last_error = str(row.get("last_error") or "")
         if row.get("halted") or row.get("is_halted") or "contract resolution failed" in last_error.lower():
             return _preflight_response(
-                ok=False, reason_code="STRATEGY_HALTED", reason=halted_reason or last_error or "Strategy is halted.",
+                ok=False, reason_code="STRATEGY_DISABLED", reason=halted_reason or last_error or "Strategy is halted.",
                 strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
             )
 
     if not instr.tradingsymbol or not instr.instrument_token:
         return _preflight_response(
-            ok=False, reason_code="INVALID_INSTRUMENT", reason="Instrument could not be resolved.",
+            ok=False, reason_code="INSTRUMENT_UNRESOLVED", reason="Instrument could not be resolved.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
         )
     if option_contract is not None and not (option_contract.get("instrument_key") or option_contract.get("instrument_token")):
         return _preflight_response(
-            ok=False, reason_code="SKIPPED_CONTRACT_UNRESOLVED", reason="Option contract resolution did not return an Upstox instrument_key.",
+            ok=False, reason_code="INSTRUMENT_UNRESOLVED", reason="Option contract resolution did not return an Upstox instrument_key.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
         )
 
     segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
     if segment not in SEGMENT_MARKET_WINDOWS:
         return _preflight_response(
-            ok=False, reason_code="INVALID_INSTRUMENT", reason=f"Unsupported exchange segment {segment}.",
+            ok=False, reason_code="INSTRUMENT_UNRESOLVED", reason=f"Unsupported exchange segment {segment}.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
         )
 
@@ -5969,7 +6028,7 @@ async def _execution_preflight(
 
     if _intent_is_entry(intent.intent) and ltp <= 0:
         return _preflight_response(
-            ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", reason="No valid Upstox websocket or REST LTP is available.",
+            ok=False, reason_code="PRICE_UNAVAILABLE", reason="No valid Upstox websocket or REST LTP is available.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=None, market_session=market_session,
         )
 
@@ -5983,7 +6042,7 @@ async def _execution_preflight(
     if not price_validation.get("ok"):
         return _preflight_response(
             ok=False,
-            reason_code=price_validation.get("reason_code") or "SKIPPED_PRICE_UNAVAILABLE",
+            reason_code=price_validation.get("reason_code") or "PRICE_UNAVAILABLE",
             reason=price_validation.get("human_reason") or "Price integrity check failed.",
             strategy_id=strategy_id,
             intent=intent,
@@ -6007,7 +6066,7 @@ async def _execution_preflight(
         if existing:
             return _preflight_response(
                 ok=False,
-                reason_code="DUPLICATE_POSITION",
+                reason_code="CONFLICT_BLOCKED",
                 reason=f"Duplicate open position blocked for {instr.tradingsymbol}.",
                 strategy_id=strategy_id,
                 intent=intent,
@@ -6023,7 +6082,7 @@ async def _execution_preflight(
     except HTTPException as exc:
         return _preflight_response(
             ok=False,
-            reason_code="RISK_QUOTA_EXHAUSTED",
+            reason_code="RISK_BLOCKED",
             reason=str(exc.detail),
             strategy_id=strategy_id,
             intent=intent,
@@ -6792,6 +6851,142 @@ async def _persist_paper_skipped_order(
     return doc
 
 
+async def _persist_core_paper_skipped_order(
+    *,
+    user_id: str,
+    strategy_id: str,
+    symbol: str,
+    option_contract: Optional[Dict[str, Any]],
+    side: str,
+    qty: int,
+    price: float,
+    reason: str,
+    reason_code: str,
+    idempotency_key: Optional[str],
+    signal_id: Optional[str],
+    market_snapshot: Dict[str, Any]
+) -> Dict[str, Any]:
+    from core.market_domains import resolve_domain_by_underlying
+    domain = resolve_domain_by_underlying(symbol)
+    
+    now = datetime.now(timezone.utc)
+    session_date = now.date().isoformat()
+    dedupe_key = f"{strategy_id}:{symbol}:{side}:{reason_code}:{session_date}"
+    
+    trace = {
+        "signal_action": side,
+        "selected_symbol": option_contract["tradingsymbol"] if option_contract else symbol,
+        "underlying": symbol,
+        "exchange": option_contract.get("exchange", "NFO") if option_contract else "NSE",
+        "instrument_key": (option_contract or {}).get("instrument_key"),
+        "ltp_source": market_snapshot.get("source", "upstox-cache"),
+        "ltp_value": market_snapshot.get("ltp", 0.0),
+        "quote_timestamp": market_snapshot.get("received_at"),
+        "reason": reason,
+        "reason_code": reason_code,
+    }
+    
+    doc_seed = {
+        "user_id": user_id,
+        "dedupe_key": dedupe_key,
+        "strategy_id": strategy_id,
+        "session_date": session_date,
+        "symbol": option_contract["tradingsymbol"] if option_contract else symbol,
+        "side": side,
+        "qty": qty,
+        "filled_qty": 0,
+        "pending_qty": 0,
+        "order_type": "MARKET",
+        "requested_price": price,
+        "expected_price": 0.0,
+        "price": 0.0,
+        "brokerage": 0.0,
+        "slippage": 0.0,
+        "product": "MIS",
+        "status": ORDER_SKIPPED_SIGNAL,
+        "legacy_status": ORDER_SKIPPED_SIGNAL,
+        "execution_status": ORDER_SKIPPED_SIGNAL,
+        "status_message": f"{ORDER_SKIPPED_SIGNAL}: {reason}",
+        "reason_code": reason_code,
+        "skip_reason": reason,
+        "mode": "paper",
+        "broker": "paper",
+        "source": f"strategy:{strategy_id}" if strategy_id != "manual" else "manual",
+        "signal_id": signal_id,
+        "created_at": now,
+        "exchange": option_contract.get("exchange", "NFO") if option_contract else "NSE",
+        "asset_type": "option" if option_contract else "equity",
+        "segment": domain.segment,
+        "paper_skip": True,
+        "paper_skip_trace": trace,
+    }
+    if option_contract:
+        doc_seed.update({
+            "underlying": option_contract.get("underlying"),
+            "option_type": option_contract.get("option_type"),
+            "strike": option_contract.get("strike"),
+            "expiry": option_contract.get("expiry"),
+            "instrument_token": option_contract.get("instrument_token"),
+            "instrument_key": option_contract.get("instrument_key") or option_contract.get("instrument_token"),
+            "entry_spot": option_contract.get("spot"),
+            "lots": qty,
+            "lot_size": option_contract.get("lot_size", 1),
+        })
+    mutable_doc_fields = {
+        "last_seen_at": now,
+        "updated_at": now,
+        "last_signal_id": signal_id,
+        "last_trace": trace,
+        "market_snapshot": market_snapshot,
+        "market_session": {"open": True, "reason": "market hours open"},
+    }
+    try:
+        doc = await db.skipped_signals.find_one_and_update(
+            {"user_id": user_id, "dedupe_key": dedupe_key},
+            {
+                "$setOnInsert": doc_seed,
+                "$set": mutable_doc_fields,
+                "$inc": {"count": 1},
+            },
+            upsert=True,
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
+        )
+    except AttributeError:
+        doc = {**doc_seed, **mutable_doc_fields}
+        doc["count"] = 1
+        await db.skipped_signals.insert_one(doc)
+    doc = doc or doc_seed
+    
+    if strategy_id and strategy_id not in ("manual", "manual_recovery"):
+        try:
+            await db.strategies.update_one(
+                {"id": strategy_id, "user_id": user_id},
+                {
+                    "$set": {
+                        "last_evaluated_at": now,
+                        "last_signal_action": side,
+                        "last_signal_validated": False,
+                        "last_filter_reason": reason,
+                        "last_skip_reason_code": reason_code,
+                        "last_contract_selected": option_contract.get("tradingsymbol") if option_contract else symbol,
+                        "last_price_source": trace.get("ltp_source"),
+                        "last_ltp_timestamp": trace.get("quote_timestamp"),
+                    },
+                    "$inc": {"skipped_count_today": 1},
+                },
+            )
+        except Exception as exc:
+            logger.warning("strategy skip diagnostics update failed strategy=%s: %s", strategy_id, exc)
+            
+    logger.warning(
+        "Core Paper execution skipped strategy_id=%s signal_id=%s action=%s symbol=%s reason=%s reason_code=%s",
+        strategy_id, signal_id, side, symbol, reason, reason_code
+    )
+    doc.pop("_id", None)
+    return doc
+
+
 # ---------------------------------------------------------------------------
 # _submit_order_intent  –  dispatch live order to the correct broker adapter
 # ---------------------------------------------------------------------------
@@ -7421,12 +7616,83 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         simulated_contract = bool((option_contract or {}).get("simulated"))
         domain_name = domain.name.value if hasattr(domain.name, "value") else str(domain.name)
         market_session = _segment_session_status(domain_name)
+        
+        # Check staleness in Core path of _place_order_core
+        received_at = (option_contract or {}).get("received_at")
+        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0):
+            if not received_at or parse_market_timestamp(received_at) is None:
+                logger.warning("Core paper option order skipped: Upstox quote timestamp is missing for %s.", option_contract.get("tradingsymbol") or symbol)
+                skip_doc = await _persist_core_paper_skipped_order(
+                    user_id=user_id,
+                    strategy_id=strategy_id or "manual",
+                    symbol=symbol,
+                    option_contract=option_contract,
+                    side=side,
+                    qty=qty or 1,
+                    price=price or 0.0,
+                    reason="Upstox quote timestamp is missing.",
+                    reason_code="PRICE_UNAVAILABLE",
+                    idempotency_key=idem_key,
+                    signal_id=signal_id,
+                    market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+                )
+                return _clean_order_response(skip_doc)
+            dt = parse_market_timestamp(received_at)
+            if dt:
+                age = (datetime.now(timezone.utc) - dt).total_seconds()
+                if age > 60.0:
+                    logger.warning("Core paper option order skipped: Upstox quote is stale for %s (age %s).", option_contract.get("tradingsymbol") or symbol, age)
+                    skip_doc = await _persist_core_paper_skipped_order(
+                        user_id=user_id,
+                        strategy_id=strategy_id or "manual",
+                        symbol=symbol,
+                        option_contract=option_contract,
+                        side=side,
+                        qty=qty or 1,
+                        price=price or 0.0,
+                        reason=f"Upstox quote is stale ({age:.1f}s age > 60s).",
+                        reason_code="STALE_PRICE",
+                        idempotency_key=idem_key,
+                        signal_id=signal_id,
+                        market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+                    )
+                    return _clean_order_response(skip_doc)
+
         if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0) and contract_ltp <= 0:
             logger.warning("Core paper option order skipped: fresh Upstox LTP required for %s.", option_contract.get("tradingsymbol") or symbol)
-            return {"ok": False, "status": ORDER_SKIPPED_SIGNAL, "reason_code": "SKIPPED_PRICE_UNAVAILABLE", "reason": "Fresh real Upstox option LTP is required during live market hours."}
+            skip_doc = await _persist_core_paper_skipped_order(
+                user_id=user_id,
+                strategy_id=strategy_id or "manual",
+                symbol=symbol,
+                option_contract=option_contract,
+                side=side,
+                qty=qty or 1,
+                price=price or 0.0,
+                reason="Fresh real Upstox option LTP is required during live market hours.",
+                reason_code="PRICE_UNAVAILABLE",
+                idempotency_key=idem_key,
+                signal_id=signal_id,
+                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+            )
+            return _clean_order_response(skip_doc)
+
         paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else (0.0 if market_session.get("open") else _get_paper_ltp(symbol, option_contract)))
         if paper_ltp <= 0:
-            return {"ok": False, "status": ORDER_SKIPPED_SIGNAL, "reason_code": "SKIPPED_PRICE_UNAVAILABLE", "reason": "Paper price unavailable."}
+            skip_doc = await _persist_core_paper_skipped_order(
+                user_id=user_id,
+                strategy_id=strategy_id or "manual",
+                symbol=symbol,
+                option_contract=option_contract,
+                side=side,
+                qty=qty or 1,
+                price=price or 0.0,
+                reason="Paper price unavailable.",
+                reason_code="PRICE_UNAVAILABLE",
+                idempotency_key=idem_key,
+                signal_id=signal_id,
+                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+            )
+            return _clean_order_response(skip_doc)
 
         risk_mgr = RiskManager(db)
         _lot_size = domain.get_lot_size(symbol)
@@ -10379,6 +10645,7 @@ async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] =
 
 # ============== Routes: Ops Console (extracted to routes/ops.py) ==============
 async def ops_diagnostics(user):
+    commit, branch, dirty = get_git_info()
     settings = await get_user_settings(user["id"])
     kite, kite_status = await get_user_kite(user["id"])
     kotak_status = await get_user_kotak_status(user["id"])
@@ -10451,6 +10718,9 @@ async def ops_diagnostics(user):
     )
     return {
         "version": APP_VERSION,
+        "git_commit": commit,
+        "git_branch": branch,
+        "git_dirty": dirty,
         "server_time_utc": datetime.now(timezone.utc).isoformat(),
         "server_time_ist": (datetime.now(timezone.utc) + IST_OFFSET).isoformat(),
         "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
@@ -12322,6 +12592,120 @@ async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
         strategy_metadata=strat
     )
     return result
+
+@api.get("/trading/live-readiness")
+async def get_trading_live_readiness(user=Depends(get_current_user)):
+    user_id = user["id"]
+    checks = []
+    
+    # 1. Explicit live-auto enablement in environment
+    live_env_enabled = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
+    checks.append({
+        "id": "live_env_enabled",
+        "label": "CORE_ENGINE_LIVE_ENABLED set to true in .env",
+        "ok": live_env_enabled,
+        "detail": f"CORE_ENGINE_LIVE_ENABLED={os.environ.get('CORE_ENGINE_LIVE_ENABLED')}",
+        "hint": "Set CORE_ENGINE_LIVE_ENABLED=true in .env to allow live trading."
+    })
+    
+    # 2. Live armed state in DB
+    arm_state = await db.live_arm_state.find_one({"user_id": user_id})
+    live_db_armed = bool(arm_state and arm_state.get("armed"))
+    global_live_enabled = bool(arm_state and arm_state.get("global_live_enabled"))
+    checks.append({
+        "id": "live_db_armed",
+        "label": "System manually armed in database",
+        "ok": live_db_armed and global_live_enabled,
+        "detail": f"armed={live_db_armed}, global_live_enabled={global_live_enabled}",
+        "hint": "Arm system in Control Room or call /api/core/live/arm"
+    })
+    
+    # 3. Upstox Key/Secret Configuration check
+    upstox_status = await get_user_upstox_status(user_id)
+    keys_saved = bool(upstox_status.get("keys_saved"))
+    checks.append({
+        "id": "upstox_keys",
+        "label": "Upstox key/secret configured",
+        "ok": keys_saved,
+        "detail": f"keys_saved={keys_saved}",
+        "hint": "Save Upstox API keys in Broker Keys page."
+    })
+    
+    # 4. Active Session and Token Validity
+    token_valid = bool(upstox_status.get("connected") and upstox_status.get("token_valid"))
+    checks.append({
+        "id": "upstox_token",
+        "label": "Upstox OAuth session active",
+        "ok": token_valid,
+        "detail": f"connected={upstox_status.get('connected')}, token_valid={upstox_status.get('token_valid')}",
+        "hint": "Log in to Upstox through Broker Keys callback."
+    })
+    
+    # 5. Websocket Feed status and quote freshness
+    gateway_status = upstox_status.get("gateway") or {}
+    feed_status = gateway_status.get("feed_status") or upstox_status.get("feed_status") or {}
+    feed_ok = bool(upstox_status.get("connected") and (feed_status.get("connected") or gateway_status.get("ws_running")))
+    checks.append({
+        "id": "feed_status",
+        "label": "Upstox live price feed active",
+        "ok": feed_ok,
+        "detail": f"state={feed_status.get('state') or 'running'}",
+        "hint": "Restart Upstox feed from Control Room."
+    })
+    
+    # 6. Instrument resolution readiness (MCX Contract resolver state / active resolver count)
+    exchange_rules = await db.system_config.find_one({"_id": "exchange_rules"})
+    rules_ok = bool(exchange_rules and exchange_rules.get("lot_sizes"))
+    checks.append({
+        "id": "exchange_rules",
+        "label": "Instrument lot sizes and exchange rules resolution",
+        "ok": rules_ok,
+        "detail": f"rules_present={rules_ok}",
+        "hint": "Run MCX resolver initialization or verify MongoDB system_config."
+    })
+    
+    # 7. Funds & margins presence
+    funds = await db.funds.find_one({"user_id": user_id})
+    funds_ok = bool(funds and float(funds.get("available_margin") or 0) > 0)
+    checks.append({
+        "id": "funds_presence",
+        "label": "Funds and margins balance present",
+        "ok": funds_ok,
+        "detail": f"margin=₹{funds.get('available_margin') or 0 if funds else 0:.2f}",
+        "hint": "Fetch funds from Upstox broker API or check fund ledger."
+    })
+    
+    # 8. Global kill switch state (db.risk_state and option ledger)
+    kill_switch = await db.risk_state.find_one({"_id": "global_kill_switch"})
+    kill_active = bool(kill_switch and kill_switch.get("active"))
+    checks.append({
+        "id": "kill_switch",
+        "label": "Global kill-switch status (INACTIVE is ok)",
+        "ok": not kill_active,
+        "detail": f"kill_switch_active={kill_active}",
+        "hint": "Deactivate global kill-switch or reset risk state in DB."
+    })
+    
+    # 9. Stale reconciliation state (active orders with status UNKNOWN_NEEDS_REVIEW)
+    unknown_orders_count = await db.orders.count_documents({
+        "user_id": user_id,
+        "status": "UNKNOWN_NEEDS_REVIEW"
+    })
+    checks.append({
+        "id": "stale_reconciliation",
+        "label": "No active orders needing manual review",
+        "ok": unknown_orders_count == 0,
+        "detail": f"orders_needing_review={unknown_orders_count}",
+        "hint": "Manually reconcile orders marked UNKNOWN_NEEDS_REVIEW."
+    })
+    
+    overall_ok = all(c["ok"] for c in checks)
+    return {
+        "ok": overall_ok,
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 
 @api.get("/core/live/readiness")
 async def get_core_live_readiness(user=Depends(get_current_user)):

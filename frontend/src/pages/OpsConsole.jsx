@@ -160,7 +160,7 @@ export default function OpsConsole() {
           </div>
           <div>
             <div className="font-mono text-[9px] tracking-widest uppercase text-[var(--qd-text-3)] flex items-center gap-1.5">
-              <span className="qd-live-dot"></span> RISK OPERATIONS CONTROL ROOM // v{data?.version || "10.0"}
+              <span className="qd-live-dot"></span> RISK OPERATIONS CONTROL ROOM // v{data?.version || "12.0"} ({data?.git_commit?.slice(0, 7) || "unknown"}@{data?.git_branch || "main"}{data?.git_dirty ? "*" : ""})
             </div>
             <h1 className="font-head text-2xl font-extrabold text-white mt-0.5 tracking-tight flex items-center gap-2">
               Ops Control Desk
@@ -541,6 +541,9 @@ export default function OpsConsole() {
               <DiagRow k="SQLite Ledger Path" v="runtime_state.sqlite3" />
               <DiagRow k="Websocket URL" v={ticker.websocket_url || "Stateful Cache"} />
               <DiagRow k="Readiness Assessment" v={data?.readiness?.ready ? "System operational" : (upstox.reconnect_required ? "Reconnect Upstox required" : "Review configurations")} />
+              <DiagRow k="Backend Version" v={data?.version || "12.0"} />
+              <DiagRow k="Git Branch" v={data?.git_branch || "main"} />
+              <DiagRow k="Git Commit" v={data?.git_commit ? `${data.git_commit.slice(0, 7)}${data.git_dirty ? '*' : ''}` : "unknown"} />
             </div>
           </div>
 

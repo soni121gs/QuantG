@@ -23,6 +23,91 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
     return await ops_diagnostics(user=user)
 
 
+@router.get("/runtime")
+async def ops_runtime_route(user=Depends(get_current_user)):
+    from server import (
+        APP_VERSION, START_TIME, get_git_info, get_file_version, app, db,
+        get_user_settings, get_user_upstox_status, get_user_upstox_gateway
+    )
+    import os
+    import time
+    
+    commit, branch, dirty = get_git_info()
+    file_version = get_file_version()
+    up_time = (datetime.now(timezone.utc) - START_TIME).total_seconds()
+    
+    settings = await get_user_settings(user["id"])
+    paper_mode = bool(settings.get("paper_mode", True))
+    
+    # Check broker credentials config status
+    upstox_status = await get_user_upstox_status(user["id"])
+    broker_configured = bool(upstox_status.get("keys_saved"))
+    
+    # Check if live-auto is armed in DB
+    arm_state = await db.live_arm_state.find_one({"user_id": user["id"]})
+    live_auto_enabled = bool(arm_state and arm_state.get("armed"))
+    
+    # Check loop tasks status
+    def get_task_status(task_name):
+        task = getattr(app.state, task_name, None)
+        if task is None:
+            return "missing"
+        elif task.done():
+            if task.cancelled():
+                return "cancelled"
+            try:
+                if task.exception():
+                    return f"failed: {task.exception()}"
+            except Exception:
+                pass
+            return "done"
+        return "running"
+
+    runner_status = get_task_status("runner_task")
+    sig_status = get_task_status("signal_manager_task")
+    
+    # Check feed status
+    feed_status = "disconnected"
+    upstox_gw = await get_user_upstox_gateway(user["id"])
+    if upstox_gw:
+        gw_status = upstox_gw.status()
+        if gw_status.get("feed_running"):
+            feed_status = "connected"
+            
+    # Frontend version
+    frontend_version = "10.0.0"
+    try:
+        from server import ROOT_DIR
+        frontend_pkg = ROOT_DIR.parent / "frontend" / "package.json"
+        if frontend_pkg.exists():
+            import json
+            with open(frontend_pkg, "r") as f:
+                pkg_data = json.load(f)
+                frontend_version = pkg_data.get("version", "10.0.0")
+    except Exception:
+        pass
+
+    return {
+        "backend_version": APP_VERSION,
+        "file_version": file_version,
+        "git_commit": commit,
+        "git_branch": branch,
+        "git_dirty": dirty,
+        "start_time": START_TIME.isoformat(),
+        "up_time_seconds": round(up_time, 2),
+        "runtime_mode": os.environ.get("NODE_ENV", "production"),
+        "paper_live_status": "PAPER" if paper_mode else "LIVE",
+        "broker_configured_status": broker_configured,
+        "live_auto_enabled": live_auto_enabled,
+        "active_runner_task_status": runner_status,
+        "active_signal_manager_task_status": sig_status,
+        "feed_status": feed_status,
+        "frontend_version": frontend_version,
+        "frontend_build_metadata": None
+    }
+
+
+
 @router.post("/ticker/restart")
 async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user), request: Request = None):
     # Import settings to check broker pref

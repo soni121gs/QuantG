@@ -152,3 +152,27 @@ Before trading hours start, open **`https://www.quantgtrade.com`**:
 3. Daily broker authentication: Reconnect Zerodha / Connect Kotak (Zerodha token expires daily).
 4. Verify system connection inside **Ops Console**.
 5. Switch system mode to **PAPER** or **LIVE** as desired.
+
+---
+
+## 🔍 8. Uptime, Diagnostics, and Live Readiness
+
+QuantG includes deep diagnostic APIs and verification utilities to ensure full operational awareness:
+
+### **Diagnostics Endpoints**
+*   **Version Info (`GET /api/version`):** Unauthenticated endpoint returning API version, git commit, branch, dirty status, start time, and server uptime.
+*   **Runtime Details (`GET /api/ops/runtime`):** Authenticated diagnostics detailing environment settings, active loop task statuses (runner, signal manager), Upstox connection state, and frontend version.
+*   **Live Readiness (`GET /api/trading/live-readiness`):** A pre-flight dry-run check verifying key parameters before live trading can start (verifies API credentials, WS feed, margins, global switches, and reconciliation).
+
+### **Diagnostic CLI Scripts**
+Inspect your system directly from the backend directory using the stabilization scripts:
+```bash
+# 1. Inspect all strategies, candles freshness, halt reasons, and signal status
+python backend/scripts/strategy_doctor.py
+
+# 2. Audit overall trading state, active positions, skips, and risk switches
+python backend/scripts/audit_trading_state.py
+
+# 3. Safely reset paper state, clearing paper orders, positions, and wallet balances (requires --confirm)
+python backend/scripts/reset_paper_state_safe.py
+```
