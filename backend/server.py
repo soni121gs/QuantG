@@ -6622,9 +6622,6 @@ async def _persist_paper_skipped_order(
         "segment": _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract),
         "paper_skip": True,
         "paper_skip_trace": trace,
-        "market_snapshot": market_snapshot,
-        "market_session": preflight.market_session if preflight else None,
-        "preflight": preflight.model_dump() if preflight else None,
     }
     if option_contract:
         doc_seed.update({
@@ -6638,20 +6635,21 @@ async def _persist_paper_skipped_order(
             "lots": resolution.get("lots"),
             "lot_size": resolution.get("lot_size"),
         })
+    mutable_doc_fields = {
+        "last_seen_at": now,
+        "updated_at": now,
+        "last_signal_id": signal_id,
+        "last_trace": trace,
+        "market_snapshot": market_snapshot,
+        "market_session": preflight.market_session if preflight else None,
+        "preflight": preflight.model_dump() if preflight else None,
+    }
     try:
         doc = await db.skipped_signals.find_one_and_update(
             {"user_id": user_id, "dedupe_key": dedupe_key},
             {
                 "$setOnInsert": doc_seed,
-                "$set": {
-                    "last_seen_at": now,
-                    "updated_at": now,
-                    "last_signal_id": signal_id,
-                    "last_trace": trace,
-                    "market_snapshot": market_snapshot,
-                    "market_session": preflight.market_session if preflight else None,
-                    "preflight": preflight.model_dump() if preflight else None,
-                },
+                "$set": mutable_doc_fields,
                 "$inc": {"count": 1},
             },
             upsert=True,
@@ -6659,7 +6657,7 @@ async def _persist_paper_skipped_order(
             return_document=ReturnDocument.AFTER,
         )
     except AttributeError:
-        doc = doc_seed
+        doc = {**doc_seed, **mutable_doc_fields}
         doc["count"] = 1
         await db.skipped_signals.insert_one(doc)
     doc = doc or doc_seed

@@ -62,6 +62,7 @@ async def test_after_hours_signal_is_skipped_not_failed():
     intent = _mock_intent()
 
     with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS", "max_trades_per_day": 200}), \
          patch("server._build_order_intent", new_callable=AsyncMock, return_value={"intent": intent, "lot_size": 1, "lots": 1}), \
          patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=100.0), \
@@ -81,6 +82,13 @@ async def test_after_hours_signal_is_skipped_not_failed():
 
     assert result["status"] == "SKIPPED_SIGNAL"
     assert result["reason_code"] == "MARKET_CLOSED"
+    _, update_doc = mock_db.skipped_signals.find_one_and_update.await_args.args[:2]
+    insert_fields = update_doc["$setOnInsert"]
+    mutable_fields = update_doc["$set"]
+    assert "market_snapshot" not in insert_fields
+    assert "market_snapshot" in mutable_fields
+    assert "market_session" not in insert_fields
+    assert "preflight" not in insert_fields
     mock_db.orders.insert_one.assert_not_called()
     reserve.assert_not_called()
     trade_guard.assert_not_called()
@@ -114,6 +122,7 @@ async def test_no_order_spam_for_repeated_after_hours_signal():
     intent = _mock_intent()
 
     with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "default_product": "MIS", "max_trades_per_day": 200}), \
          patch("server._build_order_intent", new_callable=AsyncMock, return_value={"intent": intent, "lot_size": 1, "lots": 1}), \
          patch("server._resolve_order_fill_hint", new_callable=AsyncMock, return_value=100.0), \
