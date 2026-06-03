@@ -370,6 +370,7 @@ class ExecutionPreflightResult(BaseModel):
     segment: Optional[str] = None
     ltp: Optional[float] = None
     market_session: Optional[Dict[str, Any]] = None
+    price_validation: Optional[Dict[str, Any]] = None
 
 
 class StrategyRuntimeSettingsReq(BaseModel):
@@ -5816,6 +5817,7 @@ def _preflight_response(
     option_contract: Optional[Dict[str, Any]],
     ltp: Optional[float],
     market_session: Optional[Dict[str, Any]],
+    price_validation: Optional[Dict[str, Any]] = None,
 ) -> ExecutionPreflightResult:
     instr = intent.instrument if intent else None
     resolved = None
@@ -5843,7 +5845,65 @@ def _preflight_response(
         segment=segment,
         ltp=float(ltp) if ltp not in (None, "") else None,
         market_session=market_session,
+        price_validation=price_validation,
     )
+
+
+def _is_option_contract(option_contract: Optional[Dict[str, Any]], instr: Optional["InstrumentRef"] = None) -> bool:
+    if option_contract:
+        opt_type = str(option_contract.get("option_type") or option_contract.get("instrument_type") or "").upper()
+        return opt_type in {"CE", "PE", "OPTCOM"} or bool(option_contract.get("strike"))
+    if not instr:
+        return False
+    return _asset_type_for_instrument(instr, option_contract) == "option"
+
+
+def _price_integrity_guard(
+    *,
+    paper: bool,
+    intent: "OrderIntent",
+    option_contract: Optional[Dict[str, Any]],
+    market_snapshot: Dict[str, Any],
+    market_session: Dict[str, Any],
+) -> Dict[str, Any]:
+    instr = intent.instrument
+    source = str(market_snapshot.get("source") or "").lower()
+    feed = str(market_snapshot.get("feed") or "").lower()
+    token = str(
+        market_snapshot.get("instrument_key")
+        or (option_contract or {}).get("instrument_key")
+        or (option_contract or {}).get("instrument_token")
+        or instr.instrument_token
+        or ""
+    ).strip()
+    ltp = float(market_snapshot.get("ltp") or 0)
+    received_at = market_snapshot.get("received_at")
+    is_option = _is_option_contract(option_contract, instr)
+    is_entry = _intent_is_entry(intent.intent)
+    result = {
+        "ok": True,
+        "reason_code": None,
+        "human_reason": "Price accepted.",
+        "source": source or None,
+        "feed": feed or None,
+        "instrument_key": token or None,
+        "ltp": ltp if ltp > 0 else None,
+        "received_at": received_at,
+    }
+    if not (paper and is_option and is_entry and market_session.get("open")):
+        return result
+    blocked_sources = {"fill-hint", "option-contract", "simulated", "mock", "synthetic", "fallback", "unavailable"}
+    if not token or "|" not in token or token.upper().startswith("PAPER_"):
+        result.update(ok=False, reason_code="SKIPPED_CONTRACT_UNRESOLVED", human_reason="Paper option entry blocked: real Upstox instrument_key is missing.")
+    elif ltp <= 0:
+        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox option LTP is missing or zero.")
+    elif source in blocked_sources or any(part in source for part in ("mock", "simulated", "fallback", "synthetic")):
+        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not a real Upstox quote.")
+    elif source not in {"upstox-cache", "upstox-rest-quote"}:
+        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not allowed in normal paper mode.")
+    elif not received_at or parse_market_timestamp(received_at) is None:
+        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox quote timestamp is missing.")
+    return result
 
 
 async def _execution_preflight(
@@ -5890,7 +5950,7 @@ async def _execution_preflight(
         )
     if option_contract is not None and not (option_contract.get("instrument_key") or option_contract.get("instrument_token")):
         return _preflight_response(
-            ok=False, reason_code="CONTRACT_RESOLUTION_FAILED", reason="Option contract resolution did not return an Upstox instrument_key.",
+            ok=False, reason_code="SKIPPED_CONTRACT_UNRESOLVED", reason="Option contract resolution did not return an Upstox instrument_key.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
         )
 
@@ -5909,8 +5969,28 @@ async def _execution_preflight(
 
     if _intent_is_entry(intent.intent) and ltp <= 0:
         return _preflight_response(
-            ok=False, reason_code="PRICE_UNAVAILABLE", reason="No valid Upstox websocket or REST LTP is available.",
+            ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", reason="No valid Upstox websocket or REST LTP is available.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=None, market_session=market_session,
+        )
+
+    price_validation = _price_integrity_guard(
+        paper=paper,
+        intent=intent,
+        option_contract=option_contract,
+        market_snapshot=market_snapshot,
+        market_session=market_session,
+    )
+    if not price_validation.get("ok"):
+        return _preflight_response(
+            ok=False,
+            reason_code=price_validation.get("reason_code") or "SKIPPED_PRICE_UNAVAILABLE",
+            reason=price_validation.get("human_reason") or "Price integrity check failed.",
+            strategy_id=strategy_id,
+            intent=intent,
+            option_contract=option_contract,
+            ltp=ltp,
+            market_session=market_session,
+            price_validation=price_validation,
         )
 
     if strategy_id and _intent_is_entry(intent.intent):
@@ -5961,6 +6041,7 @@ async def _execution_preflight(
         option_contract=option_contract,
         ltp=ltp,
         market_session=market_session,
+        price_validation=price_validation,
     )
 
 
@@ -6387,7 +6468,7 @@ async def _market_snapshot_for_intent(
             "source": tick.get("source") or "upstox-cache",
             "feed": tick.get("feed") or "upstox-cache",
         })
-    if snapshot.get("ltp") in (None, "") and option_contract and option_contract.get("ltp"):
+    if snapshot.get("ltp") in (None, "") and option_contract and option_contract.get("ltp") and option_contract.get("simulated"):
         snapshot.update({"ltp": option_contract.get("ltp"), "source": "option-contract", "feed": "option-contract"})
 
     # If websocket tick is missing but the instrument key is known, try a fresh REST
@@ -6669,6 +6750,26 @@ async def _persist_paper_skipped_order(
         doc["count"] = 1
         await db.skipped_signals.insert_one(doc)
     doc = doc or doc_seed
+    if strategy_id and strategy_id != "manual_recovery":
+        try:
+            await db.strategies.update_one(
+                {"id": strategy_id, "user_id": user_id},
+                {
+                    "$set": {
+                        "last_evaluated_at": now,
+                        "last_signal_action": side,
+                        "last_signal_validated": False,
+                        "last_filter_reason": reason,
+                        "last_skip_reason_code": reason_code,
+                        "last_contract_selected": instr.tradingsymbol,
+                        "last_price_source": trace.get("ltp_source"),
+                        "last_ltp_timestamp": trace.get("quote_timestamp") or trace.get("quote_received_at"),
+                    },
+                    "$inc": {"skipped_count_today": 1},
+                },
+            )
+        except Exception as exc:
+            logger.warning("strategy skip diagnostics update failed strategy=%s: %s", strategy_id, exc)
     logger.warning(
         "Paper execution skipped strategy_id=%s signal_id=%s action=%s symbol=%s expiry=%s strike=%s option_type=%s exchange=%s token=%s ltp_source=%s ltp=%s quote_ts=%s subscribed=%s cached=%s reason=%s",
         strategy_id,
@@ -7317,7 +7418,15 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # If caller passed a real price (e.g. from Upstox quote), use that.
         # Otherwise simulate using the symbol's known base price.
         contract_ltp = float((option_contract or {}).get("ltp") or 0)
-        paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else _get_paper_ltp(symbol, option_contract))
+        simulated_contract = bool((option_contract or {}).get("simulated"))
+        domain_name = domain.name.value if hasattr(domain.name, "value") else str(domain.name)
+        market_session = _segment_session_status(domain_name)
+        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0) and contract_ltp <= 0:
+            logger.warning("Core paper option order skipped: fresh Upstox LTP required for %s.", option_contract.get("tradingsymbol") or symbol)
+            return {"ok": False, "status": ORDER_SKIPPED_SIGNAL, "reason_code": "SKIPPED_PRICE_UNAVAILABLE", "reason": "Fresh real Upstox option LTP is required during live market hours."}
+        paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else (0.0 if market_session.get("open") else _get_paper_ltp(symbol, option_contract)))
+        if paper_ltp <= 0:
+            return {"ok": False, "status": ORDER_SKIPPED_SIGNAL, "reason_code": "SKIPPED_PRICE_UNAVAILABLE", "reason": "Paper price unavailable."}
 
         risk_mgr = RiskManager(db)
         _lot_size = domain.get_lot_size(symbol)
@@ -7440,7 +7549,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
             strategy_id = "manual_recovery"
         fill_price_hint = await _resolve_order_fill_hint(user_id, intent, price, paper, option_contract, execution_broker=execution_broker)
-        market_snapshot = {"ltp": fill_price_hint, "source": "fill-hint", "feed": "fill-hint"} if fill_price_hint > 0 else await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
+        if paper and option_contract and _intent_is_entry(intent.intent):
+            market_snapshot = await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
+        else:
+            market_snapshot = {"ltp": fill_price_hint, "source": "fill-hint", "feed": "fill-hint"} if fill_price_hint > 0 else await _market_snapshot_for_intent(user_id, intent, option_contract=option_contract)
         snapshot_ltp = float(market_snapshot.get("ltp") or 0)
         if fill_price_hint <= 0 and snapshot_ltp > 0:
             fill_price_hint = snapshot_ltp
@@ -7589,6 +7701,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "asset_type": _asset_type_for_instrument(instr, option_contract),
             "order_intent": intent.model_dump(),
             "pretrade_risk": pretrade_risk,
+            "price_source": market_snapshot.get("source"),
+            "price_feed": market_snapshot.get("feed"),
+            "price_received_at": market_snapshot.get("received_at"),
+            "price_timestamp": market_snapshot.get("timestamp") or market_snapshot.get("tick_time"),
+            "price_validation": preflight.price_validation if preflight else None,
+            "market_snapshot": market_snapshot,
             "instrument": instr.model_dump(),
             "segment": instr.segment,
             "stop_loss": intent.stop_loss,
@@ -8828,6 +8946,143 @@ async def execution_snapshot(sync: bool = False, user=Depends(get_current_user))
     snapshot = await execution_state_manager.build_snapshot(user, sync=sync)
     snapshot["market_session"] = market_session_snapshot()
     return snapshot
+
+
+def _is_fake_34_price(value: Any) -> bool:
+    try:
+        price_value = float(value or 0)
+    except (TypeError, ValueError):
+        return False
+    return 34.0 <= price_value < 35.0
+
+
+def _order_has_real_upstox_price_metadata(order: Dict[str, Any]) -> bool:
+    source = str(order.get("price_source") or "").lower()
+    token = str(order.get("instrument_key") or order.get("instrument_token") or "").strip()
+    received_at = order.get("price_received_at") or order.get("price_timestamp")
+    return source in {"upstox-cache", "upstox-rest-quote"} and "|" in token and bool(parse_market_timestamp(received_at))
+
+
+async def _build_strategy_readiness_rows(user_id: str) -> List[Dict[str, Any]]:
+    start, end = get_trading_day_window_ist()
+    strategies = await db.strategies.find({"user_id": user_id}, {"_id": 0}).sort("name", 1).to_list(500)
+    rows: List[Dict[str, Any]] = []
+    for s in strategies:
+        sid = s.get("id")
+        reasons: List[str] = []
+        status = "READY"
+        if s.get("quarantined") or str(s.get("status") or "").lower() == "quarantined":
+            status = "QUARANTINED"
+            reasons.append(s.get("quarantine_reason") or "strategy quarantined")
+        elif str(s.get("status") or "").lower() != "live":
+            status = "BLOCKED"
+            reasons.append(f"strategy status {s.get('status') or 'unknown'}")
+        elif str(s.get("mode") or "").lower() != "paper":
+            status = "WARNING"
+            reasons.append(f"strategy mode {s.get('mode') or 'unknown'}")
+        for field, reason in (
+            ("last_error", "strategy error"),
+            ("last_filter_reason", "latest filter"),
+            ("last_skip_reason_code", "latest skip"),
+        ):
+            value = s.get(field)
+            if value:
+                if status == "READY":
+                    status = "WARNING"
+                reasons.append(f"{reason}: {value}")
+        signal_count = await db.signals.count_documents({"user_id": user_id, "strategy_id": sid, "created_at": {"$gte": start, "$lt": end}})
+        skipped_count = await db.signals.count_documents({"user_id": user_id, "strategy_id": sid, "processed_at": {"$gte": start, "$lt": end}, "status": {"$in": ["FILTERED", "REJECTED", "SKIPPED_SIGNAL", "BLOCKED"]}})
+        order_count = await db.orders.count_documents({"user_id": user_id, "strategy_id": sid, "created_at": {"$gte": start, "$lt": end}, "mode": "paper", "status": {"$nin": [ORDER_SKIPPED_SIGNAL, "SKIPPED", "FAILED", "REJECTED"]}})
+        rows.append({
+            "strategy_id": sid,
+            "name": s.get("name"),
+            "status": status,
+            "mode": s.get("mode"),
+            "runtime_status": s.get("status"),
+            "reasons": reasons or ["ready"],
+            "last_evaluated_at": s.get("last_evaluated_at"),
+            "last_signal_action": s.get("last_signal_action"),
+            "last_signal_validated": s.get("last_signal_validated"),
+            "last_contract_selected": s.get("last_contract_selected") or s.get("last_traded_symbol"),
+            "last_price_source": s.get("last_price_source"),
+            "last_ltp_timestamp": s.get("last_ltp_timestamp"),
+            "signal_count_today": int(s.get("signal_count_today") or signal_count or 0),
+            "skipped_count_today": int(s.get("skipped_count_today") or skipped_count or 0),
+            "order_count_today": int(s.get("order_count_today") or order_count or 0),
+            "duplicate_signal_count_today": int(s.get("duplicate_signal_count_today") or 0),
+            "quarantine_reason": s.get("quarantine_reason"),
+        })
+    return rows
+
+
+@api.get("/strategy-readiness")
+async def strategy_readiness(user=Depends(get_current_user)):
+    rows = await _build_strategy_readiness_rows(user["id"])
+    summary = {
+        "ready": sum(1 for r in rows if r["status"] == "READY"),
+        "warning": sum(1 for r in rows if r["status"] == "WARNING"),
+        "blocked": sum(1 for r in rows if r["status"] == "BLOCKED"),
+        "quarantined": sum(1 for r in rows if r["status"] == "QUARANTINED"),
+    }
+    return {"status": "READY" if summary["blocked"] == 0 and summary["quarantined"] == 0 else "WARNING", "summary": summary, "strategies": rows}
+
+
+@api.get("/paper-readiness")
+async def paper_readiness(user=Depends(get_current_user)):
+    user_id = user["id"]
+    settings = await get_user_settings(user_id)
+    start, end = get_trading_day_window_ist()
+    upstox = await get_user_upstox_status(user_id)
+    strategy_rows = await _build_strategy_readiness_rows(user_id)
+    active_strategy_count = sum(1 for r in strategy_rows if r.get("runtime_status") == "live" and r.get("mode") == "paper")
+    quarantined_count = sum(1 for r in strategy_rows if r["status"] == "QUARANTINED")
+    skipped_count = await db.signals.count_documents({"user_id": user_id, "processed_at": {"$gte": start, "$lt": end}, "status": {"$in": ["FILTERED", "REJECTED", "SKIPPED_SIGNAL", "BLOCKED"]}})
+    valid_paper_order_count = await db.orders.count_documents({"user_id": user_id, "mode": "paper", "created_at": {"$gte": start, "$lt": end}, "status": {"$nin": [ORDER_SKIPPED_SIGNAL, "SKIPPED", "FAILED", "REJECTED"]}})
+    recent_orders = await db.orders.find({"user_id": user_id, "mode": "paper", "created_at": {"$gte": start, "$lt": end}}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
+    fake_or_unproven = [o for o in recent_orders if _is_fake_34_price(o.get("price")) and not _order_has_real_upstox_price_metadata(o)]
+    missing_price_source = [o for o in recent_orders if str(o.get("status") or "").upper() in {ORDER_PAPER_CREATED, ORDER_PAPER_FILLED} and not o.get("price_source")]
+    latest_skips = await db.signals.find({"user_id": user_id, "processed_at": {"$gte": start, "$lt": end}, "rejection_reason": {"$ne": None}}, {"_id": 0, "id": 1, "strategy_id": 1, "target_symbol": 1, "status": 1, "rejection_reason": 1, "processed_at": 1}).sort("processed_at", -1).limit(10).to_list(10)
+    feed = (upstox.get("gateway") or {})
+    blockers = []
+    if not settings.get("paper_mode", True):
+        blockers.append("paper_mode disabled")
+    if fake_or_unproven:
+        blockers.append("unproven 34.xx paper orders found today")
+    if missing_price_source:
+        blockers.append("paper orders missing price_source metadata")
+    status = "BLOCKED" if blockers else ("WARNING" if quarantined_count or skipped_count else "READY")
+    return {
+        "status": status,
+        "blockers": blockers,
+        "paper_mode": bool(settings.get("paper_mode", True)),
+        "live_trading_disabled": bool(settings.get("paper_mode", True)),
+        "allow_simulated_prices": bool(settings.get("allow_simulated_prices")),
+        "upstox": {
+            "connected": bool(upstox.get("connected")),
+            "token_valid": bool(upstox.get("token_valid") or upstox.get("authenticated")),
+            "last_tick_at": feed.get("last_tick_at"),
+            "ticks": feed.get("ticks", 0),
+        },
+        "feed_status": "READY" if feed.get("last_tick_at") else "WARNING",
+        "active_strategy_count": active_strategy_count,
+        "quarantined_strategy_count": quarantined_count,
+        "skipped_signal_count": skipped_count,
+        "valid_paper_order_count": valid_paper_order_count,
+        "fake_suspicious_price_blocked_count": len(fake_or_unproven),
+        "paper_orders_missing_price_source": len(missing_price_source),
+        "latest_skipped_reasons": latest_skips,
+        "latest_order_source_validation": [
+            {
+                "id": o.get("id"),
+                "symbol": o.get("symbol"),
+                "price": o.get("price"),
+                "price_source": o.get("price_source"),
+                "price_received_at": o.get("price_received_at"),
+                "real_upstox_metadata": _order_has_real_upstox_price_metadata(o),
+            }
+            for o in recent_orders[:10]
+        ],
+    }
 
 
 @api.get("/debug/position-integrity")

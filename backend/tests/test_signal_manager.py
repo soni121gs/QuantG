@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock
 
 from signal_manager import ConflictResolver, SignalManager
+from signal_manager import StrategySignalValidator
 
 
 def test_conflict_resolver_ce_pe_clash_highest_confidence_wins():
@@ -320,3 +321,77 @@ def test_conflict_resolver_strategy_specific_override():
     assert sig_override_true["status"] == "BLOCKED"
     assert sig_override_true["rejection_reason"] == "symbol-group-active-position-exists"
 
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_repeated_buy_with_open_position_blocks():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-dup",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "option_contract": {"instrument_key": "NSE_FO|12345", "option_type": "CE", "strike": 24900},
+        "visual_config": {"options": {"enabled": True, "strike_mode": "ATM_BUY"}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+    active = [{"strategy_id": "strat-1", "status": "OPEN", "symbol": "NIFTY26060524900CE"}]
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, active)
+
+    assert not result["ok"]
+    assert result["reason_code"] == "STRATEGY_DUPLICATE_ENTRY"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_signal_spam_blocks():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=99)
+    sig = {
+        "id": "sig-spam",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "option_contract": {"instrument_key": "NSE_FO|12345", "option_type": "CE", "strike": 24900},
+        "visual_config": {"risk": {"one_active_position_per_symbol_group": False}, "options": {"enabled": True, "strike_mode": "ATM_BUY"}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert not result["ok"]
+    assert result["reason_code"] == "STRATEGY_SIGNAL_SPAM"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_sell_without_open_position_blocks():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-sell-flat",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "SELL",
+        "confidence": 80,
+        "mode": "paper",
+        "option_contract": {"instrument_key": "NSE_FO|12345", "option_type": "CE", "strike": 24900},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert not result["ok"]
+    assert result["reason_code"] == "STRATEGY_FLIP_FLOP_SIGNAL"

@@ -313,3 +313,57 @@ async def test_paper_position_records_are_mode_scoped():
     assert wallet_update["$inc"]["balance"] < 0
     order_update = mock_db.orders.find_one_and_update.await_args.args[1]
     assert order_update["$set"]["paper_wallet_applied"] is True
+
+
+def test_price_integrity_blocks_fallback_34_option_price():
+    from server import _price_integrity_guard
+
+    instr = MagicMock()
+    instr.exchange = "NFO"
+    instr.tradingsymbol = "NIFTY26060524900CE"
+    instr.instrument_token = "NSE_FO|12345"
+    instr.asset_class = "OPTION_LONG"
+    intent = MagicMock()
+    intent.instrument = instr
+    intent.intent = "OPEN_LONG"
+
+    result = _price_integrity_guard(
+        paper=True,
+        intent=intent,
+        option_contract={"instrument_key": "NSE_FO|12345", "option_type": "CE", "strike": 24900},
+        market_snapshot={"ltp": 34.5, "source": "option-contract", "feed": "option-contract", "received_at": None},
+        market_session={"open": True, "segment": "NSE_FO"},
+    )
+
+    assert not result["ok"]
+    assert result["reason_code"] == "SKIPPED_PRICE_UNAVAILABLE"
+
+
+def test_price_integrity_allows_real_upstox_34_option_quote():
+    from datetime import datetime, timezone
+    from server import _price_integrity_guard
+
+    instr = MagicMock()
+    instr.exchange = "NFO"
+    instr.tradingsymbol = "NIFTY26060524900CE"
+    instr.instrument_token = "NSE_FO|12345"
+    instr.asset_class = "OPTION_LONG"
+    intent = MagicMock()
+    intent.instrument = instr
+    intent.intent = "OPEN_LONG"
+
+    result = _price_integrity_guard(
+        paper=True,
+        intent=intent,
+        option_contract={"instrument_key": "NSE_FO|12345", "option_type": "CE", "strike": 24900},
+        market_snapshot={
+            "ltp": 34.25,
+            "source": "upstox-rest-quote",
+            "feed": "upstox-rest-quote",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "instrument_key": "NSE_FO|12345",
+        },
+        market_session={"open": True, "segment": "NSE_FO"},
+    )
+
+    assert result["ok"]

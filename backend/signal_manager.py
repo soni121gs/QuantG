@@ -21,6 +21,145 @@ LOCK_TTL_SECONDS = 90
 LOCK_ID = "signal_manager"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
+ACTIVE_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"}
+SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "300"))
+SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "6"))
+STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
+
+
+def _today_window_utc_iso() -> Tuple[str, str]:
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = ist_midnight - timedelta(hours=5, minutes=30)
+    return start.isoformat(), (start + timedelta(days=1)).isoformat()
+
+
+def _signal_validation_result(sig: Dict[str, Any], ok: bool, reason_code: str, human_reason: str, severity: str = "BLOCKED") -> Dict[str, Any]:
+    return {
+        "ok": ok,
+        "reason_code": reason_code,
+        "human_reason": human_reason,
+        "strategy_id": sig.get("strategy_id"),
+        "signal_action": str(sig.get("action") or "").upper(),
+        "symbol": str(sig.get("symbol") or "").upper(),
+        "selected_contract": sig.get("target_symbol"),
+        "severity": severity,
+    }
+
+
+class StrategySignalValidator:
+    """Validates strategy signals before paper execution can create an order."""
+
+    @staticmethod
+    async def validate(db, sig: Dict[str, Any], strategy: Dict[str, Any], active_positions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        action = str(sig.get("action") or "").upper()
+        symbol = str(sig.get("symbol") or "").upper()
+        target = str(sig.get("target_symbol") or "").upper()
+        option_contract = sig.get("option_contract") or {}
+        effective_action = str(option_contract.get("transaction_type") or action).upper()
+        visual_config = sig.get("visual_config") or {}
+        confidence = sig.get("confidence")
+
+        if strategy.get("quarantined") or str(strategy.get("status") or "").lower() == "quarantined":
+            return _signal_validation_result(sig, False, "STRATEGY_QUARANTINED", strategy.get("quarantine_reason") or "Strategy is quarantined.")
+        if str(strategy.get("status") or "").lower() != "live":
+            return _signal_validation_result(sig, False, "STRATEGY_TIME_FILTER_FAILED", f"Strategy status is {strategy.get('status') or 'unknown'}.")
+        if str(strategy.get("mode") or sig.get("mode") or "").lower() != "paper":
+            return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Strict paper validator only accepts paper-mode strategy signals.")
+        if action not in {"BUY", "SELL"} or effective_action not in {"BUY", "SELL"}:
+            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal action must be BUY or SELL.")
+        if not symbol or symbol not in SUPPORTED_SIGNAL_SYMBOLS:
+            return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", f"Unsupported strategy symbol {symbol or 'blank'}.")
+        if confidence in (None, "") or float(confidence or 0) <= 0:
+            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal confidence is missing.")
+        trend = sig.get("trend_context") or {}
+        if not isinstance(trend, dict):
+            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal metadata is malformed.")
+        if option_contract:
+            token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").strip()
+            if not target or not token:
+                return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Resolved contract is missing target symbol or instrument key.")
+            if option_contract.get("simulated") or token.upper().startswith("PAPER_"):
+                return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "Normal paper mode cannot trade simulated contracts during live strategy execution.")
+            opt_cfg = visual_config.get("options") or {}
+            if option_contract.get("expiry") and opt_cfg.get("expiry_offset") in (None, "") and int(opt_cfg.get("otm_points") or 0) > 0:
+                return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "OTM contract selection requires explicit expiry/strike configuration.")
+
+        same_strategy_positions = [
+            p for p in active_positions
+            if str(p.get("strategy_id")) == str(sig.get("strategy_id"))
+            and str(p.get("status") or "").upper() in ACTIVE_POSITION_STATUSES
+        ]
+        if effective_action == "BUY" and same_strategy_positions:
+            return _signal_validation_result(sig, False, "STRATEGY_DUPLICATE_ENTRY", "Strategy already has an open or pending position.")
+        if effective_action == "SELL" and not same_strategy_positions:
+            return _signal_validation_result(sig, False, "STRATEGY_FLIP_FLOP_SIGNAL", "SELL signal has no open strategy position to exit.")
+
+        recent_since = (datetime.now(timezone.utc) - timedelta(seconds=SIGNAL_SPAM_WINDOW_SECONDS)).isoformat()
+        recent_count = await db.signals.count_documents({
+            "user_id": sig.get("user_id"),
+            "strategy_id": sig.get("strategy_id"),
+            "created_at": {"$gte": recent_since},
+        })
+        if recent_count >= SIGNAL_SPAM_THRESHOLD:
+            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_SPAM", f"Strategy emitted {recent_count} signals inside {SIGNAL_SPAM_WINDOW_SECONDS}s.", "WARNING")
+
+        return _signal_validation_result(sig, True, "OK", "Signal validation passed.", "INFO")
+
+
+class StrategyMisbehaviorDetector:
+    """Tracks repeated invalid strategy behavior and quarantines chronic offenders."""
+
+    @staticmethod
+    async def record_validation(db, sig: Dict[str, Any], validation: Dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        start, end = _today_window_utc_iso()
+        strategy_id = sig.get("strategy_id")
+        user_id = sig.get("user_id")
+        if not strategy_id or not user_id:
+            return
+        reason_code = validation.get("reason_code")
+        valid = bool(validation.get("ok"))
+        duplicate_inc = 1 if reason_code == "STRATEGY_DUPLICATE_ENTRY" else 0
+        update = {
+            "$set": {
+                "last_evaluated_at": now,
+                "last_signal_action": validation.get("signal_action"),
+                "last_signal_reason": validation.get("human_reason"),
+                "last_signal_validated": valid,
+                "last_filter_reason": None if valid else validation.get("human_reason"),
+                "last_skip_reason_code": None if valid else reason_code,
+                "last_contract_selected": validation.get("selected_contract"),
+            },
+            "$inc": {
+                "signal_count_today": 1,
+                "duplicate_signal_count_today": duplicate_inc,
+            },
+        }
+        if not valid:
+            update["$inc"]["skipped_count_today"] = 1
+        await db.strategies.update_one({"id": strategy_id, "user_id": user_id}, update)
+        if valid:
+            return
+        invalid_today = await db.signals.count_documents({
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "processed_at": {"$gte": start, "$lt": end},
+            "rejection_reason": {"$regex": "^STRATEGY_"},
+        })
+        if invalid_today + 1 >= STRATEGY_QUARANTINE_THRESHOLD:
+            await db.strategies.update_one(
+                {"id": strategy_id, "user_id": user_id},
+                {"$set": {
+                    "status": "quarantined",
+                    "quarantined": True,
+                    "quarantine_reason": reason_code,
+                    "last_skip_reason_code": "STRATEGY_QUARANTINED",
+                    "last_filter_reason": f"Strategy quarantined after repeated invalid signals: {reason_code}",
+                }},
+            )
+
 
 class ConflictResolver:
     """Evaluates pending signals for directional conflicts and duplicate prevention."""
@@ -57,9 +196,10 @@ class ConflictResolver:
             filtered_sigs = []
             for sig in sigs:
                 vc = sig.get("visual_config") or {}
+                eff_action = str((sig.get("option_contract") or {}).get("transaction_type") or sig.get("action") or "").upper()
                 one_active_pos = vc.get("risk", {}).get("one_active_position_per_symbol_group", one_active_position_per_symbol_group)
                 if one_active_pos and und in active_groups:
-                    if sig.get("action") == "BUY":
+                    if eff_action == "BUY":
                         sig["status"] = "BLOCKED"
                         sig["rejection_reason"] = "symbol-group-active-position-exists"
                         rejected_or_filtered.append(sig)
@@ -78,7 +218,7 @@ class ConflictResolver:
             exits: List[Dict[str, Any]] = []
 
             for sig in filtered_sigs:
-                action = str(sig.get("action") or "").upper()
+                action = str((sig.get("option_contract") or {}).get("transaction_type") or sig.get("action") or "").upper()
                 if action == "SELL":
                     exits.append(sig)
                     continue
@@ -290,18 +430,34 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                     pre_validated = []
                     for sig in sigs:
                         visual_cfg = sig.get("visual_config") or {}
-                        # Copy one_active_position_per_symbol_group option if present in visual_config
-                        one_active_pos = visual_cfg.get("risk", {}).get("one_active_position_per_symbol_group", one_active_group)
-                        
-                        ok, limit_reason = await SignalManager.validate_strategy_limits(
-                            db, sig["strategy_id"], user_id, visual_cfg
-                        )
-                        if not ok:
+                        strategy = await db.strategies.find_one({"id": sig["strategy_id"], "user_id": user_id}) or {}
+                        validation = await StrategySignalValidator.validate(db, sig, strategy, active_positions)
+                        await StrategyMisbehaviorDetector.record_validation(db, sig, validation)
+                        if not validation.get("ok"):
+                            now_str = datetime.now(timezone.utc).isoformat()
                             await db.signals.update_one(
                                 {"id": sig["id"]},
                                 {"$set": {
                                     "status": "FILTERED",
-                                    "rejection_reason": limit_reason,
+                                    "rejection_reason": validation["reason_code"],
+                                    "rejection_detail": validation,
+                                    "processed_at": now_str,
+                                }}
+                            )
+                            continue
+
+                        ok, limit_reason = await SignalManager.validate_strategy_limits(
+                            db, sig["strategy_id"], user_id, visual_cfg
+                        )
+                        if not ok:
+                            validation = _signal_validation_result(sig, False, "STRATEGY_SIGNAL_SPAM" if limit_reason == "cooldown-active" else str(limit_reason).upper().replace("-", "_"), limit_reason or "strategy limit failed", "WARNING")
+                            await StrategyMisbehaviorDetector.record_validation(db, sig, validation)
+                            await db.signals.update_one(
+                                {"id": sig["id"]},
+                                {"$set": {
+                                    "status": "FILTERED",
+                                    "rejection_reason": validation["reason_code"],
+                                    "rejection_detail": validation,
                                     "processed_at": datetime.now(timezone.utc).isoformat()
                                 }}
                             )
@@ -318,11 +474,14 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
 
                         # Handle rejected/filtered signals
                         for sig in rejected:
+                            validation = _signal_validation_result(sig, False, str(sig["rejection_reason"]).upper().replace("-", "_"), sig["rejection_reason"], "WARNING")
+                            await StrategyMisbehaviorDetector.record_validation(db, sig, validation)
                             await db.signals.update_one(
                                 {"id": sig["id"]},
                                 {"$set": {
                                     "status": sig["status"],
-                                    "rejection_reason": sig["rejection_reason"],
+                                    "rejection_reason": validation["reason_code"],
+                                    "rejection_detail": validation,
                                     "processed_at": datetime.now(timezone.utc).isoformat()
                                 }}
                             )
@@ -359,7 +518,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     "processed_at": now_str,
                                 }
                                 if final_signal_status == "SKIPPED_SIGNAL":
-                                    signal_update["rejection_reason"] = order_res.get("skip_reason") or order_res.get("reason_code") or "preflight skipped"
+                                    signal_update["rejection_reason"] = order_res.get("reason_code") or order_res.get("skip_reason") or "preflight skipped"
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
                                     {"$set": signal_update}
@@ -367,7 +526,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 if final_signal_status == "PROCESSED":
                                     await db.strategies.update_one(
                                         {"id": sig["strategy_id"], "user_id": user_id},
-                                        {"$set": {"last_signal_at": now_str}}
+                                        {"$set": {"last_signal_at": now_str, "last_signal_validated": True}, "$inc": {"order_count_today": 1}}
                                     )
                             except Exception as exec_err:
                                 logger.warning(f"Failed order placement for signal {sig['id']}: {exec_err}")
