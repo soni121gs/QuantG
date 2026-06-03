@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { api, formatINR, formatApiErrorDetail } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "../components/ui/button";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
 const FILLED_STATUSES = ["FILLED", "PAPER_FILLED", "CLOSED", "COMPLETE"];
@@ -116,18 +118,17 @@ export default function Orders() {
 
   return (
     <div className="space-y-4" data-testid="orders-page">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// EXECUTION</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1">Orders</h1>
-          <p className="text-xs text-[var(--qd-text-2)] mt-1 font-mono">Broker: {executionBroker}</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={syncBroker} disabled={syncing} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] disabled:opacity-50 text-white text-xs font-mono uppercase tracking-wider px-4 py-2 rounded-sm">
-            Sync with Broker
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Execution"
+        title="Orders"
+        subtitle="Execution ledger with broker state, skipped signals, rejection reasons, and app-managed protection levels."
+        badge={<StatusBadge tone="neutral">Broker: {executionBroker}</StatusBadge>}
+        actions={
+          <Button onClick={syncBroker} disabled={syncing} variant="outline" size="sm" data-testid="sync-broker-btn">
+            <ShieldCheck size={14} /> {syncing ? "Syncing" : "Sync with Broker"}
+          </Button>
+        }
+      />
 
       {error && (
         <div className="qd-card border-l-2 border-l-[var(--qd-warn)] p-3 flex gap-2">

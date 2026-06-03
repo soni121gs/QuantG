@@ -16,32 +16,57 @@ import {
   TrendingUp,
   ShieldAlert,
   HeartPulse,
+  RefreshCw,
+  Plus,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
+import { Button } from "./ui/button";
+import { CommandBar, StatusBadge } from "./ui/app-shell";
 
-const NAV = [
-  { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
-  { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
-  { to: "/python", icon: Code2, label: "Python", id: "nav-python" },
-  { to: "/visual", icon: Blocks, label: "Visual Builder", id: "nav-visual" },
-  { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "nav-aibot" },
-  { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
-  { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
-  { to: "/market-hub", icon: HeartPulse, label: "Markets", id: "nav-market-hub" },
-  { to: "/broker-keys", icon: KeyRound, label: "Brokers", id: "nav-keys" },
-  { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
-  { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
+const NAV_GROUPS = [
+  {
+    label: "Trading",
+    items: [
+      { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
+      { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
+      { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
+      { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
+    ],
+  },
+  {
+    label: "Monitor",
+    items: [
+      { to: "/market-hub", icon: HeartPulse, label: "Markets", id: "nav-market-hub" },
+      { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
+      { to: "/ai-bot", icon: Bot, label: "Ask Agent", id: "nav-aibot" },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { to: "/python", icon: Code2, label: "Python", id: "nav-python" },
+      { to: "/visual", icon: Blocks, label: "Visual Builder", id: "nav-visual" },
+    ],
+  },
+  {
+    label: "Account",
+    items: [
+      { to: "/broker-keys", icon: KeyRound, label: "Brokers", id: "nav-keys" },
+      { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
+    ],
+  },
 ];
 
 // Bottom-bar items for mobile (5 most-used)
 const MOBILE_NAV = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Home", id: "mnav-dashboard" },
   { to: "/strategies", icon: Blocks, label: "Strats", id: "mnav-strategies" },
-  { to: "/ai-bot", icon: Bot, label: "AI Bot", id: "mnav-aibot" },
-  { to: "/orders", icon: ListOrdered, label: "Orders", id: "mnav-orders" },
-  { to: "/positions", icon: PieChart, label: "Holdings", id: "mnav-positions" },
+  { to: "/orders", icon: ListOrdered, label: "Execution", id: "mnav-orders" },
+  { to: "/ai-bot", icon: Bot, label: "Agent", id: "mnav-aibot" },
+  { to: "/ops", icon: ShieldAlert, label: "Risk", id: "mnav-ops" },
 ];
 
 export default function Layout({ children }) {
@@ -52,7 +77,7 @@ export default function Layout({ children }) {
   const [portfolio, setPortfolio] = useState(null);
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [marketTrend, setMarketTrend] = useState(null);
+  const [commandBusy, setCommandBusy] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -88,14 +113,29 @@ export default function Layout({ children }) {
     return nseOpen || mcxOpen;
   })();
 
+  const refreshShell = () => {
+    api.get("/portfolio").then((r) => {
+      setPnl(r.data.total_pnl);
+      setPortfolio(r.data);
+    }).catch(() => {});
+    api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
+  };
+
+  const syncBroker = async () => {
+    setCommandBusy(true);
+    try {
+      await api.post("/ops/orders/sync");
+      refreshShell();
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col qd-shell">
       {/* Top Bar */}
-      <header
-        className="sticky top-0 z-50 border-b border-[var(--qd-border)] bg-[rgba(8,10,13,0.92)] backdrop-blur-xl"
-        data-testid="top-bar"
-      >
-        <div className="flex items-center justify-between px-3 md:px-4 h-12 gap-3">
+      <header className="sticky top-0 z-50 qd-topbar" data-testid="top-bar">
+        <div className="flex items-center justify-between px-3 md:px-4 h-14 gap-3">
           <div className="flex items-center gap-3 md:gap-6 min-w-0">
             {/* Mobile hamburger */}
             <button
@@ -108,10 +148,10 @@ export default function Layout({ children }) {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-[var(--qd-accent)] flex items-center justify-center rounded">
+              <div className="w-8 h-8 bg-[var(--qd-accent)] flex items-center justify-center rounded-[var(--qd-radius-sm)] shadow-sm">
                 <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
-              <span className="font-head font-bold tracking-tight text-white text-base">
+              <span className="font-head font-extrabold text-white text-base">
                 QUANT<span className="text-[var(--qd-accent)]">G</span>
               </span>
               <span
@@ -129,17 +169,13 @@ export default function Layout({ children }) {
               </span>
             </div>
             {profile && (
-              <span
-                className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm ${
-                  profile.paper_mode
-                    ? "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)] border border-[var(--qd-warn)]"
-                    : "bg-[rgba(76,255,0,0.12)] text-[#4cff00] border border-[#4cff00]"
-                }`}
+              <StatusBadge
+                tone={profile.paper_mode ? "paper" : "live"}
                 data-testid="mode-badge"
                 title={profile.paper_mode ? "Paper mode - orders are simulated" : "LIVE - real money at risk"}
               >
                 {profile.paper_mode ? "PAPER" : "LIVE"}
-              </span>
+              </StatusBadge>
             )}
           </div>
           <div className="flex items-center gap-3 md:gap-6">
@@ -176,9 +212,10 @@ export default function Layout({ children }) {
                   </span>
                 )}
               </div>
-              <button
+              <Button
                 type="button"
-                className="text-xs font-mono text-[var(--qd-text-2)] hover:text-white flex items-center gap-1.5 px-2 py-1 border border-transparent hover:border-[var(--qd-border)] rounded-sm"
+                variant="ghost"
+                size="icon"
                 onClick={() => {
                   logout();
                   navigate("/login");
@@ -187,35 +224,74 @@ export default function Layout({ children }) {
                 aria-label="Logout"
               >
                 <LogOut size={14} />
-              </button>
+              </Button>
             </div>
           </div>
         </div>
+        <CommandBar data-testid="global-command-bar" className="hidden lg:flex">
+          <span className="mr-1 whitespace-nowrap qd-section-title">Command Center</span>
+          <Button variant="outline" size="sm" onClick={refreshShell} data-testid="cmd-refresh">
+            <RefreshCw size={14} /> Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={syncBroker} disabled={commandBusy} data-testid="cmd-broker-sync">
+            <ShieldCheck size={14} /> Broker Sync
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => navigate("/strategies")} data-testid="cmd-new-strategy">
+            <Plus size={14} /> New Strategy
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => navigate("/ai-bot")} data-testid="cmd-ask-ai">
+            <Bot size={14} /> Ask AI
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => navigate("/ops")} data-testid="cmd-risk-ops">
+            <ShieldAlert size={14} /> Risk Ops
+          </Button>
+        </CommandBar>
+        <CommandBar data-testid="mobile-command-row" className="lg:hidden">
+          <Button variant="outline" size="sm" onClick={refreshShell} data-testid="mcmd-refresh">
+            <RefreshCw size={14} /> Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={syncBroker} disabled={commandBusy} data-testid="mcmd-broker-sync">
+            <ShieldCheck size={14} /> Sync
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => navigate("/ai-bot")} data-testid="mcmd-ask-ai">
+            <Bot size={14} /> AI
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => navigate("/ops")} data-testid="mcmd-risk-ops">
+            <ShieldAlert size={14} /> Risk
+          </Button>
+        </CommandBar>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Desktop Sidebar */}
         <aside
-          className="hidden lg:flex lg:flex-col w-56 border-r border-[var(--qd-border)] bg-[rgba(8,10,13,0.9)] sticky top-[48px] self-start h-[calc(100vh-48px)] overflow-y-auto"
+          className="hidden lg:flex lg:flex-col w-64 qd-sidebar sticky top-[98px] self-start h-[calc(100vh-98px)] overflow-y-auto"
           data-testid="sidebar"
         >
-          <nav className="flex flex-col p-2 gap-0.5">
-            {NAV.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                data-testid={n.id}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2 text-sm transition-colors rounded-sm ${
-                    isActive
-                      ? "bg-[var(--qd-surface-2)] text-white border-l-2 border-[var(--qd-accent)]"
-                      : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface-2)]"
-                  }`
-                }
-              >
-                <n.icon size={16} strokeWidth={1.5} />
-                <span>{n.label}</span>
-              </NavLink>
+          <nav className="flex flex-col p-3 gap-4">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.label}>
+                <div className="qd-section-title px-3 pb-2">{group.label}</div>
+                <div className="space-y-1">
+                  {group.items.map((n) => (
+                    <NavLink
+                      key={n.to}
+                      to={n.to}
+                      data-testid={n.id}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 px-3 py-2.5 text-sm font-semibold rounded-[var(--qd-radius-sm)] ${
+                          isActive
+                            ? "bg-[var(--qd-surface-3)] text-white border border-[var(--qd-border-strong)]"
+                            : "text-[var(--qd-text-2)] border border-transparent hover:text-white hover:bg-[var(--qd-surface-2)]"
+                        }`
+                      }
+                    >
+                      <n.icon size={16} strokeWidth={1.7} />
+                      <span>{n.label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
             ))}
           </nav>
           <div className="mt-auto p-3 text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)]">
@@ -255,24 +331,31 @@ export default function Layout({ children }) {
                   <X size={20} />
                 </button>
               </div>
-              <nav className="flex flex-col gap-1 flex-1">
-                {NAV.map((n) => (
-                  <NavLink
-                    key={n.to}
-                    to={n.to}
-                    onClick={() => setDrawerOpen(false)}
-                    data-testid={`m-${n.id}`}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-2.5 text-sm rounded-sm ${
-                        isActive
-                          ? "bg-[var(--qd-surface-2)] text-white border-l-2 border-[var(--qd-accent)]"
-                          : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface)]"
-                      }`
-                    }
-                  >
-                    <n.icon size={16} strokeWidth={1.5} />
-                    <span>{n.label}</span>
-                  </NavLink>
+              <nav className="flex flex-col gap-4 flex-1 overflow-y-auto">
+                {NAV_GROUPS.map((group) => (
+                  <div key={group.label}>
+                    <div className="qd-section-title px-3 pb-2">{group.label}</div>
+                    <div className="space-y-1">
+                      {group.items.map((n) => (
+                        <NavLink
+                          key={n.to}
+                          to={n.to}
+                          onClick={() => setDrawerOpen(false)}
+                          data-testid={`m-${n.id}`}
+                          className={({ isActive }) =>
+                            `flex items-center gap-3 px-3 py-2.5 text-sm rounded-[var(--qd-radius-sm)] ${
+                              isActive
+                                ? "bg-[var(--qd-surface-2)] text-white border border-[var(--qd-border-strong)]"
+                                : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface)]"
+                            }`
+                          }
+                        >
+                          <n.icon size={16} strokeWidth={1.7} />
+                          <span>{n.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </nav>
               <div className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
@@ -283,7 +366,7 @@ export default function Layout({ children }) {
         )}
 
         {/* Main */}
-        <main className="flex-1 min-w-0 p-3 md:p-6 pb-20 lg:pb-6 qd-grid-bg">
+        <main className="flex-1 min-w-0 p-3 md:p-6 pb-24 lg:pb-6 qd-grid-bg">
           {children}
 
           {/* SEBI Compliance F&O Risk Disclosure */}

@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatINR } from "../lib/api";
+import { Button } from "../components/ui/button";
+import { PageHeader, StatusBadge as AppStatusBadge } from "../components/ui/app-shell";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
@@ -211,29 +213,31 @@ export default function Strategies() {
 
   return (
     <div className="space-y-3" data-testid="strategies-page">
-      <section className="flex flex-col gap-3 border-b border-[var(--qd-border)] pb-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="qd-section-title">Strategy Catalog</div>
-          <h1 className="mt-1 font-head text-2xl font-bold text-white">Standardized Strategies</h1>
-          <p className="mt-1 max-w-2xl text-xs text-[var(--qd-text-2)]">
-            Filterable option systems with explicit capital, strategy type, and live AI confidence.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={load} className="flex items-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white" data-testid="refresh-strategies">
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
-          </button>
-          <button onClick={installPresets} className="flex items-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-white hover:border-[var(--qd-accent)]" data-testid="install-presets-btn">
-            <Zap size={14} /> Presets
-          </button>
-          <Link to="/python" className="flex items-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-white hover:border-white" data-testid="new-python-btn">
-            <Code2 size={14} /> Python
-          </Link>
-          <Link to="/visual" className="flex items-center gap-2 rounded bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white hover:bg-[var(--qd-accent-hover)]" data-testid="new-visual-btn">
-            <Blocks size={14} /> Builder
-          </Link>
-        </div>
-      </section>
+      <PageHeader
+        eyebrow="Strategy Catalog"
+        title="Standardized Strategies"
+        subtitle="Filterable option systems with explicit capital, strategy type, broker state, and live AI confidence."
+        badge={<AppStatusBadge tone={upstoxStatus.connected ? "healthy" : "warning"}>{upstoxStatus.connected ? "Upstox Connected" : "Upstox Check"}</AppStatusBadge>}
+        actions={
+          <>
+            <Button onClick={load} variant="outline" size="sm" data-testid="refresh-strategies">
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
+            </Button>
+            <Button onClick={installPresets} variant="secondary" size="sm" data-testid="install-presets-btn">
+              <Zap size={14} /> Presets
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/python" data-testid="new-python-btn"><Code2 size={14} /> Python</Link>
+            </Button>
+            <Button asChild variant="primary" size="sm">
+              <Link to="/visual" data-testid="new-visual-btn"><Blocks size={14} /> Builder</Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/ai-bot" data-testid="ask-agent-btn"><Bot size={14} /> Ask AI</Link>
+            </Button>
+          </>
+        }
+      />
 
       <section className="qd-card flex flex-col gap-3 rounded-md border border-[var(--qd-border)] bg-black/40 p-3 backdrop-blur-md lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">

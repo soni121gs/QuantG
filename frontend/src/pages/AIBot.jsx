@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { AlertCircle, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity } from "lucide-react";
+import { Button } from "../components/ui/button";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const SESSION = "default";
 const SUGGESTIONS = [
@@ -38,19 +40,9 @@ export default function AIBot() {
   };
 
   useEffect(() => {
-    // Inject Google Fonts dynamically
-    const link = document.createElement("link");
-    link.href = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap";
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
-
     api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
     api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
     fetchProfile();
-
-    return () => {
-      try { document.head.removeChild(link); } catch (e) {}
-    };
   }, []);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -123,108 +115,44 @@ export default function AIBot() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-130px)] flex-col gap-4 premium-font" data-testid="ai-bot-page">
-      <style>{`
-        .premium-font {
-          font-family: 'Plus Jakarta Sans', 'Outfit', sans-serif !important;
-        }
-        .glass-card {
-          background: rgba(30, 41, 59, 0.35);
-          backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 12px;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .glass-card:hover {
-          border-color: rgba(255, 255, 255, 0.15);
-          background: rgba(30, 41, 59, 0.45);
-          box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.4);
-        }
-        .action-badge {
-          font-size: 9px;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          font-weight: 700;
-          padding: 3px 9px;
-          border-radius: 6px;
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-        }
-        .badge-kill {
-          background: rgba(239, 68, 68, 0.15);
-          border: 1px solid rgba(239, 68, 68, 0.4);
-          color: #f87171;
-        }
-        .badge-drawdown {
-          background: rgba(245, 158, 11, 0.15);
-          border: 1px solid rgba(245, 158, 11, 0.4);
-          color: #fbbf24;
-        }
-        .badge-size {
-          background: rgba(59, 130, 246, 0.15);
-          border: 1px solid rgba(59, 130, 246, 0.4);
-          color: #60a5fa;
-        }
-        .badge-normal {
-          background: rgba(16, 185, 129, 0.15);
-          border: 1px solid rgba(16, 185, 129, 0.4);
-          color: #34d399;
-        }
-        .glow-pulse-red {
-          box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
-          animation: red-pulse 2s infinite alternate;
-        }
-        .glow-pulse-green {
-          box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
-          animation: green-pulse 2s infinite alternate;
-        }
-        @keyframes red-pulse {
-          0% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.4); }
-          100% { box-shadow: 0 0 12px rgba(239, 68, 68, 0.8); }
-        }
-        @keyframes green-pulse {
-          0% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.4); }
-          100% { box-shadow: 0 0 12px rgba(16, 185, 129, 0.8); }
-        }
-      `}</style>
-
-      {/* Header Area */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between border-b border-[var(--qd-border)] pb-4">
-        <div>
-          <div className="font-mono text-[9px] tracking-widest uppercase text-[var(--qd-text-3)]">// ACTIVE RISK & CO-PILOT TERMINAL</div>
-          <h1 className="font-head text-3xl font-extrabold text-white mt-1 flex items-center gap-3"><Bot size={28} className="text-[var(--qd-accent)]" /> Ask QuantG Agent</h1>
-          <p className="text-xs text-[var(--qd-text-2)] mt-1">Autonomous safety guardrails, drawdowns control, and instant emergency switches.</p>
-        </div>
-        <div className="flex rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1">
+    <div className="flex h-[calc(100vh-156px)] flex-col gap-4" data-testid="ai-bot-page">
+      <PageHeader
+        eyebrow="Active Risk & Co-Pilot"
+        title="Ask QuantG Agent"
+        subtitle="Trading diagnostics, market briefings, and governed action proposals in one command surface."
+        badge={<StatusBadge tone={profile?.paper_mode ? "paper" : "live"}>{profile?.paper_mode ? "Paper" : "Live"}</StatusBadge>}
+        actions={
+          <div className="flex rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1">
           {MODES.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setMode(item.id)}
-              className={`px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider rounded transition-all duration-200 ${mode === item.id ? "bg-[var(--qd-accent)] text-white shadow" : "text-[var(--qd-text-2)] hover:text-white"}`}
+              className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "bg-[var(--qd-accent)] text-white" : "text-[var(--qd-text-2)] hover:text-white"}`}
             >
               {item.label}
             </button>
           ))}
         </div>
-      </div>
+        }
+      />
 
       {mode === "brief" && (
-        <div className="glass-card p-5">
+        <div className="qd-card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
             <div>
               <h2 className="font-head text-lg font-semibold text-white flex items-center gap-2"><Activity size={18} className="text-[var(--qd-accent)]" /> Market Analysis</h2>
               <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and MCX commodity feeds.</p>
             </div>
-            <button
+            <Button
               type="button"
               onClick={runMarketAnalysis}
               disabled={analysisBusy}
-              className="rounded bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] transition-all px-4 py-2 font-mono text-xs uppercase tracking-wider text-white disabled:opacity-50"
+              variant="primary"
+              size="sm"
             >
               {analysisBusy ? "Analyzing..." : "Generate Analysis"}
-            </button>
+            </Button>
           </div>
           {marketAnalysis?.content && (
             <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)] whitespace-pre-wrap">
@@ -253,7 +181,7 @@ export default function AIBot() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-0">
         
         {/* Left Column: Chat Area */}
-        <div className="lg:col-span-8 flex flex-col min-h-0 glass-card">
+        <div className="lg:col-span-8 flex flex-col min-h-0 qd-card">
           <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages">
             {messages.length === 0 && (
               <div className="text-center py-16">
@@ -290,9 +218,9 @@ export default function AIBot() {
               className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-white font-mono rounded"
               data-testid="ai-input"
             />
-            <button onClick={() => send()} disabled={busy || !text.trim()} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-5 py-3 rounded transition-all flex items-center justify-center shadow-md" data-testid="ai-send-btn">
+            <Button onClick={() => send()} disabled={busy || !text.trim()} variant="primary" size="lg" data-testid="ai-send-btn" aria-label="Send message">
               <Send size={16} />
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -300,7 +228,7 @@ export default function AIBot() {
         <div className="lg:col-span-4 flex flex-col gap-4 overflow-y-auto">
           
           {/* Live Status and Mode Indicator */}
-          <div className="glass-card p-5 flex flex-col gap-4">
+          <div className="qd-card p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-[var(--qd-border)]/50 pb-3">
               <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-400" /> System Governance</h2>
               <div className="flex items-center gap-2">
@@ -345,7 +273,7 @@ export default function AIBot() {
           </div>
 
           {/* Capital Allocations & Size Limits */}
-          <div className="glass-card p-5">
+          <div className="qd-card p-5">
             <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider border-b border-[var(--qd-border)]/50 pb-3 mb-4 flex items-center gap-2"><Sliders size={16} className="text-blue-400" /> Capital & Position Size Limits</h2>
             
             {profile ? (
@@ -369,7 +297,7 @@ export default function AIBot() {
           </div>
 
           {/* Quick Help & Guidelines */}
-          <div className="glass-card p-5 text-xs leading-relaxed text-[var(--qd-text-2)]">
+          <div className="qd-card p-5 text-xs leading-relaxed text-[var(--qd-text-2)]">
             <h3 className="font-head font-bold text-white uppercase text-xs pb-2 flex items-center gap-2"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> Copilot Guidelines</h3>
             <p className="mt-1 font-mono">You can speak freely with the co-pilot to adjust parameters. All critical changes require your explicit click approval here before committing to Upstox live routes.</p>
           </div>
@@ -444,18 +372,22 @@ const Message = ({ m, onApprove, onReject }) => {
 
             {m.pending_action.status === "pending" && (
               <div className="flex gap-2 mt-4">
-                <button
+                <Button
                   onClick={() => onApprove(m.pending_action.id)}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 font-mono text-[11px] font-semibold tracking-wider text-white uppercase py-2 px-3 rounded shadow transition-all duration-200"
+                  className="flex-1 font-mono text-[11px] uppercase tracking-wider"
+                  variant="success"
+                  size="sm"
                 >
                   Approve Action
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={() => onReject(m.pending_action.id)}
-                  className="flex-1 bg-rose-600/25 hover:bg-rose-600/40 border border-rose-500/40 font-mono text-[11px] font-semibold tracking-wider text-rose-400 uppercase py-2 px-3 rounded transition-all duration-200"
+                  className="flex-1 font-mono text-[11px] uppercase tracking-wider"
+                  variant="danger"
+                  size="sm"
                 >
                   Decline
-                </button>
+                </Button>
               </div>
             )}
 
