@@ -59,7 +59,12 @@ class LiveSafetyFirewall:
                 reasons.append("Upstox access token is invalid or expired. Re-authenticate needed.")
 
         # 4. Reconciliation Health Mismatch
-        recon_status = await self.db.risk_state.find_one({"_id": "position_reconciliation"})
+        recon_status = await self.db.risk_state.find_one({
+            "$or": [
+                {"_id": f"position_reconciliation:{user_id}"},
+                {"_id": "position_reconciliation", "$or": [{"user_id": user_id}, {"user_id": {"$exists": False}}]},
+            ]
+        })
         if recon_status and recon_status.get("mismatch_detected"):
             reasons.append("QuantG position ledger has a mismatch compared to broker book (BROKER_RECONCILIATION_REQUIRED).")
 

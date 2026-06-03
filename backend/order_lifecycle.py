@@ -42,6 +42,52 @@ ORDER_ACTIVE_STATUSES = {
     ORDER_PAPER_CREATED,
 }
 
+ALLOWED_ORDER_TRANSITIONS = {
+    ORDER_NEW: {
+        ORDER_PLACED,
+        ORDER_OPEN,
+        ORDER_REJECTED,
+        ORDER_CANCELLED,
+        ORDER_UNKNOWN_NEEDS_REVIEW,
+    },
+    ORDER_PLACED: {
+        ORDER_OPEN,
+        ORDER_PARTIAL_FILL,
+        ORDER_FILLED,
+        ORDER_REJECTED,
+        ORDER_CANCELLED,
+        ORDER_UNKNOWN_NEEDS_REVIEW,
+    },
+    ORDER_OPEN: {
+        ORDER_PARTIAL_FILL,
+        ORDER_FILLED,
+        ORDER_CANCELLED,
+        ORDER_REJECTED,
+        ORDER_EXIT_PENDING,
+        ORDER_UNKNOWN_NEEDS_REVIEW,
+    },
+    ORDER_PARTIAL_FILL: {
+        ORDER_PARTIAL_FILL,
+        ORDER_FILLED,
+        ORDER_CANCELLED,
+        ORDER_EXIT_PENDING,
+        ORDER_UNKNOWN_NEEDS_REVIEW,
+    },
+    ORDER_EXIT_PENDING: {
+        ORDER_CLOSED,
+        ORDER_FILLED,
+        ORDER_CANCELLED,
+        ORDER_REJECTED,
+        ORDER_UNKNOWN_NEEDS_REVIEW,
+    },
+    ORDER_PAPER_CREATED: {
+        ORDER_PAPER_FILLED,
+        ORDER_CANCELLED,
+        ORDER_REJECTED,
+        ORDER_SKIPPED_SIGNAL,
+    },
+}
+
 LEGACY_OPEN_STATUSES = {
     "PENDING",
     "PENDING_BROKER",
@@ -109,3 +155,17 @@ def is_order_active(status: Any) -> bool:
 
 def is_order_terminal(status: Any) -> bool:
     return canonical_order_status(status) in ORDER_TERMINAL_STATUSES
+
+
+def validate_order_transition(current_status: Any, next_status: Any) -> str:
+    """Return canonical next status or raise when the transition is unsafe."""
+    current = canonical_order_status(current_status)
+    next_canonical = canonical_order_status(next_status)
+    if current == next_canonical:
+        return next_canonical
+    if current in ORDER_TERMINAL_STATUSES:
+        raise ValueError(f"order state is terminal: {current} -> {next_canonical}")
+    allowed = ALLOWED_ORDER_TRANSITIONS.get(current, set())
+    if next_canonical not in allowed:
+        raise ValueError(f"invalid order transition: {current} -> {next_canonical}")
+    return next_canonical

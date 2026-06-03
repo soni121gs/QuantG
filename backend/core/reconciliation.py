@@ -27,7 +27,7 @@ class CoreReconciliation:
         local_positions = await self.db.strategy_positions.find({
             "user_id": user_id,
             "mode": mode,
-            "status": "OPEN"
+            "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER", "EXITING"]}
         }).to_list(length=500)
 
         # Normalize local positions
@@ -60,9 +60,11 @@ class CoreReconciliation:
         # Update reconciliation risk state
         now_str = datetime.now(timezone.utc).isoformat()
         await self.db.risk_state.update_one(
-            {"_id": "position_reconciliation"},
+            {"_id": f"position_reconciliation:{user_id}"},
             {
                 "$set": {
+                    "user_id": user_id,
+                    "scope": "position_reconciliation",
                     "mismatch_detected": mismatch_detected,
                     "mismatches": mismatches,
                     "last_reconciled_at": now_str

@@ -25,6 +25,7 @@ export default function OpsConsole() {
   const [simulatedLatency, setSimulatedLatency] = useState(12);
   const [pendingUsers, setPendingUsers] = useState([]);
   const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
+  const [reconciliationBreaks, setReconciliationBreaks] = useState(null);
 
   const loadPendingUsers = async () => {
     if (user?.role !== "owner") return;
@@ -38,9 +39,9 @@ export default function OpsConsole() {
 
   const loadNeedsReview = async () => {
     try {
-      const r = await api.get("/orders?include_stale=true");
-      const filtered = r.data.filter(o => o.status === "UNKNOWN_NEEDS_REVIEW");
-      setNeedsReviewOrders(filtered);
+      const r = await api.get("/ops/reconciliation/breaks");
+      setReconciliationBreaks(r.data);
+      setNeedsReviewOrders(r.data?.unknown_live_orders || []);
     } catch (e) {
       console.error("Failed to load needs review orders", e);
     }
@@ -108,6 +109,26 @@ export default function OpsConsole() {
     }
   };
 
+  const resolveReconciliation = async () => {
+    const phrase = reconciliationBreaks?.resolve_required_note || "RESOLVE_RECONCILIATION_AFTER_MANUAL_BROKER_CHECK";
+    const entered = window.prompt(`Type ${phrase} after manually verifying the broker account.`);
+    if (entered !== phrase) {
+      toast.error("Confirmation phrase did not match.");
+      return;
+    }
+    setBusy("resolve-reconciliation");
+    try {
+      const r = await api.post("/ops/reconciliation/resolve", { confirm: true, note: phrase });
+      toast.success(r.data?.detail || "Reconciliation block cleared.");
+      await loadNeedsReview();
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Reconciliation resolve failed");
+    } finally {
+      setBusy("");
+    }
+  };
+
   const handleUpstoxLogin = async () => {
     setBusy("upstox-login");
     try {
@@ -134,6 +155,12 @@ export default function OpsConsole() {
   const rateLimits = data?.rate_limits || {};
   const prefs = data?.broker_preferences || {};
   const isUpstoxActive = prefs.data_broker === "upstox" || prefs.execution_broker === "upstox";
+  const reconciliationBlockers = reconciliationBreaks?.blockers || {};
+  const reconciliationNeedsAttention = Boolean(
+    reconciliationBlockers.position_reconciliation_mismatch ||
+    reconciliationBlockers.unknown_live_orders ||
+    reconciliationBlockers.reservations_needing_review
+  );
 
   // Calculate Margin Metrics
   const availCash = fundsData?.available_cash || 0;
@@ -249,23 +276,53 @@ export default function OpsConsole() {
       )}
 
       {/* NEEDS REVIEW DESK */}
-      {needsReviewOrders.length > 0 && (
+      {reconciliationNeedsAttention && (
         <div className="qd-card p-6 border-[var(--qd-loss)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden" data-testid="needs-review-panel">
           <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-loss)]/5 rounded-full blur-[100px] pointer-events-none" />
-          <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-white/10 pb-3 relative z-10">
             <div className="flex items-center gap-2">
               <AlertTriangle className="text-[var(--qd-loss)] animate-bounce" size={20} />
               <h2 className="text-lg font-head font-extrabold text-white">Manual Reconciliation Required</h2>
               <span className="text-xs font-mono bg-[var(--qd-loss)]/15 border border-[var(--qd-loss)]/30 text-[var(--qd-loss)] px-2 py-0.5 rounded-full font-bold">
-                {needsReviewOrders.length} UNRESOLVED
+                {(reconciliationBlockers.unknown_live_orders || 0) + (reconciliationBlockers.reservations_needing_review || 0)} UNRESOLVED
               </span>
             </div>
-            <span className="text-xs font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
-              Needs Immediate Review
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => run("reconcile", "/ops/orders/sync")}
+                disabled={busy === "reconcile"}
+                className="border border-[var(--qd-border)] hover:border-white hover:bg-white/5 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-white flex items-center gap-1.5"
+              >
+                <RefreshCw size={13} className={busy === "reconcile" ? "animate-spin" : ""} /> Sync Broker
+              </button>
+              {user?.role === "owner" && (
+                <button
+                  onClick={resolveReconciliation}
+                  disabled={busy === "resolve-reconciliation" || !reconciliationBreaks?.can_resolve_position_reconciliation}
+                  className="border border-emerald-500/40 disabled:border-white/10 disabled:text-[var(--qd-text-3)] disabled:opacity-50 hover:border-emerald-400 hover:bg-emerald-500/10 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-emerald-300 flex items-center gap-1.5"
+                >
+                  <CheckCircle2 size={13} /> Clear Checked Block
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="qd-table-wrap relative z-10">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 relative z-10">
+            <MetricCard label="Position Mismatch" value={reconciliationBlockers.position_reconciliation_mismatch ? "YES" : "NO"} tone={reconciliationBlockers.position_reconciliation_mismatch ? "loss" : "profit"} />
+            <MetricCard label="Unknown Orders" value={reconciliationBlockers.unknown_live_orders || 0} tone={reconciliationBlockers.unknown_live_orders ? "loss" : "profit"} />
+            <MetricCard label="Exposure Review" value={reconciliationBlockers.reservations_needing_review || 0} tone={reconciliationBlockers.reservations_needing_review ? "loss" : "profit"} />
+            <MetricCard label="Active Reserves" value={reconciliationBlockers.active_live_reservations || 0} tone={reconciliationBlockers.active_live_reservations ? "warn" : "normal"} />
+          </div>
+
+          {!!reconciliationBreaks?.reconciliation_state?.mismatches?.length && (
+            <div className="relative z-10 border border-red-500/20 bg-red-500/5 rounded-md p-3 space-y-1">
+              {reconciliationBreaks.reconciliation_state.mismatches.map((m, idx) => (
+                <div key={`${m}-${idx}`} className="text-xs text-red-200 font-mono">{m}</div>
+              ))}
+            </div>
+          )}
+
+          {needsReviewOrders.length > 0 && <div className="qd-table-wrap relative z-10">
             <table className="w-full text-left text-xs font-mono border-collapse">
               <thead>
                 <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
@@ -300,7 +357,34 @@ export default function OpsConsole() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </div>}
+
+          {!!reconciliationBreaks?.reservations_needing_review?.length && (
+            <div className="qd-table-wrap relative z-10">
+              <table className="w-full text-left text-xs font-mono border-collapse">
+                <thead>
+                  <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                    <th className="py-2.5">SYMBOL</th>
+                    <th className="py-2.5">ORDER ID</th>
+                    <th className="py-2.5">RESERVED VALUE</th>
+                    <th className="py-2.5">REASON</th>
+                    <th className="py-2.5">UPDATED</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reconciliationBreaks.reservations_needing_review.map((r) => (
+                    <tr key={r.id || r.order_id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                      <td className="py-3 text-white font-semibold">{r.symbol || r.instrument_key}</td>
+                      <td className="py-3 text-[var(--qd-text-2)]">{r.order_id || r.id}</td>
+                      <td className="py-3 text-[var(--qd-warn)]">{Number(r.reserved_value || 0).toLocaleString("en-IN", { style: "currency", currency: "INR" })}</td>
+                      <td className="py-3 text-[var(--qd-text-2)] max-w-xs truncate" title={r.reason}>{r.reason || r.status}</td>
+                      <td className="py-3 text-[var(--qd-text-3)]">{fmt(r.updated_at || r.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

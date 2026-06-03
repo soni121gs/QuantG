@@ -66,6 +66,7 @@ from order_lifecycle import (
     LEGACY_TERMINAL_STATUSES,
     canonical_order_status,
     is_order_active,
+    validate_order_transition,
 )
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality, parse_market_timestamp
 from core.strategy_leaderboard import build_strategy_leaderboard
@@ -3984,6 +3985,152 @@ def _strategy_lock_ids(user_id: str, strategy_id: str, instrument_key: str) -> L
     ]
 
 
+def _risk_reservation_lock_id(user_id: str) -> str:
+    return f"risk-reservation:{user_id}"
+
+
+async def _acquire_risk_reservation_lock(user_id: str, *, timeout_sec: float = 2.0) -> Optional[str]:
+    lock_id = _risk_reservation_lock_id(user_id)
+    owner = uuid.uuid4().hex
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        try:
+            await db.risk_reservation_locks.insert_one({
+                "_id": lock_id,
+                "owner": owner,
+                "user_id": user_id,
+                "created_at": now,
+                "expires_at": now_dt + timedelta(seconds=15),
+            })
+            return owner
+        except DuplicateKeyError:
+            stale = await db.risk_reservation_locks.find_one_and_delete({
+                "_id": lock_id,
+                "expires_at": {"$lt": now_dt},
+            })
+            if stale:
+                continue
+            await asyncio.sleep(0.05)
+    return None
+
+
+async def _release_risk_reservation_lock(user_id: str, owner: Optional[str]) -> None:
+    if not owner:
+        return
+    try:
+        await db.risk_reservation_locks.delete_one({"_id": _risk_reservation_lock_id(user_id), "owner": owner})
+    except Exception as exc:
+        logger.warning("risk reservation lock release failed user=%s: %s", user_id, exc)
+
+
+async def _current_reserved_exposure(user_id: str) -> float:
+    now = datetime.now(timezone.utc)
+    total = 0.0
+    rows = await db.risk_reservations.find({
+        "user_id": user_id,
+        "status": "ACTIVE",
+        "$or": [
+            {"expires_at": {"$gt": now}},
+            {"expires_at": {"$exists": False}},
+            {"expires_at": None},
+        ],
+    }, {"_id": 0, "reserved_value": 1}).to_list(1000)
+    for row in rows:
+        try:
+            total += float(row.get("reserved_value") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 2)
+
+
+async def _reserve_order_exposure(
+    *,
+    user_id: str,
+    order_id: str,
+    strategy_id: Optional[str],
+    instrument_key: str,
+    symbol: str,
+    quantity: int,
+    price: float,
+    settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    owner = await _acquire_risk_reservation_lock(user_id)
+    if not owner:
+        raise HTTPException(status_code=409, detail="Risk reservation busy; retry order after current risk check completes.")
+    try:
+        order_value = round(max(0, int(quantity or 0)) * max(0.0, float(price or 0)), 2)
+        reserved = await _current_reserved_exposure(user_id)
+        limit = float(settings.get("max_position_size") or settings.get("per_strategy_capital") or 0)
+        if limit > 0 and reserved + order_value > limit:
+            await _record_pretrade_risk_event(user_id, {
+                "event": "PRETRADE_BLOCK",
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "reason": "reserved exposure limit exceeded",
+                "reserved_exposure": reserved,
+                "proposed_order_value": order_value,
+                "max_position_value": limit,
+                "paper": False,
+            })
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Pre-trade blocked: reserved exposure {reserved:.2f} + order value "
+                    f"{order_value:.2f} exceeds max position value {limit:.2f}."
+                ),
+            )
+        now_dt = datetime.now(timezone.utc)
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "order_id": order_id,
+            "strategy_id": strategy_id,
+            "instrument_key": instrument_key,
+            "symbol": symbol,
+            "quantity": int(quantity or 0),
+            "price": float(price or 0),
+            "reserved_value": order_value,
+            "reserved_exposure_before": reserved,
+            "status": "ACTIVE",
+            "created_at": now_dt.isoformat(),
+            "updated_at": now_dt.isoformat(),
+            "expires_at": now_dt + timedelta(hours=8),
+        }
+        await db.risk_reservations.insert_one(doc)
+        await _append_order_event(order_id, user_id, "RISK_EXPOSURE_RESERVED", {
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "reserved_value": order_value,
+            "reserved_exposure_before": reserved,
+            "reserved_exposure_after": round(reserved + order_value, 2),
+        })
+        return doc
+    except DuplicateKeyError:
+        existing = await db.risk_reservations.find_one({"order_id": order_id, "user_id": user_id}, {"_id": 0})
+        if existing:
+            return existing
+        raise
+    finally:
+        await _release_risk_reservation_lock(user_id, owner)
+
+
+async def _close_order_exposure_reservation(order_id: str, user_id: str, *, status: str, reason: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await db.risk_reservations.update_many(
+            {"order_id": order_id, "user_id": user_id, "status": "ACTIVE"},
+            {"$set": {"status": status, "close_reason": reason, "updated_at": now, "closed_at": now}},
+        )
+        await _append_order_event(order_id, user_id, "RISK_EXPOSURE_RELEASED", {
+            "status": status,
+            "reason": reason,
+        })
+    except Exception as exc:
+        logger.warning("risk reservation close failed order=%s user=%s: %s", order_id, user_id, exc)
+
+
 async def _strategy_row(user_id: str, strategy_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not strategy_id:
         return None
@@ -5032,11 +5179,30 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
     strategy_ids = [s["id"] for s in strategies if s.get("id")]
     closed_trades = await db.trades.find({"user_id": user_id}, {"_id": 0}).to_list(10000)
+    fill_summary = await _fill_ledger_summary(user_id)
+    fill_trades = [
+        {
+            **row,
+            "closed_at": row.get("filled_at"),
+            "pnl": row.get("realised_pnl"),
+            "source": "trade_fills",
+        }
+        for row in fill_summary["fills"]
+        if float(row.get("realised_pnl") or 0) != 0
+    ]
+    closed_trades = [*closed_trades, *fill_trades]
     option_trades = await db.option_trade_journal.find(
         {"strategy_id": {"$in": strategy_ids}},
         {"_id": 0},
     ).to_list(10000)
-    return build_strategy_leaderboard(strategies, closed_trades, option_trades)
+    result = build_strategy_leaderboard(strategies, closed_trades, option_trades)
+    result["fill_ledger"] = {
+        "source": "trade_fills",
+        "fill_count": fill_summary["fill_count"],
+        "closed_trade_count": fill_summary["closed_trade_count"],
+        "realised_pnl": fill_summary["realised_pnl"],
+    }
+    return result
 
 
 @api.get("/strategies/{sid}", response_model=StrategyOut)
@@ -5951,7 +6117,7 @@ def _price_integrity_guard(
     elif ltp <= 0:
         result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason="Paper option entry blocked: Upstox option LTP is missing or zero.")
     elif source in blocked_sources or any(part in source for part in ("mock", "simulated", "fallback", "synthetic")):
-        result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not a real Upstox quote.")
+        result.update(ok=False, reason_code="SKIPPED_PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not a real Upstox quote.")
     elif source not in {"upstox-cache", "upstox-rest-quote"}:
         result.update(ok=False, reason_code="PRICE_UNAVAILABLE", human_reason=f"Paper option entry blocked: price source '{source or 'unknown'}' is not allowed in normal paper mode.")
     elif not received_at or parse_market_timestamp(received_at) is None:
@@ -7115,6 +7281,38 @@ def _scoped_idempotency_key(user_id: str, raw_key: Optional[str]) -> str:
     return f"idem:{digest}"
 
 
+async def _append_business_outbox_event(
+    *,
+    user_id: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None,
+) -> None:
+    """Durable event record for replay/publishing; publisher can be added later."""
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "aggregate_type": aggregate_type,
+        "aggregate_id": aggregate_id,
+        "event_type": event_type,
+        "payload": payload or {},
+        "idempotency_key": idempotency_key,
+        "status": "PENDING",
+        "created_at": now,
+        "updated_at": now,
+        "publish_attempts": 0,
+    }
+    try:
+        await db.outbox_events.insert_one(doc)
+    except DuplicateKeyError:
+        return
+    except Exception as exc:
+        logger.warning("outbox append failed aggregate=%s event=%s: %s", aggregate_id, event_type, exc)
+
+
 async def _append_order_event(order_id: str, user_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
     try:
         await db.order_events.insert_one({
@@ -7125,8 +7323,66 @@ async def _append_order_event(order_id: str, user_id: str, event_type: str, payl
             "payload": payload or {},
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
+        await _append_business_outbox_event(
+            user_id=user_id,
+            aggregate_type="order",
+            aggregate_id=order_id,
+            event_type=event_type,
+            payload=payload or {},
+            idempotency_key=(payload or {}).get("idempotency_key"),
+        )
     except Exception as exc:
         logger.warning("order event append failed order=%s event=%s: %s", order_id, event_type, exc)
+
+
+async def _assert_live_trading_book_safe(user_id: str, *, strategy_id: Optional[str], symbol: str) -> None:
+    """Block new live entries when global safety state says local/broker books disagree."""
+    kill_switch = await db.risk_state.find_one({"_id": "global_kill_switch"})
+    if kill_switch and kill_switch.get("active"):
+        raise HTTPException(status_code=409, detail="Live trading blocked: global kill switch is active.")
+
+    unknown_orders = await db.orders.count_documents({
+        "user_id": user_id,
+        "mode": "live",
+        "status": ORDER_UNKNOWN_NEEDS_REVIEW,
+        "visibility": {"$ne": "hidden"},
+    })
+    if unknown_orders:
+        await _record_pretrade_risk_event(user_id, {
+            "event": "PRETRADE_BLOCK",
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "reason": "UNKNOWN_ORDER_NEEDS_REVIEW",
+            "unknown_orders": unknown_orders,
+            "paper": False,
+        })
+        raise HTTPException(
+            status_code=409,
+            detail=f"Live trading blocked: {unknown_orders} live order(s) need broker reconciliation review.",
+        )
+
+    recon = await db.risk_state.find_one({
+        "$or": [
+            {"_id": f"position_reconciliation:{user_id}"},
+            {"_id": "position_reconciliation", "$or": [{"user_id": user_id}, {"user_id": {"$exists": False}}]},
+        ]
+    })
+    if recon and recon.get("mismatch_detected"):
+        await _record_pretrade_risk_event(user_id, {
+            "event": "PRETRADE_BLOCK",
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "reason": "BROKER_RECONCILIATION_REQUIRED",
+            "reconciliation": {
+                "mismatches": recon.get("mismatches") or [],
+                "last_reconciled_at": recon.get("last_reconciled_at"),
+            },
+            "paper": False,
+        })
+        raise HTTPException(
+            status_code=409,
+            detail="Live trading blocked: broker reconciliation mismatch detected. Sync and resolve positions first.",
+        )
 
 
 async def _insert_order_intent(order_doc: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
@@ -7202,12 +7458,22 @@ def _classify_rejection_reason(message: str) -> str:
 async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dict[str, Any]:
     reason_code = _classify_rejection_reason(message)
     now = datetime.now(timezone.utc).isoformat()
+    current = await db.orders.find_one({"id": order_id, "user_id": user_id}, {"_id": 0, "status": 1})
+    try:
+        next_status = validate_order_transition((current or {}).get("status") or ORDER_NEW, ORDER_REJECTED)
+    except ValueError as exc:
+        await _append_order_event(order_id, user_id, "ORDER_TRANSITION_REJECTED", {
+            "target_status": ORDER_REJECTED,
+            "message": str(exc),
+            "reject_message": message,
+        })
+        raise RuntimeError(str(exc))
     row = await db.orders.find_one_and_update(
         {"id": order_id, "user_id": user_id},
         {"$set": {
-            "status": "FAILED",
-            "legacy_status": "FAILED",
-            "execution_status": "FAILED",
+            "status": next_status,
+            "legacy_status": "REJECTED",
+            "execution_status": next_status,
             "status_message": reason_code,
             "error_message": message,
             "reject_reason": reason_code,
@@ -7217,6 +7483,7 @@ async def _mark_order_rejected(order_id: str, user_id: str, message: str) -> Dic
         return_document=ReturnDocument.AFTER,
     )
     await _append_order_event(order_id, user_id, "ORDER_REJECTED", {"message": message, "reason_code": reason_code})
+    await _close_order_exposure_reservation(order_id, user_id, status="RELEASED", reason=reason_code)
     return row or {}
 
 
@@ -7229,6 +7496,17 @@ async def _mark_order_submitted(order_id: str, user_id: str, submit: Dict[str, A
     canonical = canonical_order_status(broker_status or ORDER_PLACED)
     if canonical == ORDER_NEW:
         canonical = ORDER_PLACED
+    current = await db.orders.find_one({"id": order_id, "user_id": user_id}, {"_id": 0, "status": 1})
+    try:
+        canonical = validate_order_transition((current or {}).get("status") or ORDER_NEW, canonical)
+    except ValueError as exc:
+        await _append_order_event(order_id, user_id, "ORDER_TRANSITION_REJECTED", {
+            "target_status": canonical,
+            "broker_order_id": broker_order_id,
+            "broker_status": broker_status,
+            "message": str(exc),
+        })
+        raise RuntimeError(str(exc))
     try:
         row = await db.orders.find_one_and_update(
             {"id": order_id, "user_id": user_id},
@@ -7509,6 +7787,186 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     return updated or locked
 
 
+async def _book_live_fill_from_order(
+    order_doc: Dict[str, Any],
+    *,
+    fill_price: float,
+    filled_qty: Optional[int],
+    raw_report: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Book one immutable live fill row for a broker-filled order."""
+    if order_doc.get("mode") != "live":
+        return None
+    order_id = order_doc.get("id")
+    user_id = order_doc.get("user_id")
+    if not order_id or not user_id:
+        raise RuntimeError("live fill booking requires order id and user id")
+
+    existing = await db.trade_fills.find_one({"order_id": order_id, "user_id": user_id}, {"_id": 0})
+    if existing:
+        return existing
+
+    qty = int(filled_qty or order_doc.get("filled_qty") or order_doc.get("qty") or 0)
+    price = float(fill_price or order_doc.get("price") or order_doc.get("expected_price") or 0)
+    if qty <= 0 or price <= 0:
+        await _append_order_event(order_id, user_id, "LIVE_FILL_BOOKING_SKIPPED", {
+            "reason": "filled quantity or price unavailable",
+            "filled_qty": qty,
+            "fill_price": price,
+        })
+        return None
+
+    intent_doc = order_doc.get("order_intent") or {}
+    intent_name = str(intent_doc.get("intent") or "").upper()
+    side = str(order_doc.get("side") or "").upper()
+    symbol = order_doc.get("symbol") or ((intent_doc.get("instrument") or {}).get("tradingsymbol"))
+    brokerage = float(order_doc.get("brokerage") or 0.0)
+    expected = float(order_doc.get("expected_price") or order_doc.get("requested_price") or price or 0)
+    slippage = round(abs(price - expected) * qty, 2) if expected > 0 else 0.0
+    now = datetime.now(timezone.utc).isoformat()
+
+    gross_realised = 0.0
+    net_realised = 0.0
+    position_before_qty = None
+    position_after_qty = None
+    avg_price_before = None
+    avg_price_after = None
+    if intent_name in {"CLOSE_LONG", "CLOSE_SHORT"}:
+        pos = None
+        if order_doc.get("strategy_id"):
+            pos = await db.strategy_positions.find_one(
+                {
+                    "user_id": user_id,
+                    "strategy_id": order_doc.get("strategy_id"),
+                    "status": {"$in": ["EXITING", "OPEN", "FILLED"]},
+                },
+                {"_id": 0},
+            )
+        if pos:
+            position_before_qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
+            avg_price_before = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
+            closed_qty = min(position_before_qty, qty) if position_before_qty > 0 else qty
+            pos_side = str(pos.get("position_side") or "LONG").upper()
+            gross_realised = round((avg_price_before - price) * closed_qty, 2) if pos_side == "SHORT" else round((price - avg_price_before) * closed_qty, 2)
+            net_realised = round(gross_realised - brokerage, 2)
+            position_after_qty = max(0, position_before_qty - closed_qty)
+            avg_price_after = avg_price_before if position_after_qty else 0.0
+
+    fill_doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "broker_order_id": order_doc.get("broker_order_id"),
+        "user_id": user_id,
+        "strategy_id": order_doc.get("strategy_id"),
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "fill_price": price,
+        "price": price,
+        "brokerage": brokerage,
+        "slippage": slippage,
+        "gross_realised_pnl": gross_realised,
+        "realised_pnl": net_realised,
+        "position_before_qty": position_before_qty,
+        "position_after_qty": position_after_qty,
+        "avg_price_before": avg_price_before,
+        "avg_price_after": avg_price_after,
+        "filled_at": now,
+        "mode": "live",
+        "broker": order_doc.get("broker") or "upstox",
+        "raw_execution_report": raw_report or {},
+    }
+    try:
+        await db.trade_fills.insert_one(fill_doc)
+    except DuplicateKeyError:
+        return await db.trade_fills.find_one({"order_id": order_id, "user_id": user_id}, {"_id": 0})
+
+    await db.orders.update_one(
+        {"id": order_id, "user_id": user_id},
+        {"$set": {
+            "live_fill_booked": True,
+            "live_fill_id": fill_doc["id"],
+            "gross_realised_pnl": gross_realised,
+            "realised_pnl": net_realised,
+            "brokerage": brokerage,
+            "slippage": slippage,
+            "updated_at": now,
+        }},
+    )
+    await _append_order_event(order_id, user_id, "LIVE_FILL_BOOKED", {
+        "fill_id": fill_doc["id"],
+        "broker_order_id": order_doc.get("broker_order_id"),
+        "qty": qty,
+        "fill_price": price,
+        "gross_realised_pnl": gross_realised,
+        "realised_pnl": net_realised,
+    })
+    if intent_name in {"CLOSE_LONG", "CLOSE_SHORT"} and net_realised:
+        try:
+            await db.trades.insert_one({
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "strategy_id": order_doc.get("strategy_id"),
+                "entry_symbol": symbol,
+                "exit_order_id": order_id,
+                "broker_order_id": order_doc.get("broker_order_id"),
+                "qty": qty,
+                "exit_price": price,
+                "gross_realised_pnl": gross_realised,
+                "realised_pnl": net_realised,
+                "brokerage": brokerage,
+                "slippage": slippage,
+                "closed_at": now,
+                "mode": "live",
+            })
+        except DuplicateKeyError:
+            pass
+    return fill_doc
+
+
+async def _fill_ledger_summary(
+    user_id: str,
+    *,
+    mode: Optional[str] = None,
+    start: Any = None,
+    end: Any = None,
+    strategy_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    query: Dict[str, Any] = {"user_id": user_id}
+    if mode:
+        query["mode"] = mode
+    if strategy_id:
+        query["strategy_id"] = strategy_id
+    if start is not None or end is not None:
+        window: Dict[str, Any] = {}
+        if start is not None:
+            window["$gte"] = start
+        if end is not None:
+            window["$lt"] = end
+        query["filled_at"] = window
+    fills = await db.trade_fills.find(query, {"_id": 0}).to_list(10000)
+    realised_fills = [row for row in fills if float(row.get("realised_pnl") or 0) != 0]
+    wins = len([row for row in realised_fills if float(row.get("realised_pnl") or 0) > 0])
+    losses = len([row for row in realised_fills if float(row.get("realised_pnl") or 0) < 0])
+    gross_turnover = round(sum(abs(float(row.get("fill_price") or row.get("price") or 0) * int(row.get("qty") or 0)) for row in fills), 2)
+    brokerage = round(sum(float(row.get("brokerage") or 0) for row in fills), 2)
+    slippage = round(sum(float(row.get("slippage") or 0) for row in fills), 2)
+    realised = round(sum(float(row.get("realised_pnl") or 0) for row in fills), 2)
+    return {
+        "fills": fills,
+        "fill_count": len(fills),
+        "closed_trade_count": len(realised_fills),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(wins / max(1, wins + losses) * 100, 2),
+        "realised_pnl": realised,
+        "gross_turnover": gross_turnover,
+        "brokerage": brokerage,
+        "slippage": slippage,
+        "source": "trade_fills",
+    }
+
+
 async def _recover_pending_paper_fills(limit: int = 500) -> int:
     """Finish paper fills that were persisted before a restart/crash."""
     rows = await db.orders.find(
@@ -7748,9 +8206,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 status_code=400,
                 detail="Live trading disabled: Reconnect Upstox required before placing live orders.",
             )
+        if side == "BUY":
+            await _assert_live_trading_book_safe(user_id, strategy_id=strategy_id, symbol=symbol)
 
     order_inserted = False
     position_reservation = None
+    exposure_reservation = None
     exit_position_record = None
     intent = None
     preflight_blocked = False
@@ -8005,6 +8466,18 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             await _cancel_strategy_reservation(position_reservation, "duplicate-idempotency-key")
             return _clean_order_response(order_doc)
 
+        if not paper and _intent_is_entry(intent.intent):
+            exposure_reservation = await _reserve_order_exposure(
+                user_id=user_id,
+                order_id=order_doc["id"],
+                strategy_id=strategy_id,
+                instrument_key=instrument_key,
+                symbol=instr.tradingsymbol,
+                quantity=int(intent.quantity),
+                price=float(fill_price_hint or price or 0),
+                settings=settings,
+            )
+
         # Show the exact payload that would be sent to Upstox in live trading
         if paper:
             normalized_product = "I" if resolved_product.upper() in ["MIS", "INTRADAY", "I"] else "D"
@@ -8056,6 +8529,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 order_doc = await _mark_order_submitted(order_doc["id"], user_id, submit)
             except Exception as exc:
                 await _cancel_strategy_reservation(position_reservation, str(exc))
+                if exposure_reservation:
+                    await _close_order_exposure_reservation(order_doc["id"], user_id, status="RELEASED", reason=str(exc))
+                    exposure_reservation = None
                 order_doc = await _mark_order_rejected(order_doc["id"], user_id, str(exc))
                 raise HTTPException(
                     status_code=400,
@@ -8129,6 +8605,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
     except Exception as exc:
         if position_reservation:
             await _cancel_strategy_reservation(position_reservation, str(exc))
+        if exposure_reservation and order_inserted:
+            await _close_order_exposure_reservation(exposure_reservation["order_id"], user_id, status="RELEASED", reason=str(exc))
         if exit_position_record:
             await _reopen_strategy_position_after_exit_reject(exit_position_record["id"], user_id, str(exc))
             
@@ -8335,12 +8813,14 @@ async def _advance_pending_order_from_broker(
     status: str,
     avg_price: float = 0.0,
     filled_qty: Optional[int] = None,
+    pending_qty: Optional[int] = None,
     status_message: Optional[str] = None,
+    raw_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
     if not broker_order_id or not status:
         return {"orders": 0, "positions": 0}
     normalized = str(status).upper()
-    canonical = canonical_order_status(normalized, filled_qty=filled_qty)
+    canonical = canonical_order_status(normalized, filled_qty=filled_qty, pending_qty=pending_qty)
     local_orders = await db.orders.find(
         {"user_id": user_id, "broker_order_id": str(broker_order_id)},
         {"_id": 0},
@@ -8355,8 +8835,59 @@ async def _advance_pending_order_from_broker(
         instrument = intent_doc.get("instrument") or order.get("instrument") or {}
         is_entry = intent_name in {"OPEN_LONG", "OPEN_SHORT"}
         is_exit = intent_name in {"CLOSE_LONG", "CLOSE_SHORT"}
+        current_status = order.get("status") or ORDER_NEW
+        try:
+            next_status = validate_order_transition(current_status, canonical)
+        except ValueError as exc:
+            await _append_order_event(order["id"], user_id, "BROKER_EXECUTION_REPORT_REJECTED", {
+                "broker_order_id": str(broker_order_id),
+                "broker_status": normalized,
+                "target_status": canonical,
+                "message": str(exc),
+                "raw": raw_report or {},
+            })
+            continue
+
+        set_doc = {
+            "status": next_status,
+            "legacy_status": normalized,
+            "broker_status": normalized,
+            "execution_status": next_status,
+            "status_message": status_message or normalized,
+            "updated_at": now,
+        }
+        if filled_qty is not None:
+            set_doc["filled_qty"] = int(filled_qty or 0)
+        if pending_qty is not None:
+            set_doc["pending_qty"] = int(pending_qty or 0)
+        if avg_price and avg_price > 0:
+            set_doc["price"] = float(avg_price)
+        if raw_report:
+            set_doc["last_execution_report"] = raw_report
+
+        res_order = await db.orders.update_one(
+            {"id": order["id"], "user_id": user_id},
+            {"$set": set_doc},
+        )
+        changed_orders += res_order.modified_count
+        await _append_order_event(order["id"], user_id, "BROKER_EXECUTION_REPORT_APPLIED", {
+            "broker_order_id": str(broker_order_id),
+            "broker_status": normalized,
+            "status": next_status,
+            "filled_qty": filled_qty,
+            "pending_qty": pending_qty,
+            "avg_price": avg_price,
+            "status_message": status_message,
+        })
+
         if canonical == ORDER_FILLED:
-            changed_orders += 1
+            await _book_live_fill_from_order(
+                {**order, **set_doc},
+                fill_price=float(avg_price or order.get("price") or 0),
+                filled_qty=filled_qty,
+                raw_report=raw_report,
+            )
+            await _close_order_exposure_reservation(order["id"], user_id, status="SETTLED", reason="broker-filled")
             if strategy_id and is_entry:
                 pos_set = {
                     "status": "FILLED",
@@ -8400,7 +8931,7 @@ async def _advance_pending_order_from_broker(
                     await _close_strategy_position_record(pos, exit_price=exit_price, reason="broker-exit-complete")
                     changed_positions += 1
         elif canonical in {ORDER_CANCELLED, ORDER_REJECTED}:
-            changed_orders += 1
+            await _close_order_exposure_reservation(order["id"], user_id, status="RELEASED", reason=f"broker-{canonical.lower()}")
             if strategy_id and is_entry:
                 res = await db.strategy_positions.update_many(
                     {
@@ -8423,6 +8954,8 @@ async def _advance_pending_order_from_broker(
                 for pos in exit_positions:
                     await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status_message or normalized)
                     changed_positions += 1
+        elif canonical == ORDER_UNKNOWN_NEEDS_REVIEW:
+            await _close_order_exposure_reservation(order["id"], user_id, status="NEEDS_REVIEW", reason=status_message or normalized)
     return {"orders": changed_orders, "positions": changed_positions}
 
 
@@ -8502,7 +9035,9 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
             status=str(status),
             avg_price=avg_price,
             filled_qty=int(o.get("filled_quantity") or 0),
+            pending_qty=int(o.get("pending_quantity") or 0) if o.get("pending_quantity") not in (None, "") else None,
             status_message=o.get("status_message"),
+            raw_report=o,
         )
         if set_doc["status"] == ORDER_FILLED:
             pos_set = {
@@ -8808,69 +9343,36 @@ async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> D
         if not order_id:
             continue
         status = _normalize_upstox_order_status(_upstox_first(item, ["status", "order_status"]))
-        set_doc = {
-            "updated_at": now,
-            "status_message": _upstox_first(item, ["status_message", "status_message_raw"]) or status,
-        }
-        if status:
-            set_doc["status"] = canonical_order_status(status)
-            set_doc["legacy_status"] = status
-            set_doc["broker_status"] = status
-        for source_key, target_key in (
-            ("filled_quantity", "filled_qty"),
-            ("pending_quantity", "pending_qty"),
-            ("average_price", "price"),
-        ):
-            value = item.get(source_key)
-            if value not in (None, ""):
-                try:
-                    set_doc[target_key] = float(value) if target_key == "price" else int(float(value))
-                except Exception:
-                    set_doc[target_key] = value
-        res = await db.orders.update_many(
-            {"user_id": user_id, "broker": "upstox", "broker_order_id": str(order_id)},
-            {"$set": set_doc},
-        )
-        updated += res.modified_count
-        await _advance_pending_order_from_broker(
+        status_message = _upstox_first(item, ["status_message", "status_message_raw"]) or status
+        avg_price = 0.0
+        if item.get("average_price") not in (None, ""):
+            try:
+                avg_price = float(item.get("average_price") or 0)
+            except Exception:
+                avg_price = 0.0
+        filled_qty = None
+        if item.get("filled_quantity") not in (None, ""):
+            try:
+                filled_qty = int(float(item.get("filled_quantity") or 0))
+            except Exception:
+                filled_qty = None
+        pending_qty = None
+        if item.get("pending_quantity") not in (None, ""):
+            try:
+                pending_qty = int(float(item.get("pending_quantity") or 0))
+            except Exception:
+                pending_qty = None
+        reduced = await _advance_pending_order_from_broker(
             user_id=user_id,
             broker_order_id=str(order_id),
             status=str(status or ""),
-            avg_price=float(set_doc.get("price") or 0),
-            filled_qty=int(set_doc.get("filled_qty") or 0) if set_doc.get("filled_qty") not in (None, "") else None,
-            status_message=str(set_doc.get("status_message") or status or ""),
+            avg_price=avg_price,
+            filled_qty=filled_qty,
+            pending_qty=pending_qty,
+            status_message=str(status_message or ""),
+            raw_report=item,
         )
-        if set_doc.get("status") == ORDER_FILLED:
-            avg_price = float(set_doc.get("price") or 0)
-            filled_qty = set_doc.get("filled_qty")
-            pos_set = {"status": "FILLED", "updated_at": now}
-            if avg_price > 0:
-                pos_set["average_buy_price"] = avg_price
-            if filled_qty not in (None, ""):
-                pos_set["quantity"] = int(filled_qty)
-                pos_set["open_quantity"] = int(filled_qty)
-            await db.strategy_positions.update_many(
-                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": pos_set},
-            )
-            exit_positions = await db.strategy_positions.find(
-                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
-                {"_id": 0},
-            ).to_list(20)
-            for pos in exit_positions:
-                await _close_strategy_position_record(pos, exit_price=avg_price or float(pos.get("average_buy_price") or 0), reason="broker-exit-complete")
-        elif set_doc.get("status") in {ORDER_CANCELLED, ORDER_REJECTED}:
-            await db.strategy_positions.update_many(
-                {"user_id": user_id, "entry_broker_order_id": str(order_id), "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"$set": {"status": set_doc.get("status"), "legacy_status": status, "updated_at": now, "broker_status_message": set_doc.get("status_message")},
-                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
-            )
-            exit_positions = await db.strategy_positions.find(
-                {"user_id": user_id, "exit_broker_order_id": str(order_id), "status": "EXITING"},
-                {"_id": 0, "id": 1},
-            ).to_list(20)
-            for pos in exit_positions:
-                await _reopen_strategy_position_after_exit_reject(pos["id"], user_id, status)
+        updated += int(reduced.get("orders") or 0)
 
     missing_fixed = 0
     stale_before = datetime.now(timezone.utc) - timedelta(minutes=2)
@@ -8919,6 +9421,11 @@ async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> D
             }},
         )
         missing_fixed += res.modified_count
+        await _append_order_event(row["id"], user_id, "BROKER_ORDER_MISSING_NEEDS_REVIEW", {
+            "broker_order_id": broker_order_id,
+            "message": message,
+        })
+        await _close_order_exposure_reservation(row["id"], user_id, status="NEEDS_REVIEW", reason=message)
         await db.strategy_positions.update_many(
             {
                 "user_id": user_id,
@@ -9455,8 +9962,12 @@ async def list_holdings(user=Depends(get_current_user)):
 
 @api.get("/portfolio")
 async def portfolio(user=Depends(get_current_user)):
+    settings = await get_user_settings(user["id"])
+    mode = "paper" if settings.get("paper_mode", True) else "live"
     positions = await list_positions(user)
-    total_pnl = round(sum(p["pnl"] for p in positions), 2)
+    open_pnl = round(sum(p["pnl"] for p in positions), 2)
+    fill_summary = await _fill_ledger_summary(user["id"], mode=mode)
+    total_pnl = round(fill_summary["realised_pnl"] + open_pnl, 2)
     deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
     orders_count = await db.orders.count_documents({"user_id": user["id"]})
     strategies_count = await db.strategies.count_documents({"user_id": user["id"]})
@@ -9479,7 +9990,10 @@ async def portfolio(user=Depends(get_current_user)):
 
     return {
         "total_pnl": total_pnl,
-        "pnl_type": "open_unrealized",
+        "realised_pnl": fill_summary["realised_pnl"],
+        "open_pnl": open_pnl,
+        "pnl_type": "realised_plus_open",
+        "realised_pnl_source": fill_summary["source"],
         "pnl_source": "none" if not position_modes else position_modes[0] if len(position_modes) == 1 else "mixed",
         "open_positions": len(positions),
         "deployed": deployed,
@@ -9507,7 +10021,8 @@ async def risk_dashboard(user=Depends(get_current_user)):
         {"_id": 0},
     ).to_list(1000)
     positions = await list_positions(user)
-    realised = round(sum(float(o.get("realised_pnl") or 0) for o in orders), 2)
+    fill_summary = await _fill_ledger_summary(user["id"], mode=mode, start=start, end=end)
+    realised = fill_summary["realised_pnl"]
     open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
     loss_limit = float(settings.get("max_daily_loss") or 0)
     gross_order_value = round(sum(abs(float(o.get("price") or 0) * int(o.get("qty") or 0)) for o in orders), 2)
@@ -9535,6 +10050,9 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "mode": mode.upper(),
         "daily_loss_limit": loss_limit,
         "realised_pnl": realised,
+        "realised_pnl_source": fill_summary["source"],
+        "fill_count": fill_summary["fill_count"],
+        "closed_trade_count": fill_summary["closed_trade_count"],
         "open_pnl": open_pnl,
         "total_pnl": round(realised + open_pnl, 2),
         "loss_remaining": round(max(0.0, loss_limit + realised), 2) if loss_limit else None,
@@ -9553,25 +10071,27 @@ async def risk_dashboard(user=Depends(get_current_user)):
 async def trade_journal(user=Depends(get_current_user)):
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     skipped = await db.skipped_signals.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
+    fill_summary = await _fill_ledger_summary(user["id"])
     completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
     failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
-    wins = len([r for r in completed if float(r.get("realised_pnl") or 0) > 0])
-    losses = len([r for r in completed if float(r.get("realised_pnl") or 0) < 0])
-    total_pnl = round(sum(float(r.get("realised_pnl") or 0) for r in completed), 2)
+    wins = fill_summary["wins"]
+    losses = fill_summary["losses"]
+    total_pnl = fill_summary["realised_pnl"]
     return {
         "summary": {
             "orders": len(rows),
             "completed": len(completed),
-            "filled_trades": len(completed),
+            "filled_trades": fill_summary["fill_count"],
             "failed_actual_orders": len(failed_actual),
             "skipped_signals": sum(int(row.get("count") or 1) for row in skipped),
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / max(1, wins + losses) * 100, 2),
             "realised_pnl": total_pnl,
+            "realised_pnl_source": fill_summary["source"],
         },
         "orders": rows,
-        "filled_trades": completed,
+        "filled_trades": fill_summary["fills"],
         "failed_actual_orders": failed_actual,
         "skipped_signals": skipped,
     }
@@ -9591,11 +10111,10 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
             {"user_id": user["id"], "strategy_id": s["id"]},
             {"_id": 0},
         ).sort("created_at", -1).to_list(200)
+        fill_summary = await _fill_ledger_summary(user["id"], mode="live", strategy_id=s["id"])
         completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
-        live_pnl = round(sum(float(o.get("realised_pnl") or 0) for o in completed), 2)
-        live_wins = len([o for o in completed if float(o.get("realised_pnl") or 0) > 0])
-        live_losses = len([o for o in completed if float(o.get("realised_pnl") or 0) < 0])
-        live_win_rate = round(live_wins / max(1, live_wins + live_losses) * 100, 2)
+        live_pnl = fill_summary["realised_pnl"]
+        live_win_rate = fill_summary["win_rate"]
         backtest_pnl = float((latest_backtest or {}).get("pnl") or 0)
         drift = round(live_pnl - backtest_pnl, 2) if latest_backtest else None
         out.append({
@@ -9609,7 +10128,9 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
             "live": {
                 "orders": len(live_orders),
                 "completed": len(completed),
+                "fills": fill_summary["fill_count"],
                 "realised_pnl": live_pnl,
+                "realised_pnl_source": fill_summary["source"],
                 "win_rate": live_win_rate,
             },
             "backtest": {
@@ -12181,11 +12702,21 @@ async def startup():
         ("paper_trading_history", [("user_id", 1), ("created_at", -1)], {}),
         ("trade_fills", "order_id", {"unique": True}),
         ("trade_fills", [("user_id", 1), ("filled_at", -1)], {}),
+        ("trade_fills", [("user_id", 1), ("broker_order_id", 1)], {}),
+        ("trade_fills", [("strategy_id", 1), ("mode", 1), ("filled_at", -1)], {}),
         ("trades", [("user_id", 1), ("closed_at", -1)], {}),
         ("order_events", [("order_id", 1), ("created_at", 1)], {}),
         ("order_events", [("user_id", 1), ("created_at", -1)], {}),
+        ("outbox_events", "id", {"unique": True}),
+        ("outbox_events", [("status", 1), ("created_at", 1)], {}),
+        ("outbox_events", [("aggregate_type", 1), ("aggregate_id", 1), ("created_at", 1)], {}),
+        ("outbox_events", [("idempotency_key", 1), ("event_type", 1)], {}),
         ("risk_events", [("user_id", 1), ("created_at", -1)], {}),
         ("risk_events", [("strategy_id", 1), ("created_at", -1)], {}),
+        ("risk_reservations", [("user_id", 1), ("status", 1), ("expires_at", 1)], {}),
+        ("risk_reservations", [("order_id", 1), ("user_id", 1)], {"unique": True}),
+        ("risk_reservations", [("strategy_id", 1), ("status", 1)], {}),
+        ("risk_state", "_id", {"unique": True}),
         ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("system_config", "_id", {}),
         ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
@@ -12216,6 +12747,7 @@ async def startup():
     for coll, key, opts in [
         ("runner_locks", "expires_at", {"expireAfterSeconds": 0}),
         ("strategy_position_locks", "expires_at", {"expireAfterSeconds": 0}),
+        ("risk_reservation_locks", "expires_at", {"expireAfterSeconds": 0}),
         ("option_trade_journal", [("strategy_id", 1), ("exit_time", -1)], {}),
         ("option_market_ticks", [("symbol", 1), ("tick_time", -1)], {}),
     ]:

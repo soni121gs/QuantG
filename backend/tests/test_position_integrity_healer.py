@@ -1,5 +1,6 @@
 import pytest
 import sys
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
@@ -101,7 +102,8 @@ async def test_place_order_core_paper_market_gating():
          patch("server._is_order_market_open", return_value=False), \
          patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": False, "status": "CLOSED", "reason": "NSE market closed"}), \
          patch("server._persist_paper_skipped_order", new_callable=AsyncMock, return_value={"id": "skip-1", "status": "SKIPPED_SIGNAL", "mode": "paper"}), \
-         patch("server._build_order_intent", new_callable=AsyncMock) as mock_intent:
+         patch("server._build_order_intent", new_callable=AsyncMock) as mock_intent, \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}):
          
          # Mock user settings
          mock_settings.return_value = {"paper_mode": True, "execution_broker": "upstox"}
@@ -243,6 +245,8 @@ async def test_paper_trading_e2e_flow():
     mock_db.strategies.update_one = AsyncMock()
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.signals.count_documents = AsyncMock(return_value=0)
+    mock_db.skipped_signals.find_one_and_update = AsyncMock(return_value=None)
+    mock_db.skipped_signals.insert_one = AsyncMock()
     mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.strategy_positions.update_one = AsyncMock()
 
@@ -256,7 +260,9 @@ async def test_paper_trading_e2e_flow():
          patch("server._insert_order_intent", new_callable=AsyncMock) as mock_insert, \
          patch("server._apply_paper_fill_to_position", new_callable=AsyncMock) as mock_fill, \
          patch("server._pre_trade_risk_gate", new_callable=AsyncMock) as mock_risk, \
-         patch("server._build_order_intent", new=AsyncMock(side_effect=mock_intent_side_effect)) as mock_intent:
+         patch("server._execution_preflight", new_callable=AsyncMock, return_value=MagicMock(ok=True)), \
+         patch("server._build_order_intent", new=AsyncMock(side_effect=mock_intent_side_effect)) as mock_intent, \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "false", "CORE_ENGINE_PAPER_ENABLED": "false"}):
          
          # Mock user and strategy settings
          mock_settings.return_value = {"paper_mode": True, "execution_broker": "upstox"}

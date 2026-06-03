@@ -198,15 +198,17 @@ class TestOptionSelectionLtp(unittest.IsolatedAsyncioTestCase):
         gw.place_order = fake_place_order
         mock_get_gateway.return_value = gw
 
-        with self.assertRaises(Exception) as ctx:
-            await _place_upstox_order(
-                user_id=self.user_id,
-                instrument_token="NSE_FO|99999",
-                side="BUY",
-                quantity=50,
-                order_type="MARKET",
-                product="MIS",
-            )
+        self.db.live_arm_state.find_one = AsyncMock(return_value={"armed": True})
+        with patch("server.db", self.db), patch.dict(os.environ, {"CORE_ENGINE_LIVE_ENABLED": "true"}):
+            with self.assertRaises(Exception) as ctx:
+                await _place_upstox_order(
+                    user_id=self.user_id,
+                    instrument_token="NSE_FO|99999",
+                    side="BUY",
+                    quantity=50,
+                    order_type="MARKET",
+                    product="MIS",
+                )
         
         self.assertIn("UDAPI10011", str(ctx.exception))
 

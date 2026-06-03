@@ -330,6 +330,7 @@ class TestAuditFixes(unittest.TestCase):
             mock_db.positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
             mock_db.strategy_position_locks.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
             mock_db.signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=10))
+            mock_db.skipped_signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
             mock_db.paper_trading_history.delete_many = AsyncMock(return_value=MagicMock(deleted_count=3))
             mock_db.trades.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
             mock_db.trade_fills.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
@@ -338,6 +339,7 @@ class TestAuditFixes(unittest.TestCase):
             mock_db.option_trade_journal.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
             mock_db.option_strategy_states.update_many = AsyncMock()
             mock_db.risk_events.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
+            mock_db.paper_wallets.replace_one = AsyncMock()
             
             with patch("server.db", mock_db):
                 user = {"id": "user-123", "email": "test@quantg.com"}
