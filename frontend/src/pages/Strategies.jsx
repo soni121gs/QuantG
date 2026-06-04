@@ -94,7 +94,7 @@ export default function Strategies() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, [load]);
 

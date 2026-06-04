@@ -11462,7 +11462,13 @@ async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional
     refresh_token = os.environ.get("UPSTOX_REFRESH_TOKEN") or (decrypt_secret(keys.get("refresh_token")) if keys else None)
     redirect_uri = _upstox_redirect_uri(None, keys)
     if not api_key and not access_token:
-        logger.warning("Upstox gateway not initialized for user=%s: no_keys", user_id)
+        _log_throttled(
+            f"upstox-no-keys:{user_id}",
+            300.0,
+            logging.WARNING,
+            "Upstox gateway not initialized for user=%s: no_keys",
+            user_id,
+        )
         return None
     if access_token:
         logger.info("Loaded Upstox access token from %s for user=%s", "env" if os.environ.get("UPSTOX_ACCESS_TOKEN") else "storage", user_id)
