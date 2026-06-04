@@ -146,13 +146,21 @@ def _contract_resolution_update(
     clear_reason: str,
     is_paper_mode: bool,
     is_mcx_underlying: bool,
+    diagnostics: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    diagnostics = diagnostics or {}
     update_set = {
         **eval_set,
         "last_error": None if is_paper_mode else clear_reason,
         "last_filter_reason": clear_reason,
         "last_signals_count": signals_count,
         "last_signal_action": action,
+        "last_resolver_stage": diagnostics.get("resolver_stage") or diagnostics.get("stage"),
+        "last_resolver_reason": diagnostics.get("resolver_reason") or diagnostics.get("reason") or clear_reason,
+        "last_instrument_source": diagnostics.get("instrument_source"),
+        "last_instrument_key": diagnostics.get("instrument_key"),
+        "last_quote_source": diagnostics.get("quote_source"),
+        "last_quote_age_sec": diagnostics.get("quote_age_sec"),
     }
     update_doc: Dict[str, Any] = {"$set": update_set, "$inc": inc_set}
     if is_paper_mode and is_mcx_underlying:
@@ -440,10 +448,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         if not option_contract:
                             underlying_name = opt_cfg.get("underlying", "NIFTY")
                             is_mcx_underlying = str(underlying_name).upper() in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+                            resolver_diag = getattr(resolve_option_fn, "last_diagnostics", {}) if resolve_option_fn else {}
                             clear_reason = (
-                                f"{underlying_name} contract unresolved: check Upstox MCX_FO permission / instrument master."
+                                (resolver_diag.get("resolver_reason") or resolver_diag.get("reason") or f"{underlying_name} MCX contract unresolved.")
                                 if is_mcx_underlying else
-                                f"Upstox option contract resolution failed for {underlying_name}. Check OAuth, exchange segment permission, and instrument search logs."
+                                (resolver_diag.get("resolver_reason") or resolver_diag.get("reason") or f"Upstox option contract resolution failed for {underlying_name}.")
                             )
                             update_doc = _contract_resolution_update(
                                 eval_set=eval_set,
@@ -453,6 +462,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 clear_reason=clear_reason,
                                 is_paper_mode=is_paper_mode,
                                 is_mcx_underlying=is_mcx_underlying,
+                                diagnostics=resolver_diag,
                             )
                             await db.strategies.update_one({"id": s["id"]}, update_doc)
                             continue
@@ -502,7 +512,13 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                   "last_signal_action": action,
                                   "last_signals_count": signals_count,
                                   "last_fired_signal_date": last_sig_date,
-                                  "last_traded_symbol": target_symbol},
+                                  "last_traded_symbol": target_symbol,
+                                  "last_resolver_stage": (option_contract or {}).get("resolver_stage"),
+                                  "last_resolver_reason": (option_contract or {}).get("resolver_reason"),
+                                  "last_instrument_source": (option_contract or {}).get("source"),
+                                  "last_instrument_key": (option_contract or {}).get("instrument_key"),
+                                  "last_quote_source": (option_contract or {}).get("quote_source"),
+                                  "last_quote_age_sec": (option_contract or {}).get("quote_age_sec")},
                          "$inc": {**inc_set, "signals_fired": 1}},
                     )
                     logger.info(f"strategy {s['id']} → queued PENDING {action} signal {signal_id} for {target_symbol}")

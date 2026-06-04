@@ -30,7 +30,6 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field, EmailStr, validator
 
-import kite_helper
 import upstox_helper
 from brokers.upstox_gateway import UpstoxGateway, extract_order_id as extract_upstox_order_id
 from brokers import upstox_gateway as upstox_gateway_utils
@@ -70,9 +69,21 @@ from order_lifecycle import (
 )
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality, parse_market_timestamp
 from core.strategy_leaderboard import build_strategy_leaderboard
+from core.instrument_resolver import InstrumentResolver
+from core.models import InstrumentSource
+from core.quote_service import QuoteService
 
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
+
+
+class _LegacyKiteHelperProxy:
+    def __getattr__(self, name: str):
+        import importlib
+        return getattr(importlib.import_module("kite_helper"), name)
+
+
+kite_helper = _LegacyKiteHelperProxy()
 
 # Mongo
 mongo_url = os.environ['MONGO_URL']
@@ -6426,13 +6437,10 @@ def _intent_side(intent_str: str) -> str:
 
 def _runtime_broker_name(broker_raw: str) -> str:
     """Normalise internal broker identifiers to the display-ready name."""
-    mapping = {
-        "zerodha": "zerodha",
-        "kotak_neo": "kotak_neo",
-        "kotak": "kotak_neo",
-        "upstox": "upstox",
-    }
-    return mapping.get((broker_raw or "").lower(), broker_raw or "zerodha")
+    broker = (broker_raw or "upstox").lower()
+    if broker != "upstox":
+        return "unsupported_legacy_broker"
+    return "upstox"
 
 
 # ---------------------------------------------------------------------------
@@ -10678,7 +10686,16 @@ def _nse_token(sym: str) -> str:
     return f"NSE:{sym}"
 
 
-from brokers.quarantine import get_user_kite, get_user_kotak_status, get_user_kotak_gateway
+async def get_user_kite(user_id: str):
+    return None, {"connected": False, "reason": "zerodha_runtime_removed"}
+
+
+async def get_user_kotak_status(user_id: str) -> Dict[str, Any]:
+    return {"connected": False, "reason": "kotak_runtime_removed", "gateway": {}}
+
+
+async def get_user_kotak_gateway(user_id: str):
+    return None
 
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
@@ -12870,15 +12887,157 @@ async def startup():
     async def _resolve_option(user_id: str, underlying: str, signal_action: str,
                               strike_mode: str, otm_points: int = 0,
                               expiry_offset: int = 0, strategy: Optional[dict] = None):
-        return await _resolve_option_for_strategy(
-            user_id,
-            strategy or {},
-            underlying,
-            signal_action,
-            strike_mode,
-            otm_points,
-            expiry_offset
+        strategy = strategy or {}
+        settings = await get_user_settings(user_id)
+        mode = str(strategy.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")).lower()
+        underlying = str(underlying or "NIFTY").upper()
+        strike_mode_u = str(strike_mode or "ATM_BUY").upper()
+        action_u = str(signal_action or "BUY").upper()
+        is_mcx = underlying in COMMODITY_UNDERLYINGS
+        option_side = "CE" if action_u == "BUY" else "PE"
+        if "SELL" in strike_mode_u:
+            option_side = "PE" if action_u == "BUY" else "CE"
+        strike_rule = "OTM1" if int(otm_points or 0) > 0 else "ATM"
+        instrument_type = "MCX_OPTION" if is_mcx else "INDEX_OPTION"
+        diagnostics: Dict[str, Any] = {
+            "resolver_stage": "start",
+            "resolver_reason": "starting_upstox_unified_resolver",
+            "instrument_source": None,
+            "instrument_key": None,
+            "quote_source": None,
+            "quote_age_sec": None,
+        }
+        _resolve_option.last_diagnostics = diagnostics
+
+        upstox_gw = await get_user_upstox_gateway(user_id)
+        spot_hint = None
+        if is_mcx:
+            future = await _resolve_upstox_mcx_future_contract(underlying)
+            if future and future.get("instrument_key") and upstox_gw and upstox_gw.connected:
+                try:
+                    q = await asyncio.to_thread(upstox_gw.get_market_quote, [future["instrument_key"]])
+                    spot_hint = UpstoxGateway.parse_quote_ltp(q, future["instrument_key"])
+                    diagnostics.update({
+                        "resolver_stage": "mcx_future_quote",
+                        "resolver_reason": "spot_from_upstox_mcx_future",
+                        "instrument_key": future.get("instrument_key"),
+                        "quote_source": "UPSTOX_LIVE",
+                    })
+                except Exception as exc:
+                    diagnostics.update({
+                        "resolver_stage": "mcx_future_quote",
+                        "resolver_reason": f"upstox_future_quote_failed:{exc}",
+                        "instrument_key": future.get("instrument_key"),
+                    })
+
+        resolver = InstrumentResolver(db, upstox_gateway=upstox_gw)
+        instrument = await resolver.resolve_instrument_with_source(
+            underlying=underlying,
+            instrument_type=instrument_type,
+            option_side=option_side,
+            strike_rule=strike_rule,
+            expiry_rule=int(expiry_offset or 0),
+            spot_price_hint=float(spot_hint or 0) if spot_hint else None,
+            mode=mode,
         )
+        diagnostics.update({
+            "resolver_stage": resolver.last_diagnostics.get("stage"),
+            "resolver_reason": resolver.last_diagnostics.get("reason"),
+            "instrument_source": getattr(instrument.source, "value", None) if instrument else None,
+            "instrument_key": instrument.instrument_key if instrument else diagnostics.get("instrument_key"),
+        })
+        _resolve_option.last_diagnostics = diagnostics
+        if not instrument:
+            return None
+        if mode == "live" and instrument.source == InstrumentSource.PAPER_SIMULATED:
+            diagnostics.update({
+                "resolver_stage": "live_contract_gate",
+                "resolver_reason": "live_rejects_paper_simulated_instrument",
+                "instrument_source": instrument.source.value,
+                "instrument_key": instrument.instrument_key,
+            })
+            _resolve_option.last_diagnostics = diagnostics
+            return None
+
+        quote_service = QuoteService(db, upstox_gw)
+        quote = await quote_service.get_quote(
+            instrument.instrument_key,
+            mode=mode,
+            allow_simulated=(mode == "paper"),
+        )
+        if not quote and mode == "paper" and instrument.source == InstrumentSource.PAPER_SIMULATED:
+            base = float(spot_hint or 0)
+            if base <= 0:
+                base = 6500.0 if underlying in {"CRUDEOIL", "CRUDEOILM"} else 245.0 if underlying in {"NATURALGAS", "NATGASMINI"} else 100.0
+            simulated_ltp = max(1.0, round(base * 0.01, 2))
+            quote = type("PaperQuote", (), {
+                "ltp": simulated_ltp,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source": "PAPER_SIMULATED",
+                "symbol": instrument.symbol,
+            })()
+        if not quote:
+            diagnostics.update({
+                "resolver_stage": "quote_lookup",
+                "resolver_reason": "upstox_fresh_quote_unavailable",
+                "instrument_source": instrument.source.value,
+                "instrument_key": instrument.instrument_key,
+                "quote_source": None,
+            })
+            _resolve_option.last_diagnostics = diagnostics
+            return None
+        if mode == "live" and str(quote.source).upper().startswith("PAPER"):
+            diagnostics.update({
+                "resolver_stage": "live_quote_gate",
+                "resolver_reason": "live_rejects_paper_simulated_quote",
+                "instrument_source": instrument.source.value,
+                "instrument_key": instrument.instrument_key,
+                "quote_source": quote.source,
+            })
+            _resolve_option.last_diagnostics = diagnostics
+            return None
+
+        quote_age_sec = None
+        try:
+            quote_ts = datetime.fromisoformat(str(quote.timestamp).replace("Z", "+00:00"))
+            if quote_ts.tzinfo is None:
+                quote_ts = quote_ts.replace(tzinfo=timezone.utc)
+            quote_age_sec = round((datetime.now(timezone.utc) - quote_ts).total_seconds(), 3)
+        except Exception:
+            quote_age_sec = None
+        diagnostics.update({
+            "resolver_stage": resolver.last_diagnostics.get("stage"),
+            "resolver_reason": resolver.last_diagnostics.get("reason"),
+            "instrument_source": instrument.source.value,
+            "instrument_key": instrument.instrument_key,
+            "quote_source": quote.source,
+            "quote_age_sec": quote_age_sec,
+        })
+        _resolve_option.last_diagnostics = diagnostics
+        return {
+            "tradingsymbol": instrument.symbol,
+            "trading_symbol": instrument.symbol,
+            "exchange": instrument.exchange,
+            "segment": instrument.segment,
+            "instrument_token": instrument.instrument_key,
+            "instrument_key": instrument.instrument_key,
+            "asset_class": "OPTION_LONG",
+            "asset_type": "option",
+            "option_type": instrument.option_type,
+            "strike": instrument.strike,
+            "lot_size": instrument.lot_size,
+            "tick_size": instrument.tick_size,
+            "expiry": instrument.expiry,
+            "underlying": instrument.underlying,
+            "transaction_type": action_u,
+            "source": instrument.source.value,
+            "simulated": instrument.source == InstrumentSource.PAPER_SIMULATED,
+            "ltp": float(quote.ltp),
+            "quote_source": quote.source,
+            "quote_age_sec": quote_age_sec,
+            "resolver_stage": diagnostics.get("resolver_stage"),
+            "resolver_reason": diagnostics.get("resolver_reason"),
+        }
 
     app.state.tick_manager = RealtimeTickManager()
     app.state.kotak_gateways = _KOTAK_GATEWAYS

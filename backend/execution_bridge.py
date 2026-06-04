@@ -38,7 +38,6 @@ class BrokerOrderRateLimiter:
 
 
 _BROKER_LIMITERS = {
-    "zerodha": BrokerOrderRateLimiter(10, 400),
     "upstox": BrokerOrderRateLimiter(10, 400),
 }
 
@@ -97,17 +96,12 @@ class ExecutionDispatchPayload(BaseModel):
 
 
 def canonical_broker(value: str) -> str:
-    broker = (value or "zerodha").strip().lower()
-    if broker in {"kotak_neo", "kotak"}:
-        return "kotak"
-    return broker
+    broker = (value or "upstox").strip().lower()
+    return "upstox" if broker in {"upstox", ""} else broker
 
 
 def runtime_broker(value: str) -> str:
-    broker = canonical_broker(value)
-    if broker == "kotak":
-        return "kotak_neo"
-    return broker
+    return canonical_broker(value)
 
 
 def segment_from_exchange(exchange: str, asset_class: str = "DIRECT") -> str:
@@ -174,7 +168,7 @@ def normalize_broker_failure(exc: Exception) -> str:
 
 
 UpstoxPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
-KitePlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
+LegacyPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
 UpstoxTokenFn = Callable[[str, str, str], Optional[str]]
 
 
@@ -183,7 +177,7 @@ async def submit_order(
     payload: ExecutionDispatchPayload,
     *,
     place_upstox: UpstoxPlaceFn,
-    place_kite: KitePlaceFn,
+    place_kite: LegacyPlaceFn,
     resolve_upstox_token: UpstoxTokenFn,
 ) -> Dict[str, Any]:
     """Place order through the configured broker. Never raises — returns ok/error envelope."""
@@ -208,56 +202,33 @@ async def submit_order(
     try:
 
 
-        if broker == "upstox":
-            token = resolve_upstox_token(validated.exchange, validated.tradingsymbol, validated.instrument_token)
-            if not token:
-                raise RuntimeError(
-                    f"Upstox instrument token unavailable for {validated.tradingsymbol} ({validated.segment})."
-                )
-            result = await place_upstox(
-                user_id,
-                instrument_token=token,
-                side=validated.side,
-                quantity=validated.quantity,
-                order_type=validated.order_type,
-                product=validated.product,
-                price=validated.price,
-                tag=validated.tag,
+        if broker != "upstox":
+            raise RuntimeError(f"Unsupported broker for unified runtime: {broker}. Upstox is required.")
+        token = resolve_upstox_token(validated.exchange, validated.tradingsymbol, validated.instrument_token)
+        if not token:
+            raise RuntimeError(
+                f"Upstox instrument token unavailable for {validated.tradingsymbol} ({validated.segment})."
             )
-            broker_order_id = result.get("broker_order_id") or result.get("order_id")
-            if result.get("ok") is False:
-                raise RuntimeError(result.get("error") or "Upstox order rejected")
-            return {
-                "ok": True,
-                "status": "PENDING_BROKER",
-                "broker_order_id": broker_order_id,
-                "raw": result.get("raw") or result,
-                "attempts": int(result.get("attempts") or 1),
-                "recovered": False,
-                "error": None,
-                "dispatch": validated.model_dump(),
-            }
-
-        result = await place_kite(
+        result = await place_upstox(
             user_id,
-            tradingsymbol=validated.tradingsymbol,
-            exchange=validated.exchange,
-            transaction_type=validated.side,
+            instrument_token=token,
+            side=validated.side,
             quantity=validated.quantity,
             order_type=validated.order_type,
             product=validated.product,
             price=validated.price,
             tag=validated.tag,
         )
-        if not result.get("ok"):
-            raise RuntimeError(result.get("error") or "Kite order rejected")
+        broker_order_id = result.get("broker_order_id") or result.get("order_id")
+        if result.get("ok") is False:
+            raise RuntimeError(result.get("error") or "Upstox order rejected")
         return {
             "ok": True,
             "status": "PENDING_BROKER",
-            "broker_order_id": result.get("order_id"),
-            "raw": result.get("broker_order") or result,
+            "broker_order_id": broker_order_id,
+            "raw": result.get("raw") or result,
             "attempts": int(result.get("attempts") or 1),
-            "recovered": bool(result.get("recovered")),
+            "recovered": False,
             "error": None,
             "dispatch": validated.model_dump(),
         }

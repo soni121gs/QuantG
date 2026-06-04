@@ -5,6 +5,7 @@ Unified LTP fetching with source tracking.
 - Paper mode: uses Upstox LTP if available, falls back to simulated cache
 """
 
+import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 import logging
@@ -146,12 +147,24 @@ class QuoteService:
                 if quote and "last_price" in quote:
                     return {
                         "ltp": quote["last_price"],
-                        "timestamp": datetime.now(timezone.utc).isoformat()
+                        "timestamp": quote.get("timestamp") or datetime.now(timezone.utc).isoformat()
                     }
             elif hasattr(self.upstox_client, 'get_ltp'):
                 quote = await self.upstox_client.get_ltp(symbol)
                 if quote:
                     return quote
+            if hasattr(self.upstox_client, 'get_market_quote'):
+                quote = await asyncio.to_thread(self.upstox_client.get_market_quote, [symbol])
+                parser = getattr(self.upstox_client, "parse_quote_ltp", None)
+                ltp = parser(quote, symbol) if parser else None
+                if not ltp:
+                    node = ((quote or {}).get("data") or {}).get(symbol) or {}
+                    ltp = node.get("last_price") or node.get("ltp")
+                if ltp:
+                    return {
+                        "ltp": float(ltp),
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
         except Exception as e:
             logger.warning(f"Upstox LTP fetch failed for {symbol}: {e}")
         

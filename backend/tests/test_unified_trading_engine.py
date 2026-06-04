@@ -337,32 +337,39 @@ class TestInstrumentResolver:
     async def test_nse_option_resolution(self):
         """NSE option resolves with UPSTOX_MASTER source."""
         db = AsyncMock()
-        resolver = InstrumentResolver(db)
+        upstox = MagicMock()
+        upstox.connected = True
+        upstox.get_market_quote.return_value = {
+            "data": {"NSE_INDEX|Nifty 50": {"last_price": 24850.0}}
+        }
+        upstox.parse_quote_ltp.return_value = 24850.0
+        upstox.get_option_chain.return_value = {
+            "status": "success",
+            "data": [{
+                "strike_price": 24850,
+                "expiry": date.today().isoformat(),
+                "call_options": {
+                    "instrument_key": "NSE_FO|12345",
+                    "trading_symbol": "NIFTY26FEB24850CE",
+                    "lot_size": 65,
+                },
+                "put_options": {},
+            }],
+        }
+        resolver = InstrumentResolver(db, upstox_gateway=upstox)
         
-        kite = AsyncMock()
+        inst = await resolver.resolve_instrument_with_source(
+            underlying="NIFTY",
+            instrument_type="INDEX_OPTION",
+            option_side="CE",
+            strike_rule="ATM",
+            mode="paper"
+        )
         
-        with patch('options_helper.resolve_atm_option') as mock_resolve:
-            mock_resolve.return_value = {
-                "tradingsymbol": "NIFTY26FEB24850CE",
-                "exchange": "NSE",
-                "instrument_token": "12345",
-                "strike": 850.0,
-                "lot_size": 75,
-                "expiry": date.today()
-            }
-            
-            inst = await resolver.resolve_instrument_with_source(
-                underlying="NIFTY",
-                instrument_type="INDEX_OPTION",
-                option_side="CE",
-                strike_rule="ATM",
-                kite_client=kite,
-                mode="paper"
-            )
-            
-            assert inst is not None
-            assert inst.source == InstrumentSource.UPSTOX_MASTER
-            assert inst.symbol == "NIFTY26FEB24850CE"
+        assert inst is not None
+        assert inst.source == InstrumentSource.UPSTOX_MASTER
+        assert inst.symbol == "NIFTY26FEB24850CE"
+        assert inst.instrument_key == "NSE_FO|12345"
     
     @pytest.mark.asyncio
     async def test_mcx_paper_simulation_on_master_fail(self):

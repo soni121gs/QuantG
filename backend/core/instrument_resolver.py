@@ -1,28 +1,57 @@
-"""QuantG Instrument Resolver.
+"""Upstox-only instrument resolver used by the unified strategy pipeline."""
+from __future__ import annotations
 
-One source of truth for resolving option and commodity instruments from Zerodha/Upstox masters.
-Ensures option instruments are never incorrectly classified as EQUITY.
-
-Unified paper/live pipeline:
-- Master available → UPSTOX_MASTER source
-- Paper + master missing → PAPER_SIMULATED source (with fallback)
-- Live + master missing → return None (fail in readiness check)
-"""
-from typing import Dict, Any, Optional
 import logging
-from core.market_domains import resolve_domain_by_underlying, DomainType
-from core.models import Instrument, InstrumentSource
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-# Import existing helpers
-import options_helper
+from core.market_domains import DomainType, resolve_domain_by_underlying
+from core.models import Instrument, InstrumentSource
 from mcx_contract_resolver import MCXContractResolver
 
 logger = logging.getLogger("quantg.instrument_resolver")
 
+
+INDEX_SPOT_KEYS = {
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "SENSEX": "BSE_INDEX|SENSEX",
+}
+
+PAPER_SPOT_HINTS = {
+    "NIFTY": 24850.0,
+    "BANKNIFTY": 54000.0,
+    "SENSEX": 80500.0,
+    "CRUDEOIL": 6500.0,
+    "CRUDEOILM": 6500.0,
+    "NATURALGAS": 245.0,
+    "NATGASMINI": 245.0,
+}
+
+
+def _round_to_strike(price: float, interval: int) -> int:
+    interval = max(1, int(interval or 1))
+    return int(round(float(price) / interval) * interval)
+
+
+def _source_value(source: InstrumentSource | str) -> str:
+    return source.value if isinstance(source, InstrumentSource) else str(source)
+
+
 class InstrumentResolver:
-    def __init__(self, db):
+    def __init__(self, db, upstox_gateway: Optional[Any] = None):
         self.db = db
+        self.upstox_gateway = upstox_gateway
         self.mcx_resolver = MCXContractResolver(db)
+        self.last_diagnostics: Dict[str, Any] = {}
+
+    def _diag(self, *, stage: str, reason: str = "", **extra: Any) -> None:
+        self.last_diagnostics = {
+            "stage": stage,
+            "reason": reason,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            **{k: v for k, v in extra.items() if v is not None},
+        }
 
     async def resolve_instrument_with_source(
         self,
@@ -32,54 +61,33 @@ class InstrumentResolver:
         strike_rule: str = "NONE",
         expiry_rule: int = 0,
         spot_price_hint: Optional[float] = None,
-        kite_client: Optional[Any] = None,
-        mode: str = "paper"
+        upstox_gateway: Optional[Any] = None,
+        mode: str = "paper",
+        **_ignored: Any,
     ) -> Optional[Instrument]:
-        """Resolve instrument with source tracking (unified paper/live pipeline).
-        
-        Three paths:
-        1. Master available → InstrumentSource.UPSTOX_MASTER
-        2. Paper + master missing → InstrumentSource.PAPER_SIMULATED
-        3. Live + master missing → return None (fail in readiness check)
-        
-        Args:
-            underlying: Underlying symbol (e.g., NIFTY, CRUDEOILM)
-            instrument_type: INDEX_OPTION, MCX_FUTURE, MCX_OPTION, EQUITY
-            option_side: CE, PE, NONE
-            strike_rule: ATM, ITM1, OTM1, NONE
-            expiry_rule: Expiry offset
-            spot_price_hint: Spot price for MCX option strike selection
-            kite_client: Kite/Upstox client for NSE/BSE resolution
-            mode: "paper" or "live"
-            
-        Returns:
-            Instrument with source tracking, or None if unresolvable
+        """Resolve a tradable Upstox instrument with source tracking.
+
+        LIVE never returns simulated instruments. PAPER can return a clearly
+        marked simulated instrument when the real Upstox master path is absent.
         """
-        und_upper = str(underlying).upper()
-        inst_type_upper = str(instrument_type).upper()
-        side_upper = str(option_side).upper()
-        strike_upper = str(strike_rule).upper()
-        
-        domain = resolve_domain_by_underlying(und_upper)
-        
-        # MCX System (MCX_FO)
+        und = str(underlying or "").upper()
+        inst_type = str(instrument_type or "").upper()
+        side = str(option_side or "NONE").upper()
+        strike = str(strike_rule or "NONE").upper()
+        mode = str(mode or "paper").lower()
+        self.upstox_gateway = upstox_gateway or self.upstox_gateway
+        self._diag(stage="start", underlying=und, instrument_type=inst_type, mode=mode)
+
+        domain = resolve_domain_by_underlying(und)
         if domain.name == DomainType.MCX_FO:
-            return await self._resolve_mcx_instrument(
-                und_upper, inst_type_upper, side_upper, strike_upper,
-                expiry_rule, spot_price_hint, mode
-            )
-        
-        # NSE / BSE Index Options
-        if inst_type_upper == "INDEX_OPTION":
-            return await self._resolve_nse_bse_option(
-                und_upper, inst_type_upper, side_upper, strike_upper,
-                expiry_rule, kite_client, domain
-            )
-        
-        logger.error(f"Unsupported instrument: {domain.name} / {inst_type_upper}")
+            return await self._resolve_mcx(und, inst_type, side, strike, expiry_rule, spot_price_hint, mode)
+        if inst_type == "INDEX_OPTION":
+            return await self._resolve_index_option(und, side, strike, expiry_rule, spot_price_hint, mode)
+
+        self._diag(stage="unsupported_domain", reason=f"{domain.name}/{inst_type} is unsupported")
         return None
-    
-    async def _resolve_mcx_instrument(
+
+    async def _resolve_mcx(
         self,
         underlying: str,
         inst_type: str,
@@ -87,344 +95,300 @@ class InstrumentResolver:
         strike_rule: str,
         expiry_rule: int,
         spot_price_hint: Optional[float],
-        mode: str
+        mode: str,
     ) -> Optional[Instrument]:
-        """Resolve MCX instrument with paper/live split."""
+        cache_status = None
         try:
-            await self.mcx_resolver.ensure_cache(reason=f"core-resolve:{underlying}")
-        except Exception as e:
-            logger.warning(f"MCX master cache load failed: {e}")
+            cache_status = await self.mcx_resolver.ensure_cache(reason=f"unified-resolve:{underlying}")
+            self._diag(stage="mcx_master_cache", reason="cache_ready", cache_status=cache_status)
+        except Exception as exc:
+            self._diag(stage="mcx_master_cache", reason=f"cache_load_failed:{exc}")
             if mode == "live":
-                # Live mode: hard fail if master unavailable
-                logger.error(f"Live mode requires MCX master, unavailable for {underlying}")
                 return None
-            # Paper mode: continue to try simulation
-        
-        # Try to resolve from master
+
         if inst_type == "MCX_FUTURE":
-            future_row = await self.mcx_resolver.resolve_future(
-                underlying=underlying,
-                expiry_offset=expiry_rule
-            )
-            if future_row:
+            future = await self.mcx_resolver.resolve_future(underlying=underlying, expiry_offset=int(expiry_rule or 0))
+            if future:
+                self._diag(
+                    stage="mcx_future_lookup",
+                    reason="matched_upstox_master",
+                    instrument_key=future.get("instrument_key"),
+                    trading_symbol=future.get("trading_symbol"),
+                )
                 return Instrument(
-                    symbol=future_row["trading_symbol"],
+                    symbol=future["trading_symbol"],
                     underlying=underlying,
                     exchange="MCX",
                     segment="MCX_FO",
-                    instrument_key=future_row["instrument_key"],
-                    lot_size=int(future_row["lot_size"]),
-                    tick_size=float(future_row.get("tick_size", 0.05)),
-                    expiry=future_row.get("expiry"),
-                    source=InstrumentSource.UPSTOX_MASTER
+                    instrument_key=future["instrument_key"],
+                    lot_size=int(future.get("lot_size") or 1),
+                    tick_size=float(future.get("tick_size") or 0.05),
+                    expiry=future.get("expiry"),
+                    source=InstrumentSource.UPSTOX_MASTER,
                 )
-            
-            # Master missing: paper can simulate, live fails
-            if mode == "paper":
-                sim = await self._create_simulated_mcx_future(underlying, expiry_rule)
-                if sim:
-                    return sim
+            self._diag(stage="mcx_future_lookup", reason="no_future_match", cache_status=cache_status)
+            return await self._paper_simulated_future(underlying, mode)
+
+        if inst_type != "MCX_OPTION":
+            self._diag(stage="mcx_instrument_type", reason=f"unsupported:{inst_type}")
             return None
-        
-        if inst_type == "MCX_OPTION":
-            if not spot_price_hint or spot_price_hint <= 0:
-                if mode == "live":
-                    logger.error(f"Spot price required for live MCX option: {underlying}")
-                    return None
-                # Paper: try to continue with simulated price
-                spot_price_hint = await self._get_simulated_spot(underlying)
-                if not spot_price_hint:
-                    return None
-            
-            domain = resolve_domain_by_underlying(underlying)
-            strike_interval = domain.get_strike_interval(underlying)
-            otm_points = 0
-            if strike_rule == "OTM1":
-                otm_points = strike_interval
-            elif strike_rule == "ITM1":
-                otm_points = -strike_interval
-            
-            # Try to resolve from master
-            opt_row = await self.mcx_resolver.resolve(
+
+        spot = float(spot_price_hint or 0)
+        if spot <= 0:
+            if mode == "live":
+                self._diag(stage="mcx_spot_price", reason="live_requires_real_spot")
+                return None
+            spot = await self._paper_spot(underlying)
+            self._diag(stage="mcx_spot_price", reason="using_paper_spot_hint", spot=spot)
+
+        domain = resolve_domain_by_underlying(underlying)
+        strike_interval = int(domain.get_strike_interval(underlying) or 1)
+        otm_points = 0
+        if strike_rule == "OTM1":
+            otm_points = strike_interval
+        elif strike_rule == "ITM1":
+            otm_points = -strike_interval
+
+        opt = await self.mcx_resolver.resolve(
+            underlying=underlying,
+            spot=spot,
+            option_type=option_side,
+            strike_interval=strike_interval,
+            otm_points=otm_points,
+            expiry_offset=int(expiry_rule or 0),
+        )
+        if opt:
+            key = opt.get("instrument_key") or opt.get("instrument_token")
+            self._diag(
+                stage="mcx_option_lookup",
+                reason="matched_upstox_master",
+                instrument_key=key,
+                trading_symbol=opt.get("trading_symbol"),
+                strike=opt.get("strike"),
+                expiry=opt.get("expiry"),
+            )
+            return Instrument(
+                symbol=opt["trading_symbol"],
                 underlying=underlying,
-                spot=spot_price_hint,
+                exchange="MCX",
+                segment="MCX_FO",
+                instrument_key=key,
+                lot_size=int(opt.get("lot_size") or domain.get_lot_size(underlying)),
+                tick_size=float(opt.get("tick_size") or 0.05),
+                expiry=opt.get("expiry"),
+                strike=float(opt.get("strike") or 0),
                 option_type=option_side,
-                strike_interval=strike_interval,
-                otm_points=otm_points,
-                expiry_offset=expiry_rule
+                source=InstrumentSource.UPSTOX_MASTER,
             )
-            if opt_row:
-                return Instrument(
-                    symbol=opt_row["trading_symbol"],
-                    underlying=underlying,
-                    exchange="MCX",
-                    segment="MCX_FO",
-                    instrument_key=opt_row["instrument_token"],
-                    lot_size=int(opt_row["lot_size"]),
-                    tick_size=0.05,
-                    expiry=opt_row.get("expiry"),
-                    strike=float(opt_row["strike"]),
-                    option_type=option_side,
-                    source=InstrumentSource.UPSTOX_MASTER
-                )
-            
-            # Master missing: paper can simulate, live fails
-            if mode == "paper":
-                sim = await self._create_simulated_mcx_option(
-                    underlying, option_side, spot_price_hint, strike_rule
-                )
-                if sim:
-                    return sim
-            return None
-        
-        logger.error(f"MCX Domain does not support: {inst_type}")
-        return None
-    
-    async def _resolve_nse_bse_option(
+
+        self._diag(
+            stage="mcx_option_lookup",
+            reason="no_option_match_for_underlying_expiry_strike",
+            underlying=underlying,
+            option_side=option_side,
+            spot=spot,
+            strike_interval=strike_interval,
+            expiry_offset=int(expiry_rule or 0),
+        )
+        return await self._paper_simulated_option(underlying, option_side, spot, strike_rule, mode)
+
+    async def _resolve_index_option(
         self,
         underlying: str,
-        inst_type: str,
         option_side: str,
         strike_rule: str,
         expiry_rule: int,
-        kite_client: Optional[Any],
-        domain
+        spot_price_hint: Optional[float],
+        mode: str,
     ) -> Optional[Instrument]:
-        """Resolve NSE/BSE option with source tracking."""
-        if not kite_client:
-            logger.error("Kite client required for NSE/BSE option resolution")
-            return None
-        
-        strike_interval = domain.get_strike_interval(underlying)
-        strike_offset = 0
+        gw = self.upstox_gateway
+        domain = resolve_domain_by_underlying(underlying)
+        interval = int(domain.get_strike_interval(underlying) or 1)
+        spot = float(spot_price_hint or 0)
+        if spot <= 0:
+            spot = await self._upstox_spot(underlying)
+        if spot <= 0:
+            if mode == "live":
+                self._diag(stage="index_spot_price", reason="live_requires_real_upstox_spot")
+                return None
+            spot = await self._paper_spot(underlying)
+            self._diag(stage="index_spot_price", reason="using_paper_spot_hint", spot=spot)
+
+        target_strike = _round_to_strike(spot, interval)
         if strike_rule == "OTM1":
-            strike_offset = strike_interval
+            target_strike += interval
         elif strike_rule == "ITM1":
-            strike_offset = -strike_interval
-        
-        contract = options_helper.resolve_atm_option(
-            kite=kite_client,
+            target_strike -= interval
+        target_strike = _round_to_strike(target_strike, interval)
+
+        if gw and getattr(gw, "connected", True):
+            inst = await self._lookup_index_option_chain(gw, underlying, option_side, target_strike, domain)
+            if inst:
+                return inst
+
+        self._diag(
+            stage="index_option_lookup",
+            reason="no_upstox_option_match",
             underlying=underlying,
-            option_type=option_side,
-            strike_offset_points=strike_offset,
-            expiry_offset_weeks=expiry_rule
+            option_side=option_side,
+            target_strike=target_strike,
+            expiry_offset=int(expiry_rule or 0),
         )
-        
-        if contract:
-            return Instrument(
-                symbol=contract["tradingsymbol"],
-                underlying=underlying,
-                exchange=contract["exchange"],
-                segment=domain.segment,
-                instrument_key=f"{contract['exchange']}:{contract['tradingsymbol']}",
-                lot_size=int(contract["lot_size"]),
-                tick_size=0.05,
-                expiry=contract.get("expiry"),
-                strike=float(contract["strike"]),
-                option_type=option_side,
-                source=InstrumentSource.UPSTOX_MASTER
-            )
+        if mode == "live":
+            return None
+        return await self._paper_simulated_index_option(underlying, option_side, target_strike)
+
+    async def _lookup_index_option_chain(self, gw: Any, underlying: str, option_side: str, target_strike: int, domain: Any) -> Optional[Instrument]:
+        spot_key = INDEX_SPOT_KEYS.get(underlying)
+        if not spot_key or not hasattr(gw, "get_option_chain"):
+            self._diag(stage="index_option_lookup", reason="upstox_option_chain_unavailable", spot_key=spot_key)
+            return None
+        try:
+            chain = gw.get_option_chain(spot_key, None)
+            rows = (chain or {}).get("data") or []
+            for row in rows:
+                try:
+                    row_strike = int(float(row.get("strike_price") or row.get("strike") or 0))
+                except Exception:
+                    continue
+                if row_strike != int(target_strike):
+                    continue
+                opt_node = row.get("call_options" if option_side == "CE" else "put_options") or {}
+                key = opt_node.get("instrument_key")
+                symbol = opt_node.get("trading_symbol") or opt_node.get("tradingsymbol")
+                if not key:
+                    continue
+                self._diag(
+                    stage="index_option_lookup",
+                    reason="matched_upstox_option_chain",
+                    instrument_key=key,
+                    trading_symbol=symbol,
+                    strike=target_strike,
+                )
+                return Instrument(
+                    symbol=symbol or str(key),
+                    underlying=underlying,
+                    exchange=domain.exchange,
+                    segment=domain.segment,
+                    instrument_key=str(key),
+                    lot_size=int(opt_node.get("lot_size") or domain.get_lot_size(underlying)),
+                    tick_size=float(opt_node.get("tick_size") or 0.05),
+                    expiry=row.get("expiry"),
+                    strike=float(target_strike),
+                    option_type=option_side,
+                    source=InstrumentSource.UPSTOX_MASTER,
+                )
+        except Exception as exc:
+            self._diag(stage="index_option_lookup", reason=f"upstox_option_chain_error:{exc}")
         return None
-    
-    async def _create_simulated_mcx_future(
-        self,
-        underlying: str,
-        expiry_rule: int
-    ) -> Optional[Instrument]:
-        """Create simulated MCX future for paper mode."""
+
+    async def _upstox_spot(self, underlying: str) -> float:
+        gw = self.upstox_gateway
+        key = INDEX_SPOT_KEYS.get(underlying)
+        if not gw or not key or not hasattr(gw, "get_market_quote"):
+            return 0.0
         try:
-            domain = resolve_domain_by_underlying(underlying)
-            lot_size = domain.get_lot_size(underlying)
-            
-            # Create synthetic instrument
-            return Instrument(
-                symbol=f"{underlying}_SIM",
-                underlying=underlying,
-                exchange="MCX",
-                segment="MCX_FO",
-                instrument_key=f"MCX_SIM_{underlying}",
-                lot_size=lot_size,
-                tick_size=0.05,
-                source=InstrumentSource.PAPER_SIMULATED
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create simulated MCX future: {e}")
-            return None
-    
-    async def _create_simulated_mcx_option(
-        self,
-        underlying: str,
-        option_side: str,
-        spot_price: float,
-        strike_rule: str
-    ) -> Optional[Instrument]:
-        """Create simulated MCX option for paper mode."""
-        try:
-            domain = resolve_domain_by_underlying(underlying)
-            lot_size = domain.get_lot_size(underlying)
-            strike_interval = domain.get_strike_interval(underlying)
-            
-            # Calculate strike
-            strike_offset = 0
-            if strike_rule == "OTM1":
-                strike_offset = strike_interval
-            elif strike_rule == "ITM1":
-                strike_offset = -strike_interval
-            
-            strike = round(spot_price + strike_offset)
-            
-            # Create synthetic option instrument
-            return Instrument(
-                symbol=f"{underlying}{option_side}{int(strike)}_SIM",
-                underlying=underlying,
-                exchange="MCX",
-                segment="MCX_FO",
-                instrument_key=f"MCX_SIM_{underlying}_{option_side}_{strike}",
-                lot_size=lot_size,
-                tick_size=0.05,
-                strike=float(strike),
-                option_type=option_side,
-                source=InstrumentSource.PAPER_SIMULATED
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create simulated MCX option: {e}")
-            return None
-    
-    async def _get_simulated_spot(self, underlying: str) -> Optional[float]:
-        """Get simulated spot price for MCX commodity."""
+            quote = gw.get_market_quote([key])
+            parser = getattr(gw, "parse_quote_ltp", None)
+            value = parser(quote, key) if parser else None
+            if not value:
+                node = (quote.get("data") or {}).get(key) or {}
+                value = node.get("last_price") or node.get("ltp")
+            return float(value or 0)
+        except Exception as exc:
+            self._diag(stage="index_spot_price", reason=f"upstox_quote_error:{exc}", instrument_key=key)
+            return 0.0
+
+    async def _paper_spot(self, underlying: str) -> float:
         try:
             cache = await self.db.paper_quote_cache.find_one({"symbol": underlying})
-            if cache:
-                return float(cache.get("ltp", 0))
-        except Exception as e:
-            logger.warning(f"Failed to get simulated spot for {underlying}: {e}")
-        return None
+            value = float((cache or {}).get("ltp") or 0)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+        return float(PAPER_SPOT_HINTS.get(underlying, 100.0))
 
-    async def resolve_instrument(
-        self,
-        underlying: str,
-        instrument_type: str,          # "INDEX_OPTION" | "MCX_FUTURE" | "MCX_OPTION" | "EQUITY"
-        option_side: str = "NONE",      # "CE" | "PE" | "NONE"
-        strike_rule: str = "NONE",      # "ATM" | "ITM1" | "OTM1" | "NONE"
-        expiry_rule: int = 0,           # expiry offset (0 = current week / near month)
-        spot_price_hint: Optional[float] = None,
-        kite_client: Optional[Any] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Resolves active tradable instruments from respective master sources.
-
-        Enforces isolation of BSE_FO, NSE_FO, and MCX_FO.
-        """
-        und_upper = str(underlying).upper()
-        inst_type_upper = str(instrument_type).upper()
-        side_upper = str(option_side).upper()
-        strike_upper = str(strike_rule).upper()
-        
-        domain = resolve_domain_by_underlying(und_upper)
-        
-        # 1. MCX System (MCX_FO)
-        if domain.name == DomainType.MCX_FO:
-            await self.mcx_resolver.ensure_cache(reason=f"core-resolve:{und_upper}")
-            
-            if inst_type_upper == "MCX_FUTURE":
-                future_row = await self.mcx_resolver.resolve_future(
-                    underlying=und_upper,
-                    expiry_offset=expiry_rule
-                )
-                if future_row:
-                    return {
-                        "tradingsymbol": future_row["trading_symbol"],
-                        "trading_symbol": future_row["trading_symbol"],
-                        "exchange": "MCX",
-                        "segment": "MCX_FO",
-                        "instrument_token": future_row["instrument_key"],
-                        "instrument_key": future_row["instrument_key"],
-                        "asset_class": "MCX_FUTURE",
-                        "asset_type": "commodity",
-                        "lot_size": int(future_row["lot_size"]),
-                        "tick_size": float(future_row.get("tick_size", 0.05)),
-                        "expiry": future_row["expiry"]
-                    }
-                return None
-                
-            if inst_type_upper == "MCX_OPTION":
-                if not spot_price_hint or spot_price_hint <= 0:
-                    raise ValueError(f"Spot price hint required for MCX option resolution: {und_upper}")
-                
-                # Derive strike offset points based on strike rule
-                strike_interval = domain.get_strike_interval(und_upper)
-                otm_points = 0
-                if strike_upper == "OTM1":
-                    otm_points = strike_interval
-                elif strike_upper == "ITM1":
-                    otm_points = -strike_interval  # Opposite of OTM
-                
-                opt_row = await self.mcx_resolver.resolve(
-                    underlying=und_upper,
-                    spot=spot_price_hint,
-                    option_type=side_upper,
-                    strike_interval=strike_interval,
-                    otm_points=otm_points,
-                    expiry_offset=expiry_rule
-                )
-                if opt_row:
-                    return {
-                        "tradingsymbol": opt_row["trading_symbol"],
-                        "trading_symbol": opt_row["trading_symbol"],
-                        "exchange": "MCX",
-                        "segment": "MCX_FO",
-                        "instrument_token": opt_row["instrument_token"],
-                        "instrument_key": opt_row["instrument_token"],
-                        "asset_class": "OPTION_LONG",
-                        "asset_type": "option",
-                        "option_type": side_upper,
-                        "strike": float(opt_row["strike"]),
-                        "lot_size": int(opt_row["lot_size"]),
-                        "tick_size": 0.05,
-                        "expiry": opt_row["expiry"],
-                        "underlying": und_upper
-                    }
-                return None
-            
-            raise ValueError(f"MCX Domain does not support instrument type: {inst_type_upper}")
-
-        # 2. NSE / BSE Index Options Systems
-        if inst_type_upper == "INDEX_OPTION":
-            if not kite_client:
-                raise ValueError("Kite client instance is required to resolve NSE/BSE Index Option contracts.")
-            
-            # Map rule to points
-            strike_interval = domain.get_strike_interval(und_upper)
-            strike_offset = 0
-            if strike_upper == "OTM1":
-                strike_offset = strike_interval
-            elif strike_upper == "ITM1":
-                strike_offset = -strike_interval
-                
-            contract = options_helper.resolve_atm_option(
-                kite=kite_client,
-                underlying=und_upper,
-                option_type=side_upper,
-                strike_offset_points=strike_offset,
-                expiry_offset_weeks=expiry_rule
-            )
-            
-            if contract:
-                return {
-                    "tradingsymbol": contract["tradingsymbol"],
-                    "trading_symbol": contract["tradingsymbol"],
-                    "exchange": contract["exchange"],
-                    "segment": domain.segment,
-                    "instrument_token": str(contract["instrument_token"]),
-                    "instrument_key": f"{contract['exchange']}:{contract['tradingsymbol']}",
-                    "asset_class": "OPTION_LONG",
-                    "asset_type": "option",
-                    "option_type": side_upper,
-                    "strike": float(contract["strike"]),
-                    "lot_size": int(contract["lot_size"]),
-                    "tick_size": 0.05,
-                    "expiry": contract["expiry"],
-                    "underlying": und_upper
-                }
+    async def _paper_simulated_future(self, underlying: str, mode: str) -> Optional[Instrument]:
+        if mode == "live":
             return None
+        domain = resolve_domain_by_underlying(underlying)
+        self._diag(stage="paper_simulated", reason="mcx_future_master_missing", instrument_key=f"PAPER_{underlying}_FUT")
+        return Instrument(
+            symbol=f"{underlying}_PAPER_FUT",
+            underlying=underlying,
+            exchange="MCX",
+            segment="MCX_FO",
+            instrument_key=f"PAPER_{underlying}_FUT",
+            lot_size=domain.get_lot_size(underlying),
+            tick_size=0.05,
+            source=InstrumentSource.PAPER_SIMULATED,
+        )
 
-        raise ValueError(f"Unsupported instrument domain/type combination: {domain.name} / {inst_type_upper}")
+    async def _paper_simulated_option(self, underlying: str, option_side: str, spot: float, strike_rule: str, mode: str) -> Optional[Instrument]:
+        if mode == "live":
+            return None
+        domain = resolve_domain_by_underlying(underlying)
+        interval = int(domain.get_strike_interval(underlying) or 1)
+        strike = _round_to_strike(spot, interval)
+        if strike_rule == "OTM1":
+            strike += interval
+        elif strike_rule == "ITM1":
+            strike -= interval
+        key = f"PAPER_{underlying}_{option_side}_{strike}"
+        self._diag(stage="paper_simulated", reason="mcx_option_master_missing", instrument_key=key, strike=strike)
+        return Instrument(
+            symbol=f"{underlying}{int(strike)}{option_side}_PAPER",
+            underlying=underlying,
+            exchange="MCX",
+            segment="MCX_FO",
+            instrument_key=key,
+            lot_size=domain.get_lot_size(underlying),
+            tick_size=0.05,
+            strike=float(strike),
+            option_type=option_side,
+            source=InstrumentSource.PAPER_SIMULATED,
+        )
+
+    async def _paper_simulated_index_option(self, underlying: str, option_side: str, strike: int) -> Instrument:
+        domain = resolve_domain_by_underlying(underlying)
+        key = f"PAPER_{underlying}_{option_side}_{strike}"
+        self._diag(stage="paper_simulated", reason="index_option_master_missing", instrument_key=key, strike=strike)
+        return Instrument(
+            symbol=f"{underlying}{int(strike)}{option_side}_PAPER",
+            underlying=underlying,
+            exchange=domain.exchange,
+            segment=domain.segment,
+            instrument_key=key,
+            lot_size=domain.get_lot_size(underlying),
+            tick_size=0.05,
+            strike=float(strike),
+            option_type=option_side,
+            source=InstrumentSource.PAPER_SIMULATED,
+        )
+
+    async def resolve_instrument(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+        """Compatibility wrapper returning the legacy dict shape."""
+        inst = await self.resolve_instrument_with_source(*args, **kwargs)
+        if not inst:
+            return None
+        return {
+            "tradingsymbol": inst.symbol,
+            "trading_symbol": inst.symbol,
+            "exchange": inst.exchange,
+            "segment": inst.segment,
+            "instrument_token": inst.instrument_key,
+            "instrument_key": inst.instrument_key,
+            "asset_class": "OPTION_LONG" if inst.option_type else "MCX_FUTURE",
+            "asset_type": "option" if inst.option_type else "commodity",
+            "option_type": inst.option_type,
+            "strike": inst.strike,
+            "lot_size": inst.lot_size,
+            "tick_size": inst.tick_size,
+            "expiry": inst.expiry,
+            "underlying": inst.underlying,
+            "source": _source_value(inst.source),
+            "simulated": inst.source == InstrumentSource.PAPER_SIMULATED,
+            "resolver_stage": self.last_diagnostics.get("stage"),
+            "resolver_reason": self.last_diagnostics.get("reason"),
+        }
