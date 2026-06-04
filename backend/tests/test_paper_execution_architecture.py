@@ -246,6 +246,7 @@ async def test_recover_paper_contract_resolution_halts_is_user_and_paper_scoped(
     import server
 
     mock_db = MagicMock()
+    mock_db.users.find_one = AsyncMock(return_value={"id": "user-123", "paper_mode": True})
     recovered_rows = [
         {"id": "paper-1", "name": "NIFTY Paper", "status": "live"},
     ]

@@ -3812,6 +3812,42 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
     }
 
 
+async def _sync_strategy_modes_to_profile(user_id: str, paper_mode: bool) -> int:
+    """Keep strategy execution mode aligned with the account mode.
+
+    The runner queues signals with the strategy mode, while the signal manager
+    only executes paper signals for paper-mode strategies. A profile switch back
+    to PAPER must therefore update existing strategies too.
+    """
+    mode = "paper" if paper_mode else "live"
+    update: Dict[str, Any] = {
+        "broker": "upstox",
+        "mode": mode,
+        "profile_mode_synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    unset: Dict[str, Any] = {
+        "last_filter_reason": "",
+        "last_skip_reason_code": "",
+    }
+    if paper_mode:
+        update.update({
+            "quarantined": False,
+            "halted": False,
+            "is_halted": False,
+        })
+        unset.update({
+            "quarantine_reason": "",
+            "halt_reason": "",
+            "last_halt_reason": "",
+            "last_error": "",
+        })
+    res = await db.strategies.update_many(
+        {"user_id": user_id},
+        {"$set": update, "$unset": unset},
+    )
+    return int(res.modified_count or 0)
+
+
 async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
     if not source:
         return None
@@ -5352,11 +5388,22 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
     new_status = "paused" if row["status"] == "live" else "live"
+    settings = await get_user_settings(user["id"])
+    strategy_mode = "paper" if bool(settings.get("paper_mode", True)) else "live"
     update_fields = {
         "status": new_status,
         "broker": "upstox",
-        "mode": "live" if not bool((await get_user_settings(user["id"])).get("paper_mode", True)) else row.get("mode", "paper"),
+        "mode": strategy_mode,
     }
+    if strategy_mode == "paper":
+        update_fields.update({
+            "quarantined": False,
+            "halted": False,
+            "is_halted": False,
+            "last_filter_reason": "",
+            "last_skip_reason_code": "",
+            "last_error": "",
+        })
     await db.strategies.update_one({"id": sid}, {"$set": update_fields})
     if new_status == "live":
         _sync_option_ledger_strategy({**row, **update_fields})
@@ -12137,6 +12184,8 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="fallback_broker must be none or upstox")
     if update:
         await db.users.update_one({"id": user["id"]}, {"$set": update})
+        if "paper_mode" in update:
+            await _sync_strategy_modes_to_profile(user["id"], bool(update["paper_mode"]))
     return await get_profile(user=user)
 
 
@@ -12244,6 +12293,10 @@ async def reset_paper_trading(user=Depends(get_current_user)):
 
 async def _recover_paper_contract_resolution_halts_for_user(user_id: str) -> Dict[str, Any]:
     """Clear only paper strategy halts caused by option contract resolution failures."""
+    settings = await get_user_settings(user_id)
+    mode_synced = 0
+    if bool(settings.get("paper_mode", True)):
+        mode_synced = await _sync_strategy_modes_to_profile(user_id, True)
     now = datetime.now(timezone.utc).isoformat()
     query = {
         "user_id": user_id,
@@ -12275,6 +12328,7 @@ async def _recover_paper_contract_resolution_halts_for_user(user_id: str) -> Dic
         "ok": True,
         "matched": res.matched_count,
         "modified": res.modified_count,
+        "mode_synced": mode_synced,
         "strategies": rows,
         "recovered_at": now,
     }
@@ -12770,6 +12824,11 @@ async def startup():
             user_id = user_row["id"]
             await seed_default_strategies_for_user(user_id)
             await migrate_user_to_v12_upstox(user_id)
+            settings = await get_user_settings(user_id)
+            if bool(settings.get("paper_mode", True)):
+                synced_modes = await _sync_strategy_modes_to_profile(user_id, True)
+                if synced_modes:
+                    logger.warning("Startup synced %s strategy mode(s) to PAPER for user %s", synced_modes, user_id)
             
             # Executing startup self-heal
             try:
