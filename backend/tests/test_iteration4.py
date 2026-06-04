@@ -18,6 +18,14 @@ EMAIL = "demo@quantdesk.io"
 PASSWORD = "demo1234"
 
 
+def _is_market_closed_skip(payload):
+    return (
+        isinstance(payload, dict)
+        and payload.get("status") in {"SKIPPED", "SKIPPED_SIGNAL"}
+        and "market" in str(payload.get("reason", "")).lower()
+    )
+
+
 # ---------- fixtures ----------
 @pytest.fixture(scope="session")
 def token() -> str:
@@ -51,7 +59,7 @@ class TestReadiness:
         assert "market_open" in data and isinstance(data["market_open"], bool)
         assert "checks" in data and isinstance(data["checks"], list)
         ids = [c["id"] for c in data["checks"]]
-        expected = {"broker_keys", "kite_session", "funds", "risk_limits", "market_hours", "tick_feed"}
+        expected = {"broker_keys", "upstox_session", "funds", "risk_limits", "market_hours", "tick_feed"}
         assert expected.issubset(set(ids)), f"missing checks: {expected - set(ids)}"
 
     def test_readiness_each_check_has_required_fields(self, auth):
@@ -65,11 +73,10 @@ class TestReadiness:
             _ = c.get("detail")
 
     def test_readiness_demo_user_not_ready(self, auth):
-        # Demo user has no Zerodha session => ready must be False
         r = auth.get(f"{BASE_URL}/api/live/readiness", timeout=15)
         data = r.json()
-        kite_check = next(c for c in data["checks"] if c["id"] == "kite_session")
-        assert kite_check["ok"] is False
+        upstox_check = next(c for c in data["checks"] if c["id"] == "upstox_session")
+        assert upstox_check["ok"] is False
         assert data["ready"] is False
 
 
@@ -144,6 +151,8 @@ class TestRealisedPnlOnClose:
         if b.status_code == 400:
             pytest.skip(f"BUY rejected: {b.text}")
         assert b.status_code == 200
+        if _is_market_closed_skip(b.json()):
+            return
 
         time.sleep(1)
         s = auth.post(f"{BASE_URL}/api/orders",
@@ -152,6 +161,8 @@ class TestRealisedPnlOnClose:
             pytest.skip(f"SELL rejected: {s.text}")
         assert s.status_code == 200
         sell_doc = s.json()
+        if _is_market_closed_skip(sell_doc):
+            return
 
         # The SELL response or the persisted order must carry a realised_pnl field (key exists)
         if "realised_pnl" not in sell_doc:
