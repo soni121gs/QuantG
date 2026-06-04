@@ -256,7 +256,20 @@ class QuoteService:
                 parser = getattr(self.upstox_client, "parse_quote_ltp", None)
                 ltp = parser(quote, symbol) if parser else None
                 if ltp is None:
-                    node = ((quote or {}).get("data") or {}).get(symbol) or {}
+                    data = (quote or {}).get("data") or {}
+                    node = data.get(symbol) or {}
+                    if not node:
+                        node = next(
+                            (
+                                value for value in data.values()
+                                if isinstance(value, dict)
+                                and (
+                                    value.get("instrument_token") == symbol
+                                    or value.get("instrument_key") == symbol
+                                )
+                            ),
+                            {},
+                        )
                     ltp = node.get("last_price")
                     if ltp is None:
                         ltp = node.get("ltp")

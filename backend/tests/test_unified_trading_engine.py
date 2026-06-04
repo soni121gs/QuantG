@@ -316,7 +316,14 @@ class TestQuoteService:
                 return {"ok": True, "tokens": 1}
 
             def get_market_quote(self, keys):
-                return {"data": {"MCX_FO|566995": {"last_price": 0.0}}}
+                return {
+                    "data": {
+                        "MCX_FO:CRUDEOILM26JUN6500CE": {
+                            "last_price": 0.0,
+                            "instrument_token": "MCX_FO|566995",
+                        }
+                    }
+                }
 
         upstox = FakeGateway()
         service = QuoteService(db, upstox)
