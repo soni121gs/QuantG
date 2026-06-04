@@ -1,7 +1,24 @@
 """QuantG Execution Router.
 
-Routes OrderIntents to the correct adapter: PaperAdapter, UpstoxLiveAdapter, or BacktestAdapter.
-Guarantees identical risk-checking and preflight paths for all execution modes.
+Routes OrderIntents to the correct adapter: PaperAdapter or UpstoxLiveAdapter.
+
+Unified Pipeline Design:
+- IDENTICAL risk checks (via RiskManager) applied to both paper and live modes
+- IDENTICAL preflight validation (via ReadinessChecker) 
+- ONLY execution differs: paper uses virtual wallet, live uses Upstox API
+
+The adapters are designed to be fully interchangeable at execution time:
+- PaperAdapter: Simulates fills using paper wallet (instant, deterministic)
+- UpstoxLiveAdapter: Dispatches to Upstox broker API (async, subject to market)
+
+Both adapters:
+1. Create order documents in the database
+2. Generate fill records
+3. Update portfolio ledger
+4. Support identical OrderIntent schema
+
+This ensures strategies can trade paper and live without code changes—only the
+mode flag changes where the order goes.
 """
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
@@ -15,6 +32,23 @@ from execution_bridge import submit_order as bridge_submit_order
 logger = logging.getLogger("quantg.execution_router")
 
 class PaperAdapter:
+    """Paper trading execution adapter.
+    
+    Executes trades against a virtual paper wallet with simulated slippage.
+    Used for backtesting and paper trading.
+    
+    Part of the unified pipeline:
+    - Receives identical OrderIntent as UpstoxLiveAdapter
+    - Applies identical risk checks via RiskManager
+    - Creates order/fill records in the same schema
+    - Updates portfolio ledger identically
+    
+    Differences from UpstoxLiveAdapter:
+    - Fills are instant (not async)
+    - No broker interaction (deterministic)
+    - Uses virtual wallet for fund management
+    - Simulated slippage: 0.02% on price, 0.05% brokerage
+    """
     def __init__(self, db, ledger: PortfolioLedger):
         self.db = db
         self.ledger = ledger
@@ -115,6 +149,27 @@ class PaperAdapter:
         return order_doc
 
 class UpstoxLiveAdapter:
+    """Live trading execution adapter.
+    
+    Dispatches orders to Upstox broker for real execution on market.
+    
+    Part of the unified pipeline:
+    - Receives identical OrderIntent as PaperAdapter
+    - Applies identical risk checks via RiskManager
+    - Creates order/fill records in the same schema
+    - Updates portfolio ledger identically
+    
+    Differences from PaperAdapter:
+    - Fills are async (subject to market conditions)
+    - Requires broker connection (Upstox API)
+    - Real fund deduction via margin
+    - Real market slippage
+    
+    Safety measures:
+    - Requires CORE_ENGINE_LIVE_ENABLED environment flag
+    - Requires user.live_arm_state.armed = true
+    - Requires Upstox OAuth authentication
+    """
     def __init__(self, db, ledger: PortfolioLedger):
         self.db = db
         self.ledger = ledger

@@ -3,13 +3,16 @@
 Acts as the central firewall for all orders (paper, live, backtest).
 Enforces: strategy status, market hours, instrument validity, price freshness, daily trade counts,
 daily loss limits, max position size, global kill-switch, and live arm status.
+
+Unified pipeline: applies identical checks for paper and live modes. Mode-specific
+setup is done in readiness_checker before execution.
 """
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 import logging
 
-from core.market_domains import resolve_domain_by_underlying
-from core.market_clock import get_segment_status
+from core.market_domains import resolve_domain_by_underlying, DomainType
+from core.market_session_service import MarketSessionService
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
 
 logger = logging.getLogger("quantg.risk_manager")
@@ -75,16 +78,16 @@ class RiskManager:
                 "quantity": 0
             }
 
-        # 4. Market schedule domain checking
+        # 4. Market schedule domain checking (applies uniformly to all modes)
+        # Backtest mode bypasses market hours checks via readiness_checker
         domain = resolve_domain_by_underlying(symbol)
-        clock_status = get_segment_status(domain.name)
-        if not clock_status.get("open") and mode != "backtest":
-            # Allow exits in paper mode even when market is closed to prevent locked positions
-            if not (mode == "paper" and side == "SELL"):
+        if mode != "backtest":
+            segment_open = MarketSessionService.is_segment_open(domain.name)
+            if not segment_open:
                 return {
                     "ok": False,
                     "status": "REJECTED_MARKET_CLOSED",
-                    "reason": f"Market domain {domain.name.value} is closed.",
+                    "reason": f"Market domain {domain.name.value} is closed. Check trading hours.",
                     "quantity": 0
                 }
 
