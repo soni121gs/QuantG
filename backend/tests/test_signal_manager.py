@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, AsyncMock
 
 from signal_manager import ConflictResolver, SignalManager
 from signal_manager import StrategySignalValidator
+from signal_manager import _dispatch_signal_via_unified_engine
 
 
 def test_conflict_resolver_ce_pe_clash_highest_confidence_wins():
@@ -435,6 +436,88 @@ async def test_strategy_signal_validator_blocks_live_simulated_contract():
 
     assert not result["ok"]
     assert result["reason_code"] == "STRATEGY_INVALID_INSTRUMENT"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_allows_live_real_contract():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-live-real",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "live",
+        "option_contract": {
+            "instrument_key": "NSE_FO|12345",
+            "option_type": "CE",
+            "strike": 24900,
+            "ltp": 34.5,
+        },
+        "visual_config": {"options": {"enabled": True, "strike_mode": "ATM_BUY"}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "live", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
+
+
+@pytest.mark.anyio
+async def test_dispatch_signal_uses_unified_router_for_paper(monkeypatch):
+    captured = {}
+    db = MagicMock()
+    db.orders.find_one = AsyncMock(return_value=None)
+
+    async def fake_risk(self, **kwargs):
+        captured["risk"] = kwargs
+        return {"ok": True, "status": "APPROVED", "reason": "ok", "quantity": kwargs["requested_qty"]}
+
+    async def fake_route(self, user_id, intent_doc):
+        captured["route_user_id"] = user_id
+        captured["intent"] = intent_doc
+        return {"id": "order-1", "status": "FILLED", "mode": intent_doc["mode"]}
+
+    monkeypatch.setattr("core.risk_manager.RiskManager.evaluate_order", fake_risk)
+    monkeypatch.setattr("core.execution_router.ExecutionRouter.route_intent", fake_route)
+
+    sig = {
+        "id": "sig-unified",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "CRUDEOILM",
+        "target_symbol": "CRUDEOILM_SIM",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "price": 34.5,
+        "option_contract": {
+            "tradingsymbol": "CRUDEOILM_SIM",
+            "instrument_key": "PAPER_CRUDEOILM_CE",
+            "exchange": "MCX",
+            "segment": "MCX_FO",
+            "lot_size": 10,
+            "ltp": 34.5,
+            "simulated": True,
+            "source": "PAPER_SIMULATED_CONTRACT",
+        },
+        "visual_config": {"options": {"enabled": True, "lots": 1}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy)
+
+    assert result["status"] == "FILLED"
+    assert captured["risk"]["mode"] == "paper"
+    assert captured["risk"]["requested_qty"] == 10
+    assert captured["intent"]["mode"] == "paper"
+    assert captured["intent"]["instrument_token"] == "PAPER_CRUDEOILM_CE"
+    assert captured["route_user_id"] == "user-1"
 
 
 @pytest.mark.anyio
