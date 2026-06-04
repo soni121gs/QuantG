@@ -10782,6 +10782,13 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     # Token expiration and refresh details
     token_expired = token_present and not token_valid
 
+    reconnect_message = (
+        "Upstox token expired or invalid. Reconnect Upstox before live quotes, live readiness, or feed startup."
+        if token_expired else
+        "Reconnect Upstox required" if token_present else
+        "Save Upstox credentials and connect Upstox"
+    )
+
     status.update({
         "connected": bool(token_valid),
         "authenticated": bool(token_valid),
@@ -10803,7 +10810,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "env_ready": not missing,
         "missing_env": missing,
         "reason": None if token_valid else (token_state if token_present else ("no_token" if api_key else "no_keys")),
-        "message": "Upstox connected" if token_valid else "Reconnect Upstox required",
+        "message": "Upstox connected" if token_valid else reconnect_message,
         "gateway": gateway_status or None,
         "is_sandbox": bool(keys.get("is_sandbox")) if keys else False,
         
@@ -10813,7 +10820,10 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "token_expired": token_expired,
         "refresh_token_available": False,
         "daily_reconnect_required": True,
-        "user_message": "Upstox requires a fresh login daily before market hours. Automatic session refresh is not supported by the broker.",
+        "user_message": (
+            "Upstox connected. Upstox requires a fresh login daily before market hours."
+            if token_valid else reconnect_message
+        ),
     })
     return status
 
@@ -12906,6 +12916,11 @@ async def startup():
             "instrument_key": None,
             "quote_source": None,
             "quote_age_sec": None,
+            "subscribed_key": None,
+            "cache_lookup_key": None,
+            "cache_hit": False,
+            "quote_timestamp": None,
+            "quote_reject_reason": None,
         }
         _resolve_option.last_diagnostics = diagnostics
 
@@ -12959,27 +12974,39 @@ async def startup():
             _resolve_option.last_diagnostics = diagnostics
             return None
 
+        if upstox_gw and instrument.instrument_key:
+            try:
+                sub_res = await asyncio.to_thread(upstox_gw.start_market_data_ws, [instrument.instrument_key], "ltpc")
+                diagnostics.update({
+                    "subscribed_key": instrument.instrument_key,
+                    "subscription_result": sub_res,
+                })
+            except Exception as exc:
+                diagnostics.update({
+                    "subscribed_key": instrument.instrument_key,
+                    "subscription_result": {"ok": False, "error": str(exc)[:200]},
+                })
+
         quote_service = QuoteService(db, upstox_gw)
         quote = await quote_service.get_quote(
             instrument.instrument_key,
             mode=mode,
             allow_simulated=(mode == "paper"),
         )
-        if not quote and mode == "paper" and instrument.source == InstrumentSource.PAPER_SIMULATED:
-            base = float(spot_hint or 0)
-            if base <= 0:
-                base = 6500.0 if underlying in {"CRUDEOIL", "CRUDEOILM"} else 245.0 if underlying in {"NATURALGAS", "NATGASMINI"} else 100.0
-            simulated_ltp = max(1.0, round(base * 0.01, 2))
-            quote = type("PaperQuote", (), {
-                "ltp": simulated_ltp,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "source": "PAPER_SIMULATED",
-                "symbol": instrument.symbol,
-            })()
+        quote_diag = quote_service.last_diagnostics or {}
+        diagnostics.update({
+            "subscribed_key": quote_diag.get("subscribed_key") or diagnostics.get("subscribed_key"),
+            "cache_lookup_key": quote_diag.get("cache_lookup_key"),
+            "cache_hit": bool(quote_diag.get("cache_hit")),
+            "quote_timestamp": quote_diag.get("quote_timestamp"),
+            "quote_age_sec": quote_diag.get("quote_age_sec"),
+            "quote_reject_reason": quote_diag.get("quote_reject_reason"),
+            "quote_source": quote_diag.get("quote_source") or diagnostics.get("quote_source"),
+        })
         if not quote:
             diagnostics.update({
                 "resolver_stage": "quote_lookup",
-                "resolver_reason": "upstox_fresh_quote_unavailable",
+                "resolver_reason": quote_diag.get("quote_reject_reason") or "upstox_fresh_quote_unavailable",
                 "instrument_source": instrument.source.value,
                 "instrument_key": instrument.instrument_key,
                 "quote_source": None,
@@ -13012,6 +13039,10 @@ async def startup():
             "instrument_key": instrument.instrument_key,
             "quote_source": quote.source,
             "quote_age_sec": quote_age_sec,
+            "cache_lookup_key": diagnostics.get("cache_lookup_key"),
+            "cache_hit": diagnostics.get("cache_hit"),
+            "quote_timestamp": quote.timestamp,
+            "quote_reject_reason": None,
         })
         _resolve_option.last_diagnostics = diagnostics
         return {
@@ -13035,6 +13066,11 @@ async def startup():
             "ltp": float(quote.ltp),
             "quote_source": quote.source,
             "quote_age_sec": quote_age_sec,
+            "subscribed_key": diagnostics.get("subscribed_key"),
+            "cache_lookup_key": diagnostics.get("cache_lookup_key"),
+            "cache_hit": diagnostics.get("cache_hit"),
+            "quote_timestamp": quote.timestamp,
+            "quote_reject_reason": diagnostics.get("quote_reject_reason"),
             "resolver_stage": diagnostics.get("resolver_stage"),
             "resolver_reason": diagnostics.get("resolver_reason"),
         }

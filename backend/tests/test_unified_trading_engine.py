@@ -216,6 +216,93 @@ class TestQuoteService:
         assert quote.source == "UPSTOX_LIVE"
         assert quote.symbol == "NIFTY"
 
+    @pytest.mark.asyncio
+    async def test_mcx_quote_uses_exact_websocket_cache_key(self):
+        """MCX quotes are read from the Upstox V3 cache by exact instrument_key."""
+        db = AsyncMock()
+        db.paper_quote_cache.update_one = AsyncMock()
+
+        class FakeGateway:
+            def latest_tick(self, key):
+                assert key == "MCX_FO|566001"
+                return {
+                    "instrument_key": "MCX_FO|566001",
+                    "ltp": 6502.5,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source": "websocket",
+                }
+
+        upstox = FakeGateway()
+        service = QuoteService(db, upstox)
+
+        quote = await service.get_quote("MCX_FO|566001", mode="paper")
+
+        assert quote is not None
+        assert quote.ltp == 6502.5
+        assert quote.source == "UPSTOX_LIVE"
+        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+        assert service.last_diagnostics["cache_hit"] is True
+        assert service.last_diagnostics["quote_reject_reason"] is None
+        db.paper_quote_cache.update_one.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mcx_quote_subscribes_exact_key_then_uses_rest(self):
+        """When cache is cold, QuoteService subscribes the same MCX_FO key before REST LTP."""
+        db = AsyncMock()
+        db.paper_quote_cache.update_one = AsyncMock()
+
+        class FakeGateway:
+            def __init__(self):
+                self.subscribed = None
+
+            def latest_tick(self, key):
+                return None
+
+            def start_market_data_ws(self, keys, mode):
+                self.subscribed = (keys, mode)
+                return {"ok": True, "tokens": 1}
+
+            def get_market_quote(self, keys):
+                return {"data": {"MCX_FO|566001": {"last_price": 6503.0}}}
+
+            @staticmethod
+            def parse_quote_ltp(payload, key):
+                return 6503.0
+
+        upstox = FakeGateway()
+        service = QuoteService(db, upstox)
+
+        quote = await service.get_quote("MCX_FO|566001", mode="paper")
+
+        assert quote is not None
+        assert quote.ltp == 6503.0
+        assert upstox.subscribed == (["MCX_FO|566001"], "ltpc")
+        assert service.last_diagnostics["subscribed_key"] == "MCX_FO|566001"
+        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+
+    @pytest.mark.asyncio
+    async def test_live_rejects_stale_mcx_quote_with_diagnostics(self):
+        """LIVE blocks stale Upstox quotes and records reject reason."""
+        db = AsyncMock()
+
+        class FakeGateway:
+            def latest_tick(self, key):
+                return {
+                    "instrument_key": "MCX_FO|566001",
+                    "ltp": 6502.5,
+                    "timestamp": (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat(),
+                }
+
+        upstox = FakeGateway()
+        service = QuoteService(db, upstox)
+
+        quote = await service.get_quote("MCX_FO|566001", mode="live")
+
+        assert quote is None
+        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+        assert service.last_diagnostics["cache_hit"] is True
+        assert service.last_diagnostics["quote_reject_reason"] == "stale_upstox_quote"
+
 
 class TestPositionManager:
     """Test position lifecycle (AC6: Position lifecycle tracked)."""

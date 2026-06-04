@@ -161,6 +161,11 @@ def _contract_resolution_update(
         "last_instrument_key": diagnostics.get("instrument_key"),
         "last_quote_source": diagnostics.get("quote_source"),
         "last_quote_age_sec": diagnostics.get("quote_age_sec"),
+        "subscribed_key": diagnostics.get("subscribed_key"),
+        "cache_lookup_key": diagnostics.get("cache_lookup_key"),
+        "cache_hit": diagnostics.get("cache_hit"),
+        "quote_timestamp": diagnostics.get("quote_timestamp"),
+        "quote_reject_reason": diagnostics.get("quote_reject_reason"),
     }
     update_doc: Dict[str, Any] = {"$set": update_set, "$inc": inc_set}
     if is_paper_mode and is_mcx_underlying:
@@ -518,7 +523,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                   "last_instrument_source": (option_contract or {}).get("source"),
                                   "last_instrument_key": (option_contract or {}).get("instrument_key"),
                                   "last_quote_source": (option_contract or {}).get("quote_source"),
-                                  "last_quote_age_sec": (option_contract or {}).get("quote_age_sec")},
+                                  "last_quote_age_sec": (option_contract or {}).get("quote_age_sec"),
+                                  "subscribed_key": (option_contract or {}).get("subscribed_key"),
+                                  "cache_lookup_key": (option_contract or {}).get("cache_lookup_key"),
+                                  "cache_hit": (option_contract or {}).get("cache_hit"),
+                                  "quote_timestamp": (option_contract or {}).get("quote_timestamp"),
+                                  "quote_reject_reason": (option_contract or {}).get("quote_reject_reason")},
                          "$inc": {**inc_set, "signals_fired": 1}},
                     )
                     logger.info(f"strategy {s['id']} → queued PENDING {action} signal {signal_id} for {target_symbol}")

@@ -22,6 +22,11 @@ def test_mcx_paper_contract_resolution_failure_does_not_halt():
             "instrument_key": "MCX_FO|future-key",
             "quote_source": "UPSTOX_LIVE",
             "quote_age_sec": 0.7,
+            "subscribed_key": "MCX_FO|future-key",
+            "cache_lookup_key": "MCX_FO|future-key",
+            "cache_hit": True,
+            "quote_timestamp": "2026-06-04T10:00:00+00:00",
+            "quote_reject_reason": None,
         },
     )
 
@@ -35,6 +40,10 @@ def test_mcx_paper_contract_resolution_failure_does_not_halt():
     assert update["$set"]["last_instrument_key"] == "MCX_FO|future-key"
     assert update["$set"]["last_quote_source"] == "UPSTOX_LIVE"
     assert update["$set"]["last_quote_age_sec"] == 0.7
+    assert update["$set"]["subscribed_key"] == "MCX_FO|future-key"
+    assert update["$set"]["cache_lookup_key"] == "MCX_FO|future-key"
+    assert update["$set"]["cache_hit"] is True
+    assert update["$set"]["quote_timestamp"] == "2026-06-04T10:00:00+00:00"
     assert "halt_reason" in update["$unset"]
 
 
