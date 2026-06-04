@@ -374,6 +374,7 @@ class UpstoxMarketDataFeedV3:
                 "last_error": self._last_error,
                 "last_tick_time": self._last_tick_time,
                 "subscribed_count": len(self._subscribed),
+                "subscribed_keys": sorted(self._subscribed.keys())[:50],
                 "reconnects": self._reconnects,
                 "feed": "upstox-market-data-feed-v3",
             }

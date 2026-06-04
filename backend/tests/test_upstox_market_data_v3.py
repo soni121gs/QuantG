@@ -74,6 +74,7 @@ def test_reconnect_loop_sets_reconnecting_and_preserves_subscription(monkeypatch
     assert result["ok"] is True
     assert status["state"] == "reconnecting"
     assert status["subscribed_count"] == 1
+    assert status["subscribed_keys"] == ["NSE_INDEX|Nifty 50"]
 
 
 def test_gateway_strategy_reads_latest_tick_from_websocket_cache():

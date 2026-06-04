@@ -303,6 +303,31 @@ class TestQuoteService:
         assert service.last_diagnostics["cache_hit"] is True
         assert service.last_diagnostics["quote_reject_reason"] == "stale_upstox_quote"
 
+    @pytest.mark.asyncio
+    async def test_zero_mcx_rest_quote_is_not_tradable(self):
+        """Upstox can resolve an MCX option but return 0 LTP; that must not become a quote."""
+        db = AsyncMock()
+
+        class FakeGateway:
+            def latest_tick(self, key):
+                return None
+
+            def start_market_data_ws(self, keys, mode):
+                return {"ok": True, "tokens": 1}
+
+            def get_market_quote(self, keys):
+                return {"data": {"MCX_FO|566995": {"last_price": 0.0}}}
+
+        upstox = FakeGateway()
+        service = QuoteService(db, upstox)
+
+        quote = await service.get_quote("MCX_FO|566995", mode="paper")
+
+        assert quote is None
+        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566995"
+        assert service.last_diagnostics["cache_hit"] is False
+        assert service.last_diagnostics["quote_reject_reason"] == "zero_ltp_from_upstox"
+
 
 class TestPositionManager:
     """Test position lifecycle (AC6: Position lifecycle tracked)."""

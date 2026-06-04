@@ -161,6 +161,7 @@ class UpstoxGateway:
             "ticks": self.ticks,
             "last_tick_at": self.last_tick_at,
             "subscribed_tokens": len(self._subscribed_tokens),
+            "subscribed_keys": list(self._subscribed_tokens)[:50],
             "ws_running": self._ws_running,
             "feed_status": feed_st,
             "refresh_token_present": bool(self._refresh_token),

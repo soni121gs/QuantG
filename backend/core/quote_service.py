@@ -233,8 +233,12 @@ class QuoteService:
             if full_quote_method:
                 quote = await full_quote_method(symbol) if inspect.iscoroutinefunction(full_quote_method) else full_quote_method(symbol)
                 if quote and "last_price" in quote:
+                    last_price = float(quote["last_price"] or 0)
+                    if last_price <= 0:
+                        self._diag(quote_reject_reason="zero_ltp_from_upstox")
+                        return None
                     result = {
-                        "ltp": quote["last_price"],
+                        "ltp": last_price,
                         "timestamp": quote.get("timestamp") or datetime.now(timezone.utc).isoformat(),
                         "source": "UPSTOX_LIVE",
                         "cache_hit": False,
@@ -251,12 +255,18 @@ class QuoteService:
                 quote = await asyncio.to_thread(market_quote_method, [symbol])
                 parser = getattr(self.upstox_client, "parse_quote_ltp", None)
                 ltp = parser(quote, symbol) if parser else None
-                if not ltp:
+                if ltp is None:
                     node = ((quote or {}).get("data") or {}).get(symbol) or {}
-                    ltp = node.get("last_price") or node.get("ltp")
-                if ltp:
+                    ltp = node.get("last_price")
+                    if ltp is None:
+                        ltp = node.get("ltp")
+                if ltp is not None:
+                    ltp = float(ltp)
+                    if ltp <= 0:
+                        self._diag(quote_reject_reason="zero_ltp_from_upstox")
+                        return None
                     result = {
-                        "ltp": float(ltp),
+                        "ltp": ltp,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "source": "UPSTOX_LIVE",
                         "cache_hit": False,
