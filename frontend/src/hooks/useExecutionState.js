@@ -60,6 +60,8 @@ export function useExecutionState({ pollMs = DEFAULT_POLL_MS, syncOnLoad = false
     paperMode: Boolean(snapshot?.paper_mode),
     executionBroker: snapshot?.execution_broker || "upstox",
     marketSession: snapshot?.market_session,
+    upstoxDataHealth: snapshot?.upstox_data_health,
+    brokerReconciliation: snapshot?.broker_reconciliation,
     generatedAt: snapshot?.generated_at,
   };
 }

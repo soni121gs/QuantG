@@ -103,14 +103,14 @@ def normalize_closed_trades(
         add_trade(
             row,
             source="trades",
-            pnl_keys=["realised_pnl", "realized_pnl", "gross_realised_pnl", "pnl"],
+            pnl_keys=["net_pnl", "net_realised_pnl", "realised_pnl", "realized_pnl", "gross_realised_pnl", "pnl"],
             close_keys=["closed_at", "exit_time", "filled_at", "updated_at"],
         )
     for row in raw_option_trades:
         add_trade(
             row,
             source="option_trade_journal",
-            pnl_keys=["pnl", "realised_pnl", "realized_pnl"],
+            pnl_keys=["net_pnl", "net_realised_pnl", "pnl", "realised_pnl", "realized_pnl"],
             close_keys=["exit_time", "closed_at", "updated_at"],
         )
 

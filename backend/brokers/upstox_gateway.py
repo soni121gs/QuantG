@@ -270,6 +270,33 @@ class UpstoxGateway:
         """Fetch Upstox user available and utilized funds across equity and commodity desks."""
         return self._request("GET", "/v2/user/get-funds-and-margin")
 
+    def get_margin_details(self, instruments: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate upfront margin/premium requirements for proposed orders."""
+        payload = {"instruments": list(instruments or [])}
+        return self._request("POST", "/v2/charges/margin", json=payload)
+
+    def get_brokerage_details(
+        self,
+        *,
+        instrument_token: str,
+        quantity: int,
+        product: str,
+        transaction_type: str,
+        price: float,
+    ) -> Dict[str, Any]:
+        """Calculate Upstox brokerage and statutory charges for a proposed order."""
+        return self._request(
+            "GET",
+            "/v2/charges/brokerage",
+            params={
+                "instrument_token": instrument_token,
+                "quantity": int(quantity),
+                "product": self.normalize_product(product),
+                "transaction_type": str(transaction_type or "BUY").upper(),
+                "price": float(price or 0),
+            },
+        )
+
     def get_profile(self) -> Dict[str, Any]:
         """Validate the current Upstox access token with a lightweight user call."""
         return self._request("GET", "/v2/user/profile")
@@ -280,6 +307,29 @@ class UpstoxGateway:
         if expiry_date:
             params["expiry_date"] = expiry_date
         return self._request("GET", "/v2/option/chain", params=params)
+
+    def get_option_contracts(self, underlying_key: str, expiry_date: Optional[str] = None) -> Dict[str, Any]:
+        params = {"instrument_key": underlying_key}
+        if expiry_date:
+            params["expiry_date"] = expiry_date
+        return self._request("GET", "/v2/option/contract", params=params)
+
+    def place_gtt_order(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("POST", "/v3/order/gtt/place", json=payload)
+
+    def modify_gtt_order(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("PUT", "/v3/order/gtt/modify", json=payload)
+
+    def cancel_gtt_order(self, gtt_order_id: str) -> Dict[str, Any]:
+        return self._request("DELETE", "/v3/order/gtt/cancel", params={"gtt_order_id": gtt_order_id})
+
+    def exit_all_positions(self, *, segment: Optional[str] = None, tag: Optional[str] = None) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if segment:
+            params["segment"] = segment
+        if tag:
+            params["tag"] = tag
+        return self._request("POST", "/v2/order/positions/exit", params=params or None, json={})
 
     def get_historical_candles(
         self,
@@ -359,6 +409,69 @@ class UpstoxGateway:
         except Exception as e:
             logger.warning(f"Upstox historical candles failed for {instrument_key}: {e}")
             return None
+
+    def get_historical_candles_v3(
+        self,
+        instrument_key: str,
+        *,
+        unit: str = "minutes",
+        interval: int = 1,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        from datetime import timedelta
+        from urllib.parse import quote
+
+        end = to_date or datetime.now().strftime("%Y-%m-%d")
+        start = from_date or (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        path = f"/v3/historical-candle/{quote(instrument_key)}/{unit}/{int(interval)}/{end}/{start}"
+        return self._parse_candle_response(self._request("GET", path))
+
+    def get_intraday_candles_v3(
+        self,
+        instrument_key: str,
+        *,
+        unit: str = "minutes",
+        interval: int = 1,
+    ) -> Optional[List[Dict[str, Any]]]:
+        from urllib.parse import quote
+
+        path = f"/v3/historical-candle/intraday/{quote(instrument_key)}/{unit}/{int(interval)}"
+        return self._parse_candle_response(self._request("GET", path))
+
+    def get_expired_historical_candles_v3(
+        self,
+        expired_instrument_key: str,
+        *,
+        unit: str = "minutes",
+        interval: int = 1,
+        from_date: str,
+        to_date: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        from urllib.parse import quote
+
+        path = f"/v3/expired-instruments/historical-candle/{quote(expired_instrument_key)}/{unit}/{int(interval)}/{to_date}/{from_date}"
+        return self._parse_candle_response(self._request("GET", path))
+
+    @staticmethod
+    def _parse_candle_response(res: Any) -> Optional[List[Dict[str, Any]]]:
+        if not isinstance(res, dict) or res.get("status") not in (None, "success"):
+            return None
+        candles = ((res.get("data") or {}).get("candles") if isinstance(res.get("data"), dict) else None) or []
+        out: List[Dict[str, Any]] = []
+        for c in reversed(candles):
+            if len(c) >= 5:
+                text = str(c[0])
+                out.append({
+                    "date": text.split("+")[0].replace("T", " ")[:16] if "T" in text else text,
+                    "open": float(c[1] or 0),
+                    "high": float(c[2] or 0),
+                    "low": float(c[3] or 0),
+                    "close": float(c[4] or 0),
+                    "volume": int(c[5] or 0) if len(c) > 5 else 0,
+                    "oi": float(c[6] or 0) if len(c) > 6 and c[6] not in (None, "") else 0.0,
+                })
+        return out
 
     def _get_index_candles(
         self,

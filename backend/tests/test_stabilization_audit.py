@@ -59,7 +59,7 @@ async def test_stale_quote_price_yields_skips():
     )
     
     assert not result["ok"]
-    assert result["reason_code"] == "STALE_PRICE"
+    assert result["reason_code"] == "SKIPPED_QUOTE_STALE"
     assert "quote is stale" in result["human_reason"]
 
 @pytest.mark.anyio
@@ -91,7 +91,7 @@ async def test_missing_quote_timestamp_yields_skips():
     )
     
     assert not result["ok"]
-    assert result["reason_code"] == "PRICE_UNAVAILABLE"
+    assert result["reason_code"] == "SKIPPED_QUOTE_STALE"
     assert "quote timestamp is missing" in result["human_reason"]
 
 @pytest.mark.anyio

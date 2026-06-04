@@ -362,18 +362,27 @@ class UpstoxMarketDataFeedV3:
         self._state = "disconnected"
         self._last_error = None
         self._last_tick_time = None
+        self._snapshot_received = False
+        self._market_status: Dict[str, Any] = {}
         self._reconnects = 0
         self._consecutive_failures = 0
         self._first_tick_logged = False
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
+            modes: Dict[str, int] = {}
+            for mode in self._subscribed.values():
+                modes[mode] = modes.get(mode, 0) + 1
             return {
                 "connected": self._connected,
                 "state": self._state,
                 "last_error": self._last_error,
                 "last_tick_time": self._last_tick_time,
+                "snapshot_received": self._snapshot_received,
+                "latest_tick_time": self._last_tick_time,
+                "market_status": dict(self._market_status),
                 "subscribed_count": len(self._subscribed),
+                "subscribed_modes": modes,
                 "subscribed_keys": sorted(self._subscribed.keys())[:50],
                 "reconnects": self._reconnects,
                 "feed": "upstox-market-data-feed-v3",
@@ -566,6 +575,8 @@ class UpstoxMarketDataFeedV3:
             
             # Silent handling of market_info welcome frames
             if frame_type == "market_info" or frame_type == 2:
+                with self._lock:
+                    self._market_status = decoded.get("marketInfo") or decoded.get("market_info") or {}
                 logger.info("Upstox V3 handshake successful: segment status received (%s bytes)", raw_len)
                 return
 
@@ -598,13 +609,17 @@ class UpstoxMarketDataFeedV3:
     def apply_decoded_message(self, decoded: Dict[str, Any]) -> None:
         feeds = decoded.get("feeds") or {}
         current_ts = decoded.get("currentTs") or decoded.get("current_ts")
+        market_info = decoded.get("marketInfo") or decoded.get("market_info") or {}
         updated = 0
         with self._lock:
+            if market_info:
+                self._market_status = market_info
             for instrument_key, feed in feeds.items():
                 tick = extract_ltp_tick(instrument_key, feed, current_ts=current_ts)
                 if tick:
                     self._ticks[instrument_key] = tick
                     self._last_tick_time = tick["received_at"]
+                    self._snapshot_received = True
                     updated += 1
                     logger.info(
                         "Upstox V3 tick accepted key=%s ltp=%s cache_size=%s",

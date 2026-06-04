@@ -185,6 +185,7 @@ async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
 
     mock_db = MagicMock()
     mock_db.strategies.find_one = AsyncMock(return_value={"id": "nifty-strategy", "mode": "paper", "status": "live"})
+    mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.orders.find_one = AsyncMock(return_value=None)
     mock_db.signals.find_one = AsyncMock(return_value=None)
 
@@ -239,6 +240,82 @@ async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
     assert captured["intent_doc"]["qty"] == 65
     assert captured["intent_doc"]["target_symbol"] == "NIFTY26060524900CE"
     assert captured["route_user_id"] == "user-123"
+
+
+@pytest.mark.anyio
+async def test_core_paper_option_entry_blocks_active_same_instrument_before_route():
+    import server
+
+    mock_db = MagicMock()
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "nifty-strategy", "mode": "paper", "status": "live"})
+    mock_db.strategy_positions.find_one = AsyncMock(return_value={
+        "id": "existing-pos",
+        "strategy_id": "other-strategy",
+        "instrument_key": "PAPER_NIFTY_CE_24900",
+        "status": "OPEN",
+    })
+    mock_db.orders.find_one = AsyncMock(return_value=None)
+    mock_db.signals.find_one = AsyncMock(return_value=None)
+    mock_db.skipped_signals.find_one_and_update = AsyncMock(return_value={
+        "id": "skip-duplicate",
+        "status": "SKIPPED_SIGNAL",
+        "execution_status": "SKIPPED_SIGNAL",
+        "reason_code": "DUPLICATE_POSITION",
+        "mode": "paper",
+        "filled_qty": 0,
+    })
+
+    option_contract = {
+        "tradingsymbol": "NIFTY26060524900CE",
+        "exchange": "NFO",
+        "instrument_token": "PAPER_NIFTY_CE_24900",
+        "instrument_key": "PAPER_NIFTY_CE_24900",
+        "lot_size": 65,
+        "underlying": "NIFTY",
+        "option_type": "CE",
+        "ltp": 125.0,
+        "simulated": True,
+        "source": "PAPER_SIMULATED_CONTRACT",
+    }
+
+    async def fake_route_intent(self, user_id, intent_doc):
+        raise AssertionError("duplicate core paper entry must not route")
+
+    with patch("server.db", mock_db), \
+         patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "true", "CORE_ENGINE_PAPER_ENABLED": "true"}), \
+         patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "allow_simulated_prices": True}), \
+         patch("core.execution_router.ExecutionRouter.route_intent", new=fake_route_intent):
+        result = await server._place_order_core(
+            user_id="user-123",
+            symbol="NIFTY",
+            side="BUY",
+            qty=1,
+            source="strategy:nifty-strategy",
+            option_contract=option_contract,
+            signal_id="signal-duplicate",
+        )
+
+    assert result["status"] == "SKIPPED_SIGNAL"
+    assert result["reason_code"] == "DUPLICATE_POSITION"
+    mock_db.skipped_signals.find_one_and_update.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_default_strategy_seed_is_additive_without_legacy_delete():
+    import server
+
+    mock_db = MagicMock()
+    mock_db.strategies.find.return_value.to_list = AsyncMock(return_value=[
+        {"name": server.DEFAULT_OPTION_STRATEGIES[0]["name"]},
+    ])
+    mock_db.strategies.insert_many = AsyncMock()
+    mock_db.strategies.delete_many = AsyncMock()
+
+    with patch("server.db", mock_db):
+        inserted = await server.seed_default_strategies_for_user("user-123")
+
+    assert inserted >= 0
+    mock_db.strategies.delete_many.assert_not_called()
 
 
 @pytest.mark.anyio

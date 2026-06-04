@@ -75,6 +75,16 @@ const KpiCard = ({ label, value, sub, icon: Icon, tone, testid }) => (
   </div>
 );
 
+const QualityPill = ({ score, readiness }) => {
+  const n = Number(score || 0);
+  const tone = readiness === "PASS" || n >= 70
+    ? "border-[rgba(0,230,118,0.38)] bg-[rgba(0,230,118,0.1)] text-[var(--qd-profit)]"
+    : readiness === "BLOCK" || n < 45
+      ? "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
+      : "border-[rgba(255,209,102,0.38)] bg-[rgba(255,209,102,0.1)] text-[var(--qd-warn)]";
+  return <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${tone}`}>Q {n}</span>;
+};
+
 const metric = (row, path, fallback = 0) => {
   const value = path.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), row);
   return value ?? fallback;
@@ -331,6 +341,8 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
   const position = row.position;
   const pendingOrder = row.pendingOrder;
   const failedOrder = row.failedOrder;
+  const quality = pendingOrder?.quality_score ?? failedOrder?.quality_score ?? position?.quality_score;
+  const qualityReadiness = pendingOrder?.quality_readiness ?? failedOrder?.quality_readiness ?? position?.quality_readiness;
   const status = position?.execution_status || position?.ledger_status || (pendingOrder ? pendingOrder.status : row.state || "FLAT");
   const positionOpen = position && hasQty(position.qty);
   const problem = failedOrder || asStatus(position?.execution_status) === "BROKER_NOT_FOUND";
@@ -365,6 +377,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={tone}>{positionOpen ? status : pendingOrder ? "Order pending" : problem ? "Needs check" : idleLabel}</StatusPill>
+          {quality != null && <QualityPill score={quality} readiness={qualityReadiness} />}
           {slMissing && <StatusPill tone="bad">No SL</StatusPill>}
           {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
         </div>
@@ -399,7 +412,16 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
   );
 };
 export default function Dashboard() {
-  const { positions: execPositions, orders: execOrders, strategyPositions: execStrategyPositions, summary: executionSummary, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
+  const {
+    positions: execPositions,
+    orders: execOrders,
+    skippedSignals,
+    strategyPositions: execStrategyPositions,
+    summary: executionSummary,
+    upstoxDataHealth,
+    brokerReconciliation,
+    refresh: refreshExecution,
+  } = useExecutionState({ pollMs: 15000 });
   const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const positions = execPositions;
@@ -409,13 +431,14 @@ export default function Dashboard() {
   const [marketSession, setMarketSession] = useState(null);
   const [commodities, setCommodities] = useState([]);
   const [strategyAnalytics, setStrategyAnalytics] = useState(null);
+  const [optionChain, setOptionChain] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [activeTab, setActiveTab] = useState("overview");
 
   const load = useCallback(async () => {
     try {
-      const [p, w, f, t, c, s, leaderboard] = await Promise.all([
+      const [p, w, f, t, c, s, leaderboard, chain] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/funds"),
@@ -423,6 +446,7 @@ export default function Dashboard() {
         api.get("/market/commodities"),
         api.get("/market/session-status"),
         api.get("/strategies/leaderboard"),
+        api.get("/upstox/option-chain", { params: { underlying: "NIFTY" } }).catch(() => ({ data: null })),
       ]);
       await refreshExecution();
       setPf(p.data);
@@ -432,6 +456,7 @@ export default function Dashboard() {
       setCommodities(c.data || []);
       setMarketSession(s.data);
       setStrategyAnalytics(leaderboard.data);
+      setOptionChain(chain.data);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -444,7 +469,9 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const pnl = executionSummary.total_unrealized_pnl ?? pf?.total_pnl ?? 0;
+  const pnl = executionSummary.net_pnl ?? pf?.net_pnl ?? pf?.total_pnl ?? 0;
+  const grossPnl = executionSummary.gross_pnl ?? pf?.gross_pnl ?? pnl;
+  const charges = executionSummary.charges ?? pf?.charges ?? 0;
   const openPositions = executionSummary.open_positions ?? pf?.open_positions ?? positions.length;
   const strategies = useMemo(() => telemetry?.strategies_page_data || [], [telemetry?.strategies_page_data]);
   const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;
@@ -541,6 +568,12 @@ export default function Dashboard() {
   const killSwitch = async () => {
     if (!window.confirm("Trigger emergency kill switch? This pauses live strategies, switches to paper mode, and disables ledger re-entry.")) return;
     await api.post("/risk/kill-switch");
+    await load();
+  };
+
+  const exitAllUpstox = async () => {
+    if (!window.confirm("Exit all Upstox positions now? Tag-based exits can affect total instrument quantity when multiple strategies share the same instrument.")) return;
+    await api.post("/upstox/exit-all");
     await load();
   };
 
@@ -642,6 +675,13 @@ export default function Dashboard() {
           >
             <Power size={15} /> Trigger Kill Switch
           </button>
+          <button
+            type="button"
+            onClick={exitAllUpstox}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[rgba(255,59,48,0.42)] px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.1)]"
+          >
+            <AlertTriangle size={15} /> Upstox Exit All
+          </button>
         </div>
       </section>
 
@@ -687,7 +727,7 @@ export default function Dashboard() {
           <section className="grid grid-cols-2 gap-4 xl:grid-cols-4">
             <KpiCard label="Account Balance" value={money(funds?.available_cash)} icon={Wallet} sub={funds?.source === "live" ? "Live Account Balance" : "Simulated Paper Cash"} />
             <KpiCard label="Utilized Margin" value={money(funds?.used_margin)} icon={Layers} sub={funds?.source === "live" ? "Live Blocked Margin" : "Paper Blocked Margin"} />
-            <KpiCard label="Open Profit" value={money(pnl)} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={toneClass(pnl)} sub={`${openPositions} Active positions`} />
+            <KpiCard label="Net P&L" value={money(pnl)} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={toneClass(pnl)} sub={`Gross ${money(grossPnl)} after charges ${money(charges)}`} />
             <KpiCard
               label="Trade Safety"
               value={`${missingProtectionCount}/${openStrategyPositions.length}`}
@@ -695,6 +735,60 @@ export default function Dashboard() {
               tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"}
               sub={`${openOrders.length} pending orders, ${failedOrders.length} failed`}
             />
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <div className="qd-card p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="qd-section-title">// Upstox</div>
+                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Data Health</h2>
+                </div>
+                <StatusPill tone={upstoxDataHealth?.readiness === "READY" ? "good" : "warn"}>{upstoxDataHealth?.readiness || "UNKNOWN"}</StatusPill>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Websocket" value={upstoxDataHealth?.connected ? "Connected" : "Disconnected"} tone={upstoxDataHealth?.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} />
+                <Field label="Snapshot" value={upstoxDataHealth?.snapshot_received ? "Received" : "Waiting"} tone={upstoxDataHealth?.snapshot_received ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
+                <Field label="Quote Age" value={quoteAge(upstoxDataHealth?.quote_age_sec)} tone={upstoxDataHealth?.quote_stale ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+                <Field label="Latest Tick" value={quoteTime(upstoxDataHealth?.latest_tick_time)} />
+              </div>
+            </div>
+
+            <div className="qd-card p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="qd-section-title">// Broker truth</div>
+                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Reconciliation</h2>
+                </div>
+                <StatusPill tone={brokerReconciliation?.status === "OK" ? "good" : "warn"}>{brokerReconciliation?.status || "UNKNOWN"}</StatusPill>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Pending Gaps" value={brokerReconciliation?.mismatches?.pending_orders_without_broker_match ?? 0} tone={(brokerReconciliation?.mismatches?.pending_orders_without_broker_match || 0) ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+                <Field label="Position Gaps" value={brokerReconciliation?.mismatches?.position_key_mismatches ?? 0} tone={(brokerReconciliation?.mismatches?.position_key_mismatches || 0) ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+                <Field label="Local Live" value={brokerReconciliation?.mismatches?.local_positions ?? 0} />
+                <Field label="Broker Live" value={brokerReconciliation?.mismatches?.broker_positions ?? 0} />
+              </div>
+            </div>
+
+            <div className="qd-card p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="qd-section-title">// Skipped</div>
+                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Signal Reasons</h2>
+                </div>
+                <StatusPill tone={skippedSignals.length ? "warn" : "good"}>{skippedSignals.length}</StatusPill>
+              </div>
+              <div className="space-y-3">
+                {skippedSignals.length === 0 ? (
+                  <div className="text-xs text-[var(--qd-text-3)]">No skipped signals recorded.</div>
+                ) : skippedSignals.slice(0, 4).map((row) => (
+                  <div key={row.id || row.dedupe_key} className="border-b border-[var(--qd-border)] pb-2 last:border-0">
+                    <div className="font-mono text-xs text-white">{row.reason_code || row.reason || "SKIPPED"}</div>
+                    <div className="mt-1 text-[11px] text-[var(--qd-text-2)]">{row.symbol || row.strategy_id || "-"} · {row.count || 1}x</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-4">
@@ -1321,8 +1415,32 @@ export default function Dashboard() {
               <div className="qd-card overflow-hidden">
                 <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between">
                   <h2 className="font-head text-sm font-semibold text-white">Option Chain Monitor</h2>
-                  <span className="qd-live-dot" />
+                  <StatusPill tone={optionChain?.row_count ? "good" : "warn"}>{optionChain?.row_count || 0} Rows</StatusPill>
                 </div>
+                {optionChain?.data?.length ? (
+                  <div className="overflow-x-auto border-b border-[var(--qd-border)]">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                          <th className="px-3 py-2">Strike</th>
+                          <th className="px-3 py-2">Call</th>
+                          <th className="px-3 py-2">Put</th>
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono">
+                        {optionChain.data.slice(0, 8).map((row) => (
+                          <tr key={`${row.strike_price}-${row.expiry}`} className="border-b border-[var(--qd-border)] last:border-0">
+                            <td className="px-3 py-2 text-white">{row.strike_price || row.strike}</td>
+                            <td className="px-3 py-2 text-[var(--qd-text-2)]">{row.call_options?.market_data?.ltp ?? row.call_options?.ltp ?? "-"}</td>
+                            <td className="px-3 py-2 text-[var(--qd-text-2)]">{row.put_options?.market_data?.ltp ?? row.put_options?.ltp ?? "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="border-b border-[var(--qd-border)] p-4 text-xs text-[var(--qd-text-3)]">Upstox option chain unavailable or OAuth disconnected.</div>
+                )}
                 {foPositions.length === 0 ? (
                   <div className="p-8 text-center text-xs text-[var(--qd-text-3)]">No open derivatives / options positions.</div>
                 ) : (

@@ -66,12 +66,21 @@ class PaperAdapter:
         qty = int(intent["qty"])
         side = str(intent["side"]).upper()
 
-        # Simulated slippage and brokerage
-        slippage = round(fill_price * 0.0002, 2)
+        # Simulated Upstox-like slippage and charges. The main server order
+        # path uses broker charge APIs in live mode and the same accounting
+        # shape in paper mode; keep this optional core path consistent.
+        slippage = round(fill_price * 0.00035, 2)
         final_price = round(
             fill_price + slippage if side == "BUY" else fill_price - slippage, 2
         )
-        brokerage = round(min(20.0, final_price * qty * 0.0005), 2)
+        gross = abs(final_price * qty)
+        brokerage = round(min(20.0, gross * 0.0003), 2)
+        stt = round(gross * (0.000625 if side == "SELL" else 0.0), 2)
+        exchange_txn = round(gross * 0.00053, 2)
+        sebi = round(gross * 0.000001, 2)
+        stamp = round(gross * (0.00003 if side == "BUY" else 0.0), 2)
+        gst = round((brokerage + exchange_txn + sebi) * 0.18, 2)
+        charges = round(brokerage + stt + exchange_txn + sebi + stamp + gst, 2)
 
         order_id = intent.get("id") or str(uuid.uuid4())
         trade_value = round(final_price * qty, 2)
@@ -80,7 +89,7 @@ class PaperAdapter:
         # Paper wallet balance check & update
         # ------------------------------------------------------------------
         if side == "BUY":
-            total_cost = round(trade_value + brokerage, 2)
+            total_cost = round(trade_value + charges, 2)
             balance_ok = await self.wallet.debit(user_id, total_cost, order_id)
             if not balance_ok:
                 current_balance = await self.wallet.get_balance(user_id)
@@ -90,7 +99,7 @@ class PaperAdapter:
                     f"Reset paper account to restore ₹5,00,000."
                 )
         else:  # SELL / exit: credit back proceeds
-            proceeds = round(trade_value - brokerage, 2)
+            proceeds = round(trade_value - charges, 2)
             await self.wallet.credit(user_id, max(0.0, proceeds), order_id)
 
         order_doc = {
@@ -108,12 +117,30 @@ class PaperAdapter:
             "requested_price": fill_price,
             "price": final_price,
             "brokerage": brokerage,
+            "charges": charges,
+            "gross_pnl": 0.0,
+            "net_pnl": 0.0,
             "slippage": slippage,
             "trade_value": trade_value,
             "exchange": intent["exchange"],
             "segment": intent["segment"],
             "mode": "paper",
             "broker": "paper",
+            "execution_tag": intent.get("execution_tag") or f"quantg:{intent['strategy_id'][:18]}:{datetime.now(timezone.utc).strftime('%Y%m%d')}",
+            "paper_realism": "UPSTOX_LIKE",
+            "pretrade_cost": {
+                "source": "core_paper_upstox_cost_model",
+                "estimated_charges": charges,
+                "charges_breakup": {
+                    "brokerage": brokerage,
+                    "stt": stt,
+                    "exchange_txn": exchange_txn,
+                    "sebi": sebi,
+                    "stamp": stamp,
+                    "gst": gst,
+                    "total": charges,
+                },
+            },
             "created_at": now,
             "updated_at": now,
             "idempotency_key": intent.get("idempotency_key"),
@@ -137,6 +164,8 @@ class PaperAdapter:
             "qty": qty,
             "price": final_price,
             "brokerage": brokerage,
+            "charges": charges,
+            "net_pnl": 0.0,
             "trade_value": trade_value,
             "mode": "paper",
             "created_at": now,
@@ -231,7 +260,7 @@ class UpstoxLiveAdapter:
                 order_type=intent.get("order_type", "MARKET"),
                 product="MIS",
                 price=intent["requested_price"],
-                tag=f"core:{intent['strategy_id'][:8]}"
+                tag=intent.get("execution_tag") or f"quantg:{intent['strategy_id'][:18]}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
             )
             
             broker_order_id = submit_res.get("broker_order_id") or submit_res.get("order_id")
