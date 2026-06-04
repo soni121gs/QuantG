@@ -88,7 +88,7 @@ def _is_allowed_paper_simulated_contract(sig: Dict[str, Any], strategy: Dict[str
 
 
 class StrategySignalValidator:
-    """Validates strategy signals before paper execution can create an order."""
+    """Validates strategy signals before unified execution can create an order."""
 
     @staticmethod
     async def validate(db, sig: Dict[str, Any], strategy: Dict[str, Any], active_positions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -104,8 +104,9 @@ class StrategySignalValidator:
             return _signal_validation_result(sig, False, "STRATEGY_QUARANTINED", strategy.get("quarantine_reason") or "Strategy is quarantined.")
         if str(strategy.get("status") or "").lower() != "live":
             return _signal_validation_result(sig, False, "STRATEGY_TIME_FILTER_FAILED", f"Strategy status is {strategy.get('status') or 'unknown'}.")
-        if _strategy_mode(strategy, sig) != "paper":
-            return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Strict paper validator only accepts paper-mode strategy signals.")
+        mode = _strategy_mode(strategy, sig)
+        if mode not in {"paper", "live"}:
+            return _signal_validation_result(sig, False, "STRATEGY_INVALID_MODE", "Strategy mode must be paper or live.")
         if action not in {"BUY", "SELL"} or effective_action not in {"BUY", "SELL"}:
             return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal action must be BUY or SELL.")
         if not _is_supported_signal_symbol(sig):
@@ -119,6 +120,9 @@ class StrategySignalValidator:
             token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").strip()
             if not target or not token:
                 return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Resolved contract is missing target symbol or instrument key.")
+            source = str(option_contract.get("source") or "").upper()
+            if mode == "live" and (option_contract.get("simulated") or token.upper().startswith("PAPER_") or source in PAPER_SIMULATED_SOURCES):
+                return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Live strategy cannot use a simulated paper contract.")
             if option_contract.get("simulated") or token.upper().startswith("PAPER_"):
                 if not _is_allowed_paper_simulated_contract(sig, strategy):
                     return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "Simulated paper contract is missing a valid paper LTP.")
@@ -432,6 +436,118 @@ async def _release_lock(db) -> None:
         pass
 
 
+def _positive_float(*values: Any) -> Optional[float]:
+    for value in values:
+        try:
+            parsed = float(value)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any]:
+    from core.event_store import CoreEventStore
+    from core.execution_router import ExecutionRouter
+    from core.market_domains import resolve_domain_by_underlying
+    from core.order_manager import OrderManager
+    from core.portfolio_ledger import PortfolioLedger
+    from core.risk_manager import RiskManager
+
+    mode = _strategy_mode(strategy, sig)
+    if mode not in {"paper", "live"}:
+        raise ValueError(f"Unified strategy execution requires paper/live mode, got {mode or 'blank'}.")
+
+    option_contract = sig.get("option_contract") or None
+    symbol = str(sig.get("symbol") or "").upper()
+    if not symbol:
+        raise ValueError("Signal is missing an underlying symbol.")
+
+    target_symbol = (
+        (option_contract or {}).get("tradingsymbol")
+        or (option_contract or {}).get("trading_symbol")
+        or sig.get("target_symbol")
+        or symbol
+    )
+    side = str((option_contract or {}).get("transaction_type") or sig.get("action") or "").upper()
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("Signal action must be BUY or SELL.")
+
+    price = _positive_float(
+        sig.get("price"),
+        sig.get("ltp"),
+        (option_contract or {}).get("ltp"),
+        sig.get("requested_price"),
+    )
+    if price is None:
+        raise ValueError("Unified execution requires a positive signal price or contract LTP.")
+
+    domain = resolve_domain_by_underlying(symbol)
+    lot_size = int((option_contract or {}).get("lot_size") or domain.get_lot_size(symbol) or 1)
+    lots = int((sig.get("visual_config") or {}).get("options", {}).get("lots") or sig.get("lots") or 1)
+    requested_qty = max(1, lots) * max(1, lot_size)
+
+    idem_key = sig.get("idempotency_key") or f"sig:{sig['id']}"
+    order_mgr = OrderManager(db)
+    if not await order_mgr.verify_and_lock_idempotency(idem_key, user_id):
+        existing = await db.orders.find_one({"user_id": user_id, "idempotency_key": idem_key})
+        if existing:
+            return existing
+        return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block", "reason_code": "DUPLICATE_SIGNAL"}
+
+    risk_res = await RiskManager(db).evaluate_order(
+        user_id=user_id,
+        strategy_id=sig["strategy_id"],
+        symbol=symbol,
+        target_symbol=target_symbol,
+        side=side,
+        requested_qty=requested_qty,
+        price=price,
+        mode=mode,
+        stop_loss=sig.get("stop_loss"),
+        take_profit=sig.get("take_profit"),
+        lot_size=lot_size,
+    )
+    if not risk_res.get("ok"):
+        await CoreEventStore(db).log_event(
+            "RISK_BLOCKED",
+            sig["strategy_id"],
+            user_id,
+            {"reason": risk_res.get("reason"), "symbol": symbol, "mode": mode},
+        )
+        return {
+            "ok": False,
+            "status": "SKIPPED",
+            "reason": risk_res.get("reason"),
+            "reason_code": risk_res.get("status") or "RISK_BLOCKED",
+        }
+
+    intent_doc = order_mgr.compile_order_intent(
+        strategy_id=sig["strategy_id"],
+        symbol=symbol,
+        target_symbol=target_symbol,
+        side=side,
+        quantity=int(risk_res["quantity"]),
+        price=price,
+        exchange=(option_contract or {}).get("exchange") or sig.get("exchange") or domain.exchange,
+        segment=(option_contract or {}).get("segment") or sig.get("segment") or domain.segment,
+        mode=mode,
+        stop_loss=sig.get("stop_loss"),
+        take_profit=sig.get("take_profit"),
+        idempotency_key=idem_key,
+    )
+    if option_contract:
+        intent_doc["instrument_token"] = (
+            option_contract.get("instrument_key")
+            or option_contract.get("instrument_token")
+            or option_contract.get("upstox_instrument_token")
+        )
+        intent_doc["option_contract"] = option_contract
+
+    return await ExecutionRouter(db, PortfolioLedger(db)).route_intent(user_id, intent_doc)
+
+
 async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> None:
     """Background signal sweeping loop."""
     logger.info(f"Signal Manager starting (tick={TICK_SECONDS}s, pod={POD_ID})")
@@ -529,24 +645,8 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                         # Dispatch approved signals
                         for sig in approved:
                             try:
-                                opt_cfg = sig.get("visual_config", {}).get("options") or {}
-                                option_contract = sig.get("option_contract")
-                                
-                                place_kwargs: Dict[str, Any] = dict(
-                                    user_id=user_id,
-                                    symbol=sig["symbol"],
-                                    side=sig["action"],
-                                    qty=int(opt_cfg.get("lots") or 1) if option_contract else None,
-                                    order_type="MARKET",
-                                    product=None,
-                                    source=f"strategy:{sig['strategy_id']}",
-                                    idempotency_key=f"sig:{sig['id']}",
-                                    option_contract=option_contract,
-                                    exchange=option_contract.get("exchange") if option_contract else sig.get("exchange", "NSE"),
-                                )
-                                
-                                # Route direct strategy-level parameters
-                                order_res = await place_order_fn(**place_kwargs)
+                                strategy = await db.strategies.find_one({"id": sig["strategy_id"], "user_id": user_id}) or {}
+                                order_res = await _dispatch_signal_via_unified_engine(db, user_id, sig, strategy)
                                 
                                 now_str = datetime.now(timezone.utc).isoformat()
                                 order_status = str(order_res.get("status") or "").upper()

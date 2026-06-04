@@ -117,6 +117,59 @@ def _entry_block_reason(exc: Exception) -> str | None:
     return None
 
 
+def _latest_signal_price(signal: Dict[str, Any], data: List[dict], option_contract: Dict[str, Any] | None = None) -> float | None:
+    """Best available price for the unified execution preflight."""
+    for candidate in (
+        (option_contract or {}).get("ltp"),
+        signal.get("price"),
+        signal.get("ltp"),
+        signal.get("close"),
+        signal.get("entry_price"),
+        (data[-1] if data else {}).get("close"),
+        (data[-1] if data else {}).get("price"),
+        (data[-1] if data else {}).get("ltp"),
+    ):
+        try:
+            value = float(candidate)
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _contract_resolution_update(
+    eval_set: Dict[str, Any],
+    inc_set: Dict[str, Any],
+    action: str,
+    signals_count: int,
+    clear_reason: str,
+    is_paper_mode: bool,
+    is_mcx_underlying: bool,
+) -> Dict[str, Any]:
+    update_set = {
+        **eval_set,
+        "last_error": None if is_paper_mode else clear_reason,
+        "last_filter_reason": clear_reason,
+        "last_signals_count": signals_count,
+        "last_signal_action": action,
+    }
+    update_doc: Dict[str, Any] = {"$set": update_set, "$inc": inc_set}
+    if is_paper_mode and is_mcx_underlying:
+        update_doc["$set"].update({
+            "halted": False,
+            "is_halted": False,
+            "last_skip_reason_code": "CONTRACT_RESOLUTION_FAILED",
+        })
+        update_doc["$unset"] = {"halt_reason": "", "last_halt_reason": ""}
+    else:
+        update_doc["$set"].update({
+            "halted": True,
+            "halt_reason": "CONTRACT_RESOLUTION_FAILED",
+        })
+    return update_doc
+
+
 async def _acquire_lock(db) -> bool:
     """Try to grab the runner lock. Returns True if this pod owns it now."""
     now = datetime.now(timezone.utc)
@@ -392,14 +445,16 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 if is_mcx_underlying else
                                 f"Upstox option contract resolution failed for {underlying_name}. Check OAuth, exchange segment permission, and instrument search logs."
                             )
-                            await db.strategies.update_one(
-                                {"id": s["id"]},
-                                {"$set": {**eval_set,
-                                          "last_error": clear_reason,
-                                          "halted": True,
-                                          "halt_reason": "CONTRACT_RESOLUTION_FAILED",
-                                          "last_signals_count": signals_count},
-                                 "$inc": inc_set})
+                            update_doc = _contract_resolution_update(
+                                eval_set=eval_set,
+                                inc_set=inc_set,
+                                action=action,
+                                signals_count=signals_count,
+                                clear_reason=clear_reason,
+                                is_paper_mode=is_paper_mode,
+                                is_mcx_underlying=is_mcx_underlying,
+                            )
+                            await db.strategies.update_one({"id": s["id"]}, update_doc)
                             continue
                     except Exception as e:
                         logger.warning(f"option resolve failed for {s['id']}: {e}")
@@ -412,6 +467,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 try:
                     target_symbol = option_contract["tradingsymbol"] if option_contract else symbol
                     option_type = option_contract.get("option_type") if option_contract else None
+                    signal_price = _latest_signal_price(last_sig, data, option_contract)
                     signal_id = str(uuid.uuid4())
                     now_str = datetime.now(timezone.utc).isoformat()
                     
@@ -425,6 +481,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "option_type": option_type,
                         "action": action,
                         "confidence": float(signal_validation.get("confidence", 85.0)),
+                        "price": signal_price,
+                        "ltp": signal_price,
                         "trend_context": signal_validation.get("trend") or {},
                         "visual_config": s.get("visual_config") or {},
                         "option_contract": option_contract,
