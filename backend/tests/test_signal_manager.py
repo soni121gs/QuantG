@@ -374,6 +374,93 @@ async def test_strategy_signal_validator_signal_spam_blocks():
 
 
 @pytest.mark.anyio
+async def test_strategy_signal_validator_allows_paper_simulated_contract_with_ltp():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-paper-sim",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "option_contract": {
+            "instrument_key": "PAPER_NIFTY_CE_24900",
+            "option_type": "CE",
+            "strike": 24900,
+            "simulated": True,
+            "source": "PAPER_SIMULATED_CONTRACT",
+            "ltp": 34.5,
+        },
+        "visual_config": {"options": {"enabled": True, "strike_mode": "ATM_BUY"}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_blocks_live_simulated_contract():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-live-sim",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900CE",
+        "option_type": "CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "live",
+        "option_contract": {
+            "instrument_key": "PAPER_NIFTY_CE_24900",
+            "option_type": "CE",
+            "strike": 24900,
+            "simulated": True,
+            "source": "PAPER_SIMULATED_CONTRACT",
+            "ltp": 34.5,
+        },
+        "visual_config": {"options": {"enabled": True, "strike_mode": "ATM_BUY"}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "live", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert not result["ok"]
+    assert result["reason_code"] == "STRATEGY_INVALID_INSTRUMENT"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_allows_direct_equity_symbol():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-equity",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "RELIANCE",
+        "target_symbol": "RELIANCE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "visual_config": {"symbol": "RELIANCE"},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
+
+
+@pytest.mark.anyio
 async def test_strategy_signal_validator_sell_without_open_position_blocks():
     db = MagicMock()
     db.signals.count_documents = AsyncMock(return_value=0)

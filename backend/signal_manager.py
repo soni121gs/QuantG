@@ -26,6 +26,7 @@ SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOI
 SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "300"))
 SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "6"))
 STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
+PAPER_SIMULATED_SOURCES = {"PAPER_SIMULATED_CONTRACT", "PAPER_SIMULATED_PRICE"}
 
 
 def _today_window_utc_iso() -> Tuple[str, str]:
@@ -48,6 +49,44 @@ def _signal_validation_result(sig: Dict[str, Any], ok: bool, reason_code: str, h
     }
 
 
+def _strategy_mode(strategy: Dict[str, Any], sig: Dict[str, Any]) -> str:
+    return str(strategy.get("mode") or sig.get("mode") or "").lower()
+
+
+def _is_option_signal(sig: Dict[str, Any]) -> bool:
+    visual_config = sig.get("visual_config") or {}
+    opt_cfg = visual_config.get("options") or {}
+    return bool(opt_cfg.get("enabled") or sig.get("option_contract") or sig.get("option_type"))
+
+
+def _is_supported_signal_symbol(sig: Dict[str, Any]) -> bool:
+    symbol = str(sig.get("symbol") or "").upper()
+    if not symbol:
+        return False
+    if symbol in SUPPORTED_SIGNAL_SYMBOLS:
+        return True
+    # Direct equity paper strategies are valid too; only option/commodity
+    # routing is limited to the known underlying set above.
+    return not _is_option_signal(sig)
+
+
+def _is_allowed_paper_simulated_contract(sig: Dict[str, Any], strategy: Dict[str, Any]) -> bool:
+    option_contract = sig.get("option_contract") or {}
+    if not option_contract:
+        return False
+    if _strategy_mode(strategy, sig) != "paper":
+        return False
+    token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").strip()
+    source = str(option_contract.get("source") or "").upper()
+    simulated = bool(option_contract.get("simulated")) or token.upper().startswith("PAPER_") or source in PAPER_SIMULATED_SOURCES
+    if not simulated:
+        return False
+    try:
+        return float(option_contract.get("ltp") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 class StrategySignalValidator:
     """Validates strategy signals before paper execution can create an order."""
 
@@ -65,11 +104,11 @@ class StrategySignalValidator:
             return _signal_validation_result(sig, False, "STRATEGY_QUARANTINED", strategy.get("quarantine_reason") or "Strategy is quarantined.")
         if str(strategy.get("status") or "").lower() != "live":
             return _signal_validation_result(sig, False, "STRATEGY_TIME_FILTER_FAILED", f"Strategy status is {strategy.get('status') or 'unknown'}.")
-        if str(strategy.get("mode") or sig.get("mode") or "").lower() != "paper":
+        if _strategy_mode(strategy, sig) != "paper":
             return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Strict paper validator only accepts paper-mode strategy signals.")
         if action not in {"BUY", "SELL"} or effective_action not in {"BUY", "SELL"}:
             return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal action must be BUY or SELL.")
-        if not symbol or symbol not in SUPPORTED_SIGNAL_SYMBOLS:
+        if not _is_supported_signal_symbol(sig):
             return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", f"Unsupported strategy symbol {symbol or 'blank'}.")
         if confidence in (None, "") or float(confidence or 0) <= 0:
             return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal confidence is missing.")
@@ -81,7 +120,8 @@ class StrategySignalValidator:
             if not target or not token:
                 return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Resolved contract is missing target symbol or instrument key.")
             if option_contract.get("simulated") or token.upper().startswith("PAPER_"):
-                return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "Normal paper mode cannot trade simulated contracts during live strategy execution.")
+                if not _is_allowed_paper_simulated_contract(sig, strategy):
+                    return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "Simulated paper contract is missing a valid paper LTP.")
             opt_cfg = visual_config.get("options") or {}
             if option_contract.get("expiry") and opt_cfg.get("expiry_offset") in (None, "") and int(opt_cfg.get("otm_points") or 0) > 0:
                 return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "OTM contract selection requires explicit expiry/strike configuration.")
