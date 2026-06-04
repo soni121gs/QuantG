@@ -7555,9 +7555,17 @@ async def _persist_core_paper_skipped_order(
         except Exception as exc:
             logger.warning("strategy skip diagnostics update failed strategy=%s: %s", strategy_id, exc)
             
-    logger.warning(
+    _log_throttled(
+        f"core-paper-skip:{user_id}:{dedupe_key}",
+        300.0,
+        logging.WARNING,
         "Core Paper execution skipped strategy_id=%s signal_id=%s action=%s symbol=%s reason=%s reason_code=%s",
-        strategy_id, signal_id, side, symbol, reason, reason_code
+        strategy_id,
+        signal_id,
+        side,
+        symbol,
+        reason,
+        reason_code,
     )
     doc.pop("_id", None)
     return doc
@@ -13455,7 +13463,7 @@ async def startup():
         ("risk_reservations", [("user_id", 1), ("status", 1), ("expires_at", 1)], {}),
         ("risk_reservations", [("order_id", 1), ("user_id", 1)], {"unique": True}),
         ("risk_reservations", [("strategy_id", 1), ("status", 1)], {}),
-        ("risk_state", "_id", {"unique": True}),
+        ("risk_state", "_id", {}),
         ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("system_config", "_id", {}),
         ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
