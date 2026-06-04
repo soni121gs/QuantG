@@ -96,9 +96,15 @@ async def test_place_order_core_paper_market_gating():
     from unittest.mock import patch, MagicMock, AsyncMock
     from server import _place_order_core
     
+    mock_db = MagicMock()
+    mock_db.strategies.find_one = AsyncMock(return_value={"id": "strat_1", "mode": "paper", "status": "live"})
+    mock_db.paper_wallets.find_one = AsyncMock(return_value={"user_id": "user_123", "balance": 500000.0})
+    mock_db.paper_wallets.insert_one = AsyncMock()
+    mock_db.paper_wallets.update_one = AsyncMock()
+    
     # Mock all required database and helper methods
     with patch("server.get_user_settings", new_callable=AsyncMock) as mock_settings, \
-         patch("server.db.strategies.find_one", new_callable=AsyncMock) as mock_strat, \
+         patch("server.db", mock_db), \
          patch("server._is_order_market_open", return_value=False), \
          patch("server._market_session_for_instrument", return_value={"segment": "NSE_EQ", "open": False, "status": "CLOSED", "reason": "NSE market closed"}), \
          patch("server._persist_paper_skipped_order", new_callable=AsyncMock, return_value={"id": "skip-1", "status": "SKIPPED_SIGNAL", "mode": "paper"}), \
@@ -107,7 +113,6 @@ async def test_place_order_core_paper_market_gating():
          
          # Mock user settings
          mock_settings.return_value = {"paper_mode": True, "execution_broker": "upstox"}
-         mock_strat.return_value = {"id": "strat_1", "mode": "paper", "status": "live"}
          
          # Mock return values for _build_order_intent
          mock_instr = MagicMock()
@@ -249,6 +254,9 @@ async def test_paper_trading_e2e_flow():
     mock_db.skipped_signals.insert_one = AsyncMock()
     mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     mock_db.strategy_positions.update_one = AsyncMock()
+    mock_db.paper_wallets.find_one = AsyncMock(return_value={"user_id": "user_123", "balance": 500000.0})
+    mock_db.paper_wallets.insert_one = AsyncMock()
+    mock_db.paper_wallets.update_one = AsyncMock()
 
     with patch("server.get_user_settings", new_callable=AsyncMock) as mock_settings, \
          patch("server.db", mock_db), \

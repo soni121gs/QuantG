@@ -213,6 +213,9 @@ class UpstoxLiveAdapter:
         if not live_enabled:
             raise RuntimeError("Live execution blocked: CORE_ENGINE_LIVE_ENABLED is set to false in the environment.")
 
+        if intent.get("segment") == "MCX_FO" or intent.get("exchange") == "MCX":
+            raise RuntimeError("Live execution blocked: Live trading is disabled for MCX segment on Upstox API.")
+
         arm = await self.db.live_arm_state.find_one({"user_id": user_id})
         if not arm or not arm.get("armed"):
             raise RuntimeError("Live execution blocked: System is not armed.")

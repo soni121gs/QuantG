@@ -5231,6 +5231,15 @@ async def unwind_strategy(sid: str, user=Depends(get_current_user)):
 @api.post("/strategies", response_model=StrategyOut)
 async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
     visual_config = req.visual_config or {}
+    underlying = str((visual_config.get("options") or {}).get("underlying") or req.instrument_group or "").upper()
+    is_mcx = (
+        str(req.asset_class).lower() == "commodity"
+        or str(req.instrument_group).upper() == "MCX"
+        or underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+    )
+    if is_mcx and (req.mode or "").strip().lower() == "live":
+        raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
+
     risk_config = dict((visual_config.get("risk") or {}))
     if req.required_capital is not None:
         risk_config["required_capital"] = float(req.required_capital)
@@ -5376,6 +5385,23 @@ async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
 @api.put("/strategies/{sid}", response_model=StrategyOut)
 async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
+    
+    # Retrieve existing to perform merged MCX check
+    existing = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    visual_config_check = update.get("visual_config") or existing.get("visual_config") or {}
+    underlying_check = str((visual_config_check.get("options") or {}).get("underlying") or update.get("instrument_group") or existing.get("instrument_group") or "").upper()
+    asset_class_check = str(update.get("asset_class") or existing.get("asset_class") or "").lower()
+    instrument_group_check = str(update.get("instrument_group") or existing.get("instrument_group") or "").upper()
+    mode_check = str(update.get("mode") or existing.get("mode") or "").strip().lower()
+    is_mcx_check = (
+        asset_class_check == "commodity"
+        or instrument_group_check == "MCX"
+        or underlying_check in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+    )
+    if is_mcx_check and mode_check == "live":
+        raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
     if "asset_class" not in update and "visual_config" in update:
         update["asset_class"] = "options" if ((update["visual_config"] or {}).get("options") or {}).get("enabled") else "equity"
     if "required_capital" in update:
@@ -5506,6 +5532,19 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    
+    if req.mode is not None and req.mode.strip().lower() == "live":
+        visual_config_check = row.get("visual_config") or {}
+        underlying_check = str((visual_config_check.get("options") or {}).get("underlying") or row.get("instrument_group") or "").upper()
+        asset_class_check = str(row.get("asset_class") or "").lower()
+        instrument_group_check = str(row.get("instrument_group") or "").upper()
+        is_mcx_check = (
+            asset_class_check == "commodity"
+            or instrument_group_check == "MCX"
+            or underlying_check in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+        )
+        if is_mcx_check:
+            raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
     visual_config = row.get("visual_config") or {}
     risk = visual_config.get("risk") or {}
     mapping = {
@@ -6360,6 +6399,11 @@ async def _execution_preflight(
         )
 
     segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
+    if segment == "MCX_FO" and not paper:
+        return _preflight_response(
+            ok=False, reason_code="SKIPPED_SEGMENT_DISABLED", reason="Live trading is disabled for MCX segment on Upstox API.",
+            strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
+        )
     if segment not in SEGMENT_MARKET_WINDOWS:
         return _preflight_response(
             ok=False, reason_code="INSTRUMENT_UNRESOLVED", reason=f"Unsupported exchange segment {segment}.",
@@ -11962,6 +12006,7 @@ async def ops_diagnostics(user):
         "server_time_utc": datetime.now(timezone.utc).isoformat(),
         "server_time_ist": (datetime.now(timezone.utc) + IST_OFFSET).isoformat(),
         "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
+        "market_session": market_session_snapshot(),
         "market": {"open": _is_nse_market_open(), "status": "OPEN" if _is_nse_market_open() else "CLOSED"},
         "broker_preferences": {
             "data_broker": settings.get("data_broker"),
@@ -12805,6 +12850,13 @@ async def get_profile(user=Depends(get_current_user)):
 @api.put("/profile")
 async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
+    
+    if "paper_mode" in update and update["paper_mode"] is False:
+        if not os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true":
+            raise HTTPException(
+                status_code=400,
+                detail="Live trading mode cannot be enabled: CORE_ENGINE_LIVE_ENABLED is set to false in the environment.",
+            )
     if "paper_mode" in update and update["paper_mode"] is False:
         upstox_status = await get_user_upstox_status(user["id"])
         if not upstox_status.get("token_valid"):
@@ -13528,6 +13580,41 @@ async def startup():
                 synced_modes = await _sync_strategy_modes_to_profile(user_id, True)
                 if synced_modes:
                     logger.warning("Startup synced %s strategy mode(s) to PAPER for user %s", synced_modes, user_id)
+
+            # Auditing/Migrating user account settings to match target config
+            try:
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": {
+                        "LEGACY_EXECUTION_WRITES_ENABLED": False,
+                        "CORE_ENGINE_PAPER_ENABLED": True,
+                        "CORE_ENGINE_LIVE_ENABLED": False,
+                    }}
+                )
+                
+                # Check strategies for MCX live downgrades or missing fields
+                user_strats = await db.strategies.find({"user_id": user_id}).to_list(1000)
+                for s in user_strats:
+                    s_updates = {}
+                    if not s.get("required_capital"):
+                        s_updates["required_capital"] = 25000.0
+                    if not s.get("instrument_group"):
+                        s_updates["instrument_group"] = _strategy_instrument_group(s)
+                    if not s.get("strategy_type"):
+                        s_updates["strategy_type"] = _strategy_type(s)
+                    
+                    # Force MCX live strategy to paper
+                    if _strategy_instrument_group(s) == "MCX" and s.get("mode") == "live":
+                        s_updates["mode"] = "paper"
+                        s_updates["last_filter_reason"] = "MCX live strategies downgraded to paper-only automatically."
+                        logger.warning("MCX Live strategy %s auto-downgraded to paper-only", s.get("id"))
+                    
+                    if s_updates:
+                        await db.strategies.update_one({"id": s["id"]}, {"$set": s_updates})
+                
+                logger.info("Startup audit and safety configuration completed for user %s", user_id)
+            except Exception as audit_err:
+                logger.warning("Startup audit/safety config migration failed for user %s: %s", user_id, audit_err)
             
             # Executing startup self-heal
             try:

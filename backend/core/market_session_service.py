@@ -59,15 +59,43 @@ class MarketSessionService:
         """Check if a specific market segment is open.
         
         Args:
-            domain: DomainType enum (NSE_FO, MCX_FO, BSE_FO)
+            domain: DomainType enum (NSE_FO, MCX_FO, BSE_FO), MarketDomain object, or string representation.
             now_utc: Optional datetime for testing
             
         Returns:
             bool: True if segment is open for trading
         """
-        window = SEGMENT_WINDOWS.get(domain)
+        # Resolve domain to DomainType enum
+        from core.market_domains import DomainType
+        resolved_domain = None
+        if isinstance(domain, DomainType):
+            resolved_domain = domain
+        elif hasattr(domain, 'name') and isinstance(domain.name, DomainType):
+            resolved_domain = domain.name
+        elif isinstance(domain, str):
+            try:
+                resolved_domain = DomainType(domain.upper())
+            except ValueError:
+                try:
+                    resolved_domain = DomainType[domain.upper()]
+                except KeyError:
+                    pass
+        elif hasattr(domain, 'name') and isinstance(domain.name, str):
+            try:
+                resolved_domain = DomainType(domain.name.upper())
+            except ValueError:
+                try:
+                    resolved_domain = DomainType[domain.name.upper()]
+                except KeyError:
+                    pass
+
+        if resolved_domain is None:
+            logger.warning(f"Unknown domain parameter type or value {domain}, returning False")
+            return False
+
+        window = SEGMENT_WINDOWS.get(resolved_domain)
         if not window:
-            logger.warning(f"Unknown domain {domain}, returning False")
+            logger.warning(f"Unknown domain {resolved_domain}, returning False")
             return False
         
         open_minute, close_minute, _ = window
@@ -77,14 +105,14 @@ class MarketSessionService:
         
         # Check weekday (0-4 = Mon-Fri, 5-6 = Sat-Sun)
         if day_of_week >= 5:
-            logger.debug(f"Segment {domain} closed: weekend")
+            logger.debug(f"Segment {resolved_domain} closed: weekend")
             return False
         
         # Check if in trading window
         is_open = open_minute <= minutes <= close_minute
         if not is_open:
             logger.debug(
-                f"Segment {domain} closed: {minutes:04d} minutes not in "
+                f"Segment {resolved_domain} closed: {minutes:04d} minutes not in "
                 f"[{open_minute:04d}, {close_minute:04d}]"
             )
         return is_open
@@ -94,15 +122,47 @@ class MarketSessionService:
         """Get detailed status for a market segment.
         
         Args:
-            domain: DomainType enum
+            domain: DomainType enum, MarketDomain object, or string representation.
             now_utc: Optional datetime for testing
             
         Returns:
             dict: Status information including open/closed, hours, current time
         """
-        window = SEGMENT_WINDOWS.get(domain)
-        if not window:
+        # Resolve domain to DomainType enum
+        from core.market_domains import DomainType
+        resolved_domain = None
+        if isinstance(domain, DomainType):
+            resolved_domain = domain
+        elif hasattr(domain, 'name') and isinstance(domain.name, DomainType):
+            resolved_domain = domain.name
+        elif isinstance(domain, str):
+            try:
+                resolved_domain = DomainType(domain.upper())
+            except ValueError:
+                try:
+                    resolved_domain = DomainType[domain.upper()]
+                except KeyError:
+                    pass
+        elif hasattr(domain, 'name') and isinstance(domain.name, str):
+            try:
+                resolved_domain = DomainType(domain.name.upper())
+            except ValueError:
+                try:
+                    resolved_domain = DomainType[domain.name.upper()]
+                except KeyError:
+                    pass
+
+        if resolved_domain is None:
             domain_str = domain.value if hasattr(domain, 'value') else str(domain)
+            return {
+                "segment": domain_str,
+                "open": False,
+                "reason": "Unsupported segment"
+            }
+
+        window = SEGMENT_WINDOWS.get(resolved_domain)
+        if not window:
+            domain_str = resolved_domain.value if hasattr(resolved_domain, 'value') else str(resolved_domain)
             return {
                 "segment": domain_str,
                 "open": False,
@@ -113,7 +173,7 @@ class MarketSessionService:
         ist_now = MarketSessionService.get_ist_now(now_utc)
         minutes = ist_now.hour * 60 + ist_now.minute
         day_of_week = ist_now.weekday()
-        is_open = MarketSessionService.is_segment_open(domain, now_utc)
+        is_open = MarketSessionService.is_segment_open(resolved_domain, now_utc)
         
         # Format trading hours
         open_hour = open_minute // 60
@@ -122,7 +182,7 @@ class MarketSessionService:
         close_min = close_minute % 60
         
         return {
-            "segment": domain.value if hasattr(domain, 'value') else str(domain),
+            "segment": resolved_domain.value if hasattr(resolved_domain, 'value') else str(resolved_domain),
             "label": label,
             "open": is_open,
             "current_time_ist": ist_now.isoformat(),

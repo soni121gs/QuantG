@@ -186,7 +186,7 @@ class ReadinessChecker:
             
             # 3. Check market segment availability
             domain = resolve_domain_by_underlying(underlying.upper())
-            segment_open = MarketSessionService.is_segment_open(domain)
+            segment_open = MarketSessionService.is_segment_open(domain.name)
             checks["segment_open"] = segment_open
             
             all_ready = all(checks.values())

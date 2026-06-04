@@ -17,6 +17,16 @@ const fmt = (value) => {
   }
 };
 
+const fmtUTC = (value) => {
+  if (!value) return "-";
+  try {
+    const d = new Date(value);
+    return d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  } catch {
+    return String(value);
+  }
+};
+
 export default function OpsConsole() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -583,21 +593,17 @@ export default function OpsConsole() {
             </h2>
             
             <div className="space-y-3 font-mono text-xs">
-              <ChecklistItem
-                label="Upstox Feed"
-                checked={upstox.connected && upstox.feed_running}
-                details={upstox.connected ? (upstox.feed_running ? "Ingestion online" : "Token valid, feed stopped") : "Reconnect Upstox required"}
-              />
-              <ChecklistItem 
-                label="SQLite Write Lock" 
-                checked={true} 
-                details="No lockups, pool healthy" 
-              />
-              <ChecklistItem 
-                label="Risk Limits Cache" 
-                checked={data?.readiness?.ready} 
-                details={data?.readiness?.ready ? "Validated" : "Needs settings sync"} 
-              />
+              {(data?.readiness?.checks || []).map((c) => (
+                <ChecklistItem
+                  key={c.id}
+                  label={c.label}
+                  checked={c.ok}
+                  details={c.detail || (c.ok ? "OK" : c.hint || "Failed")}
+                />
+              ))}
+              {(!data?.readiness?.checks || data.readiness.checks.length === 0) && (
+                <div className="text-[var(--qd-text-3)] text-center py-2">No connection checks returned</div>
+              )}
             </div>
 
             <div className="mt-5 pt-3.5 border-t border-[rgba(255,255,255,0.06)] space-y-2">
@@ -619,14 +625,17 @@ export default function OpsConsole() {
             </h2>
             
             <div className="space-y-2">
-              <DiagRow k="Server Time IST" v={fmt(data?.server_time_ist)} />
+              <DiagRow k="Server Time UTC" v={fmtUTC(data?.server_time_utc)} />
+              <DiagRow k="India Time IST" v={fmt(data?.server_time_ist)} />
+              <DiagRow k="Market Session" v={data?.market_session?.global_status || "CLOSED"} />
+              <DiagRow k="NSE Segment" v={data?.market_session?.NSE_FO?.status || "CLOSED"} />
+              <DiagRow k="MCX Segment" v={data?.market_session?.MCX_FO?.status || "CLOSED"} />
+              <DiagRow k="Next Open" v={data?.market_session?.next_open ? fmt(data.market_session.next_open) : "N/A"} />
+              <DiagRow k="Next Close" v={data?.market_session?.next_close ? fmt(data.market_session.next_close) : "N/A"} />
               <DiagRow k="Data Feed Latency" v={ticker.last_tick_at ? fmt(ticker.last_tick_at) : "No ticks"} />
               <DiagRow k="Subscribed Tokens" v={ticker.subscribed_tokens ?? 0} />
-              <DiagRow k="SQLite Ledger Path" v="runtime_state.sqlite3" />
-              <DiagRow k="Websocket URL" v={ticker.websocket_url || "Stateful Cache"} />
               <DiagRow k="Readiness Assessment" v={data?.readiness?.ready ? "System operational" : (upstox.reconnect_required ? "Reconnect Upstox required" : "Review configurations")} />
               <DiagRow k="Backend Version" v={data?.version || "12.0"} />
-              <DiagRow k="Git Branch" v={data?.git_branch || "main"} />
               <DiagRow k="Git Commit" v={data?.git_commit ? `${data.git_commit.slice(0, 7)}${data.git_dirty ? '*' : ''}` : "unknown"} />
             </div>
           </div>

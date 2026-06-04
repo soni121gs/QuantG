@@ -371,6 +371,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
   const notice = noticeFor(s);
   const editPath = s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`;
   const scoreValue = score?.score ?? s.ai_confidence_score ?? 0;
+  const isMcx = s.instrument_group === "MCX" || s.asset_class === "commodity" || (s.visual_config?.options?.underlying && ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"].includes(s.visual_config.options.underlying.toUpperCase()));
   
   const risk = s.visual_config?.risk || {};
   
@@ -495,7 +496,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
           <h2 className="mt-1 truncate font-head text-base font-semibold text-white">{s.name}</h2>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-rose-300 animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-cyan-300"}`}>
-              {s.mode === "live" ? "● PRODUCTION LIVE" : "● PAPER SIMULATED"}
+              {s.mode === "live" ? "● PRODUCTION LIVE" : (isMcx ? "● PAPER ONLY" : "● PAPER SIMULATED")}
             </span>
             <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-white">
               BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
@@ -720,7 +721,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
                   className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                   <option value="paper">Paper Trading (Simulated)</option>
-                  <option value="live">Live Trading (Production)</option>
+                  <option value="live" disabled={isMcx}>Live Trading (Production) {isMcx ? "(Disabled for MCX)" : ""}</option>
                 </select>
               </div>
             </div>
