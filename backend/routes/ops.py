@@ -200,44 +200,22 @@ async def ops_runtime_route(user=Depends(get_current_user)):
 
 @router.post("/ticker/restart")
 async def ops_restart_ticker(req: OpsActionReq = None, user=Depends(get_current_user), request: Request = None):
-    # Import settings to check broker pref
-    from server import get_user_settings, _start_user_ticker, _start_user_upstox_ticker, app
-    
-    settings = await get_user_settings(user["id"])
-    if settings.get("data_broker") == "upstox":
-        return await _start_user_upstox_ticker(user["id"])
-        
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if tick_manager:
-        try:
-            ticker = tick_manager._tickers.get(user["id"])
-            if ticker:
-                ticker.stop()
-        except Exception as e:
-            import logging
-            logging.getLogger("quantdesk.ops").warning(f"ticker stop from ops failed: {e}")
-            
-    return await _start_user_ticker(user["id"])
+    from server import _start_user_upstox_ticker
+    return await _start_user_upstox_ticker(user["id"])
 
 
 @router.post("/orders/sync")
 async def ops_sync_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
     from server import (
-        get_user_kite, 
         _ORDER_SYNC_CACHE, 
-        _sync_kite_order_statuses, 
-        _stale_local_open_orders, 
         _sync_upstox_order_statuses,
         _sync_strategy_positions_with_broker
     )
     
-    kite, status = await get_user_kite(user["id"])
     _ORDER_SYNC_CACHE.pop(user["id"], None)
-    sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0, "reason": status.get("reason", "zerodha_not_connected")}
-    stale = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": status.get("reason", "zerodha_not_connected")}
     upstox_sync = await _sync_upstox_order_statuses(user["id"], force=True)
-    position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
-    return {"ok": True, "sync": sync, "stale": stale, "upstox_sync": upstox_sync, "position_sync": position_sync}
+    position_sync = await _sync_strategy_positions_with_broker(user["id"])
+    return {"ok": True, "upstox_sync": upstox_sync, "position_sync": position_sync}
 
 
 @router.get("/reconciliation/breaks")
@@ -306,31 +284,17 @@ async def ops_resolve_reconciliation(req: OpsActionReq = None, user=Depends(get_
 @router.post("/auto-recover")
 async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_user)):
     from server import (
-        get_user_kite,
         _ORDER_SYNC_CACHE,
-        _sync_kite_order_statuses,
-        _stale_local_open_orders,
         _sync_strategy_positions_with_broker,
         _sync_upstox_order_statuses,
         _start_user_upstox_ticker,
-        _start_user_ticker,
         ops_diagnostics
     )
     
     actions: List[Dict[str, Any]] = []
-    kite, kite_status = await get_user_kite(user["id"])
-    if kite:
-        _ORDER_SYNC_CACHE.pop(user["id"], None)
-        actions.append({"name": "zerodha_order_sync", "result": await _sync_kite_order_statuses(user["id"], kite)})
-        actions.append({"name": "stale_order_repair", "result": await _stale_local_open_orders(user["id"], kite)})
-        actions.append({"name": "strategy_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
-        ticker_result = await _start_user_ticker(user["id"])
-        actions.append({"name": "zerodha_ticker_restart", "result": ticker_result})
-    else:
-        actions.append({"name": "zerodha_session", "skipped": True, "reason": kite_status.get("reason", "not_connected")})
- 
+    _ORDER_SYNC_CACHE.pop(user["id"], None)
     actions.append({"name": "upstox_order_sync", "result": await _sync_upstox_order_statuses(user["id"], force=True)})
-    actions.append({"name": "upstox_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"], kite)})
+    actions.append({"name": "upstox_position_sync", "result": await _sync_strategy_positions_with_broker(user["id"])})
     actions.append({"name": "upstox_market_ticker", "result": await _start_user_upstox_ticker(user["id"])})
 
     diagnostics = await ops_diagnostics(user=user)

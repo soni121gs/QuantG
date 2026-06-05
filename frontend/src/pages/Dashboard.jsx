@@ -429,7 +429,6 @@ export default function Dashboard() {
   const [funds, setFunds] = useState(null);
   const [telemetry, setTelemetry] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
-  const [commodities, setCommodities] = useState([]);
   const [strategyAnalytics, setStrategyAnalytics] = useState(null);
   const [optionChain, setOptionChain] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -443,7 +442,6 @@ export default function Dashboard() {
         api.get("/market/watchlist"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
-        api.get("/market/commodities"),
         api.get("/market/session-status"),
         api.get("/strategies/leaderboard"),
         api.get("/upstox/option-chain", { params: { underlying: "NIFTY" } }).catch(() => ({ data: null })),
@@ -452,9 +450,7 @@ export default function Dashboard() {
       setPf(p.data);
       setWatch(w.data);
       setFunds(f.data);
-      setTelemetry(t.data);
-      setCommodities(c.data || []);
-      setMarketSession(s.data);
+      setTelemetry(t.data);      setMarketSession(s.data);
       setStrategyAnalytics(leaderboard.data);
       setOptionChain(chain.data);
       setLoadError("");
@@ -534,10 +530,6 @@ export default function Dashboard() {
   // Tab Filtering
   const equityPositions = useMemo(() => positions.filter((p) => p.asset_type === "equity" || p.exchange === "NSE"), [positions]);
   const equityOrders = useMemo(() => orders.filter((o) => o.exchange === "NSE"), [orders]);
-  
-  const commodityPositions = useMemo(() => positions.filter((p) => p.exchange === "MCX" || p.asset_type === "commodity" || p.symbol.includes("CRUDE") || p.symbol.includes("NATURAL")), [positions]);
-  const commodityOrders = useMemo(() => orders.filter((o) => o.exchange === "MCX" || o.asset_type === "commodity" || o.symbol.includes("CRUDE") || o.symbol.includes("NATURAL")), [orders]);
-
   const foPositions = useMemo(() => positions.filter((p) => p.option_type || p.symbol.endsWith("CE") || p.symbol.endsWith("PE") || p.exchange === "NFO" || p.exchange === "BFO"), [positions]);
   const foStrategies = useMemo(() => strategies.filter((s) => s.asset_class === "option" || s.strategy_id.includes("Straddle") || s.strategy_id.includes("Scalper") || s.name.includes("Option")), [strategies]);
   const leaderboardRows = useMemo(() => strategyAnalytics?.leaderboard || [], [strategyAnalytics]);
@@ -701,9 +693,7 @@ export default function Dashboard() {
       <div className="flex border-b border-[var(--qd-border)] gap-2 overflow-x-auto pb-px">
         {[
           { id: "overview", label: "General Console" },
-          { id: "equity", label: "Equity Spot" },
-          { id: "commodities", label: "MCX Commodities" },
-          { id: "fo", label: "Derivatives (F&O)" },
+          { id: "equity", label: "Equity Spot" },          { id: "fo", label: "Derivatives (F&O)" },
         ].map((t) => (
           <button
             key={t.id}
@@ -1194,7 +1184,7 @@ export default function Dashboard() {
                 <span className="qd-live-dot" />
               </div>
               <div className="max-h-[300px] divide-y divide-[var(--qd-border)] overflow-auto">
-                {topWatch.filter(w => !w.symbol.includes("CRUDE") && !w.symbol.includes("NATURAL")).map((item) => (
+                {topWatch.map((item) => (
                   <MarketRow key={item.symbol} item={item} />
                 ))}
               </div>
@@ -1234,149 +1224,6 @@ export default function Dashboard() {
                 </table>
               </div>
             )}
-          </section>
-        </div>
-      )}
-
-      {activeTab === "commodities" && (
-        <div className="space-y-5">
-          {/* Commodity metrics */}
-          <section className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-            <KpiCard label="Commodity Feed" value="UPSTOX LIVE" icon={Activity} sub="Realtime High-Frequency Feed" />
-            <KpiCard label="MCX Positions" value={commodityPositions.length} icon={PieChart} sub="Active MCX Contracts" />
-            <KpiCard label="MCX Orders" value={commodityOrders.length} icon={Power} sub="MCX Orders Filled Today" />
-            <KpiCard
-              label="MCX Status"
-              value={marketSession?.MCX_FO?.status || "-"}
-              icon={Shield}
-              tone={marketSession?.MCX_FO?.status === "OPEN" ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}
-              sub={marketSession?.MCX_FO?.reason || "Session trades 09:00 - 23:30"}
-            />
-          </section>
-
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-            {/* Commodity Positions & Orders */}
-            <div className="space-y-4">
-              <div className="qd-card overflow-hidden">
-                <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between">
-                  <h2 className="font-head text-sm font-semibold text-white">Commodity Open Positions</h2>
-                  <StatusPill>{commodityPositions.length} active</StatusPill>
-                </div>
-                {commodityPositions.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-[var(--qd-text-3)]">No open MCX commodity positions.</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
-                          <th className="px-3 py-2">Symbol</th>
-                          <th className="px-3 py-2">Qty</th>
-                          <th className="px-3 py-2">Avg Buy</th>
-                          <th className="px-3 py-2">LTP</th>
-                          <th className="px-3 py-2 text-right">PnL</th>
-                        </tr>
-                      </thead>
-                      <tbody className="font-mono">
-                        {commodityPositions.map((p) => (
-                          <tr key={p.symbol} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
-                            <td className="px-3 py-2 text-white font-semibold">{p.symbol}</td>
-                            <td className="px-3 py-2 text-[var(--qd-text-2)]">{p.qty}</td>
-                            <td className="px-3 py-2 text-[var(--qd-text-3)]">{money(p.avg_price)}</td>
-                            <td className="px-3 py-2 text-[var(--qd-text-2)]">{money(p.ltp)}</td>
-                            <td className={`px-3 py-2 text-right font-semibold ${toneClass(p.pnl)}`}>{money(p.pnl)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              {/* Commodity Orders */}
-              <div className="qd-card overflow-hidden">
-                <div className="border-b border-[var(--qd-border)] px-4 py-3">
-                  <h2 className="font-head text-sm font-semibold text-white">Commodity Orders History</h2>
-                </div>
-                {commodityOrders.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-[var(--qd-text-3)]">No MCX commodity trades submitted today.</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
-                          <th className="px-3 py-2">Symbol</th>
-                          <th className="px-3 py-2">Side</th>
-                          <th className="px-3 py-2">Qty</th>
-                          <th className="px-3 py-2">Fill Price</th>
-                          <th className="px-3 py-2">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="font-mono">
-                        {commodityOrders.map((o) => (
-                          <tr key={o.id} className="border-b border-[var(--qd-border)]">
-                            <td className="px-3 py-2 text-white">{o.symbol}</td>
-                            <td className={`px-3 py-2 font-bold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
-                            <td className="px-3 py-2 text-[var(--qd-text-2)]">{o.qty}</td>
-                            <td className="px-3 py-2 text-[var(--qd-text-3)]">{money(o.price)}</td>
-                            <td className="px-3 py-2"><StatusPill tone={filledOrder(o.status) ? "good" : "warn"}>{o.status}</StatusPill></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Commodity live quote feeds */}
-            <aside className="space-y-4">
-              <div className="qd-card overflow-hidden">
-                <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between">
-                  <h2 className="font-head text-sm font-semibold text-white">MCX Live Quotes</h2>
-                  <span className="qd-live-dot" />
-                </div>
-                <div className="divide-y divide-[var(--qd-border)]">
-                  {commodities.map((item) => (
-                    <div key={item.symbol} className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 hover:bg-[var(--qd-surface-2)]">
-                      <div className="min-w-0">
-                        <div className="font-mono text-sm font-semibold text-white">{item.symbol}</div>
-                        <div className="mt-0.5 truncate text-xs text-[var(--qd-text-3)]">{item.name}</div>
-                        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-[var(--qd-text-3)]">
-                          <span>Quote {quoteTime(item.received_at || item.tick_time)}</span>
-                          <span>Age {quoteAge(item.data_age_sec)}</span>
-                          <span>Feed {item.feed || item.source || "-"}</span>
-                          <span>Market {item.market_status || "-"}</span>
-                          <span className="col-span-2 truncate">Key {item.instrument_key || item.token || "-"}</span>
-                          {item.block_reason && <span className="col-span-2 truncate text-[var(--qd-warn)]">{item.block_reason}</span>}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-mono text-sm font-bold text-white">{money(item.price)}</div>
-                        <div className={`font-mono text-xs font-semibold ${toneClass(item.change)}`}>
-                          {item.change >= 0 ? "UP" : "DN"} {pctFmt(item.pct)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {commodities.length === 0 && (
-                    <div className="p-8 text-center text-xs text-[var(--qd-text-3)]">Waiting for MCX tickers.</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Seed instructions */}
-              <div className="qd-card p-4 bg-gradient-to-br from-indigo-500/5 to-cyan-500/5">
-                <h3 className="font-head text-sm font-semibold text-white flex items-center gap-2 mb-2">
-                  <Zap size={14} className="text-[var(--qd-cyan)]" /> Low Cost Option Scalping
-                </h3>
-                <p className="text-xs text-[var(--qd-text-2)] leading-relaxed">
-                  We have successfully integrated <strong>Crude Oil Mini options (CRUDEOILM)</strong>. By deploying the new <strong>Crude Oil Mini EMA Momentum</strong> or <strong>RSI Reversion</strong> strategies, you can trade live commodity options on Upstox with extremely low margins (lot size of 10 instead of 100 on standard crude).
-                </p>
-                <div className="mt-3 text-[10px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
-                  Lot Size: 10 barrels · Margin required: ~₹5,000
-                </div>
-              </div>
-            </aside>
           </section>
         </div>
       )}

@@ -111,7 +111,7 @@ def test_market_session_single_source():
     assert closed["global_status"] in {"OPEN", "PARTIAL_OPEN", "CLOSED"}
     assert closed["segments"]["NSE_FO"]["status"] == "CLOSED"
     assert closed["segments"]["NSE_FO"]["status"] == closed["NSE_FO"]["status"]
-    assert closed["segments"]["MCX_FO"]["status"] == closed["MCX_FO"]["status"]
+    assert "MCX_FO" not in closed["segments"]
 
 
 @pytest.mark.anyio
@@ -144,31 +144,25 @@ async def test_no_order_spam_for_repeated_after_hours_signal():
 
 
 @pytest.mark.anyio
-async def test_crudeoilm_future_resolution():
+async def test_removed_mcx_future_resolution_rejected():
     from server import _build_order_intent
 
     mock_db = MagicMock()
     mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
     with patch("server.db", mock_db), \
          patch("server._upstox_instrument_token", return_value=None), \
-         patch("server._resolve_upstox_mcx_future_contract", new_callable=AsyncMock, return_value={
-             "instrument_key": "MCX_FO|566001",
-             "trading_symbol": "CRUDEOILM 16 JUN 26 FUT",
-         }):
-        result = await _build_order_intent(
-            user_id="user-1",
-            symbol="CRUDEOILM",
-            side="BUY",
-            qty=1,
-            source="manual",
-            exchange="MCX",
-            settings={"default_qty": 1},
-        )
-
-    instr = result["intent"].instrument
-    assert instr.exchange == "MCX"
-    assert instr.segment == "MCX_FO"
-    assert instr.instrument_token == "MCX_FO|566001"
+         patch("server._resolve_upstox_mcx_future_contract", new_callable=AsyncMock) as resolver:
+        with pytest.raises(Exception, match="MCX/CDS execution has been removed"):
+            await _build_order_intent(
+                user_id="user-1",
+                symbol="CRUDEOILM",
+                side="BUY",
+                qty=1,
+                source="manual",
+                exchange="MCX",
+                settings={"default_qty": 1},
+            )
+        resolver.assert_not_called()
 
 
 def test_option_segment_not_equity():
@@ -177,4 +171,3 @@ def test_option_segment_not_equity():
     assert _execution_segment_for("NFO", "OPTION_LONG", "NIFTY26JUN25000CE") == "NSE_FO"
     assert _execution_segment_for("NFO", "OPTION_LONG", "BANKNIFTY26JUN52000PE") == "NSE_FO"
     assert _execution_segment_for("BFO", "OPTION_LONG", "SENSEX26JUN80000CE") == "BSE_FO"
-    assert _execution_segment_for("MCX", "OPTION_LONG", "CRUDEOILM26JUN6500CE") == "MCX_FO"

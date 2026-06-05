@@ -1,11 +1,7 @@
-"""QuantG Risk Manager.
+"""QuantG platform risk manager.
 
-Acts as the central firewall for all orders (paper, live, backtest).
-Enforces: strategy status, market hours, instrument validity, price freshness, daily trade counts,
-daily loss limits, max position size, global kill-switch, and live arm status.
-
-Unified pipeline: applies identical checks for paper and live modes. Mode-specific
-setup is done in readiness_checker before execution.
+This is intentionally not a strategy-quality filter. It enforces account,
+session, wallet/margin and optional kill-switch constraints before execution.
 """
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
@@ -61,20 +57,14 @@ class RiskManager:
                     "quantity": 0
                 }
 
-        # 3. Strategy Operational Check
+        # 3. Strategy config lookup for sizing only. Do not block because a
+        # strategy is "bad", halted, low confidence, or otherwise app-judged.
         strategy = await self.db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if not strategy:
             return {
                 "ok": False,
                 "status": "REJECTED_STRATEGY_MISSING",
                 "reason": "Strategy not found.",
-                "quantity": 0
-            }
-        if strategy.get("halted") or strategy.get("is_halted"):
-            return {
-                "ok": False,
-                "status": "REJECTED_STRATEGY_HALTED",
-                "reason": f"Strategy is halted. Reason: {strategy.get('halt_reason', 'Unknown')}",
                 "quantity": 0
             }
 
@@ -99,10 +89,17 @@ class RiskManager:
                 if key in user and key not in settings:
                     settings[key] = user.get(key)
         
-        # Calculate daily losses
-        daily_loss_limit = float(strategy.get("visual_config", {}).get("risk", {}).get("daily_loss_limit") or settings.get("max_daily_loss") or 10000.0)
+        # Optional user-enabled daily loss kill switch.
+        visual_risk_cfg = strategy.get("visual_config", {}).get("risk", {})
+        daily_loss_enabled = bool(
+            settings.get("daily_loss_kill_switch_enabled")
+            or settings.get("daily_loss_guard_enabled")
+            or visual_risk_cfg.get("daily_loss_enabled")
+            or visual_risk_cfg.get("daily_loss_kill_switch_enabled")
+        )
+        daily_loss_limit = float(visual_risk_cfg.get("daily_loss_limit") or settings.get("max_daily_loss") or 0.0)
         daily_loss = float(strategy.get("today_pnl") or 0.0)
-        if daily_loss < -daily_loss_limit:
+        if daily_loss_enabled and daily_loss_limit > 0 and daily_loss < -daily_loss_limit:
             return {
                 "ok": False,
                 "status": "REJECTED_DAILY_LOSS_LIMIT",

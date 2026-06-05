@@ -27,7 +27,6 @@ UPSTOX_INSTRUMENT_URLS = {
     "complete": os.environ.get("UPSTOX_INSTRUMENTS_COMPLETE_URL", "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"),
     "nse": os.environ.get("UPSTOX_INSTRUMENTS_NSE_URL", "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"),
     "bse": os.environ.get("UPSTOX_INSTRUMENTS_BSE_URL", "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz"),
-    "mcx": os.environ.get("UPSTOX_INSTRUMENTS_MCX_URL", "https://assets.upstox.com/market-quote/instruments/exchange/MCX.json.gz"),
     "suspended": os.environ.get("UPSTOX_SUSPENDED_INSTRUMENTS_URL", "https://assets.upstox.com/market-quote/instruments/exchange/suspended.json.gz"),
 }
 

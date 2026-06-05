@@ -18,7 +18,7 @@ class ReadinessChecker:
     
     Checks:
     - Live arm status (for live mode)
-    - NSE/MCX master availability
+    - NSE/BSE Upstox availability
     - Paper wallet initialized (for paper mode)
     - User permissions
     - Market session open
@@ -61,7 +61,7 @@ class ReadinessChecker:
                     "live_armed": bool,
                     "upstox_authenticated": bool,
                     "nse_fo_permission": bool,
-                    "mcx_fo_permission": bool
+                    "bse_fo_permission": bool
                 }
             }
         """
@@ -82,8 +82,8 @@ class ReadinessChecker:
             allowed_segments = user.get("allowed_segments") or [] if user else []
             checks["nse_fo_permission"] = "NSE_FO" in allowed_segments
             
-            # 4. Check MCX_FO permission
-            checks["mcx_fo_permission"] = "MCX_FO" in allowed_segments
+            # 4. Check BSE_FO permission
+            checks["bse_fo_permission"] = "BSE_FO" in allowed_segments
             
             all_ready = all(checks.values())
             return {

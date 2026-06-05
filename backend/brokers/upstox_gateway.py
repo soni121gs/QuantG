@@ -961,8 +961,7 @@ class UpstoxGateway:
             print(">>> [UPSTOX API SIMULATION] END PAYLOAD <<<\n", flush=True)
             
             logger.info(
-                "Upstox Live Order Routed: exchange=%s instrument_token=%s quantity=%s side=%s order_type=%s product=%s validity=%s",
-                "NFO" if "NSE_FO" in str(payload.get("instrument_token")) else "MCX",
+                "Upstox Live Order Routed: instrument_token=%s quantity=%s side=%s order_type=%s product=%s validity=%s",
                 payload.get("instrument_token"),
                 payload.get("quantity"),
                 payload.get("transaction_type"),
@@ -982,7 +981,7 @@ class UpstoxGateway:
                 "status": "success",
                 "data": {
                     "equity": {"available_margin": 100000.0, "used_margin": 0.0},
-                    "commodity": {"available_margin": 50000.0, "used_margin": 0.0}
+                    "commodity": {"available_margin": 0.0, "used_margin": 0.0}
                 }
             }
             

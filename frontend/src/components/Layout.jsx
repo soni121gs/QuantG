@@ -109,8 +109,7 @@ export default function Layout({ children }) {
     if (!isWeekday) return false;
     
     const nseOpen = minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
-    const mcxOpen = minutes >= 9 * 60 && minutes <= 23 * 60 + 30;
-    return nseOpen || mcxOpen;
+    return nseOpen;
   })();
 
   const refreshShell = () => {

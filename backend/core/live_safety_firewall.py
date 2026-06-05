@@ -73,13 +73,9 @@ class LiveSafetyFirewall:
         if kill_switch and kill_switch.get("active"):
             reasons.append("Global trading kill-switch is active.")
 
-        # 6. Domain specific live blocks (For now: no MCX live until separately approved)
+        # 6. Domain schedule verification
         try:
             domain = resolve_domain_by_underlying(symbol)
-            if domain.name == DomainType.MCX_FO:
-                reasons.append("Live trading on commodity MCX futures/options is currently restricted.")
-                
-            # Verify market schedules
             clock = get_segment_status(domain.name)
             if not clock.get("open"):
                 reasons.append(f"Market domain {domain.name.value} schedule is CLOSED.")

@@ -13,9 +13,6 @@ async def test_submit_order_rejects_legacy_broker_before_adapter_call():
     async def place_upstox(*args, **kwargs):
         raise AssertionError("Upstox adapter should not be called for legacy broker")
 
-    async def legacy_adapter(*args, **kwargs):
-        raise AssertionError("Legacy broker adapter must never be called")
-
     payload = ExecutionDispatchPayload(
         broker="zerodha",
         segment="NSE_FO",
@@ -30,7 +27,6 @@ async def test_submit_order_rejects_legacy_broker_before_adapter_call():
         "user-1",
         payload,
         place_upstox=place_upstox,
-        place_kite=legacy_adapter,
         resolve_upstox_token=lambda *_: "NSE_FO|12345",
     )
 
@@ -42,4 +38,4 @@ async def test_submit_order_rejects_legacy_broker_before_adapter_call():
 def test_runtime_broker_defaults_to_upstox_only():
     assert runtime_broker("") == "upstox"
     assert runtime_broker("upstox") == "upstox"
-    assert runtime_broker("kotak_neo") == "kotak_neo"
+    assert runtime_broker("kotak_neo") == "unsupported_legacy_broker"

@@ -17,7 +17,11 @@ DEFAULT_STOP_LOSS_PCT = 8.0   # Tightened from 22% — protects against large ru
 DEFAULT_TAKE_PROFIT_PCT = 20.0  # Reduced from 45% to maintain a sensible 2.5:1 R:R ratio
 
 
-def _pct(row: Dict[str, Any], *keys: str, default: float) -> float:
+DEFAULT_STOP_LOSS_PCT = None
+DEFAULT_TAKE_PROFIT_PCT = None
+
+
+def _pct(row: Dict[str, Any], *keys: str, default: Optional[float]) -> Optional[float]:
     for key in keys:
         value = row.get(key)
         if value not in (None, ""):
@@ -37,10 +41,12 @@ def _risk_prices(entry: float, side: str, risk: Dict[str, Any]) -> Dict[str, Opt
     side_text = str(side or "LONG").upper()
     if stop_loss in (None, ""):
         stop_pct = _pct(risk, "stop_loss_pct", "stoploss_pct", default=DEFAULT_STOP_LOSS_PCT)
-        stop_loss = entry * (1 - stop_pct / 100) if side_text != "SHORT" else entry * (1 + stop_pct / 100)
+        if stop_pct is not None:
+            stop_loss = entry * (1 - stop_pct / 100) if side_text != "SHORT" else entry * (1 + stop_pct / 100)
     if take_profit in (None, ""):
         target_pct = _pct(risk, "take_profit_pct", "target_pct", default=DEFAULT_TAKE_PROFIT_PCT)
-        take_profit = entry * (1 + target_pct / 100) if side_text != "SHORT" else entry * (1 - target_pct / 100)
+        if target_pct is not None:
+            take_profit = entry * (1 + target_pct / 100) if side_text != "SHORT" else entry * (1 - target_pct / 100)
     return {
         "stop_loss": round(float(stop_loss), 2) if stop_loss not in (None, "") else None,
         "take_profit": round(float(take_profit), 2) if take_profit not in (None, "") else None,
@@ -53,11 +59,8 @@ class ExecutionStateManager:
     def __init__(self) -> None:
         self._db: Any = None
         self._get_user_settings: Optional[Callable[[str], Awaitable[dict]]] = None
-        self._get_user_kite: Optional[Callable[[str], Awaitable[Any]]] = None
-        self._sync_kite_orders: Optional[Callable[[str, Any], Awaitable[dict]]] = None
-        self._sync_kotak_orders: Optional[Callable[[str], Awaitable[dict]]] = None
         self._sync_upstox_orders: Optional[Callable[[str], Awaitable[dict]]] = None
-        self._sync_strategy_positions: Optional[Callable[[str, Any], Awaitable[dict]]] = None
+        self._sync_strategy_positions: Optional[Callable[[str], Awaitable[dict]]] = None
         self._fetch_positions: Optional[Any] = None
         self._option_ledger: Any = None
         self._last_sync_by_user: Dict[str, float] = {}
@@ -67,19 +70,13 @@ class ExecutionStateManager:
         *,
         db: Any,
         get_user_settings: Callable[[str], Awaitable[dict]],
-        get_user_kite: Callable[[str], Awaitable[Any]],
-        sync_kite_orders: Callable[[str, Any], Awaitable[dict]],
-        sync_kotak_orders: Callable[[str], Awaitable[dict]],
         sync_upstox_orders: Callable[[str], Awaitable[dict]],
-        sync_strategy_positions: Callable[[str, Any], Awaitable[dict]],
+        sync_strategy_positions: Callable[[str], Awaitable[dict]],
         fetch_positions: Any,
         option_ledger: Any,
     ) -> None:
         self._db = db
         self._get_user_settings = get_user_settings
-        self._get_user_kite = get_user_kite
-        self._sync_kite_orders = sync_kite_orders
-        self._sync_kotak_orders = sync_kotak_orders
         self._sync_upstox_orders = sync_upstox_orders
         self._sync_strategy_positions = sync_strategy_positions
         self._fetch_positions = fetch_positions
@@ -88,12 +85,19 @@ class ExecutionStateManager:
     async def sync_brokers(self, user_id: str, user: dict) -> Dict[str, Any]:
         sync_meta: Dict[str, Any] = {"upstox": {}, "positions": {}}
         sync_meta["upstox"] = await self._sync_upstox_orders(user_id)
-        sync_meta["positions"] = await self._sync_strategy_positions(user_id, None)
+        sync_meta["positions"] = await self._sync_strategy_positions(user_id)
         return sync_meta
 
-    async def _load_orders(self, user_id: str) -> List[Dict[str, Any]]:
+    async def _load_orders(self, user_id: str, *, paper_mode: bool, today_start: Optional[str] = None, today_end: Optional[str] = None) -> List[Dict[str, Any]]:
+        query: Dict[str, Any] = {"user_id": user_id, "visibility": {"$ne": "hidden"}}
+        if paper_mode and today_start and today_end:
+            query["$or"] = [
+                {"mode": {"$ne": "paper"}},
+                {"mode": "paper", "created_at": {"$gte": today_start, "$lt": today_end}},
+                {"mode": "paper", "status": {"$in": list(OPEN_ORDER_STATUSES)}},
+            ]
         rows = await self._db.orders.find(
-            {"user_id": user_id, "visibility": {"$ne": "hidden"}},
+            query,
             {"_id": 0, "user_id": 0},
         ).sort("created_at", -1).to_list(200)
         orders = [normalize_order_row(row) for row in rows]
@@ -349,11 +353,24 @@ class ExecutionStateManager:
         strategy_rows = await self._load_strategy_positions(user_id)
         ledger_risk = self._ledger_risk_by_strategy()
         positions = self._merge_position_risk(broker_positions, strategy_rows, ledger_risk)
-        orders = await self._load_orders(user_id)
+        today = settings.get("today_window_ist") or {}
+        orders = await self._load_orders(
+            user_id,
+            paper_mode=bool(settings.get("paper_mode", True)),
+            today_start=today.get("start"),
+            today_end=today.get("end"),
+        )
         skipped_signals = await self._load_skipped_signals(user_id)
 
         open_orders = [o for o in orders if o.get("status") in OPEN_ORDER_STATUSES]
         failed_orders = [o for o in orders if o.get("status") == "FAILED"]
+        wallet_row = await self._db.paper_wallets.find_one({"user_id": user_id}, {"_id": 0}) or {}
+        feed_state = await self._db.upstox_reconciliation_state.find_one({"_id": "latest"}, {"_id": 0}) or {}
+        strategy_state = {
+            "active": await self._db.strategies.count_documents({"user_id": user_id, "status": "live"}),
+            "total": await self._db.strategies.count_documents({"user_id": user_id}),
+            "scanning": await self._db.signals.count_documents({"user_id": user_id, "status": "PENDING"}),
+        }
 
         # Calculate position integrity health metrics for the dashboard
         broker_active = [p for p in positions if int(p.get("qty") or 0) != 0]
@@ -403,6 +420,9 @@ class ExecutionStateManager:
             "paper_mode": bool(settings.get("paper_mode", True)),
             "execution_broker": "upstox",
             "sync": sync_meta,
+            "wallet": wallet_row,
+            "feed_state": feed_state,
+            "strategy_state": strategy_state,
             "positions": positions,
             "orders": orders,
             "skipped_signals": skipped_signals,

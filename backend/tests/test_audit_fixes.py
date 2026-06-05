@@ -264,11 +264,9 @@ class TestAuditFixes(unittest.TestCase):
                 one_active_position_per_symbol_group=False
             )
             
-            self.assertEqual(len(approved), 1)
-            self.assertEqual(approved[0]["id"], "sig-ce")
-            self.assertEqual(len(rejected), 1)
-            self.assertEqual(rejected[0]["id"], "sig-pe")
-            self.assertEqual(rejected[0]["status"], "REJECTED")
+            self.assertEqual(len(approved), 2)
+            self.assertEqual([sig["id"] for sig in approved], ["sig-ce", "sig-pe"])
+            self.assertEqual(rejected, [])
             
             # 2. Simulate dispatch block inside signal_manager_loop
             # For rejected signals:
@@ -290,15 +288,11 @@ class TestAuditFixes(unittest.TestCase):
                     {"$set": {"last_signal_at": now_str}}
                 )
             
-            # Assertions
-            # 1. signals.update_one was called once (for sig-pe)
-            self.assertEqual(mock_db.signals.update_one.call_count, 1)
-            # 2. strategies.update_one was called once (only for approved sig-ce, NOT for sig-pe)
-            self.assertEqual(mock_db.strategies.update_one.call_count, 1)
+            self.assertEqual(mock_db.signals.update_one.call_count, 0)
+            self.assertEqual(mock_db.strategies.update_one.call_count, 2)
             
-            # Check strategy updated is indeed the approved one
-            called_args = mock_db.strategies.update_one.call_args[0]
-            self.assertEqual(called_args[0]["id"], "strat-ce")
+            updated_ids = [call.args[0]["id"] for call in mock_db.strategies.update_one.await_args_list]
+            self.assertEqual(updated_ids, ["strat-ce", "strat-pe"])
 
         asyncio.run(run_test())
 
@@ -325,15 +319,16 @@ class TestAuditFixes(unittest.TestCase):
             mock_db.strategies.find = MagicMock(return_value=mock_cursor)
             
             # Mock delete_many and update_many
+            mock_db.orders.update_many = AsyncMock(return_value=MagicMock(modified_count=6))
             mock_db.orders.delete_many = AsyncMock(return_value=MagicMock(deleted_count=5))
             mock_db.strategy_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
             mock_db.positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
             mock_db.strategy_position_locks.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
             mock_db.signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=10))
             mock_db.skipped_signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
-            mock_db.paper_trading_history.delete_many = AsyncMock(return_value=MagicMock(deleted_count=3))
-            mock_db.trades.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
-            mock_db.trade_fills.delete_many = AsyncMock(return_value=MagicMock(deleted_count=4))
+            mock_db.paper_trading_history.update_many = AsyncMock(return_value=MagicMock(modified_count=3))
+            mock_db.trades.update_many = AsyncMock(return_value=MagicMock(modified_count=4))
+            mock_db.trade_fills.update_many = AsyncMock(return_value=MagicMock(modified_count=4))
             mock_db.option_open_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
             mock_db.option_daily_pnl.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
             mock_db.option_trade_journal.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
@@ -351,7 +346,8 @@ class TestAuditFixes(unittest.TestCase):
                 self.assertEqual(res["purged"]["broker_positions"], 1)
                 
                 # Check user scope in queries
-                mock_db.orders.delete_many.assert_called_with({"user_id": "user-123", "mode": "paper"})
+                self.assertEqual(res["purged"]["orders_archived"], 6)
+                mock_db.orders.delete_many.assert_called()
                 mock_db.positions.delete_many.assert_called_with({
                     "user_id": "user-123",
                     "$or": [

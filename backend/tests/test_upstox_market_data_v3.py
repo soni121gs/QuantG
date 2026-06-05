@@ -49,7 +49,7 @@ def test_protobuf_decoding_and_tick_extraction():
 
 
 def test_tick_without_broker_timestamp_marks_server_received_at_fallback():
-    tick = extract_ltp_tick("MCX_FO|566995", {"ltpc": {"ltp": 101.25}})
+    tick = extract_ltp_tick("BSE_FO|566995", {"ltpc": {"ltp": 101.25}})
     assert tick["ltp"] == pytest.approx(101.25)
     assert tick["received_at"]
     assert tick["timestamp_source"] == "server_received_at"
@@ -79,8 +79,8 @@ def test_reconnect_loop_sets_reconnecting_and_preserves_subscription(monkeypatch
 
 def test_gateway_strategy_reads_latest_tick_from_websocket_cache():
     gateway = UpstoxGateway(access_token="token", api_key="key", api_secret="secret", redirect_uri="http://localhost")
-    gateway._feed_v3.apply_decoded_message(decode_feed_response(_ltpc_message_bytes("MCX_FO|566995", 101.25)))
-    tick = gateway.latest_tick("MCX_FO|566995")
+    gateway._feed_v3.apply_decoded_message(decode_feed_response(_ltpc_message_bytes("BSE_FO|566995", 101.25)))
+    tick = gateway.latest_tick("BSE_FO|566995")
     assert tick["ltp"] == pytest.approx(101.25)
 
 
@@ -201,17 +201,17 @@ def test_websocket_binary_frame_compatibility_on_message_and_on_data():
     assert tick_msg["ltp"] == pytest.approx(221.5)
     
     # 2. Test binary frame path through on_data (opcode 2 / OPCODE_BINARY)
-    raw_bytes_data = _ltpc_message_bytes("MCX_FO|566995", 101.25)
+    raw_bytes_data = _ltpc_message_bytes("BSE_FO|566995", 101.25)
     feed._on_data(None, raw_bytes_data, opcode=2, fin=True)
     
-    tick_data = feed.latest_tick("MCX_FO|566995")
+    tick_data = feed.latest_tick("BSE_FO|566995")
     assert tick_data is not None
     assert tick_data["ltp"] == pytest.approx(101.25)
     
     # 3. Test that both cache mappings are populated correctly and coexist
     ticks = feed.latest_ticks()
     assert "NSE_FO|45450" in ticks
-    assert "MCX_FO|566995" in ticks
+    assert "BSE_FO|566995" in ticks
     assert len(ticks) == 2
 
 

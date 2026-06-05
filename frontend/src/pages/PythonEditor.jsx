@@ -115,10 +115,7 @@ function updateSmaWindowInCode(code, key, value) {
 }
 
 function formatDataSource(source) {
-  if (!source) return "—";
-  if (source.includes("kite-5minute")) return source.includes("tick-live") ? "Legacy ticker 5m" : "Legacy 5m";
-  if (source.includes("kite-day")) return "Legacy day";
-  if (source.startsWith("mock-5minute")) return "MOCK 5m";
+  if (!source) return "—";  if (source.startsWith("mock-5minute")) return "MOCK 5m";
   if (source.startsWith("mock-day")) return "MOCK day";
   return source;
 }
@@ -298,7 +295,7 @@ export default function PythonEditor() {
               </div>
             )}
             <div className="md:col-span-4 bg-[rgba(255,159,10,0.06)] border border-[var(--qd-warn)] rounded-sm p-2 text-[11px] font-mono text-[var(--qd-text-2)]">
-              <span className="text-[var(--qd-warn)]">⚠</span> Backtest runs on the <span className="text-white">{options.underlying} spot</span> history. PnL simulation uses an option-premium proxy (~2% of spot move). Live trading uses real option premiums from Kite.
+              <span className="text-[var(--qd-warn)]">⚠</span> Backtest runs on the <span className="text-white">{options.underlying} spot</span> history. PnL simulation uses an option-premium proxy (~2% of spot move). Live trading uses real option premiums from Upstox.
             </div>
           </div>
         )}

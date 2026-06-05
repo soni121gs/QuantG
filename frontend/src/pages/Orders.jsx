@@ -252,14 +252,14 @@ export default function Orders() {
                     setForm({
                       ...form,
                       exchange,
-                      product: ["MCX", "NFO", "BFO", "CDS"].includes(exchange) ? "NRML" : form.product,
+                      product: ["NFO", "BFO"].includes(exchange) ? "NRML" : form.product,
                       symbol: ["NSE", "BSE"].includes(exchange) ? (watch[0]?.symbol || "RELIANCE") : "",
                     });
                   }}
                   className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm"
                   data-testid="order-exchange"
                 >
-                  {["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"].map((x) => <option key={x}>{x}</option>)}
+                  {["NSE", "BSE", "NFO", "BFO"].map((x) => <option key={x}>{x}</option>)}
                 </select>
               </div>
               <div>

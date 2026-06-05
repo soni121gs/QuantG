@@ -629,7 +629,6 @@ export default function OpsConsole() {
               <DiagRow k="India Time IST" v={fmt(data?.server_time_ist)} />
               <DiagRow k="Market Session" v={data?.market_session?.global_status || "CLOSED"} />
               <DiagRow k="NSE Segment" v={data?.market_session?.NSE_FO?.status || "CLOSED"} />
-              <DiagRow k="MCX Segment" v={data?.market_session?.MCX_FO?.status || "CLOSED"} />
               <DiagRow k="Next Open" v={data?.market_session?.next_open ? fmt(data.market_session.next_open) : "N/A"} />
               <DiagRow k="Next Close" v={data?.market_session?.next_close ? fmt(data.market_session.next_close) : "N/A"} />
               <DiagRow k="Data Feed Latency" v={ticker.last_tick_at ? fmt(ticker.last_tick_at) : "No ticks"} />

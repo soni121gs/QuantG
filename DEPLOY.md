@@ -149,7 +149,7 @@ GEMINI_TIMEOUT_SEC=20
 Before trading hours start, open **`https://www.quantgtrade.com`**:
 1. Perform a **Hard Refresh** (`Ctrl + Shift + R`) to force clean dashboard assets.
 2. Log in and navigate to **Broker Keys**.
-3. Daily broker authentication: Reconnect Zerodha / Connect Kotak (Zerodha token expires daily).
+3. Daily broker authentication: Ensure Upstox keys are active and connected.
 4. Verify system connection inside **Ops Console**.
 5. Switch system mode to **PAPER** or **LIVE** as desired.
 

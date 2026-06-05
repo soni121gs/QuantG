@@ -1,7 +1,9 @@
-"""Signal Manager and Conflict Resolver.
+"""Signal Manager.
 
-Centralizes signal queuing, validates strategy-level limits (cooldown, daily max),
-and applies multi-strategy conflict resolution rules before execution.
+Sweeps normalized strategy signals and sends them through the execution
+boundary. Strategy quality decisions belong inside strategies; this module only
+performs minimal shape checks and lets platform execution safety decide whether
+the signal is executable.
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ LOCK_ID = "signal_manager"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
 ACTIVE_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"}
-SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
+SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX"}
 SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "300"))
 SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "0"))
 STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
@@ -88,7 +90,7 @@ def _is_allowed_paper_simulated_contract(sig: Dict[str, Any], strategy: Dict[str
 
 
 class StrategySignalValidator:
-    """Validates strategy signals before unified execution can create an order."""
+    """Validate the normalized signal envelope without judging strategy logic."""
 
     @staticmethod
     async def validate(db, sig: Dict[str, Any], strategy: Dict[str, Any], active_positions: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -97,59 +99,23 @@ class StrategySignalValidator:
         target = str(sig.get("target_symbol") or "").upper()
         option_contract = sig.get("option_contract") or {}
         effective_action = str(option_contract.get("transaction_type") or action).upper()
-        visual_config = sig.get("visual_config") or {}
-        confidence = sig.get("confidence")
 
-        if strategy.get("quarantined") or str(strategy.get("status") or "").lower() == "quarantined":
-            return _signal_validation_result(sig, False, "STRATEGY_QUARANTINED", strategy.get("quarantine_reason") or "Strategy is quarantined.")
-        if str(strategy.get("status") or "").lower() != "live":
-            return _signal_validation_result(sig, False, "STRATEGY_TIME_FILTER_FAILED", f"Strategy status is {strategy.get('status') or 'unknown'}.")
+        if not strategy:
+            return _signal_validation_result(sig, False, "STRATEGY_MISSING", "Strategy not found.")
         mode = _strategy_mode(strategy, sig)
         if mode not in {"paper", "live"}:
             return _signal_validation_result(sig, False, "STRATEGY_INVALID_MODE", "Strategy mode must be paper or live.")
         if action not in {"BUY", "SELL"} or effective_action not in {"BUY", "SELL"}:
             return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal action must be BUY or SELL.")
-        if not _is_supported_signal_symbol(sig):
-            return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", f"Unsupported strategy symbol {symbol or 'blank'}.")
-        if confidence in (None, "") or float(confidence or 0) <= 0:
-            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal confidence is missing.")
-        trend = sig.get("trend_context") or {}
-        if not isinstance(trend, dict):
-            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_INCOMPLETE", "Signal metadata is malformed.")
+        if not symbol:
+            return _signal_validation_result(sig, False, "SIGNAL_MISSING_SYMBOL", "Signal is missing an underlying symbol.")
         if option_contract:
             token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").strip()
             if not target or not token:
-                return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Resolved contract is missing target symbol or instrument key.")
+                return _signal_validation_result(sig, False, "INSTRUMENT_UNRESOLVED", "Resolved contract is missing target symbol or instrument key.")
             source = str(option_contract.get("source") or "").upper()
             if mode == "live" and (option_contract.get("simulated") or token.upper().startswith("PAPER_") or source in PAPER_SIMULATED_SOURCES):
-                return _signal_validation_result(sig, False, "STRATEGY_INVALID_INSTRUMENT", "Live strategy cannot use a simulated paper contract.")
-            if option_contract.get("simulated") or token.upper().startswith("PAPER_"):
-                if not _is_allowed_paper_simulated_contract(sig, strategy):
-                    return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "Simulated paper contract is missing a valid paper LTP.")
-            opt_cfg = visual_config.get("options") or {}
-            if option_contract.get("expiry") and opt_cfg.get("expiry_offset") in (None, "") and int(opt_cfg.get("otm_points") or 0) > 0:
-                return _signal_validation_result(sig, False, "STRATEGY_BAD_CONTRACT_SELECTION", "OTM contract selection requires explicit expiry/strike configuration.")
-
-        same_strategy_positions = [
-            p for p in active_positions
-            if str(p.get("strategy_id")) == str(sig.get("strategy_id"))
-            and str(p.get("status") or "").upper() in ACTIVE_POSITION_STATUSES
-        ]
-        if effective_action == "BUY" and same_strategy_positions:
-            return _signal_validation_result(sig, False, "STRATEGY_DUPLICATE_ENTRY", "Strategy already has an open or pending position.")
-        if effective_action == "SELL" and not same_strategy_positions:
-            return _signal_validation_result(sig, False, "STRATEGY_FLIP_FLOP_SIGNAL", "SELL signal has no open strategy position to exit.")
-
-        recent_since = (datetime.now(timezone.utc) - timedelta(seconds=SIGNAL_SPAM_WINDOW_SECONDS)).isoformat()
-        recent_count = 0
-        if SIGNAL_SPAM_THRESHOLD > 0:
-            recent_count = await db.signals.count_documents({
-                "user_id": sig.get("user_id"),
-                "strategy_id": sig.get("strategy_id"),
-                "created_at": {"$gte": recent_since},
-            })
-        if SIGNAL_SPAM_THRESHOLD > 0 and recent_count >= SIGNAL_SPAM_THRESHOLD:
-            return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_SPAM", f"Strategy emitted {recent_count} signals inside {SIGNAL_SPAM_WINDOW_SECONDS}s.", "WARNING")
+                return _signal_validation_result(sig, False, "INSTRUMENT_UNRESOLVED", "Live strategy cannot use a simulated paper contract.")
 
         return _signal_validation_result(sig, True, "OK", "Signal validation passed.", "INFO")
 
@@ -167,7 +133,7 @@ class StrategyMisbehaviorDetector:
             return
         reason_code = validation.get("reason_code")
         valid = bool(validation.get("ok"))
-        duplicate_inc = 1 if reason_code == "STRATEGY_DUPLICATE_ENTRY" else 0
+        duplicate_inc = 1 if reason_code == "DUPLICATE_STRATEGY_INSTRUMENT_SIDE" else 0
         update = {
             "$set": {
                 "last_evaluated_at": now,
@@ -188,27 +154,15 @@ class StrategyMisbehaviorDetector:
         await db.strategies.update_one({"id": strategy_id, "user_id": user_id}, update)
         if valid:
             return
-        invalid_today = await db.signals.count_documents({
-            "user_id": user_id,
-            "strategy_id": strategy_id,
-            "processed_at": {"$gte": start, "$lt": end},
-            "rejection_reason": {"$regex": "^STRATEGY_"},
-        })
-        if invalid_today + 1 >= STRATEGY_QUARANTINE_THRESHOLD:
-            await db.strategies.update_one(
-                {"id": strategy_id, "user_id": user_id},
-                {"$set": {
-                    "status": "quarantined",
-                    "quarantined": True,
-                    "quarantine_reason": reason_code,
-                    "last_skip_reason_code": "STRATEGY_QUARANTINED",
-                    "last_filter_reason": f"Strategy quarantined after repeated invalid signals: {reason_code}",
-                }},
-            )
 
 
 class ConflictResolver:
-    """Evaluates pending signals for directional conflicts and duplicate prevention."""
+    """No app-level conflict arbitration.
+
+    Different strategies may intentionally trade the same instrument. Duplicate
+    protection is enforced later at the platform boundary for the same
+    user+strategy+instrument+side only.
+    """
 
     @staticmethod
     def resolve(
@@ -216,164 +170,7 @@ class ConflictResolver:
         active_positions: List[Dict[str, Any]],
         one_active_position_per_symbol_group: bool = True
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Processes a list of PENDING signals for a user sweep.
-
-        Returns a tuple: (approved_signals, rejected_or_filtered_signals)
-        """
-        approved: List[Dict[str, Any]] = []
-        rejected_or_filtered: List[Dict[str, Any]] = []
-
-        # Group pending signals by underlying (symbol)
-        by_underlying: Dict[str, List[Dict[str, Any]]] = {}
-        for sig in pending_signals:
-            und = str(sig.get("symbol") or "").upper()
-            by_underlying.setdefault(und, []).append(sig)
-
-        # Map active positions to their underlying symbol group
-        active_groups = set()
-        active_targets = set()
-        active_tokens = set()
-        for pos in active_positions:
-            # Standardize symbol group identification
-            for group in (pos.get("symbol_group"), pos.get("underlying"), pos.get("symbol")):
-                normalized = str(group or "").upper()
-                if normalized:
-                    active_groups.add(normalized)
-            for target in (pos.get("target_symbol"), pos.get("trading_symbol"), pos.get("symbol")):
-                normalized = str(target or "").upper()
-                if normalized:
-                    active_targets.add(normalized)
-            for token in (pos.get("instrument_key"), pos.get("instrument_token")):
-                normalized = str(token or "").upper()
-                if normalized:
-                    active_tokens.add(normalized)
-
-        for und, sigs in by_underlying.items():
-            # 1. Check One-Active-Position-Per-Symbol-Group rule on a per-signal basis
-            filtered_sigs = []
-            for sig in sigs:
-                vc = sig.get("visual_config") or {}
-                option_contract = sig.get("option_contract") or {}
-                eff_action = str(option_contract.get("transaction_type") or sig.get("action") or "").upper()
-                one_active_pos = vc.get("risk", {}).get("one_active_position_per_symbol_group", one_active_position_per_symbol_group)
-                target = str(sig.get("target_symbol") or option_contract.get("tradingsymbol") or option_contract.get("trading_symbol") or "").upper()
-                token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").upper()
-                duplicate_contract = bool(target and target in active_targets) or bool(token and token in active_tokens)
-                if eff_action == "BUY" and duplicate_contract:
-                    sig["status"] = "BLOCKED"
-                    sig["rejection_reason"] = "symbol-group-active-position-exists"
-                    rejected_or_filtered.append(sig)
-                elif one_active_pos and und in active_groups:
-                    if eff_action == "BUY":
-                        sig["status"] = "BLOCKED"
-                        sig["rejection_reason"] = "symbol-group-active-position-exists"
-                        rejected_or_filtered.append(sig)
-                    else:
-                        # Exits (SELL) are allowed to bypass the group-level lockout
-                        filtered_sigs.append(sig)
-                else:
-                    filtered_sigs.append(sig)
-
-            if not filtered_sigs:
-                continue
-
-            # 2. Check CE/PE Clashing
-            ce_buys: List[Dict[str, Any]] = []
-            pe_buys: List[Dict[str, Any]] = []
-            exits: List[Dict[str, Any]] = []
-
-            for sig in filtered_sigs:
-                action = str((sig.get("option_contract") or {}).get("transaction_type") or sig.get("action") or "").upper()
-                if action == "SELL":
-                    exits.append(sig)
-                    continue
-
-                # It's a BUY signal
-                opt_cfg = sig.get("visual_config", {}).get("options") or {}
-                strike_mode = str(opt_cfg.get("strike_mode") or "").upper()
-                opt_type = str(sig.get("option_type") or "").upper()
-                
-                # Resolve option type from config or direct field
-                if not opt_type:
-                    if "BUY" in strike_mode:
-                        opt_type = "CE" if action == "BUY" else "PE"
-                    else:
-                        opt_type = "PE" if action == "BUY" else "CE"
-
-                if opt_type == "CE":
-                    ce_buys.append(sig)
-                elif opt_type == "PE":
-                    pe_buys.append(sig)
-                else:
-                    # Non-option asset
-                    approved.append(sig)
-
-            # Exits are always approved to avoid position lockups
-            approved.extend(exits)
-
-            if ce_buys and pe_buys:
-                # Rule: Concurrent BUY signals for CE and PE on the same underlying clash.
-                # Approve the one with the highest confidence, reject the other.
-                max_ce = max(ce_buys, key=lambda s: float(s.get("confidence") or 0))
-                max_pe = max(pe_buys, key=lambda s: float(s.get("confidence") or 0))
-                conf_ce = float(max_ce.get("confidence") or 0)
-                conf_pe = float(max_pe.get("confidence") or 0)
-
-                if conf_ce > conf_pe:
-                    for sig in ce_buys:
-                        if sig["id"] == max_ce["id"]:
-                            approved.append(sig)
-                        else:
-                            sig["status"] = "FILTERED"
-                            sig["rejection_reason"] = "duplicate-contract-buy"
-                            rejected_or_filtered.append(sig)
-                    for sig in pe_buys:
-                        sig["status"] = "REJECTED"
-                        sig["rejection_reason"] = "ce-pe-clash"
-                        rejected_or_filtered.append(sig)
-                elif conf_pe > conf_ce:
-                    for sig in pe_buys:
-                        if sig["id"] == max_pe["id"]:
-                            approved.append(sig)
-                        else:
-                            sig["status"] = "FILTERED"
-                            sig["rejection_reason"] = "duplicate-contract-buy"
-                            rejected_or_filtered.append(sig)
-                    for sig in ce_buys:
-                        sig["status"] = "REJECTED"
-                        sig["rejection_reason"] = "ce-pe-clash"
-                        rejected_or_filtered.append(sig)
-                else:
-                    # Equal confidence - reject both
-                    for sig in ce_buys:
-                        sig["status"] = "REJECTED"
-                        sig["rejection_reason"] = "ce-pe-clash"
-                        rejected_or_filtered.append(sig)
-                    for sig in pe_buys:
-                        sig["status"] = "REJECTED"
-                        sig["rejection_reason"] = "ce-pe-clash"
-                        rejected_or_filtered.append(sig)
-            else:
-                # 3. Check duplicate buys for the exact same target contract
-                contract_buys: Dict[str, List[Dict[str, Any]]] = {}
-                for sig in (ce_buys + pe_buys):
-                    target = str(sig.get("target_symbol") or "").upper()
-                    contract_buys.setdefault(target, []).append(sig)
-
-                for target, sig_list in contract_buys.items():
-                    if len(sig_list) > 1:
-                        winner = max(sig_list, key=lambda s: float(s.get("confidence") or 0))
-                        for sig in sig_list:
-                            if sig["id"] == winner["id"]:
-                                approved.append(sig)
-                            else:
-                                sig["status"] = "FILTERED"
-                                sig["rejection_reason"] = "duplicate-contract-buy"
-                                rejected_or_filtered.append(sig)
-                    else:
-                        approved.extend(sig_list)
-
-        return approved, rejected_or_filtered
+        return list(pending_signals), []
 
 
 class SignalManager:
@@ -707,12 +504,12 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                         {"$set": {"last_signal_at": now_str, "last_signal_validated": True}, "$inc": {"order_count_today": 1}}
                                     )
                             except Exception as exec_err:
-                                logger.warning(f"Failed order placement for signal {sig['id']}: {exec_err}")
+                                logger.warning(f"Signal {sig['id']} skipped by execution boundary: {exec_err}")
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
                                     {"$set": {
-                                        "status": "REJECTED",
-                                        "rejection_reason": f"Execution failed: {str(exec_err)[:200]}",
+                                        "status": "SKIPPED_SIGNAL",
+                                        "rejection_reason": f"EXECUTION_SKIPPED: {str(exec_err)[:200]}",
                                         "processed_at": datetime.now(timezone.utc).isoformat()
                                     }}
                                 )

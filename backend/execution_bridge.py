@@ -42,7 +42,7 @@ _BROKER_LIMITERS = {
 }
 
 
-SUPPORTED_SEGMENTS = {"EQUITY", "OPTIONS", "FUTURES", "COMMODITY", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_FO"}
+SUPPORTED_SEGMENTS = {"EQUITY", "OPTIONS", "FUTURES", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"}
 SUPPORTED_ORDER_TYPES = {"MARKET", "LIMIT"}
 SUPPORTED_SIDES = {"BUY", "SELL"}
 
@@ -97,7 +97,7 @@ class ExecutionDispatchPayload(BaseModel):
 
 def canonical_broker(value: str) -> str:
     broker = (value or "upstox").strip().lower()
-    return "upstox" if broker in {"upstox", ""} else broker
+    return "upstox" if broker in {"upstox", ""} else "unsupported_legacy_broker"
 
 
 def runtime_broker(value: str) -> str:
@@ -108,10 +108,8 @@ def segment_from_exchange(exchange: str, asset_class: str = "DIRECT") -> str:
     exch = (exchange or "NSE").upper()
     asset = (asset_class or "DIRECT").upper()
     if asset in {"OPTION_LONG", "OPTION_SHORT"}:
-        return "BSE_FO" if exch in {"BFO", "BSE"} else "MCX_FO" if exch == "MCX" else "NSE_FO"
-    if exch == "MCX":
-        return "MCX_FO"
-    if exch in {"NFO", "BFO", "CDS"}:
+        return "BSE_FO" if exch in {"BFO", "BSE"} else "NSE_FO"
+    if exch in {"NFO", "BFO"}:
         return "BSE_FO" if exch == "BFO" else "NSE_FO"
     return "BSE_EQ" if exch == "BSE" else "NSE_EQ"
 
@@ -119,7 +117,7 @@ def segment_from_exchange(exchange: str, asset_class: str = "DIRECT") -> str:
 def default_product(segment: str, exchange: str, requested: Optional[str] = None) -> str:
     if requested:
         return str(requested).upper()
-    if segment in {"OPTIONS", "FUTURES", "COMMODITY", "NSE_FO", "BSE_FO", "MCX_FO"} or (exchange or "").upper() in {"NFO", "BFO", "MCX", "CDS"}:
+    if segment in {"OPTIONS", "FUTURES", "NSE_FO", "BSE_FO"} or (exchange or "").upper() in {"NFO", "BFO"}:
         return "NRML"
     return "MIS"
 
@@ -168,7 +166,6 @@ def normalize_broker_failure(exc: Exception) -> str:
 
 
 UpstoxPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
-LegacyPlaceFn = Callable[..., Awaitable[Dict[str, Any]]]
 UpstoxTokenFn = Callable[[str, str, str], Optional[str]]
 
 
@@ -177,7 +174,6 @@ async def submit_order(
     payload: ExecutionDispatchPayload,
     *,
     place_upstox: UpstoxPlaceFn,
-    place_kite: LegacyPlaceFn,
     resolve_upstox_token: UpstoxTokenFn,
 ) -> Dict[str, Any]:
     """Place order through the configured broker. Never raises — returns ok/error envelope."""

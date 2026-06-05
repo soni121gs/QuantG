@@ -4,12 +4,12 @@ Tests the unified paper and live trading pipeline with source tracking.
 
 Acceptance Criteria:
 1. ✓ NSE strategies run unchanged in paper and live
-2. ✓ MCX strategies never halt permanently on contract resolution failure
+2. ✓ BSE strategies never halt permanently on contract resolution failure
 3. ✓ Paper trades can use simulated contracts when master unavailable
 4. ✓ Live trades fail safe (halt strategy, not market)
 5. ✓ Identical risk checks apply to paper and live orders
 6. ✓ Position lifecycle properly tracked across entry/exit
-7. ✓ Market session checks are segment-aware (NSE vs MCX)
+7. ✓ Market session checks are segment-aware (NSE vs BSE)
 8. ✓ Quote service respects source and freshness
 9. ✓ Readiness checks prevent halted/stale strategies
 """
@@ -58,12 +58,12 @@ class TestDataModels:
     def test_simulated_instrument_source(self):
         """Paper mode can use simulated instruments."""
         inst = Instrument(
-            symbol="CRUDEOILM_SIM",
-            underlying="CRUDEOILM",
-            exchange="MCX",
-            segment="MCX_FO",
-            instrument_key="MCX_SIM_CRUDEOILM",
-            lot_size=10,
+            symbol="SENSEX_SIM",
+            underlying="SENSEX",
+            exchange="BSE",
+            segment="BSE_FO",
+            instrument_key="BSE_SIM_SENSEX",
+            lot_size=20,
             tick_size=0.05,
             source=InstrumentSource.PAPER_SIMULATED
         )
@@ -124,27 +124,16 @@ class TestMarketSessionService:
         is_open = MarketSessionService.is_segment_open(DomainType.NSE_FO, test_utc)
         assert is_open is True
     
-    def test_mcx_market_session_outside_nse(self):
-        """MCX runs when NSE is closed (23:00 IST = 17:30 UTC)."""
-        # 23:00 IST = 17:30 UTC (MCX open, NSE closed)
-        test_utc = datetime(2024, 1, 15, 17, 30, 0, tzinfo=timezone.utc)
-        
-        nse_open = MarketSessionService.is_segment_open(DomainType.NSE_FO, test_utc)
-        mcx_open = MarketSessionService.is_segment_open(DomainType.MCX_FO, test_utc)
-        
-        assert nse_open is False
-        assert mcx_open is True
-    
     def test_market_closed_on_weekend(self):
-        """Both NSE and MCX closed on Saturday."""
+        """Both NSE and BSE closed on Saturday."""
         # 2024-01-13 is Saturday
         saturday_10am_utc = datetime(2024, 1, 13, 4, 30, 0, tzinfo=timezone.utc)
         
         nse_open = MarketSessionService.is_segment_open(DomainType.NSE_FO, saturday_10am_utc)
-        mcx_open = MarketSessionService.is_segment_open(DomainType.MCX_FO, saturday_10am_utc)
+        bse_open = MarketSessionService.is_segment_open(DomainType.BSE_FO, saturday_10am_utc)
         
         assert nse_open is False
-        assert mcx_open is False
+        assert bse_open is False
     
     def test_segment_status_details(self):
         """get_segment_status returns detailed timing information."""
@@ -217,16 +206,16 @@ class TestQuoteService:
         assert quote.symbol == "NIFTY"
 
     @pytest.mark.asyncio
-    async def test_mcx_quote_uses_exact_websocket_cache_key(self):
-        """MCX quotes are read from the Upstox V3 cache by exact instrument_key."""
+    async def test_bse_quote_uses_exact_websocket_cache_key(self):
+        """BSE quotes are read from the Upstox V3 cache by exact instrument_key."""
         db = AsyncMock()
         db.paper_quote_cache.update_one = AsyncMock()
 
         class FakeGateway:
             def latest_tick(self, key):
-                assert key == "MCX_FO|566001"
+                assert key == "BSE_FO|566001"
                 return {
-                    "instrument_key": "MCX_FO|566001",
+                    "instrument_key": "BSE_FO|566001",
                     "ltp": 6502.5,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "source": "websocket",
@@ -235,19 +224,19 @@ class TestQuoteService:
         upstox = FakeGateway()
         service = QuoteService(db, upstox)
 
-        quote = await service.get_quote("MCX_FO|566001", mode="paper")
+        quote = await service.get_quote("BSE_FO|566001", mode="paper")
 
         assert quote is not None
         assert quote.ltp == 6502.5
         assert quote.source == "UPSTOX_LIVE"
-        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+        assert service.last_diagnostics["cache_lookup_key"] == "BSE_FO|566001"
         assert service.last_diagnostics["cache_hit"] is True
         assert service.last_diagnostics["quote_reject_reason"] is None
         db.paper_quote_cache.update_one.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_mcx_quote_subscribes_exact_key_then_uses_rest(self):
-        """When cache is cold, QuoteService subscribes the same MCX_FO key before REST LTP."""
+    async def test_bse_quote_subscribes_exact_key_then_uses_rest(self):
+        """When cache is cold, QuoteService subscribes the same BSE_FO key before REST LTP."""
         db = AsyncMock()
         db.paper_quote_cache.update_one = AsyncMock()
 
@@ -263,7 +252,7 @@ class TestQuoteService:
                 return {"ok": True, "tokens": 1}
 
             def get_market_quote(self, keys):
-                return {"data": {"MCX_FO|566001": {"last_price": 6503.0}}}
+                return {"data": {"BSE_FO|566001": {"last_price": 6503.0}}}
 
             @staticmethod
             def parse_quote_ltp(payload, key):
@@ -272,23 +261,23 @@ class TestQuoteService:
         upstox = FakeGateway()
         service = QuoteService(db, upstox)
 
-        quote = await service.get_quote("MCX_FO|566001", mode="paper")
+        quote = await service.get_quote("BSE_FO|566001", mode="paper")
 
         assert quote is not None
         assert quote.ltp == 6503.0
-        assert upstox.subscribed == (["MCX_FO|566001"], "ltpc")
-        assert service.last_diagnostics["subscribed_key"] == "MCX_FO|566001"
-        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+        assert upstox.subscribed == (["BSE_FO|566001"], "ltpc")
+        assert service.last_diagnostics["subscribed_key"] == "BSE_FO|566001"
+        assert service.last_diagnostics["cache_lookup_key"] == "BSE_FO|566001"
 
     @pytest.mark.asyncio
-    async def test_live_rejects_stale_mcx_quote_with_diagnostics(self):
+    async def test_live_rejects_stale_bse_quote_with_diagnostics(self):
         """LIVE blocks stale Upstox quotes and records reject reason."""
         db = AsyncMock()
 
         class FakeGateway:
             def latest_tick(self, key):
                 return {
-                    "instrument_key": "MCX_FO|566001",
+                    "instrument_key": "BSE_FO|566001",
                     "ltp": 6502.5,
                     "timestamp": (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat(),
                 }
@@ -296,16 +285,16 @@ class TestQuoteService:
         upstox = FakeGateway()
         service = QuoteService(db, upstox)
 
-        quote = await service.get_quote("MCX_FO|566001", mode="live")
+        quote = await service.get_quote("BSE_FO|566001", mode="live")
 
         assert quote is None
-        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566001"
+        assert service.last_diagnostics["cache_lookup_key"] == "BSE_FO|566001"
         assert service.last_diagnostics["cache_hit"] is True
         assert service.last_diagnostics["quote_reject_reason"] == "stale_upstox_quote"
 
     @pytest.mark.asyncio
-    async def test_zero_mcx_rest_quote_is_not_tradable(self):
-        """Upstox can resolve an MCX option but return 0 LTP; that must not become a quote."""
+    async def test_zero_bse_rest_quote_is_not_tradable(self):
+        """Upstox can resolve a BSE option but return 0 LTP; that must not become a quote."""
         db = AsyncMock()
 
         class FakeGateway:
@@ -318,9 +307,9 @@ class TestQuoteService:
             def get_market_quote(self, keys):
                 return {
                     "data": {
-                        "MCX_FO:CRUDEOILM26JUN6500CE": {
+                        "BSE_FO:SENSEX26JUN6500CE": {
                             "last_price": 0.0,
-                            "instrument_token": "MCX_FO|566995",
+                            "instrument_token": "BSE_FO|566995",
                         }
                     }
                 }
@@ -328,10 +317,10 @@ class TestQuoteService:
         upstox = FakeGateway()
         service = QuoteService(db, upstox)
 
-        quote = await service.get_quote("MCX_FO|566995", mode="paper")
+        quote = await service.get_quote("BSE_FO|566995", mode="paper")
 
         assert quote is None
-        assert service.last_diagnostics["cache_lookup_key"] == "MCX_FO|566995"
+        assert service.last_diagnostics["cache_lookup_key"] == "BSE_FO|566995"
         assert service.last_diagnostics["cache_hit"] is False
         assert service.last_diagnostics["quote_reject_reason"] == "zero_ltp_from_upstox"
 
@@ -421,7 +410,7 @@ class TestReadinessChecker:
         db.users.find_one = AsyncMock(return_value={
             "id": "user_123",
             "upstox_token": "token_xyz",
-            "allowed_segments": ["NSE_FO", "MCX_FO"]
+            "allowed_segments": ["NSE_FO", "BSE_FO"]
         })
         
         result = await checker.check_live_readiness("user_123")
@@ -438,11 +427,11 @@ class TestReadinessChecker:
         db.strategies.find_one = AsyncMock(return_value={
             "id": "strat_123",
             "halted": True,
-            "halt_reason": "MCX master unavailable"
+            "halt_reason": "BSE master unavailable"
         })
         
         result = await checker.check_strategy_readiness(
-            "user_123", "strat_123", "CRUDEOILM", "paper"
+            "user_123", "strat_123", "SENSEX", "paper"
         )
         
         assert result["ready"] is False
@@ -450,7 +439,7 @@ class TestReadinessChecker:
 
 
 class TestInstrumentResolver:
-    """Test source-tracked instrument resolution (AC2,3,4: MCX handling)."""
+    """Test source-tracked instrument resolution (AC2,3,4: BSE handling)."""
     
     @pytest.mark.asyncio
     async def test_nse_option_resolution(self):
@@ -586,51 +575,6 @@ class TestInstrumentResolver:
         assert inst is not None
         assert inst.instrument_key == "NSE_FO|57049"
         assert resolver.last_diagnostics["reason"] == "matched_upstox_search"
-    
-    @pytest.mark.asyncio
-    async def test_mcx_paper_simulation_on_master_fail(self):
-        """MCX paper trades create simulated instruments when master fails (AC2)."""
-        db = AsyncMock()
-        resolver = InstrumentResolver(db)
-        
-        mcx_resolver = AsyncMock()
-        mcx_resolver.ensure_cache = AsyncMock(side_effect=Exception("Master unavailable"))
-        mcx_resolver.resolve = AsyncMock(return_value=None)
-        
-        resolver.mcx_resolver = mcx_resolver
-        
-        inst = await resolver.resolve_instrument_with_source(
-            underlying="CRUDEOILM",
-            instrument_type="MCX_OPTION",
-            option_side="CE",
-            strike_rule="ATM",
-            spot_price_hint=400.0,
-            mode="paper"  # Paper mode allows simulation
-        )
-        
-        # Paper mode should create simulated instrument
-        assert inst is not None or True  # May be None or simulated depending on implementation
-    
-    @pytest.mark.asyncio
-    async def test_mcx_live_fails_on_master_unavailable(self):
-        """MCX live trades fail hard when master unavailable (AC4)."""
-        db = AsyncMock()
-        resolver = InstrumentResolver(db)
-        
-        mcx_resolver = AsyncMock()
-        mcx_resolver.ensure_cache = AsyncMock(side_effect=Exception("Master unavailable"))
-        resolver.mcx_resolver = mcx_resolver
-        
-        inst = await resolver.resolve_instrument_with_source(
-            underlying="CRUDEOILM",
-            instrument_type="MCX_OPTION",
-            option_side="CE",
-            strike_rule="ATM",
-            spot_price_hint=400.0,
-            mode="live"  # Live mode fails hard
-        )
-        
-        assert inst is None  # Should fail
 
 
 class TestRiskManager:

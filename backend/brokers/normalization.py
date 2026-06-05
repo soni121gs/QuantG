@@ -1,6 +1,6 @@
 """Shared normalization utilities for broker responses in QuantG.
 
-Decouples payload normalization from specific broker clients (like Zerodha Kite Connect).
+Decouples payload normalization from Upstox response shapes and local rows.
 """
 from __future__ import annotations
 import logging
@@ -41,7 +41,7 @@ def normalize_order_status(status: Any) -> Optional[str]:
 def normalize_position_row(
     raw: Dict[str, Any],
     *,
-    broker: str = "zerodha",
+    broker: str = "upstox",
     tradingsymbol: Optional[str] = None,
     quantity: Optional[int] = None,
     average_price: Optional[float] = None,
@@ -79,7 +79,7 @@ def normalize_position_row(
     return row
 
 
-def normalize_positions_payload(raw: Any, *, broker: str = "zerodha") -> Dict[str, List[Dict[str, Any]]]:
+def normalize_positions_payload(raw: Any, *, broker: str = "upstox") -> Dict[str, List[Dict[str, Any]]]:
     if isinstance(raw, dict) and isinstance(raw.get("net"), list):
         net_rows = raw.get("net") or []
         day_rows = raw.get("day") or []
@@ -107,7 +107,7 @@ def normalize_positions_payload(raw: Any, *, broker: str = "zerodha") -> Dict[st
     return {"net": net, "day": []}
 
 
-def normalize_order_update(raw: Dict[str, Any], *, broker: str = "zerodha") -> Dict[str, Any]:
+def normalize_order_update(raw: Dict[str, Any], *, broker: str = "upstox") -> Dict[str, Any]:
     order_id = str(_first_value(raw, ["order_id", "orderId", "nOrdNo", "orderNo"]) or "")
     symbol = str(_first_value(raw, ["tradingsymbol", "trading_symbol", "tradingSymbol", "trdSym", "symbol"]) or "").upper()
     status = normalize_order_status(_first_value(raw, ["status", "ordSt", "order_status", "orderStatus", "ordStatus"]))
@@ -147,5 +147,5 @@ def normalize_order_update(raw: Dict[str, Any], *, broker: str = "zerodha") -> D
     }
 
 
-def normalize_order_book(orders: Optional[List[Dict[str, Any]]], *, broker: str = "zerodha") -> List[Dict[str, Any]]:
+def normalize_order_book(orders: Optional[List[Dict[str, Any]]], *, broker: str = "upstox") -> List[Dict[str, Any]]:
     return [normalize_order_update(row, broker=broker) for row in (orders or []) if isinstance(row, dict)]

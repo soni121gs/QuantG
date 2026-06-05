@@ -39,7 +39,6 @@ import options_helper
 import backtrader_runner
 import strategy_runner
 from signal_manager import signal_manager_loop
-from mcx_contract_resolver import MCXContractResolver, mcx_instrument_refresh_loop
 from option_state_ledger import OptionStateLedger
 from execution_bridge import payload_from_intent, submit_order as bridge_submit_order
 from execution_state import execution_state_manager
@@ -89,14 +88,6 @@ from upstox_trading_quality import (
 # Cryptographically strong RNG for mock data jitter — replaces _rng.random()
 _rng = _secrets.SystemRandom()
 
-
-class _LegacyKiteHelperProxy:
-    def __getattr__(self, name: str):
-        import importlib
-        return getattr(importlib.import_module("kite_helper"), name)
-
-
-kite_helper = _LegacyKiteHelperProxy()
 
 # Mongo
 mongo_url = os.environ['MONGO_URL']
@@ -211,25 +202,15 @@ option_ledger = OptionStateLedger(
     pool_size=int(os.environ.get("OPTION_LEDGER_POOL_SIZE", "4")),
 )
 
-KITE_HISTORICAL_MIN_INTERVAL_SEC = float(os.environ.get("KITE_HISTORICAL_MIN_INTERVAL_SEC", "0.40"))
-KITE_HISTORY_CACHE_TTL_SEC = int(os.environ.get("KITE_HISTORY_CACHE_TTL_SEC", "55"))
 STRATEGY_LIVE_CANDLE_MAX_AGE_SEC = int(os.environ.get("STRATEGY_LIVE_CANDLE_MAX_AGE_SEC", "1200"))
-KITE_ORDER_SYNC_TTL_SEC = int(os.environ.get("KITE_ORDER_SYNC_TTL_SEC", "10"))
 _RATE_LIMIT_LOCK = asyncio.Lock()
 _RATE_LIMIT_LAST: Dict[str, float] = {}
 _LOG_THROTTLE_LAST: Dict[str, float] = {}
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ORDER_SYNC_CACHE: Dict[str, Dict[str, Any]] = {}
-_KOTAK_GATEWAYS: Dict[str, Any] = {}  # Kotak broker — deprecated; kept to prevent AttributeError on startup
 _UPSTOX_GATEWAYS: Dict[str, UpstoxGateway] = {}
 _UPSTOX_TOKEN_VALIDATION_CACHE: Dict[str, Dict[str, Any]] = {}
-COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
-COMMODITY_REQUIRED_CAPITAL = {
-    "CRUDEOIL": 30000.0,
-    "CRUDEOILM": 6000.0,
-    "NATURALGAS": 18000.0,
-    "NATGASMINI": 6000.0,
-}
+REMOVED_COMMODITY_UNDERLYINGS = {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT_SEC = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
 
@@ -397,8 +378,8 @@ class OrderReq(BaseModel):
 
 class InstrumentRef(BaseModel):
     broker: str          # 'upstox'
-    segment: str         # 'EQUITY', 'FUTURES', 'OPTIONS', 'COMMODITY'
-    exchange: str        # 'NSE', 'BSE', 'NFO', 'MCX'
+    segment: str         # 'EQUITY', 'FUTURES', 'OPTIONS'
+    exchange: str        # 'NSE', 'BSE', 'NFO', 'BFO'
     tradingsymbol: str
     instrument_token: str
     asset_class: str     # 'DIRECT', 'OPTION_LONG', 'OPTION_SHORT'
@@ -467,21 +448,8 @@ class ChangePasswordReq(BaseModel):
     new_password: str
 
 
-class KiteExchangeReq(BaseModel):
-    request_token: str
-    broker: str = "zerodha"
-
-
 class OpsActionReq(BaseModel):
     note: Optional[str] = None
-
-
-class KotakSubscribeReq(BaseModel):
-    instruments: List[Dict[str, str]]
-
-
-class KotakLoginReq(BaseModel):
-    current_otp: Optional[str] = None
 
 
 class UpstoxTestOrderReq(BaseModel):
@@ -575,21 +543,12 @@ SYMBOLS = [
     {"symbol": "SENSEX", "name": "BSE Sensex", "base": 81460.20},
 ]
 
-COMMODITY_SYMBOLS = [
-    {"symbol": "CRUDEOIL", "name": "MCX Crude Oil", "base": 6550.0, "exchange": "MCX"},
-    {"symbol": "CRUDEOILM", "name": "MCX Crude Oil Mini", "base": 6550.0, "exchange": "MCX"},
-    {"symbol": "NATURALGAS", "name": "MCX Natural Gas", "base": 245.0, "exchange": "MCX"},
-    {"symbol": "NATGASMINI", "name": "MCX Natural Gas Mini", "base": 245.0, "exchange": "MCX"},
-]
-
 # Mock ticks should move during market hours, then freeze. This keeps paper PnL
 # from changing on nights/weekends when the user is not trading.
 IST_OFFSET = timedelta(hours=5, minutes=30)
 NSE_OPEN_MINUTE = 9 * 60 + 15
 NSE_CLOSE_MINUTE = 15 * 60 + 30
-MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
-MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
-SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO", "MCX", "CDS"}
+SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO"}
 ACTIVE_STRATEGY_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "FILLED", "OPEN", "EXITING"}
 STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND", "UNKNOWN_NEEDS_REVIEW"}
 MARKET_HOLIDAYS_IST = {
@@ -602,7 +561,6 @@ SEGMENT_MARKET_WINDOWS = {
     "BSE_EQ": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE equity"),
     "NSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
     "BSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
-    "MCX_FO": (MCX_OPEN_MINUTE, MCX_CLOSE_MINUTE, "MCX commodity"),
 }
 
 
@@ -684,7 +642,7 @@ def market_session_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, Any
     now_utc = now_utc or datetime.now(timezone.utc)
     segments = {
         key: _segment_session_status(key, now_utc)
-        for key in ("NSE_FO", "BSE_FO", "MCX_FO", "NSE_EQ", "BSE_EQ")
+        for key in ("NSE_FO", "BSE_FO", "NSE_EQ", "BSE_EQ")
     }
     open_count = sum(1 for row in segments.values() if row["open"])
     any_open = open_count > 0
@@ -712,8 +670,6 @@ def _execution_segment_for(exchange: str, asset_class: Optional[str] = None, sym
         return "NSE_FO"
     if exch in {"BFO", "BSE_FO"} or (exch == "BSE" and is_option):
         return "BSE_FO"
-    if exch in {"MCX", "MCX_FO"}:
-        return "MCX_FO"
     if exch == "BSE":
         return "BSE_EQ"
     return "NSE_EQ"
@@ -726,8 +682,6 @@ def _asset_type_for_instrument(instr: "InstrumentRef", option_contract: Optional
     symbol = str(getattr(instr, "tradingsymbol", "") or "").upper()
     if option_contract or asset in {"OPTION_LONG", "OPTION_SHORT"} or symbol.endswith(("CE", "PE")):
         return "option"
-    if exchange == "MCX" or segment == "MCX_FO":
-        return "commodity"
     return "equity"
 
 
@@ -777,8 +731,7 @@ _PAPER_BASE_PRICES: Dict[str, float] = {
     "INFY":       1890.45,  "ICICIBANK": 1245.30,  "SBIN":        824.10,
     "AXISBANK":   1180.60,  "ITC":        482.95,  "LT":          3680.55,
     "MARUTI":    12450.00,  "NIFTY":    24850.40,  "BANKNIFTY": 52340.85,
-    "SENSEX":    81460.20,  "CRUDEOIL":  6550.00,  "CRUDEOILM":  6550.00,
-    "NATURALGAS":  245.00,  "NATGASMINI": 245.00,
+    "SENSEX":    81460.20,
 }
 
 
@@ -792,7 +745,6 @@ def _get_paper_ltp(
     Options: simulates a sensible ATM/OTM premium so paper P&L is not ₹100 dummy:
         NIFTY ATM   ~₹125-150
         BANKNIFTY   ~₹260
-        CRUDEOIL FO ~₹32
     OTM options get a discount proportional to their distance from ATM.
     """
     sym_upper = str(symbol).upper()
@@ -831,12 +783,12 @@ def historical_series(base: float, days: int = 60) -> List[Dict[str, Any]]:
 def intraday_series(base: float, bars: int = 250) -> List[Dict[str, Any]]:
     """Mock 5-minute intraday candles for the strategy runner in paper mode.
     Each bar has a UNIQUE timestamp so the runner's signal-dedup (by date)
-    allows fresh signals every 5 minutes — matching real Kite 5-min behaviour.
+    allows fresh signals every 5 minutes.
     """
     out = []
     price = base * 0.985
     now = datetime.now(timezone.utc)
-    # snap to nearest 5-min boundary so dates align with real Kite candles
+    # snap to nearest 5-min boundary so dates align with live candles
     minute_floor = (now.minute // 5) * 5
     end = now.replace(minute=minute_floor, second=0, microsecond=0)
     for i in range(bars):
@@ -855,26 +807,6 @@ def intraday_series(base: float, bars: int = 250) -> List[Dict[str, Any]]:
 
 
 async def _index_spot_token(kite, symbol: str) -> Optional[int]:
-    sym_upper = symbol.upper()
-    if sym_upper not in options_helper.INDEX_SPOT_SYMBOL:
-        return None
-    static_tokens = {
-        # Kite's documented index tokens; avoids repeatedly downloading the
-        # instruments dump during live strategy scans.
-        "NIFTY": 256265,
-        "BANKNIFTY": 260105,
-        "SENSEX": 265,
-    }
-    if sym_upper in static_tokens:
-        return static_tokens[sym_upper]
-    spot_exch, spot_sym = options_helper.INDEX_SPOT_SYMBOL[sym_upper]
-    try:
-        instruments = kite.instruments(spot_exch)
-        for inst in instruments:
-            if inst.get("tradingsymbol", "").upper() == spot_sym.upper():
-                return int(inst["instrument_token"])
-    except Exception as e:
-        logger.warning(f"index spot token lookup failed for {sym_upper}: {e}")
     return None
 
 
@@ -922,7 +854,7 @@ def _latest_candle_fresh_for_live(candles: List[Dict[str, Any]], exchange: str) 
         return {"fresh": False, "reason": "latest candle timestamp unavailable"}
 
     now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST_OFFSET
-    market_open = _is_order_market_open("MCX" if exchange == "MCX" else "NSE")
+    market_open = _is_order_market_open(exchange)
     age_sec = (now_ist - last_at).total_seconds()
     fresh = market_open and -60 <= age_sec <= STRATEGY_LIVE_CANDLE_MAX_AGE_SEC
     return {
@@ -965,13 +897,7 @@ def _history_cache_set(user_id: str, token: int, days: int, interval: str, data:
 
 
 async def _cached_safe_historical(kite, user_id: str, token: int, days: int, interval: str) -> Optional[List[Dict[str, Any]]]:
-    cached = _history_cache_get(user_id, token, days, interval)
-    if cached is not None:
-        return cached
-    await _rate_limit("kite:historical", KITE_HISTORICAL_MIN_INTERVAL_SEC)
-    data = kite_helper.safe_historical(kite, token, days=days, interval=interval)
-    _history_cache_set(user_id, token, days, interval, data)
-    return data
+    return None
 
 
 async def _fetch_strategy_history(
@@ -989,25 +915,10 @@ async def _fetch_strategy_history(
     fallback and are tagged as such so the UI can warn users.
     """
     sym_upper = symbol.upper()
-    kite, _ = await get_user_kite(user_id)
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if kite and tick_manager:
-        try:
-            token_to_symbol: Dict[int, str] = {}
-            for s in SYMBOLS:
-                if s["symbol"] in options_helper.INDEX_SPOT_SYMBOL:
-                    continue
-                tok = kite_helper.instrument_token(kite, s["symbol"])
-                if tok:
-                    token_to_symbol[tok] = s["symbol"]
-            for opt_sym, (spot_exch, spot_sym) in options_helper.INDEX_SPOT_SYMBOL.items():
-                tok = kite_helper.instrument_token(kite, spot_sym, segment=spot_exch)
-                if tok:
-                    token_to_symbol[tok] = opt_sym
-            if token_to_symbol:
-                tick_manager.start_for_user(user_id, kite, token_to_symbol)
-        except Exception as e:
-            logger.warning(f"Realtime tick service start failed: {e}")
+    if sym_upper in REMOVED_COMMODITY_UNDERLYINGS or "MCX" in sym_upper or sym_upper.endswith("FUT"):
+        if not allow_mock:
+            raise ValueError(f"MCX commodity history has been removed from QuantG: {sym_upper}")
+        return {"data": [], "source": "removed-mcx", "is_live": False, "interval": interval, "removed": True}
 
     settings = await get_user_settings(user_id)
     data_broker = settings.get("data_broker", "upstox")
@@ -1019,14 +930,10 @@ async def _fetch_strategy_history(
                 exchange = "NSE"
             elif sym_upper == "SENSEX":
                 exchange = "BSE"
-            elif sym_upper in COMMODITY_UNDERLYINGS or "MCX" in sym_upper or sym_upper.endswith("FUT"):
-                exchange = "MCX"
             else:
                 exchange = "NSE"
             token = _upstox_instrument_token(exchange, sym_upper)
             token_candidates = [token] if token else []
-            if exchange == "MCX":
-                token_candidates.extend(await _search_upstox_mcx_future_keys(upstox_gw, sym_upper, limit=5))
             for token in dict.fromkeys(k for k in token_candidates if k):
                 # Ensure real Upstox V3 websocket tracking is active. Historical
                 # candles remain the bootstrap source; the latest bar is then
@@ -1065,7 +972,7 @@ async def _fetch_strategy_history(
                     is_live_source = bool(tick) or bool(candle_freshness.get("fresh"))
                     return {
                         "data": live_data,
-                        "source": f"upstox-v3-websocket+historical:{interval}:mcx-future:{sym_upper}" if exchange == "MCX" else f"upstox-v3-websocket+historical:{interval}:{sym_upper}",
+                        "source": f"upstox-v3-websocket+historical:{interval}:{sym_upper}",
                         "is_live": is_live_source,
                         "live_reason": "websocket tick" if tick else candle_freshness.get("reason"),
                         "last_candle_at": candle_freshness.get("last_candle_at"),
@@ -1079,59 +986,13 @@ async def _fetch_strategy_history(
                 raise ValueError(
                     f"Upstox V3 historical data failed for symbol '{sym_upper}' on exchange '{exchange}' ({interval}). "
                     f"Resolved tokens: {resolved_tokens}. "
-                    f"Please ensure the MCX instrument master cache is seeded, or check your internet connection."
+                    f"Please ensure Upstox historical data is available, or check your internet connection."
                 )
         else:
             if not allow_mock:
                 raise ValueError(
                     f"Upstox data broker selected but gateway is not connected or initialized for user {user_id}."
                 )
-
-    if kite:
-
-        token = None
-        source_kind = "equity"
-        if sym_upper in options_helper.INDEX_SPOT_SYMBOL:
-            token = await _index_spot_token(kite, sym_upper)
-            source_kind = "index-spot"
-        elif sym_upper in COMMODITY_UNDERLYINGS:
-            active_sym = _mcx_active_future_symbol(sym_upper)
-            token = kite_helper.instrument_token(kite, active_sym, segment="MCX")
-            source_kind = "commodity-future"
-        else:
-            token = kite_helper.instrument_token(kite, sym_upper)
-
-        if token:
-            live_data = await _cached_safe_historical(kite, user_id, token, days, interval)
-            tick_source = None
-            if interval == "5minute" and tick_manager and tick_manager.is_running(user_id):
-                if tick_manager.has_symbol(user_id, sym_upper):
-                    tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
-                    if tick_bars:
-                        tick_source = f"tick-live"
-                        if live_data:
-                            live_data = _merge_tick_bars(live_data, tick_bars)
-                        else:
-                            live_data = tick_bars
-            if not live_data and interval == "5minute" and tick_manager and tick_manager.has_symbol(user_id, sym_upper):
-                tick_bars = tick_manager.get_candles(user_id, sym_upper, bars=max(250, min_intraday_bars + 1))
-                if tick_bars:
-                    live_data = tick_bars
-                    tick_source = f"tick-live"
-            enough = bool(live_data) and (interval == "day" or tick_source or len(live_data) > min_intraday_bars)
-            if enough:
-                source_label = f"zerodha-kite-{interval}:{source_kind}:{sym_upper}"
-                if tick_source:
-                    source_label = f"zerodha-kite-{interval}:{tick_source}:{source_kind}:{sym_upper}"
-                return {
-                    "data": live_data,
-                    "source": source_label,
-                    "is_live": True,
-                    "interval": interval,
-                }
-            if interval != "day":
-                # Strict timeframe validation: do NOT fall back to daily candles when requesting intraday intervals
-                logger.warning(f"Intraday timeframe {interval} not available for {sym_upper}; blocking daily candle fallback for safety.")
 
     if allow_mock:
         # SAFETY: mock candles are ONLY permitted when the caller explicitly opted in
@@ -1145,7 +1006,7 @@ async def _fetch_strategy_history(
                     f"Mock candle data is BLOCKED for strategy '{strategy.get('name', sym_upper)}'. "
                     "Mock candle fallbacks are disabled in production scanning paths."
                 )
-        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None) or next((s for s in COMMODITY_SYMBOLS if s["symbol"] == sym_upper), None)
+        sym = next((s for s in SYMBOLS if s["symbol"] == sym_upper), None)
         if sym:
             if interval == "day":
                 return {
@@ -1556,213 +1417,34 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 # ============== Routes: Market ==============
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
-    settings = await get_user_settings(user["id"])
-    if settings.get("data_broker") == "kotak_neo":
-        gateway = _KOTAK_GATEWAYS.get(user["id"])
-        if gateway and gateway.status().get("authenticated"):
-            if gateway.status().get("subscribed_tokens", 0) == 0:
-                await _start_user_kotak_ticker(user["id"])
-            kotak_rows = []
-            live_count = 0
-            for i, s in enumerate(SYMBOLS):
-                tick = gateway.latest_tick_by_symbol(s["symbol"])
-                if tick and tick.get("ltp"):
-                    price = float(tick["ltp"])
-                    live_count += 1
-                    change = round(price - s["base"], 2)
-                    pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
-                    kotak_rows.append({
-                        "symbol": s["symbol"],
-                        "name": s["name"],
-                        "price": price,
-                        "change": change,
-                        "pct": pct,
-                        "source": "kotak_neo",
-                        "feed": "kotak-neo-ticker",
-                        "tick_time": tick.get("received_at"),
-                    })
-                else:
-                    lp = live_price(s["base"], i)
-                    kotak_rows.append({"symbol": s["symbol"], "name": s["name"], **lp, "source": "kotak_pending", "feed": "kotak-neo-ticker"})
-            if live_count:
-                return kotak_rows
-
-    if settings.get("data_broker") == "upstox":
-        upstox_rows = await _upstox_watchlist_rows(user["id"])
-        if upstox_rows and any(row.get("source") == "upstox" for row in upstox_rows):
-            return upstox_rows
-
-    # Try live Kite first — use ohlc() so we get last_price AND previous close
-    kite, status = await get_user_kite(user["id"])
-    if kite:
-        tick_manager = getattr(app.state, "tick_manager", None)
-        has_ticks = bool(tick_manager and tick_manager.has_live_ticks(user["id"]))
-        instruments = [_nse_token(s["symbol"]) for s in SYMBOLS]
-        ohlc_data = kite_helper.safe_ohlc(kite, instruments)
-        if ohlc_data:
-            out = []
-            for s in SYMBOLS:
-                key = _nse_token(s["symbol"])
-                node = ohlc_data.get(key) or {}
-                price = node.get("last_price") or s["base"]
-                ohlc = node.get("ohlc", {}) or {}
-                prev_close = ohlc.get("close") or price
-                change = round(price - prev_close, 2)
-                pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
-                out.append({"symbol": s["symbol"], "name": s["name"],
-                            "price": price, "change": change, "pct": pct,
-                            "source": "real" if has_ticks else "live",
-                            "feed": "kite-ticker" if has_ticks else "kite-rest"})
-            return out
-    # Fallback: mock
+    upstox_rows = await _upstox_watchlist_rows(user["id"])
+    if upstox_rows and any(row.get("source") == "upstox" for row in upstox_rows):
+        return upstox_rows
     out = []
-    for i, s in enumerate(SYMBOLS):
-        lp = live_price(s["base"], i)
-        out.append({"symbol": s["symbol"], "name": s["name"], **lp, "source": "mock"})
+    for i, srow in enumerate(SYMBOLS):
+        lp = live_price(srow["base"], i)
+        out.append({"symbol": srow["symbol"], "name": srow["name"], **lp, "source": "mock"})
     return out
 
 
 @api.get("/market/commodities")
 async def commodity_watchlist(user=Depends(get_current_user)):
-    """MCX commodity feed for crude oil and natural gas.
-
-    Kotak Neo or Upstox ticks are preferred when authenticated. Mock rows stay explicit so
-    the UI can distinguish demo context from broker data.
-    """
-    settings = await get_user_settings(user["id"])
-    data_broker = settings.get("data_broker", "upstox")
-    rows = []
-
-    if data_broker == "upstox":
-        upstox_gw = await get_user_upstox_gateway(user["id"])
-        if upstox_gw and upstox_gw.connected:
-            # Resolve commodity tokens
-            keys = []
-            futures_by_symbol: Dict[str, Dict[str, Any]] = {}
-            for s in COMMODITY_SYMBOLS:
-                contract = await _resolve_upstox_mcx_future_contract(s["symbol"])
-                if contract and contract.get("instrument_key"):
-                    futures_by_symbol[s["symbol"]] = contract
-                    keys.append(contract["instrument_key"])
-            if keys:
-                upstox_gw.start_market_data_ws(keys, mode="ltpc")
-                
-            for i, s in enumerate(COMMODITY_SYMBOLS):
-                contract = futures_by_symbol.get(s["symbol"]) or await _resolve_upstox_mcx_future_contract(s["symbol"])
-                token = contract.get("instrument_key") if contract else None
-                tick = upstox_gw.latest_tick(token) if token else None
-                if tick and tick.get("ltp"):
-                    price = float(tick["ltp"])
-                    change = round(price - s["base"], 2)
-                    pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
-                    rows.append({
-                        "symbol": s["symbol"],
-                        "name": s["name"],
-                        "exchange": s["exchange"],
-                        "price": price,
-                        "change": change,
-                        "pct": pct,
-                        "source": "upstox",
-                        "feed": tick.get("source") or "upstox-mcx",
-                        "instrument_key": token,
-                        "token": token,
-                        "trading_symbol": contract.get("trading_symbol") if contract else None,
-                        "timestamp": tick.get("timestamp") or tick.get("last_trade_time") or tick.get("received_at"),
-                        "timestamp_source": tick.get("timestamp_source"),
-                        "received_at": tick.get("received_at"),
-                        "tick_time": tick.get("timestamp") or tick.get("last_trade_time") or tick.get("received_at"),
-            "data_age_sec": _market_data_age_sec(tick.get("received_at")),
-                        "bid": tick.get("bid"),
-                        "ask": tick.get("ask"),
-                        "market_status": "open" if _is_order_market_open("MCX") else "closed",
-                        "block_reason": None if _is_order_market_open("MCX") else "MCX market is closed",
-                    })
-                    continue
-                if not token:
-                    logger.warning("MCX watchlist instrument not resolved from Upstox master symbol=%s", s["symbol"])
-                lp = live_price(s["base"], i + 100)
-                rows.append({
-                    "symbol": s["symbol"],
-                    "name": s["name"],
-                    "exchange": s["exchange"],
-                    **lp,
-                    "source": "upstox_pending",
-                    "feed": "upstox-mcx-mock",
-                    "instrument_key": token,
-                    "token": token,
-                    "received_at": None,
-                    "data_age_sec": None,
-                    "market_status": "open" if _is_order_market_open("MCX") else "closed",
-                    "block_reason": "instrument token unresolved" if not token else "data feed unavailable",
-                })
-            return rows
-
-    # Default to Kotak Neo or mock
-    gateway = _KOTAK_GATEWAYS.get(user["id"]) if settings.get("data_broker") == "kotak_neo" else None
-    for i, s in enumerate(COMMODITY_SYMBOLS):
-        tick = gateway.latest_tick_by_symbol(s["symbol"]) if gateway and gateway.status().get("authenticated") else None
-        if tick and tick.get("ltp"):
-            price = float(tick["ltp"])
-            change = round(price - s["base"], 2)
-            pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
-            rows.append({
-                "symbol": s["symbol"],
-                "name": s["name"],
-                "exchange": s["exchange"],
-                "price": price,
-                "change": change,
-                "pct": pct,
-                "source": "kotak_neo",
-                "feed": "kotak-neo-mcx",
-                "tick_time": tick.get("received_at"),
-            })
-            continue
-        lp = live_price(s["base"], i + 100)
-        rows.append({
-            "symbol": s["symbol"],
-            "name": s["name"],
-            "exchange": s["exchange"],
-            **lp,
-            "source": "mock",
-            "feed": "mock-mcx",
-        })
-    return rows
-
+    raise HTTPException(status_code=410, detail="MCX commodity systems have been removed. QuantG is Upstox-only for NSE/BSE/NFO/BFO.")
 
 
 @api.get("/market/quote/{symbol}")
 async def quote(symbol: str, user=Depends(get_current_user)):
-    found = next((s for s in [*SYMBOLS, *COMMODITY_SYMBOLS] if s["symbol"] == symbol.upper()), None)
+    if symbol.upper() in REMOVED_COMMODITY_UNDERLYINGS:
+        raise HTTPException(status_code=410, detail="MCX commodity symbols have been removed from QuantG.")
+    found = next((srow for srow in SYMBOLS if srow["symbol"] == symbol.upper()), None)
     if not found:
         raise HTTPException(status_code=404, detail="Symbol not found")
-    idx = [*SYMBOLS, *COMMODITY_SYMBOLS].index(found)
-    if found.get("exchange") == "MCX":
-        rows = await commodity_watchlist(user=user)
-        item = next((r for r in rows if r["symbol"] == found["symbol"]), None)
-        if item:
-            return item
-    kite, _ = await get_user_kite(user["id"])
-    if kite:
-        q = kite_helper.safe_quote(kite, [_nse_token(found["symbol"])])
-        if q:
-            node = list(q.values())[0]
-            price = node.get("last_price", found["base"])
-            ohlc = node.get("ohlc", {}) or {}
-            ohlc_close = ohlc.get("close") or price
-            return {
-                "symbol": found["symbol"], "name": found["name"],
-                "price": price,
-                "change": round(price - ohlc_close, 2),
-                "pct": round((price - ohlc_close) / ohlc_close * 100, 2) if ohlc_close else 0,
-                "series": historical_series(price, 60),
-                "source": "live",
-            }
+    idx = SYMBOLS.index(found)
     lp = live_price(found["base"], idx)
-    return {"symbol": found["symbol"], "name": found["name"], **lp,
-            "series": historical_series(found["base"], 60), "source": "mock"}
+    return {"symbol": found["symbol"], "name": found["name"], **lp, "series": historical_series(found["base"], 60), "source": "mock"}
 
 
-# ============== Routes: Strategies ==============
+# ============== Routes: Strategies ==============# ============== Routes: Strategies ==============
 DEFAULT_PYTHON = """# Simple Moving Average Crossover
 # Available: data (list of {date, close}), signals (output list of {date, action})
 def run(data):
@@ -1868,7 +1550,7 @@ def _classify_strategy_risk_style(template: Dict[str, Any]) -> str:
     if any(token in text for token in ("hft", "scalper", "quick", "micro", "mini")):
         return "micro_scalp"
     if underlying in {"CRUDEOIL", "NATURALGAS"} or any(token in text for token in ("volatility", "breakout", "expansion", "channel")):
-        return "volatile_breakout" if underlying in COMMODITY_UNDERLYINGS else "breakout"
+        return "volatile_breakout" if underlying in REMOVED_COMMODITY_UNDERLYINGS else "breakout"
     if any(token in text for token in ("rsi", "pullback", "reversion", "swing")):
         return "pullback"
     return "momentum"
@@ -3546,6 +3228,10 @@ for _template in [*DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]:
 _seed_templates_by_name = {
     template["name"]: template
     for template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]
+    if str(template.get("instrument_group") or "").upper() != "MCX"
+    and str(template.get("underlying") or "").upper() not in REMOVED_COMMODITY_UNDERLYINGS
+    and "CRUDE" not in str(template.get("name") or "").upper()
+    and "NATURAL GAS" not in str(template.get("name") or "").upper()
 }
 DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
@@ -3606,10 +3292,12 @@ LEGACY_DEFAULT_STRATEGY_NAMES = {
 
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     underlying = str(template["underlying"]).upper()
-    instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "MCX" if underlying in COMMODITY_UNDERLYINGS else "NFO")).upper()
+    instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "NFO")).upper()
     strategy_type = template.get("strategy_type") or ("Option Selling" if str(template.get("strike_mode") or "").upper().endswith("SELL") else "Option Buying")
-    required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else COMMODITY_REQUIRED_CAPITAL.get(underlying, 35000.0)))
-    is_commodity = instrument_group == "MCX" or underlying in COMMODITY_UNDERLYINGS
+    if instrument_group == "MCX" or underlying in REMOVED_COMMODITY_UNDERLYINGS:
+        raise ValueError(f"MCX strategy templates are removed from QuantG: {template.get('name')}")
+    required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else 35000.0))
+    is_commodity = False
     options_block = {
         "enabled": True,
         "underlying": underlying,
@@ -3627,7 +3315,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "description": template["description"],
         "kind": "python",
         "python_code": template["python_code"],
-        "asset_class": "commodity" if is_commodity else "options",
+        "asset_class": "options",
         "strategy_type": strategy_type,
         "required_capital": required_capital,
         "instrument_group": instrument_group,
@@ -3636,9 +3324,8 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "market_suitability": template.get("market_suitability", "Any Market Condition"),
         "visual_config": {
             "symbol": underlying,
-            "exchange": "MCX" if is_commodity else instrument_group,
+            "exchange": instrument_group,
             "options": options_block,
-            "commodity_options": options_block if is_commodity else None,
             "risk": risk_profile,
         },
         "status": "draft",
@@ -3652,12 +3339,12 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
 
 def _strategy_asset_class(row: Dict[str, Any]) -> str:
     explicit = (row.get("asset_class") or "").lower()
-    if explicit in ("equity", "options", "futures", "commodity"):
+    if explicit in ("equity", "options", "futures"):
         return explicit
     visual_config = row.get("visual_config") or {}
     symbol = str(visual_config.get("symbol") or "").upper()
-    if symbol in COMMODITY_UNDERLYINGS:
-        return "commodity"
+    if symbol in REMOVED_COMMODITY_UNDERLYINGS:
+        return "removed"
     options_config = visual_config.get("options") or {}
     if options_config.get("enabled"):
         return "options"
@@ -3674,8 +3361,8 @@ def _strategy_instrument_group(row: Dict[str, Any]) -> str:
         return str(exchange).upper()
     options_config = visual_config.get("options") or {}
     underlying = str(options_config.get("underlying") or visual_config.get("symbol") or "").upper()
-    if underlying in COMMODITY_UNDERLYINGS:
-        return "MCX"
+    if underlying in REMOVED_COMMODITY_UNDERLYINGS:
+        return "REMOVED"
     if underlying == "SENSEX":
         return "BFO"
     if underlying:
@@ -3690,7 +3377,7 @@ def _strategy_type(row: Dict[str, Any]) -> str:
     if explicit in {"option selling", "selling", "short option", "option_selling"}:
         return "Option Selling"
     visual_config = row.get("visual_config") or {}
-    options_config = visual_config.get("commodity_options") or visual_config.get("options") or {}
+    options_config = visual_config.get("options") or {}
     strike_mode = str(options_config.get("strike_mode") or "").upper()
     name = str(row.get("name") or "").lower()
     if strike_mode.endswith("SELL") or any(token in name for token in ("condor", "covered call", "short straddle", "selling")):
@@ -3703,7 +3390,6 @@ def _strategy_required_capital(row: Dict[str, Any]) -> float:
         row.get("required_capital"),
         ((row.get("visual_config") or {}).get("risk") or {}).get("required_capital"),
         (((row.get("visual_config") or {}).get("options") or {}).get("required_capital")),
-        (((row.get("visual_config") or {}).get("commodity_options") or {}).get("required_capital")),
     ):
         if value is not None:
             try:
@@ -3711,12 +3397,11 @@ def _strategy_required_capital(row: Dict[str, Any]) -> float:
             except (TypeError, ValueError):
                 pass
     visual_config = row.get("visual_config") or {}
-    options_config = visual_config.get("commodity_options") or visual_config.get("options") or {}
+    options_config = visual_config.get("options") or {}
     underlying = str(options_config.get("underlying") or visual_config.get("symbol") or "").upper()
     base = {
         "NIFTY": 35000.0,
         "SENSEX": 45000.0,
-        **COMMODITY_REQUIRED_CAPITAL,
     }.get(underlying, 25000.0)
     if _strategy_type(row) == "Option Selling":
         base = max(base, 125000.0)
@@ -3960,12 +3645,12 @@ def _clamp_float(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def _adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, float]:
-    stop = float(risk["stop_loss_pct"])
-    target = float(risk["take_profit_pct"])
+def _adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    stop = float(risk["stop_loss_pct"]) if risk.get("stop_loss_pct") not in (None, "") else None
+    target = float(risk["take_profit_pct"]) if risk.get("take_profit_pct") not in (None, "") else None
     trigger = float(risk["trail_trigger_pct"])
     step = float(risk["trail_step_pct"])
-    if not risk.get("adaptive_exits_enabled", True) or entry <= 0:
+    if stop is None or target is None or not risk.get("adaptive_exits_enabled", True) or entry <= 0:
         return {"stop": stop, "target": target, "trigger": trigger, "step": step}
 
     style = str(risk.get("risk_style") or "balanced")
@@ -3987,7 +3672,7 @@ def _adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, 
     return {"stop": stop, "target": target, "trigger": trigger, "step": step}
 
 
-def _risk_pct(risk: Dict[str, Any], *keys: str, default: float) -> float:
+def _risk_pct(risk: Dict[str, Any], *keys: str, default: Optional[float]) -> Optional[float]:
     for key in keys:
         value = risk.get(key)
         if value not in (None, ""):
@@ -3996,22 +3681,18 @@ def _risk_pct(risk: Dict[str, Any], *keys: str, default: float) -> float:
                 return pct if pct > 1 else pct * 100.0
             except (TypeError, ValueError):
                 continue
-    return float(default)
+    return float(default) if default is not None else None
 
 
 def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = dict(risk or {})
-    stop_pct = _risk_pct(raw, "stop_loss_pct", "stoploss_pct", "stop_pct", default=DEFAULT_STRATEGY_RISK["stop_loss_pct"])
-    target_pct = _risk_pct(raw, "take_profit_pct", "target_pct", "tp_pct", default=DEFAULT_STRATEGY_RISK["take_profit_pct"])
+    stop_pct = _risk_pct(raw, "stop_loss_pct", "stoploss_pct", "stop_pct", default=None)
+    target_pct = _risk_pct(raw, "take_profit_pct", "target_pct", "tp_pct", default=None)
     trail_trigger_pct = _risk_pct(raw, "trail_trigger_pct", default=DEFAULT_STRATEGY_RISK["trail_trigger_pct"])
     trail_step_pct = _risk_pct(raw, "trail_step_pct", default=DEFAULT_STRATEGY_RISK["trail_step_pct"])
     risk_style = str(raw.get("risk_style") or DEFAULT_STRATEGY_RISK["risk_style"])
     target_r_multiple = float(raw.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"])
     raw.update({
-        "stop_loss_pct": stop_pct,
-        "stoploss_pct": stop_pct,
-        "take_profit_pct": target_pct,
-        "target_pct": target_pct,
         "trail_trigger_pct": trail_trigger_pct,
         "trail_step_pct": trail_step_pct,
         "trailing_sl_enabled": bool(raw.get("trailing_sl_enabled", True)),
@@ -4025,6 +3706,12 @@ def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "adaptive_exits_enabled": bool(raw.get("adaptive_exits_enabled", DEFAULT_STRATEGY_RISK["adaptive_exits_enabled"])),
         "target_r_multiple": target_r_multiple,
     })
+    if stop_pct is not None:
+        raw["stop_loss_pct"] = stop_pct
+        raw["stoploss_pct"] = stop_pct
+    if target_pct is not None:
+        raw["take_profit_pct"] = target_pct
+        raw["target_pct"] = target_pct
     return raw
 
 
@@ -4038,11 +3725,15 @@ def _position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None)
     target_price = risk.get("target_price") or risk.get("take_profit")
     dynamic = _adaptive_risk_percentages(entry, risk)
     if stop_price in (None, ""):
-        stop_pct = dynamic["stop"]
-        stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
+        stop_pct = risk.get("stop_loss_pct")
+        if stop_pct is not None:
+            stop_pct = float(stop_pct)
+            stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
     if target_price in (None, ""):
-        target_pct = dynamic["target"]
-        target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
+        target_pct = risk.get("take_profit_pct")
+        if target_pct is not None:
+            target_pct = float(target_pct)
+            target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
     trailing_sl = risk.get("trailing_sl")
     if risk.get("trailing_sl_enabled") and ltp and ltp > 0:
         trigger_pct = dynamic["trigger"]
@@ -4107,11 +3798,13 @@ def _active_key(user_id: str, value: str) -> str:
     return f"{user_id}:{value}"
 
 
-def _strategy_lock_ids(user_id: str, strategy_id: str, instrument_key: str) -> List[str]:
-    return [
-        f"{user_id}:instrument:{instrument_key}",
-        f"{user_id}:strategy:{strategy_id}",
-    ]
+def _strategy_side_key(user_id: str, strategy_id: str, instrument_key: str, side: str) -> str:
+    normalized_side = "SHORT" if str(side or "").upper() == "SHORT" else "LONG"
+    return _active_key(user_id, f"{strategy_id}:{instrument_key}:{normalized_side}")
+
+
+def _strategy_lock_ids(user_id: str, strategy_id: str, instrument_key: str, side: str) -> List[str]:
+    return [f"{user_id}:strategy-instrument-side:{strategy_id}:{instrument_key}:{str(side or 'LONG').upper()}"]
 
 
 def _risk_reservation_lock_id(user_id: str) -> str:
@@ -4276,44 +3969,35 @@ async def _reserve_strategy_position(
     instrument_token: Any,
     quantity: int,
     entry_price: float,
+    position_side: str = "LONG",
     source: str,
 ) -> Optional[Dict[str, Any]]:
-    """Create the central ownership row before sending a strategy BUY.
-
-    Sparse unique indexes on active_instrument_key and active_strategy_key make
-    the reservation atomic across runner cycles and concurrent requests.
-    """
+    """Create the central ownership row before sending a strategy entry."""
     if not strategy_id:
         return None
+    side_key = _strategy_side_key(user_id, strategy_id, instrument_key, position_side)
     existing = await db.strategy_positions.find_one({
         "user_id": user_id,
-        "$or": [
-            {"active_instrument_key": _active_key(user_id, instrument_key)},
-            {"active_strategy_key": _active_key(user_id, strategy_id)},
-        ],
+        "active_strategy_instrument_side_key": side_key,
         "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
     }, {"_id": 0})
     if existing:
-        if existing.get("instrument_key") == instrument_key:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Instrument already has active strategy position: {existing.get('strategy_id')} {existing.get('status')}. New BUY blocked.",
-            )
         raise HTTPException(
             status_code=409,
-            detail=f"Strategy already has active position {existing.get('trading_symbol')} ({existing.get('status')}). Re-entry blocked.",
+            detail=f"Duplicate strategy entry blocked for {trading_symbol}: same strategy, instrument and side already active.",
         )
 
     row = await _strategy_row(user_id, strategy_id)
     risk = _normalize_strategy_risk(((row or {}).get("visual_config") or {}).get("risk") or {})
     now = datetime.now(timezone.utc).isoformat()
-    lock_ids = _strategy_lock_ids(user_id, strategy_id, instrument_key)
+    lock_ids = _strategy_lock_ids(user_id, strategy_id, instrument_key, position_side)
     lock_docs = [
         {
             "_id": lock_id,
             "user_id": user_id,
             "strategy_id": strategy_id,
             "instrument_key": instrument_key,
+            "position_side": position_side,
             "trading_symbol": trading_symbol,
             "created_at": now,
             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
@@ -4330,7 +4014,7 @@ async def _reserve_strategy_position(
             await db.strategy_position_locks.delete_many({"_id": {"$in": acquired_locks}})
         raise HTTPException(
             status_code=409,
-            detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
+            detail=f"Strategy/instrument/side already reserved by another scan cycle. Duplicate entry blocked for {trading_symbol}.",
         )
 
     # Resolve symbol_group
@@ -4347,8 +4031,7 @@ async def _reserve_strategy_position(
         "strategy_id": strategy_id,
         "instrument_key": instrument_key,
         "symbol_group": symbol_group,
-        "active_instrument_key": _active_key(user_id, instrument_key),
-        "active_strategy_key": _active_key(user_id, strategy_id),
+        "active_strategy_instrument_side_key": side_key,
         "instrument_token": instrument_token,
         "trading_symbol": trading_symbol,
         "symbol": trading_symbol,
@@ -4356,6 +4039,7 @@ async def _reserve_strategy_position(
         "quantity": int(quantity),
         "open_quantity": int(quantity),
         "average_buy_price": float(entry_price or 0),
+        "position_side": "SHORT" if str(position_side or "").upper() == "SHORT" else "LONG",
         "entry_time": now,
         "status": "RESERVED",
         "tp_sl_tsl_config": dict(risk),
@@ -4369,7 +4053,7 @@ async def _reserve_strategy_position(
         await db.strategy_position_locks.delete_many({"_id": {"$in": lock_ids}})
         raise HTTPException(
             status_code=409,
-            detail=f"Instrument/strategy already reserved by another scan cycle. Duplicate BUY blocked for {trading_symbol}.",
+            detail=f"Strategy/instrument/side already reserved by another scan cycle. Duplicate entry blocked for {trading_symbol}.",
         )
     return doc
 
@@ -4431,7 +4115,7 @@ async def _cancel_strategy_reservation(reservation: Optional[Dict[str, Any]], re
     await db.strategy_positions.update_one(
         {"id": reservation["id"], "user_id": reservation["user_id"], "status": "RESERVED"},
         {"$set": {"status": "CANCELLED", "cancel_reason": reason, "updated_at": now},
-         "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+         "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
     )
     await _release_strategy_position_locks(reservation)
 
@@ -4450,6 +4134,12 @@ async def _open_strategy_position_for_exit(
         "instrument_key": instrument_key,
         "status": {"$in": ["OPEN", "FILLED"]},
     }, {"_id": 0})
+    if not row:
+        row = await db.strategy_positions.find_one({
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "status": {"$in": ["OPEN", "FILLED"]},
+        }, {"_id": 0})
     if not row:
         active = await db.strategy_positions.find_one({
             "user_id": user_id,
@@ -4501,7 +4191,7 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
             "exit_reason": reason,
             "closed_at": now,
             "updated_at": now,
-        }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+        }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
     )
     await _release_strategy_position_locks(position)
 
@@ -4514,8 +4204,9 @@ async def _release_strategy_position_locks(position: Optional[Dict[str, Any]]) -
     instrument_key = position.get("instrument_key")
     if not user_id or not strategy_id or not instrument_key:
         return
+    side = str(position.get("position_side") or "LONG").upper()
     await db.strategy_position_locks.delete_many({
-        "_id": {"$in": _strategy_lock_ids(str(user_id), str(strategy_id), str(instrument_key))}
+        "_id": {"$in": _strategy_lock_ids(str(user_id), str(strategy_id), str(instrument_key), side)}
     })
 
 
@@ -4555,7 +4246,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             "product": pos.get("product"),
             "source": f"{reason}:strategy:{sid}",
         }
-        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO", "MCX"}:
+        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
             lot_size = int(pos.get("lot_size") or 1)
             place_kwargs["symbol"] = sym
             place_kwargs["option_contract"] = {
@@ -4593,9 +4284,6 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
     if data_broker == "upstox":
         gateway = await get_user_upstox_gateway(user_id)
         token = _upstox_instrument_token(exchange, symbol)
-        if gateway and gateway.connected and exchange == "MCX" and not token:
-            contract = await _resolve_upstox_mcx_future_contract(symbol)
-            token = contract.get("instrument_key") if contract else None
         if gateway and gateway.connected and token:
             try:
                 quote = await asyncio.to_thread(gateway.get_market_quote, [token])
@@ -4610,7 +4298,7 @@ async def _current_ltp_for_symbol(user_id: str, symbol: str, exchange: str, allo
     if not allow_simulated:
         logger.info("Simulated LTP fallback blocked for %s because allow_simulated_prices is false.", symbol)
         return None
-    all_symbols = [*SYMBOLS, *COMMODITY_SYMBOLS]
+    all_symbols = [*SYMBOLS]
     sym = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
     return live_price(sym["base"], all_symbols.index(sym))["price"] if sym else None
 
@@ -4697,58 +4385,7 @@ async def _place_kotak_order(
     price: Optional[float] = None,
     tag: Optional[str] = None,
 ) -> Dict[str, Any]:
-    gateway = await get_user_kotak_gateway(user_id)
-    if not gateway:
-        raise HTTPException(status_code=400, detail="Kotak Neo is not configured. Save Consumer Key and env credentials first.")
-    status = gateway.status()
-    if not status.get("authenticated"):
-        raise HTTPException(status_code=400, detail="Kotak Neo is not connected. Open Broker Keys and click Connect Kotak.")
-    execution_tag = tag or _new_execution_tag()
-    attempts = 0
-    result: Dict[str, Any] = {}
-    symbol_used = None
-    max_attempts = int(os.environ.get("KOTAK_ORDER_MAX_ATTEMPTS", "1"))
-    candidates = _kotak_trading_symbol_candidates(exchange, trading_symbol)
-    for candidate_idx, candidate in enumerate(candidates):
-        symbol_used = candidate
-        for attempt in range(1, max(1, max_attempts) + 1):
-            attempts += 1
-            result = await asyncio.to_thread(
-                gateway.place_order,
-                exchange_segment=_kotak_exchange_segment(exchange),
-                product=(product or "MIS").upper(),
-                price=0 if (order_type or "MARKET").upper() == "MARKET" else float(price or 0),
-                quantity=int(quantity),
-                trading_symbol=candidate,
-                transaction_type=_kotak_transaction_type(side.upper()),
-                order_type=_kotak_order_type(order_type),
-                tag=execution_tag,
-            )
-            if result.get("ok"):
-                break
-            error = str(result.get("error") or "")
-            if not OrderExecutionRetry.is_retryable_error(error) or attempt >= max_attempts:
-                break
-            retry_cfg = OrderExecutionRetry.retry_config(attempt)
-            await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
-        if result.get("ok"):
-            break
-        error = str(result.get("error") or "")
-        if candidate_idx >= len(candidates) - 1 or not _kotak_symbol_error(error):
-            break
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=f"Kotak rejected order: {result.get('error')}")
-    broker_order_id = _extract_kotak_order_id(result.get("response"))
-    if not broker_order_id:
-        logger.warning("Kotak order response did not include order id: %s", result.get("response"))
-    return {
-        "ok": True,
-        "broker_order_id": broker_order_id,
-        "raw": result.get("response"),
-        "tag": execution_tag,
-        "attempts": attempts,
-        "trading_symbol": symbol_used,
-    }
+    raise HTTPException(status_code=410, detail="Kotak Neo execution has been removed. QuantG supports Upstox only.")
 
 
 UPSTOX_EQUITY_INSTRUMENTS = {
@@ -4827,8 +4464,7 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     token = str(instrument_token or "").strip()
     
     if exch == "MCX" and token:
-        token_clean = token.split("|")[-1]
-        return f"MCX_FO|{token_clean}"
+        return None
         
     if "|" in token:
         return token
@@ -4842,40 +4478,6 @@ def _upstox_instrument_token(exchange: str, trading_symbol: str, instrument_toke
     if exch in {"NFO", "BFO", "NSE_FO"}:
         return token or None
     if exch == "MCX":
-        # Query sync db to resolve token from the MCX cache
-        try:
-            sync_db = get_sync_db()
-            from datetime import datetime, timezone, timedelta
-            ist_today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).date().isoformat()
-            
-            # 1. Generic underlying (e.g. CRUDEOIL, NATURALGAS)
-            if symbol in COMMODITY_UNDERLYINGS:
-                row = sync_db.upstox_mcx_future_contracts.find_one(
-                    {
-                        "underlying": symbol,
-                        "exchange": "MCX",
-                        "instrument_type": "FUTCOM",
-                        "expiry": {"$gte": ist_today},
-                    },
-                    sort=[("expiry", 1), ("trading_symbol", 1)]
-                )
-                if row and row.get("instrument_key"):
-                    return f"MCX_FO|{row['instrument_key'].split('|')[-1]}"
-                    
-            # 2. Specific future contract symbol (e.g. CRUDEOIL26JUNFUT)
-            row = sync_db.upstox_mcx_future_contracts.find_one({"trading_symbol": symbol})
-            if row and row.get("instrument_key"):
-                return f"MCX_FO|{row['instrument_key'].split('|')[-1]}"
-                
-            # 3. Option contract symbol (e.g. CRUDEOIL26JUNFUT CE/PE)
-            row = sync_db.upstox_mcx_option_contracts.find_one({"trading_symbol": symbol})
-            if row and row.get("instrument_key"):
-                return f"MCX_FO|{row['instrument_key'].split('|')[-1]}"
-        except Exception as e:
-            logger.warning("MCX instrument token resolve exception: %s", e)
-        
-        # Remove silent fallback and log resolution failure
-        logger.error("MCX instrument resolution failed: no master contract found for symbol %s in DB cache.", symbol)
         return None
     if "|" in symbol and "_" in symbol.split("|", 1)[0]:
         return symbol
@@ -4888,28 +4490,15 @@ async def _search_upstox_mcx_future_keys(
     *,
     limit: int = 5,
 ) -> List[str]:
-    symbol = str(underlying or "").upper().strip()
-    if not symbol:
-        return []
-    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
-    app.state.mcx_contract_resolver = resolver
-    keys: List[str] = []
-    contract = await resolver.resolve_future(underlying=symbol, expiry_offset=0, allow_refresh=True)
-    if contract and contract.get("instrument_key"):
-        keys.append(str(contract["instrument_key"]))
-    return list(dict.fromkeys(keys))[:limit]
+    return []
 
 
 async def _resolve_upstox_mcx_future_contract(underlying: str, *, expiry_offset: int = 0) -> Optional[Dict[str, Any]]:
-    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
-    app.state.mcx_contract_resolver = resolver
-    return await resolver.resolve_future(underlying=underlying, expiry_offset=expiry_offset, allow_refresh=True)
+    return None
 
 
 async def _validate_upstox_mcx_instrument_key(instrument_key: Optional[str]) -> Optional[Dict[str, Any]]:
-    resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
-    app.state.mcx_contract_resolver = resolver
-    return await resolver.validate_instrument_key(instrument_key)
+    return None
 
 
 
@@ -5240,8 +4829,8 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
         or str(req.instrument_group).upper() == "MCX"
         or underlying in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
     )
-    if is_mcx and (req.mode or "").strip().lower() == "live":
-        raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
+    if is_mcx:
+        raise HTTPException(status_code=400, detail="MCX commodity strategies have been removed. QuantG supports Upstox NSE/BSE/NFO/BFO only.")
 
     risk_config = dict((visual_config.get("risk") or {}))
     if req.required_capital is not None:
@@ -5286,7 +4875,7 @@ async def seed_default_strategies(user=Depends(get_current_user)):
         "ok": True,
         "inserted": inserted,
         "migrated": migrated,
-        "message": "Standardized index and MCX option presets installed. Review and backtest before enabling LIVE.",
+        "message": "Standardized Upstox index option presets installed. Review and backtest before enabling LIVE.",
     }
 
 
@@ -5307,7 +4896,7 @@ async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
         "inserted": inserted,
         "migrated": migrated,
         "live_strategies": sum(1 for s in strategies if s.get("status") == "live"),
-        "message": "QuantG v12 Upstox retailer profile is active for NSE/NFO/BSE/BFO/MCX.",
+        "message": "QuantG v12 Upstox retailer profile is active for NSE/NFO/BSE/BFO.",
     }
 
 
@@ -5403,8 +4992,8 @@ async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_u
         or instrument_group_check == "MCX"
         or underlying_check in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
     )
-    if is_mcx_check and mode_check == "live":
-        raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
+    if is_mcx_check:
+        raise HTTPException(status_code=400, detail="MCX commodity strategies have been removed. QuantG supports Upstox NSE/BSE/NFO/BFO only.")
     if "asset_class" not in update and "visual_config" in update:
         update["asset_class"] = "options" if ((update["visual_config"] or {}).get("options") or {}).get("enabled") else "equity"
     if "required_capital" in update:
@@ -5547,7 +5136,7 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
             or underlying_check in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
         )
         if is_mcx_check:
-            raise HTTPException(status_code=400, detail="Live trading is not supported for MCX commodity strategies.")
+            raise HTTPException(status_code=400, detail="MCX commodity strategies have been removed. QuantG supports Upstox NSE/BSE/NFO/BFO only.")
     visual_config = row.get("visual_config") or {}
     risk = visual_config.get("risk") or {}
     mapping = {
@@ -5623,7 +5212,7 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
         if not contract:
             raise HTTPException(
                 status_code=400,
-                detail="Could not resolve Upstox option contract. Check OAuth, MCX/NFO permission, and instrument master cache.",
+                detail="Could not resolve Upstox option contract. Check OAuth, NFO/BFO permission, and instrument master cache.",
             )
         result = await _place_order_core(
             user_id=user["id"], symbol=opt_cfg.get("underlying", "NIFTY"),
@@ -5844,36 +5433,17 @@ async def options_preview(
     expiry_offset: int = 0,
     user=Depends(get_current_user),
 ):
-    """What option contract will fire RIGHT NOW for this config? Returns
-    contract details for the UI so users see the exact symbol before trading."""
     if underlying.upper() not in options_helper.SUPPORTED:
         raise HTTPException(status_code=400, detail=f"Underlying must be one of {options_helper.SUPPORTED}")
-    kite, status = await get_user_kite(user["id"])
-    if not kite:
-        # Show useful info even without Kite — return config + lot size + note
-        return {
-            "available": False,
-            "reason": "Zerodha not connected — preview will be live after you connect on Broker Keys",
-            "underlying": underlying.upper(),
-            "lot_size": options_helper.LOT_SIZES.get(underlying.upper()),
-            "strike_interval": options_helper.STRIKE_INTERVALS.get(underlying.upper()),
-            "exchange": options_helper.OPT_EXCHANGE.get(underlying.upper()),
-        }
-    contract = options_helper.resolve_for_signal(
-        kite,
-        underlying=underlying.upper(),
-        signal_action=action.upper(),
-        strike_mode=strike_mode.upper(),
-        otm_points=int(otm_points),
-        expiry_offset_weeks=int(expiry_offset),
-    )
-    if not contract:
-        return {
-            "available": False,
-            "reason": "Could not resolve a contract — markets may be closed or instruments unavailable.",
-            "underlying": underlying.upper(),
-        }
-    return {"available": True, **contract}
+    return {
+        "available": False,
+        "reason": "Live contract preview uses Upstox option-chain resolution during execution. This screen shows static config only.",
+        "underlying": underlying.upper(),
+        "lot_size": options_helper.LOT_SIZES.get(underlying.upper()),
+        "strike_interval": options_helper.STRIKE_INTERVALS.get(underlying.upper()),
+        "exchange": options_helper.OPT_EXCHANGE.get(underlying.upper()),
+        "broker": "upstox",
+    }
 
 
 @api.post("/strategies/backtest")
@@ -6206,7 +5776,7 @@ def _simulate_upstox_like_charges(
     side = str(side or "").upper()
     exchange = str(exchange or "").upper()
     asset_type = str(asset_type or "").lower()
-    is_option = asset_type == "option" or exchange in {"NFO", "BFO", "MCX"}
+    is_option = asset_type == "option" or exchange in {"NFO", "BFO"}
     brokerage = round(min(20.0, gross * 0.0003), 2)
     stt = round(gross * (0.000625 if side == "SELL" and is_option else 0.00025 if side == "SELL" else 0.0), 2)
     exchange_txn = round(gross * (0.00053 if exchange == "NFO" else 0.00035 if exchange == "BFO" else 0.00003), 2)
@@ -6376,19 +5946,6 @@ async def _execution_preflight(
                 ok=False, reason_code="STRATEGY_DISABLED", reason="Strategy not found or not owned by user.",
                 strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
             )
-        status = str(row.get("status") or "").lower()
-        if status != "live":
-            return _preflight_response(
-                ok=False, reason_code="STRATEGY_DISABLED", reason=f"Strategy is not active (status={status or 'unknown'}).",
-                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
-            )
-        halted_reason = row.get("halt_reason") or row.get("last_halt_reason")
-        last_error = str(row.get("last_error") or "")
-        if row.get("halted") or row.get("is_halted") or "contract resolution failed" in last_error.lower():
-            return _preflight_response(
-                ok=False, reason_code="STRATEGY_DISABLED", reason=halted_reason or last_error or "Strategy is halted.",
-                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
-            )
 
     if not instr.tradingsymbol or not instr.instrument_token:
         return _preflight_response(
@@ -6402,9 +5959,9 @@ async def _execution_preflight(
         )
 
     segment = _execution_segment_for(instr.exchange, instr.asset_class, instr.tradingsymbol, option_contract)
-    if segment == "MCX_FO" and not paper:
+    if segment == "MCX_FO":
         return _preflight_response(
-            ok=False, reason_code="SKIPPED_SEGMENT_DISABLED", reason="Live trading is disabled for MCX segment on Upstox API.",
+            ok=False, reason_code="SKIPPED_SEGMENT_DISABLED", reason="MCX commodity execution has been removed from QuantG.",
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=ltp, market_session=market_session,
         )
     if segment not in SEGMENT_MARKET_WINDOWS:
@@ -6494,20 +6051,29 @@ async def _execution_preflight(
 
     if strategy_id and _intent_is_entry(intent.intent):
         instrument_key = _instrument_key(instr.exchange, instr.tradingsymbol, instr.instrument_token)
+        side_key = _strategy_side_key(
+            user_id,
+            strategy_id,
+            instrument_key,
+            "SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
+        )
         existing = await db.strategy_positions.find_one({
             "user_id": user_id,
+            "strategy_id": strategy_id,
             "$or": [
-                {"active_instrument_key": _active_key(user_id, instrument_key)},
-                {"active_strategy_key": _active_key(user_id, strategy_id)},
-                {"strategy_id": strategy_id, "instrument_key": instrument_key},
+                {"active_strategy_instrument_side_key": side_key},
+                {
+                    "instrument_key": instrument_key,
+                    "position_side": "SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
+                },
             ],
             "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
         })
         if existing:
             return _preflight_response(
                 ok=False,
-                reason_code="CONFLICT_BLOCKED",
-                reason=f"Duplicate open position blocked for {instr.tradingsymbol}.",
+                reason_code="DUPLICATE_STRATEGY_INSTRUMENT_SIDE",
+                reason=f"Duplicate open position blocked for same strategy, instrument and side: {instr.tradingsymbol}.",
                 strategy_id=strategy_id,
                 intent=intent,
                 option_contract=option_contract,
@@ -6517,8 +6083,15 @@ async def _execution_preflight(
 
     try:
         if _intent_is_entry(intent.intent):
-            await _check_daily_loss_guard(user_id, settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
-            await _check_trade_count_guard(user_id, int(settings.get("max_trades_per_day") or 0), mode="paper" if paper else "live")
+            risk_cfg = ((strategy_row or {}).get("visual_config") or {}).get("risk") or {}
+            daily_loss_enabled = bool(
+                settings.get("daily_loss_kill_switch_enabled")
+                or settings.get("daily_loss_guard_enabled")
+                or risk_cfg.get("daily_loss_enabled")
+                or risk_cfg.get("daily_loss_kill_switch_enabled")
+            )
+            if daily_loss_enabled:
+                await _check_daily_loss_guard(user_id, risk_cfg.get("daily_loss_limit") or settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
     except HTTPException as exc:
         return _preflight_response(
             ok=False,
@@ -6545,16 +6118,6 @@ async def _execution_preflight(
 
 
 async def _find_kite_order_by_tag(kite, tag: str) -> Optional[Dict[str, Any]]:
-    if not kite or not tag:
-        return None
-    for _ in range(2):
-        try:
-            for order in kite.orders() or []:
-                if str(order.get("tag") or "") == tag:
-                    return order
-        except Exception as e:
-            logger.warning(f"kite tagged order lookup failed: {e}")
-        await asyncio.sleep(0.8)
     return None
 
 
@@ -6570,44 +6133,7 @@ async def _place_kite_order_with_recovery(
     price: Optional[float] = None,
     tag: Optional[str] = None,
 ) -> Dict[str, Any]:
-    execution_tag = tag or _new_execution_tag()
-    attempts = 0
-    last_error = None
-    max_attempts = int(os.environ.get("LIVE_ORDER_MAX_ATTEMPTS", "2"))
-    for attempt in range(1, max(1, max_attempts) + 1):
-        attempts = attempt
-        try:
-            res = kite_helper.place_live_order(
-                kite,
-                tradingsymbol=tradingsymbol,
-                exchange=exchange,
-                transaction_type=transaction_type,
-                quantity=quantity,
-                order_type=order_type,
-                product=product,
-                price=price,
-                tag=execution_tag,
-            )
-            return {"ok": True, **res, "tag": execution_tag, "attempts": attempts, "recovered": False}
-        except Exception as exc:
-            last_error = str(exc)
-            recovered = await _find_kite_order_by_tag(kite, execution_tag)
-            if recovered:
-                return {
-                    "ok": True,
-                    "order_id": recovered.get("order_id"),
-                    "tag": execution_tag,
-                    "attempts": attempts,
-                    "recovered": True,
-                    "broker_status": recovered.get("status"),
-                    "broker_order": recovered,
-                }
-            retryable = OrderExecutionRetry.is_retryable_error(last_error)
-            if not retryable or attempt >= max_attempts:
-                break
-            retry_cfg = OrderExecutionRetry.retry_config(attempt)
-            await asyncio.sleep(min(3, float(retry_cfg.get("backoff_seconds") or 1)))
-    return {"ok": False, "error": last_error or "unknown broker error", "tag": execution_tag, "attempts": attempts}
+    return {"ok": False, "error": "Zerodha Kite execution has been removed. QuantG supports Upstox only.", "tag": tag or _new_execution_tag(), "attempts": 0}
 
 
 def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
@@ -6616,8 +6142,9 @@ def _is_nse_market_open(now_utc: Optional[datetime] = None) -> bool:
 
 def _is_order_market_open(exchange: str, now_utc: Optional[datetime] = None) -> bool:
     exchange = (exchange or "NSE").upper()
+    if exchange in {"MCX", "MCX_FO", "CDS"}:
+        return False
     segment = (
-        "MCX_FO" if exchange in {"MCX", "MCX_FO"} else
         "BSE_FO" if exchange in {"BFO", "BSE_FO"} else
         "BSE_EQ" if exchange == "BSE" else
         "NSE_FO"
@@ -6685,6 +6212,8 @@ async def _build_order_intent(
     execution_broker = "upstox"
     exchange = (exchange or "NSE").upper()
     symbol_upper = symbol.upper().strip()
+    if exchange in {"MCX", "MCX_FO", "CDS"} or symbol_upper in REMOVED_COMMODITY_UNDERLYINGS:
+        raise HTTPException(status_code=410, detail="MCX/CDS execution has been removed. QuantG supports Upstox NSE/BSE/NFO/BFO only.")
 
     strategy_id = await _strategy_source_id(source)
     if not strategy_id and source in ("manual", "manual-exit", "squareoff-all"):
@@ -6747,28 +6276,15 @@ async def _build_order_intent(
         )
         return {"intent": intent, "lot_size": lot_size, "lots": lots}
 
-    # ----- equity / futures / commodity path -----
+    # ----- equity / index derivatives path -----
     segment = _execution_segment_for(exchange, "DIRECT", symbol_upper)
     asset_class = "DIRECT"
     if exchange in ("NFO", "BFO"):
         segment = _execution_segment_for(exchange, "FUTURES", symbol_upper)
-    elif exchange == "MCX":
-        segment = "MCX_FO"
-    elif exchange in ("CDS",):
-        segment = "NSE_FO"
 
     token = symbol_upper
     if execution_broker == "upstox":
         resolved = _upstox_instrument_token(exchange, symbol_upper)
-        if exchange == "MCX" and not resolved:
-            contract = await _resolve_upstox_mcx_future_contract(symbol_upper)
-            if not contract or not contract.get("instrument_key"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"instrument not found: MCX {symbol_upper} future missing from Upstox instrument master.",
-                )
-            resolved = contract["instrument_key"]
-            symbol_upper = str(contract.get("trading_symbol") or symbol_upper).upper()
         if resolved:
             token = resolved
 
@@ -8464,6 +7980,106 @@ async def _recover_pending_paper_fills(limit: int = 500) -> int:
     return recovered
 
 
+async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
+    """Prepare paper state for the current IST trading day without deleting history."""
+    today = _ist_date_key()
+    start, end = get_trading_day_window_ist()
+    now = datetime.now(timezone.utc).isoformat()
+
+    stale_strategy_positions = await db.strategy_positions.update_many(
+        {
+            "user_id": user_id,
+            "mode": "paper",
+            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+            "$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}],
+        },
+        {
+            "$set": {
+                "status": "STALE_NEEDS_REVIEW",
+                "stale": True,
+                "stale_reason": "Open paper position carried from a previous trading day.",
+                "stale_marked_at": now,
+                "updated_at": now,
+            },
+            "$unset": {
+                "active_instrument_key": "",
+                "active_strategy_key": "",
+                "active_strategy_instrument_side_key": "",
+            },
+        },
+    )
+    stale_positions = await db.positions.update_many(
+        {
+            "user_id": user_id,
+            "$and": [
+                {"$or": [{"mode": "paper"}, {"broker": "paper"}]},
+                {"$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}]},
+            ],
+            "status": {"$nin": ["CLOSED", "STALE_NEEDS_REVIEW"]},
+        },
+        {"$set": {
+            "status": "STALE_NEEDS_REVIEW",
+            "stale": True,
+            "stale_reason": "Paper broker position carried from a previous trading day.",
+            "stale_marked_at": now,
+            "updated_at": now,
+        }},
+    )
+    archived_orders = await db.orders.update_many(
+        {
+            "user_id": user_id,
+            "mode": "paper",
+            "created_at": {"$lt": start},
+            "session_date": {"$ne": today},
+        },
+        {"$set": {
+            "session_date": today,
+            "orderbook_scope": "history",
+            "history_preserved": True,
+            "updated_at": now,
+        }},
+    )
+    reset_strategies = await db.strategies.update_many(
+        {
+            "user_id": user_id,
+            "$or": [
+                {"today_session_date": {"$ne": today}},
+                {"today_session_date": {"$exists": False}},
+            ],
+        },
+        {"$set": {
+            "today_session_date": today,
+            "signal_count_today": 0,
+            "duplicate_signal_count_today": 0,
+            "skipped_count_today": 0,
+            "order_count_today": 0,
+            "today_pnl": 0.0,
+            "daily_lifecycle_at": now,
+        }},
+    )
+    await db.paper_session_state.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "user_id": user_id,
+            "session_date": today,
+            "today_start": start,
+            "today_end": end,
+            "last_rollover_at": now,
+            "stale_strategy_positions": stale_strategy_positions.modified_count,
+            "stale_positions": stale_positions.modified_count,
+            "history_orders_marked": archived_orders.modified_count,
+            "strategies_reset": reset_strategies.modified_count,
+        }},
+        upsert=True,
+    )
+    return {
+        "stale_strategy_positions": stale_strategy_positions.modified_count,
+        "stale_positions": stale_positions.modified_count,
+        "history_orders_marked": archived_orders.modified_count,
+        "strategies_reset": reset_strategies.modified_count,
+    }
+
+
 async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[int],
                             order_type: str = "MARKET", price: Optional[float] = None,
                             product: Optional[str] = None, source: str = "manual",
@@ -8557,18 +8173,19 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             or target_symbol
         )
         if strategy_id and str(side or "").upper() == "BUY":
+            core_position_side = "SHORT" if str(side or "").upper() == "SELL" else "LONG"
+            side_key = _strategy_side_key(user_id, strategy_id, str(target_instrument_key), core_position_side)
             existing_position = await db.strategy_positions.find_one({
                 "user_id": user_id,
+                "strategy_id": strategy_id,
                 "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
                 "$or": [
-                    {"active_instrument_key": _active_key(user_id, str(target_instrument_key))},
-                    {"strategy_id": strategy_id},
-                    {"instrument_key": str(target_instrument_key)},
-                    {"target_symbol": target_symbol},
+                    {"active_strategy_instrument_side_key": side_key},
+                    {"instrument_key": str(target_instrument_key), "position_side": core_position_side},
                 ],
             })
             if existing_position:
-                reason = f"Core paper entry blocked: active strategy or instrument position already exists for {target_symbol}."
+                reason = f"Core paper entry blocked: same strategy/instrument/side position already exists for {target_symbol}."
                 skip_doc = await _persist_core_paper_skipped_order(
                     user_id=user_id,
                     strategy_id=strategy_id or "manual",
@@ -8578,7 +8195,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     qty=qty or 1,
                     price=price or 0.0,
                     reason=reason,
-                    reason_code="DUPLICATE_POSITION",
+                    reason_code="DUPLICATE_STRATEGY_INSTRUMENT_SIDE",
                     idempotency_key=idem_key,
                     signal_id=signal_id,
                     market_snapshot={
@@ -8765,7 +8382,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             if not early_preflight.ok and early_preflight.reason_code == "MARKET_CLOSED":
                 resolved_product_for_skip = (
                     product
-                    or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
+                    or ("NRML" if instr.exchange in {"NFO", "BFO"} else settings.get("default_product", "MIS"))
                 )
                 if paper:
                     return _clean_order_response(await _persist_paper_skipped_order(
@@ -8822,7 +8439,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if not preflight.ok:
             resolved_product_for_skip = (
                 product
-                or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))
+                or ("NRML" if instr.exchange in {"NFO", "BFO"} else settings.get("default_product", "MIS"))
             )
             if paper:
                 return _clean_order_response(await _persist_paper_skipped_order(
@@ -8875,7 +8492,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 intent.quantity = int(pretrade_risk["quantity"])
                 if resolution.get("lot_size"):
                     resolution["lots"] = max(1, int(intent.quantity) // max(1, int(resolution.get("lot_size") or 1)))
-        resolved_product_candidate = (product or ("NRML" if instr.exchange in {"NFO", "BFO", "MCX", "CDS"} else settings.get("default_product", "MIS"))).upper()
+        resolved_product_candidate = (product or ("NRML" if instr.exchange in {"NFO", "BFO"} else settings.get("default_product", "MIS"))).upper()
         pretrade_cost = None
         if _intent_is_entry(intent.intent) and not paper:
             pretrade_cost = await _upstox_live_cost_gate(
@@ -8919,6 +8536,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 instrument_token=instr.instrument_token,
                 quantity=int(intent.quantity),
                 entry_price=float(fill_price_hint or 0),
+                position_side="SHORT" if intent.intent == "OPEN_SHORT" else "LONG",
                 source=source,
             )
         if strategy_id and _intent_is_exit(intent.intent):
@@ -9506,7 +9124,7 @@ async def _advance_pending_order_from_broker(
                     },
                     {
                         "$set": {"status": canonical, "legacy_status": normalized, "updated_at": now, "broker_status_message": status_message or normalized},
-                        "$unset": {"active_instrument_key": "", "active_strategy_key": ""},
+                        "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""},
                     },
                 )
                 changed_positions += res.modified_count
@@ -9632,7 +9250,7 @@ async def _sync_kite_order_statuses(user_id: str, kite) -> Dict[str, int]:
             await db.strategy_positions.update_many(
                 {"user_id": user_id, "entry_broker_order_id": broker_order_id, "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"$set": {"status": status, "updated_at": now, "broker_status_message": o.get("status_message")},
-                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
             )
             exit_positions = await db.strategy_positions.find(
                 {"user_id": user_id, "exit_broker_order_id": broker_order_id, "status": "EXITING"},
@@ -9711,7 +9329,7 @@ async def _stale_local_open_orders(user_id: str, kite) -> Dict[str, Any]:
             await db.strategy_positions.update_many(
                 {"user_id": user_id, "entry_order_id": row["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"$set": {"status": stale_status, "updated_at": now.isoformat()},
-                 "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+                 "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
             )
     _ORDER_SYNC_CACHE.pop(user_id, None)
     return {"fixed": fixed + missing_fixed, "broker_closed_fixed": fixed, "missing_from_broker_fixed": missing_fixed, "checked": len(rows)}
@@ -9790,7 +9408,7 @@ async def _reconcile_stale_orders_for_user(user_id: str) -> Dict[str, int]:
         await db.strategy_positions.update_many(
             {"user_id": user_id, "entry_order_id": row["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}},
             {"$set": {"status": stale_status, "updated_at": now.isoformat(), "broker_status_message": message},
-             "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+             "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
         )
 
         # Release strategy position locks
@@ -10001,7 +9619,7 @@ async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> D
                 "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
             },
             {"$set": {"status": stale_status, "updated_at": now, "broker_status_message": message},
-             "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+             "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
         )
         await db.strategy_position_locks.delete_many({"user_id": user_id, "strategy_id": row.get("strategy_id")})
     result = {"checked": len(items), "updated": updated, "missing_from_broker_fixed": missing_fixed}
@@ -10009,34 +9627,8 @@ async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> D
     return result
 
 
-async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Dict[str, Any]]:
+async def _live_broker_position_symbols(user_id: str) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
-    if kite:
-        data = kite_helper.safe_positions(kite)
-        for p in (data or {}).get("net") or []:
-            symbol = p.get("tradingsymbol")
-            qty = int(p.get("quantity") or 0)
-            if symbol and qty != 0:
-                exchange = p.get("exchange") or ("NFO" if str(symbol).endswith(("CE", "PE")) else "NSE")
-                out[_instrument_key(exchange, symbol, None)] = p
-                out[f"SYMBOL:{str(symbol).upper()}"] = p
-    gateway = _KOTAK_GATEWAYS.get(user_id)
-    if gateway and gateway.status().get("authenticated"):
-        result = await asyncio.to_thread(gateway.positions)
-        if result.get("ok"):
-            response = result.get("response") or {}
-            kotak_rows = response.get("net") if isinstance(response, dict) else _kotak_position_items(response)
-            for p in kotak_rows or []:
-                symbol = _kotak_first(p, ["trdSym", "trading_symbol", "tradingSymbol", "symbol"])
-                qty = _kotak_first(p, ["netQty", "net_quantity", "quantity", "qty"])
-                try:
-                    qty_i = int(float(qty or 0))
-                except Exception:
-                    qty_i = 0
-                if symbol and qty_i != 0:
-                    exchange = _kotak_first(p, ["exSeg", "exchange_segment", "exchange"]) or "NSE"
-                    out[_instrument_key(str(exchange).upper(), str(symbol).upper(), None)] = p
-                    out[f"SYMBOL:{str(symbol).upper()}"] = p
     upstox_gateway = await get_user_upstox_gateway(user_id)
     if upstox_gateway and upstox_gateway.connected:
         try:
@@ -10058,16 +9650,14 @@ async def _live_broker_position_symbols(user_id: str, kite=None) -> Dict[str, Di
     return out
 
 
-async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[str, int]:
-    gateway = _KOTAK_GATEWAYS.get(user_id)
-    has_kotak = bool(gateway and gateway.status().get("authenticated"))
+async def _sync_strategy_positions_with_broker(user_id: str) -> Dict[str, int]:
     upstox_gateway = await get_user_upstox_gateway(user_id)
     has_upstox = bool(upstox_gateway and upstox_gateway.connected)
-    if not kite and not has_kotak and not has_upstox:
-        return {"checked": 0, "broker_positions": 0, "marked_broker_not_found": 0, "reason": "no_broker_connected"}
+    if not has_upstox:
+        return {"checked": 0, "broker_positions": 0, "marked_broker_not_found": 0, "reason": "upstox_not_connected"}
     if not _check_and_update_sync_throttle(user_id, "positions"):
         return {"checked": 0, "broker_positions": 0, "marked_broker_not_found": 0, "throttled": True}
-    broker_positions = await _live_broker_position_symbols(user_id, kite)
+    broker_positions = await _live_broker_position_symbols(user_id)
     rows = await db.strategy_positions.find({
         "user_id": user_id,
         "mode": "live",
@@ -10104,7 +9694,7 @@ async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[
                                 "status": ord_status,
                                 "cancel_reason": f"Self-healed: entry order {order_id} has terminal status {ord_status}",
                                 "updated_at": datetime.now(timezone.utc).isoformat()
-                            }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}}
+                            }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}}
                         )
                         await _release_strategy_position_locks(row)
                         marked += 1
@@ -10117,7 +9707,7 @@ async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[
                         "status": "REJECTED",
                         "cancel_reason": "Self-healed: stuck in PENDING_BROKER for more than 5 minutes",
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}}
+                    }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}}
                 )
                 await _release_strategy_position_locks(row)
                 marked += 1
@@ -10164,7 +9754,7 @@ async def _sync_strategy_positions_with_broker(user_id: str, kite=None) -> Dict[
                     "status": "BROKER_NOT_FOUND",
                     "broker_sync_note": "Broker has no matching net position; app position marked stale.",
                     "updated_at": now,
-                }, "$unset": {"active_instrument_key": "", "active_strategy_key": ""}},
+                }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
             )
             marked += res.modified_count
     return {"checked": len(rows), "broker_positions": len(broker_positions), "marked_broker_not_found": marked}
@@ -10181,7 +9771,7 @@ def _broker_position_quantity(row: Dict[str, Any]) -> int:
 
 
 async def _assert_broker_has_position_quantity(user_id: str, kite, exchange: str, symbol: str, qty: int) -> None:
-    positions = await _live_broker_position_symbols(user_id, kite)
+    positions = await _live_broker_position_symbols(user_id)
     row = positions.get(_instrument_key(exchange, symbol, None)) or positions.get(f"SYMBOL:{symbol.upper()}")
     broker_qty = _broker_position_quantity(row or {})
     if broker_qty < int(qty or 0):
@@ -10193,31 +9783,16 @@ async def _assert_broker_has_position_quantity(user_id: str, kite, exchange: str
 
 @api.get("/orders")
 async def list_orders(include_stale: bool = False, user=Depends(get_current_user)):
-    """Local order log + live broker orders (merged) so users see EVERY status."""
-    kite, _ = await get_user_kite(user["id"])
-    if kite:
-        await _sync_kite_order_statuses(user["id"], kite)
-        await _stale_local_open_orders(user["id"], kite)
-    await _sync_kotak_order_statuses(user["id"])
+    """Local order log reconciled with Upstox so users see every app-tracked status."""
     await _sync_upstox_order_statuses(user["id"])
-    await _sync_strategy_positions_with_broker(user["id"], kite)
+    await _sync_strategy_positions_with_broker(user["id"])
     order_query: Dict[str, Any] = {"user_id": user["id"]}
     if not include_stale:
         order_query["status"] = {"$nin": list(STALE_ORDER_STATUSES)}
         order_query["visibility"] = {"$ne": "hidden"}
     rows = await db.orders.find(order_query,
                                 {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    # Add live Kite orders not already represented locally.
-    if kite:
-        try:
-            local_broker_ids = {r.get("broker_order_id") for r in rows if r.get("broker_order_id")}
-            live_orders = kite.orders() or []
-            for o in live_orders:
-                if o.get("order_id") not in local_broker_ids:
-                    rows.insert(0, _broker_order_row(o))
-        except Exception as e:
-            logger.warning(f"kite orders fetch failed: {e}")
-    # Sort merged orders newest-first (Kite + local) so order timeline is correct
+    # Sort newest-first so the UI uses one backend source of truth.
     rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return rows
 
@@ -10512,26 +10087,11 @@ async def position_integrity_report(user=Depends(get_current_user)):
 
 @api.get("/portfolio/holdings")
 async def list_holdings(user=Depends(get_current_user)):
-    kite, _ = await get_user_kite(user["id"])
-    if not kite:
-        return {"holdings": [], "source": "none",
-                "message": "Connect Zerodha to view long-term holdings."}
-    data = kite_helper.safe_holdings(kite)
-    if data is None:
-        return {"holdings": [], "source": "error", "message": "Zerodha holdings fetch failed."}
-    out = []
-    for h in data:
-        last = float(h.get("last_price") or 0)
-        avg = float(h.get("average_price") or 0)
-        qty = int(h.get("quantity") or 0)
-        out.append({
-            "symbol": h.get("tradingsymbol"),
-            "qty": qty,
-            "avg_price": round(avg, 2),
-            "ltp": round(last, 2),
-            "pnl": round((last - avg) * qty, 2),
-        })
-    return {"holdings": out, "source": "live"}
+    return {
+        "holdings": [],
+        "source": "upstox",
+        "message": "Holdings are not imported yet; QuantG live state uses Upstox positions and app orders.",
+    }
 
 
 @api.get("/portfolio")
@@ -10739,11 +10299,7 @@ async def orders_ws(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            kite, _ = await get_user_kite(user["id"])
-            if kite:
-                await _sync_kite_order_statuses(user["id"], kite)
-                await _stale_local_open_orders(user["id"], kite)
-            await _sync_kotak_order_statuses(user["id"])
+            await _sync_upstox_order_statuses(user["id"])
             rows = await db.orders.find({
                 "user_id": user["id"],
                 "status": {"$nin": list(STALE_ORDER_STATUSES)},
@@ -10768,10 +10324,11 @@ async def _resolve_option_for_strategy(
     otm_points: int = 0,
     expiry_offset: int = 0,
 ) -> Optional[Dict[str, Any]]:
-    """Resolves an index or commodity option contract dynamically.
-    Works for both Upstox Live and Paper trading (resolves real contract from Upstox if possible).
-    """
+    """Resolves an index option contract dynamically through Upstox."""
     underlying = underlying.upper()
+    if underlying in REMOVED_COMMODITY_UNDERLYINGS:
+        logger.warning("Option resolution blocked for removed MCX underlying=%s strategy=%s", underlying, strategy_row.get("id"))
+        return None
     settings = await get_user_settings(user_id)
     strategy_mode = strategy_row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
     is_paper = strategy_mode == "paper"
@@ -10790,19 +10347,6 @@ async def _resolve_option_for_strategy(
 
     spot = None
     if gateway_connected:
-        if underlying in COMMODITY_UNDERLYINGS:
-            future_contract = await _resolve_upstox_mcx_future_contract(underlying)
-            if future_contract and future_contract.get("instrument_key"):
-                upstox_keys[underlying] = future_contract["instrument_key"]
-                logger.info(
-                    "Resolved MCX spot future for option resolver underlying=%s key=%s symbol=%s",
-                    underlying,
-                    future_contract.get("instrument_key"),
-                    future_contract.get("trading_symbol"),
-                )
-            else:
-                logger.warning("MCX spot future not found in Upstox master underlying=%s", underlying)
-        
         if underlying in upstox_keys:
             try:
                 res = await asyncio.to_thread(upstox_gw.get_market_quote, [upstox_keys[underlying]])
@@ -10848,8 +10392,7 @@ async def _resolve_option_for_strategy(
             24850.40 if underlying == "NIFTY"
             else 54000.00 if underlying == "BANKNIFTY"
             else 81460.20 if underlying == "SENSEX"
-            else 6500.00 if underlying in ("CRUDEOIL", "CRUDEOILM")
-            else 245.00
+            else 0.0
         )
 
     interval = options_helper.STRIKE_INTERVALS.get(underlying, 100)
@@ -10875,129 +10418,91 @@ async def _resolve_option_for_strategy(
     quality_quote: Dict[str, Any] = {}
     pcr_value: Optional[float] = None
 
-    # 1. Try Live Upstox Resolution (Index / Commodity)
+    # 1. Try live Upstox index option resolution.
     if gateway_connected:
-        if underlying in COMMODITY_UNDERLYINGS:
-            mcx_resolver = getattr(app.state, "mcx_contract_resolver", None) or MCXContractResolver(db)
-            app.state.mcx_contract_resolver = mcx_resolver
-            for attempt in range(2):
-                contract = await mcx_resolver.resolve(
-                    underlying=underlying,
-                    spot=float(spot),
-                    option_type=opt_type,
-                    strike_interval=int(interval),
-                    otm_points=int(otm_points or 0),
-                    expiry_offset=int(expiry_offset or 0),
-                    allow_refresh=True,
-                )
-                if contract:
-                    instrument_token = contract.get("instrument_token")
-                    tradingsymbol = contract.get("trading_symbol")
-                    if contract.get("expiry"):
-                        try:
-                            expiry_dt = datetime.strptime(str(contract["expiry"]), "%Y-%m-%d")
-                        except Exception:
-                            pass
-                    lot_size = int(contract.get("lot_size") or lot_size)
-                    logger.info(
-                        "Resolved MCX option via master underlying=%s opt=%s strike=%s expiry=%s token=%s symbol=%s attempt=%s",
-                        underlying, opt_type, strike, contract.get("expiry"), instrument_token, tradingsymbol, attempt + 1,
-                    )
-                    break
-                if attempt == 0:
-                    logger.warning(
-                        "MCX master lookup failed; forcing instrument refresh and retry underlying=%s opt=%s target_strike=%s",
-                        underlying, opt_type, strike,
-                    )
-                    await mcx_resolver.refresh(reason=f"resolve-retry:{underlying}", force=True)
-        else:
-            # Index Option lookup using flexible option chain / search
-            try:
-                spot_key = upstox_keys.get(underlying)
-                if spot_key:
-                    # Query option chain with None/flexible expiry first
-                    chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, None)
-                    if chain and chain.get("status") == "success":
-                        data = chain.get("data", []) or []
-                        chain_loaded = len(data) > 0
-                        for node in data:
-                            node_strike = float(node.get("strike_price") or 0)
-                            if int(node_strike) == int(strike):
-                                chain_match = node
-                                try:
-                                    call_oi = float(((node.get("call_options") or {}).get("market_data") or {}).get("oi") or (node.get("call_options") or {}).get("oi") or 0)
-                                    put_oi = float(((node.get("put_options") or {}).get("market_data") or {}).get("oi") or (node.get("put_options") or {}).get("oi") or 0)
-                                    if call_oi > 0:
-                                        pcr_value = put_oi / call_oi
-                                except Exception:
-                                    pcr_value = None
-                                opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
-                                if opt_node:
-                                    instrument_token = opt_node.get("instrument_key")
-                                    tradingsymbol = opt_node.get("trading_symbol")
-                                    quality_quote = dict(opt_node.get("market_data") or {})
-                                    if node.get("expiry"):
-                                        try:
-                                            expiry_dt = datetime.strptime(str(node["expiry"]), "%Y-%m-%d")
-                                        except Exception:
-                                            pass
-                                    break
-            except Exception as e:
-                logger.warning(f"Upstox option chain lookup failed: {e}")
-
-            # Fallback search candidate loop
-            if not instrument_token:
-                try:
-                    exch = "BSE" if underlying == "SENSEX" else "NSE"
-                    segment_candidates = ("FO", "OPT", "ALL")
-                    expiry_candidates = ("current_week", "next_week", "current_month", None)
-                    query_roots = [underlying]
-                    query_candidates = []
-                    for root in query_roots:
-                        query_candidates.extend([f"{root} {int(strike)}", root])
-                    candidates = []
-                    for query in dict.fromkeys(query_candidates):
-                        for segment in segment_candidates:
-                            for expiry_filter in expiry_candidates:
-                                search = await asyncio.to_thread(
-                                    upstox_gw.search_instruments,
-                                    query,
-                                    exchanges=exch,
-                                    segments=segment,
-                                    instrument_types=opt_type,
-                                    expiry=expiry_filter,
-                                    atm_offset=0,
-                                    records=30,
-                                )
-                                batch = search.get("data") if isinstance(search, dict) else []
-                                if batch:
-                                    candidates.extend(batch)
-                        if candidates:
-                            break
-                    best = None
-                    best_distance = None
-                    for node in candidates or []:
-                        node_opt_type = str(node.get("instrument_type") or node.get("option_type") or "").upper()
-                        if node_opt_type != opt_type:
-                            continue
-                        key = node.get("instrument_key")
-                        if not key:
-                            continue
+        # Index Option lookup using flexible option chain / search
+        try:
+            spot_key = upstox_keys.get(underlying)
+            if spot_key:
+                chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, None)
+                if chain and chain.get("status") == "success":
+                    data = chain.get("data", []) or []
+                    chain_loaded = len(data) > 0
+                    for node in data:
                         node_strike = float(node.get("strike_price") or 0)
-                        distance = abs(node_strike - float(strike))
-                        if best is None or distance < best_distance:
-                            best = node
-                            best_distance = distance
-                    if best:
-                        instrument_token = best.get("instrument_key")
-                        tradingsymbol = best.get("trading_symbol")
-                        if best.get("expiry"):
-                            expiry_dt = datetime.fromisoformat(str(best["expiry"]))
-                        if best.get("lot_size"):
-                            lot_size = int(float(best.get("lot_size")))
-                        logger.info("Resolved Upstox option %s %s strike=%s key=%s symbol=%s", underlying, opt_type, strike, instrument_token, tradingsymbol)
-                except Exception as e:
-                    logger.warning(f"Upstox instrument search failed: {e}")
+                        if int(node_strike) == int(strike):
+                            chain_match = node
+                            try:
+                                call_oi = float(((node.get("call_options") or {}).get("market_data") or {}).get("oi") or (node.get("call_options") or {}).get("oi") or 0)
+                                put_oi = float(((node.get("put_options") or {}).get("market_data") or {}).get("oi") or (node.get("put_options") or {}).get("oi") or 0)
+                                if call_oi > 0:
+                                    pcr_value = put_oi / call_oi
+                            except Exception:
+                                pcr_value = None
+                            opt_node = node.get("call_options" if opt_type == "CE" else "put_options") or {}
+                            if opt_node:
+                                instrument_token = opt_node.get("instrument_key")
+                                tradingsymbol = opt_node.get("trading_symbol")
+                                quality_quote = dict(opt_node.get("market_data") or {})
+                                if node.get("expiry"):
+                                    try:
+                                        expiry_dt = datetime.strptime(str(node["expiry"]), "%Y-%m-%d")
+                                    except Exception:
+                                        pass
+                                break
+        except Exception as e:
+            logger.warning(f"Upstox option chain lookup failed: {e}")
+
+        # Fallback search candidate loop
+        if not instrument_token:
+            try:
+                exch = "BSE" if underlying == "SENSEX" else "NSE"
+                segment_candidates = ("FO", "OPT", "ALL")
+                expiry_candidates = ("current_week", "next_week", "current_month", None)
+                query_candidates = [f"{underlying} {int(strike)}", underlying]
+                candidates = []
+                for query in dict.fromkeys(query_candidates):
+                    for segment in segment_candidates:
+                        for expiry_filter in expiry_candidates:
+                            search = await asyncio.to_thread(
+                                upstox_gw.search_instruments,
+                                query,
+                                exchanges=exch,
+                                segments=segment,
+                                instrument_types=opt_type,
+                                expiry=expiry_filter,
+                                atm_offset=0,
+                                records=30,
+                            )
+                            batch = search.get("data") if isinstance(search, dict) else []
+                            if batch:
+                                candidates.extend(batch)
+                    if candidates:
+                        break
+                best = None
+                best_distance = None
+                for node in candidates or []:
+                    node_opt_type = str(node.get("instrument_type") or node.get("option_type") or "").upper()
+                    if node_opt_type != opt_type:
+                        continue
+                    key = node.get("instrument_key")
+                    if not key:
+                        continue
+                    node_strike = float(node.get("strike_price") or 0)
+                    distance = abs(node_strike - float(strike))
+                    if best is None or distance < best_distance:
+                        best = node
+                        best_distance = distance
+                if best:
+                    instrument_token = best.get("instrument_key")
+                    tradingsymbol = best.get("trading_symbol")
+                    if best.get("expiry"):
+                        expiry_dt = datetime.fromisoformat(str(best["expiry"]))
+                    if best.get("lot_size"):
+                        lot_size = int(float(best.get("lot_size")))
+                    logger.info("Resolved Upstox option %s %s strike=%s key=%s symbol=%s", underlying, opt_type, strike, instrument_token, tradingsymbol)
+            except Exception as e:
+                logger.warning(f"Upstox instrument search failed: {e}")
 
     # 2. Fabricate contract details in Paper Mode if live lookup failed or gateway is offline
     _is_simulated_contract = False
@@ -11013,7 +10518,7 @@ async def _resolve_option_for_strategy(
 
     resolved_contract = {
         "tradingsymbol": tradingsymbol or f"{underlying}{expiry_dt.strftime('%y%m%d')}{strike}{opt_type}",
-        "exchange": "MCX" if underlying in COMMODITY_UNDERLYINGS else ("NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO"),
+        "exchange": "NFO" if underlying in ("NIFTY", "BANKNIFTY") else "BFO",
         "instrument_token": instrument_token,
         "instrument_key": instrument_token,
         "upstox_instrument_token": instrument_token,
@@ -11070,7 +10575,7 @@ async def _resolve_option_for_strategy(
     # Format fields for exact candidate log
     formatted_expiry = expiry_dt.strftime("%d %b %Y").upper()
     exch_label = resolved_contract["exchange"]
-    segment_label = "MCX_FO" if exch_label == "MCX" else "NSE_FO"
+    segment_label = "BSE_FO" if exch_label == "BFO" else "NSE_FO"
 
     # Log EXACT candidate output
     print(f"\n----- GENERATED TRADE CANDIDATE -----\n"
@@ -11095,7 +10600,7 @@ async def _resolve_option_for_strategy(
         else:
             if not instrument_token or "|" not in str(instrument_token):
                 diagnosed_causes.append("Wrong instrument key generation or format (Cause 2 & 6)")
-            if not chain_loaded and underlying not in COMMODITY_UNDERLYINGS:
+            if not chain_loaded and underlying not in REMOVED_COMMODITY_UNDERLYINGS:
                 diagnosed_causes.append("Option chain not loaded or failed (Cause 1)")
             if expiry_dt.date() < datetime.now().date():
                 diagnosed_causes.append("Expiry mismatch / expired contract (Cause 3)")
@@ -11193,11 +10698,9 @@ async def upstox_option_chain(
         "BANKNIFTY": "NSE_INDEX|Nifty Bank",
         "SENSEX": "BSE_INDEX|SENSEX",
     }
-    if underlying in COMMODITY_UNDERLYINGS:
-        future = await _resolve_upstox_mcx_future_contract(underlying)
-        spot_key = (future or {}).get("instrument_key")
-    else:
-        spot_key = spot_keys.get(underlying)
+    if underlying in REMOVED_COMMODITY_UNDERLYINGS:
+        raise HTTPException(status_code=410, detail="MCX commodity option chains have been removed from QuantG.")
+    spot_key = spot_keys.get(underlying)
     if not spot_key:
         raise HTTPException(status_code=400, detail=f"Unsupported option-chain underlying: {underlying}")
     chain = await asyncio.to_thread(gw.get_option_chain, spot_key, expiry_date)
@@ -11317,7 +10820,7 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
                 "last_error": row.get("last_error"),
             },
         })
-    latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])
+    latest_ticks = option_ledger.latest_ticks(["NIFTY", "BANKNIFTY", "SENSEX"])
     session = market_session_snapshot()
     data_source = next((t["data_source"] for t in latest_ticks.values() if t.get("data_source")), None)
     simulated_active = bool(data_source and "simulated" in str(data_source).lower())
@@ -11549,6 +11052,7 @@ async def get_user_settings(user_id: str) -> dict:
     allow_simulated = (user or {}).get("allow_simulated_prices")
     if allow_simulated is None:
         allow_simulated = bool(paper_mode)
+    today_start, today_end = get_trading_day_window_ist()
     return {
         "name": (user or {}).get("name", ""),
         "default_qty": (user or {}).get("default_qty", 1),
@@ -11565,6 +11069,8 @@ async def get_user_settings(user_id: str) -> dict:
         "paper_realism_mode": (user or {}).get("paper_realism_mode", "UPSTOX_LIKE"),
         "paper_block_suspended_instruments": (user or {}).get("paper_block_suspended_instruments", True),
         "paper_uses_upstox_like_charges": (user or {}).get("paper_uses_upstox_like_charges", True),
+        "daily_loss_kill_switch_enabled": bool((user or {}).get("daily_loss_kill_switch_enabled") or (user or {}).get("daily_loss_guard_enabled")),
+        "today_window_ist": {"start": today_start, "end": today_end},
         "live_auto_trading_enabled": False,
         "live_readiness_required": True,
     }
@@ -11573,105 +11079,68 @@ async def get_user_settings(user_id: str) -> dict:
 # ============== Routes: Live Readiness ==============
 @api.get("/live/readiness")
 async def live_readiness(user=Depends(get_current_user)):
-    """Pre-flight checks before flipping to LIVE. Returns each check + an overall ready flag."""
     checks = []
     settings = await get_user_settings(user["id"])
-    data_broker = "upstox"
-    execution_broker = "upstox"
     upstox_status = await get_user_upstox_status(user["id"])
     required_keys_ok = bool(upstox_status.get("keys_saved"))
     checks.append({
         "id": "broker_keys",
         "label": "Upstox credentials saved",
         "ok": required_keys_ok,
+        "hint": "Save Upstox credentials on Broker Keys" if not required_keys_ok else None,
     })
-    checks[-1]["hint"] = "Save Upstox credentials on Broker Keys" if not required_keys_ok else None
     required_sessions_ok = bool(upstox_status.get("connected") and upstox_status.get("token_valid"))
     checks.append({
         "id": "upstox_session",
         "label": "Active Upstox session",
         "ok": required_sessions_ok,
-        "detail": f"data={data_broker}, execution={execution_broker}",
+        "detail": "data=upstox, execution=upstox",
         "hint": "Reconnect Upstox required on Broker Keys" if not required_sessions_ok else None,
     })
-    funds_ok = bool(upstox_status.get("connected"))
-    funds_msg = "Upstox connected; live margin check not exposed yet."
     checks.append({
         "id": "funds",
         "label": "Sufficient funds in account",
-        "ok": funds_ok,
-        "detail": funds_msg,
-        "hint": "Add funds or connect the selected execution broker" if not funds_ok else None,
+        "ok": bool(upstox_status.get("connected")),
+        "detail": "Upstox connected; live margin check runs from the Upstox account.",
+        "hint": "Connect Upstox before LIVE" if not upstox_status.get("connected") else None,
     })
-    settings = await get_user_settings(user["id"])
     checks.append({
         "id": "risk_limits",
         "label": "Risk limits configured",
         "ok": settings.get("max_position_size", 0) > 0 and settings.get("max_daily_loss", 0) > 0,
-        "detail": f"Max position ₹{settings['max_position_size']:.0f} · Daily loss cap ₹{settings['max_daily_loss']:.0f}",
+        "detail": f"Max position Rs {settings['max_position_size']:.0f} / Daily loss cap Rs {settings['max_daily_loss']:.0f}",
         "hint": "Configure on Profile" if (settings.get("max_position_size", 0) <= 0 or settings.get("max_daily_loss", 0) <= 0) else None,
     })
-
-    # Find if user has MCX strategies
-    strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
-    has_mcx = any(
-        s.get("instrument_group") == "MCX"
-        or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
-        or "MCX" in str(s.get("symbol")).upper()
-        for s in strategies
-    )
-
-    # NSE market hours: 9:15 AM – 3:30 PM IST, Mon–Fri
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
     minutes_now = ist_now.hour * 60 + ist_now.minute
     nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
     checks.append({
         "id": "market_hours",
-        "label": "NSE market open",
+        "label": "NSE/BSE market open",
         "ok": nse_open,
         "detail": ist_now.strftime("%a %H:%M IST"),
-        "hint": "Market trades 09:15 – 15:30 IST, Mon–Fri" if not nse_open else None,
+        "hint": "Market trades 09:15 - 15:30 IST, Mon-Fri" if not nse_open else None,
     })
-
-    mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
-    if has_mcx:
-        checks.append({
-            "id": "mcx_market_hours",
-            "label": "MCX market open",
-            "ok": mcx_open,
-            "detail": ist_now.strftime("%a %H:%M IST"),
-            "hint": "MCX trades 09:00 – 23:30 IST, Mon–Fri" if not mcx_open else None,
-        })
-
     gateway_status = upstox_status.get("gateway") or {}
     feed_status = gateway_status.get("feed_status") or upstox_status.get("feed_status") or {}
     selected_tick_ok = bool(upstox_status.get("connected") and (feed_status.get("connected") or gateway_status.get("ws_running")))
-
     checks.append({
         "id": "tick_feed",
-        "label": "Realtime selected tick feed",
+        "label": "Upstox realtime tick feed",
         "ok": selected_tick_ok,
-        "detail": (
-            f"upstox feed {feed_status.get('state') or 'running'}" if data_broker == "upstox" and selected_tick_ok else
-            f"ticker startup skipped: {upstox_status.get('reason') or feed_status.get('last_error') or 'not running'}"
-        ),
-        "hint": (
-            "Reconnect Upstox on Broker Keys, then restart the Upstox feed."
-            if data_broker == "upstox" and not selected_tick_ok
-            else None
-        ),
+        "detail": f"upstox feed {feed_status.get('state') or 'running'}" if selected_tick_ok else f"feed not running: {upstox_status.get('reason') or feed_status.get('last_error') or 'not running'}",
+        "hint": "Reconnect Upstox on Broker Keys, then restart the Upstox feed." if not selected_tick_ok else None,
     })
-
-    market_open = nse_open or mcx_open if has_mcx else nse_open
     paper_mode = bool(settings.get("paper_mode", True))
-    
-    overall_ready = all(c["ok"] for c in checks if c["id"] not in {"market_hours", "mcx_market_hours"})
-        
+    overall_ready = all(c["ok"] for c in checks if c["id"] != "market_hours")
     return {
         "ready": overall_ready,
-        "market_open": market_open,
+        "market_open": nse_open,
         "current_mode": "PAPER" if paper_mode else "LIVE",
+        "broker": "upstox",
+        "supported_segments": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"],
+        "removed_segments": ["MCX_FO"],
         "checks": checks,
     }
 
@@ -11713,8 +11182,6 @@ def _build_recovery_plan(
     *,
     settings: Dict[str, Any],
     market_open: bool,
-    kite_status: Dict[str, Any],
-    kotak_status: Dict[str, Any],
     tick_status: Dict[str, Any],
     errored: List[Dict[str, Any]],
     orders_open: int,
@@ -11722,8 +11189,8 @@ def _build_recovery_plan(
 ) -> Dict[str, Any]:
     issues: List[Dict[str, Any]] = []
     mode_live = not bool(settings.get("paper_mode", True))
-    data_broker = settings.get("data_broker", "upstox")
-    execution_broker = settings.get("execution_broker", "upstox")
+    data_broker = "upstox"
+    execution_broker = "upstox"
 
     def add(severity: str, title: str, detail: str, action: str, endpoint: Optional[str] = None) -> None:
         issues.append({
@@ -11734,59 +11201,33 @@ def _build_recovery_plan(
             "endpoint": endpoint,
         })
 
-    # MCX and NSE timing checks
+    # NSE/BSE timing checks.
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
     minutes_now = ist_now.hour * 60 + ist_now.minute
     nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
-    mcx_open = is_weekday and (9 * 60) <= minutes_now <= (23 * 60 + 30)
-    
-    # Check if they have commodity strategies
-    has_mcx = any(
-        s.get("instrument_group") == "MCX"
-        or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
-        for s in errored
-    ) or (execution_broker == "upstox" and not nse_open and mcx_open)
 
     if mode_live:
-        if has_mcx:
-            if not nse_open and not mcx_open:
-                add("info", "All markets closed", "Live MARKET orders are blocked outside trading hours.", "Wait for market open or use PAPER.")
-            elif not nse_open and mcx_open:
-                add("info", "NSE market is closed", "NSE orders are blocked. MCX commodities are open.", "Trade MCX commodities or use PAPER.")
-        else:
-            if not nse_open:
-                add("info", "Market is closed", "Live MARKET orders are blocked outside NSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
+        if not nse_open:
+            add("info", "Market is closed", "Live MARKET orders are blocked outside NSE/BSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
 
-    if execution_broker == "zerodha" and not kite_status.get("connected"):
-        add("critical", "Execution broker disconnected", kite_status.get("reason") or "Zerodha session is not active.", "Reconnect Zerodha on Broker Keys.")
-    if execution_broker == "kotak_neo" and not kotak_status.get("connected"):
-        add("critical", "Kotak execution disconnected", kotak_status.get("reason") or "Kotak session is not active.", "Connect Kotak on Broker Keys.")
     if execution_broker == "upstox":
         upstox = readiness.get("upstox") or {}
         upstox_session = next((c for c in readiness.get("checks") or [] if c.get("id") == "upstox_session"), {})
         if not upstox_session.get("ok"):
             add("critical", "Reconnect Upstox required", upstox_session.get("detail") or "Upstox access token is missing or expired.", "Open Broker Keys and reconnect Upstox OAuth.", "/broker/upstox/login")
-    if data_broker == "zerodha" and market_open and not tick_status.get("connected"):
-        add("warning", "Realtime Kite ticker is down", tick_status.get("last_error") or "No connected Kite websocket.", "Restart ticker.", "/ops/ticker/restart")
     if data_broker == "upstox":
         feed = tick_status.get("feed_status") or {}
         if not tick_status.get("authenticated"):
             add("critical", "Upstox data session missing", tick_status.get("last_error") or "Ticker startup skipped: no_token.", "Reconnect Upstox on Broker Keys.", "/broker/upstox/login")
         elif not (feed.get("connected") or tick_status.get("ws_running")):
             add("warning", "Upstox ticker is stopped", feed.get("last_error") or tick_status.get("last_error") or "Feed has not started.", "Restart Upstox feed.", "/ops/ticker/restart")
-    if data_broker == "kotak_neo":
-        gateway = kotak_status.get("gateway") or {}
-        if not gateway.get("authenticated"):
-            add("warning", "Kotak data session is not authenticated", kotak_status.get("reason") or "Kotak gateway is not connected.", "Connect Kotak on Broker Keys.")
-        elif not gateway.get("ticks"):
-            add("warning", "Kotak data has no ticks yet", "Subscribe Kotak instrument tokens before using Kotak as data broker.", "Use Kotak subscribe endpoint or keep Zerodha as data broker.")
     if orders_open:
         add("info", "Open orders need reconciliation", f"{orders_open} local order(s) are open/pending.", "Sync broker orders.", "/ops/orders/sync")
     if errored:
         add("warning", "Strategies have blocking errors", f"{len(errored)} strategy error(s) need attention.", "Open Strategy Errors below; clear only after fixing.", "/ops/strategies/clear-errors")
     for check in readiness.get("checks") or []:
-        if check.get("id") in {"market_hours", "mcx_market_hours"}:
+        if check.get("id") == "market_hours":
             continue
         if not check.get("ok"):
             add("critical", check.get("label") or "Readiness failed", check.get("detail") or check.get("hint") or "A required live check failed.", check.get("hint") or "Fix readiness check.")
@@ -11828,27 +11269,7 @@ def _kotak_ticker_status(user_id: str) -> Dict[str, Any]:
 
 
 async def _start_user_ticker(user_id: str) -> Dict[str, Any]:
-    kite, status = await get_user_kite(user_id)
-    if not kite:
-        return {"started": False, "reason": status.get("reason", "not_connected"), "status": status}
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if not tick_manager:
-        return {"started": False, "reason": "tick_manager_missing", "status": status}
-    token_to_symbol: Dict[int, str] = {}
-    for s in SYMBOLS:
-        if s["symbol"] in options_helper.INDEX_SPOT_SYMBOL:
-            continue
-        tok = kite_helper.instrument_token(kite, s["symbol"])
-        if tok:
-            token_to_symbol[tok] = s["symbol"]
-    for opt_sym, (spot_exch, spot_sym) in options_helper.INDEX_SPOT_SYMBOL.items():
-        tok = kite_helper.instrument_token(kite, spot_sym, segment=spot_exch)
-        if tok:
-            token_to_symbol[tok] = opt_sym
-    if not token_to_symbol:
-        return {"started": False, "reason": "no_tokens_resolved", "status": status}
-    tick_manager.start_for_user(user_id, kite, token_to_symbol)
-    return {"started": True, "tokens": len(token_to_symbol), "status": tick_manager.status_info(user_id)}
+    return await _start_user_upstox_ticker(user_id)
 
 
 def _collect_kotak_instruments(node: Any, out: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
@@ -11898,14 +11319,11 @@ async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] =
         logger.warning("Upstox ticker startup skipped: gateway_unavailable user=%s", user_id)
         return {"started": False, "reason": "gateway_unavailable", "message": "Reconnect Upstox required", "status": status}
 
-    target_symbols = [str(s).upper() for s in (symbols or ["NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])]
+    target_symbols = [str(s).upper() for s in (symbols or ["NIFTY", "BANKNIFTY", "SENSEX"])]
     keys: List[str] = []
     failures: List[Dict[str, str]] = []
     for symbol in target_symbols:
         token = _upstox_instrument_token("NSE", symbol) or _upstox_instrument_token("BSE", symbol)
-        if not token and symbol in COMMODITY_UNDERLYINGS:
-            contract = await _resolve_upstox_mcx_future_contract(symbol)
-            token = str(contract.get("instrument_key")) if contract and contract.get("instrument_key") else None
         if token:
             keys.append(token)
         else:
@@ -11933,15 +11351,6 @@ async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] =
 async def ops_diagnostics(user):
     commit, branch, dirty = get_git_info()
     settings = await get_user_settings(user["id"])
-    kite, kite_status = await get_user_kite(user["id"])
-    kotak_status = await get_user_kotak_status(user["id"])
-    order_sync = await _sync_kite_order_statuses(user["id"], kite) if kite else {"checked": 0, "updated": 0}
-    stale_order_repair = await _stale_local_open_orders(user["id"], kite) if kite else {"fixed": 0, "reason": "zerodha_not_connected"}
-    kotak_order_sync = await _sync_kotak_order_statuses(user["id"])
-    strategy_position_sync = await _sync_strategy_positions_with_broker(user["id"], kite)
-    tick_manager = getattr(app.state, "tick_manager", None)
-    zerodha_tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
-    kotak_tick_status = _kotak_ticker_status(user["id"])
     upstox_auth_status = await get_user_upstox_status(user["id"])
     upstox_gw = await get_user_upstox_gateway(user["id"])
     upstox_status = upstox_gw.status() if upstox_gw else {
@@ -11956,38 +11365,31 @@ async def ops_diagnostics(user):
             "authenticated": bool(upstox_auth_status.get("token_valid")),
             "last_error": upstox_status.get("last_error") or (None if upstox_auth_status.get("token_valid") else upstox_auth_status.get("message")),
         })
-    
-    if settings.get("data_broker") == "kotak_neo":
-        tick_status = kotak_tick_status
-    elif settings.get("data_broker") == "upstox":
-        tick_status = upstox_status
-    else:
-        tick_status = zerodha_tick_status
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
     stale_nonblocking_error_ids = [
-        s.get("id")
-        for s in strategies
-        if s.get("last_error") and not _is_strategy_blocking_error(s.get("last_error"))
+        srow.get("id")
+        for srow in strategies
+        if srow.get("last_error") and not _is_strategy_blocking_error(srow.get("last_error"))
     ]
     if stale_nonblocking_error_ids:
         await db.strategies.update_many(
             {"user_id": user["id"], "id": {"$in": stale_nonblocking_error_ids}},
             {"$unset": {"last_error": ""}},
         )
-        for s in strategies:
-            if s.get("id") in stale_nonblocking_error_ids:
-                s.pop("last_error", None)
+        for srow in strategies:
+            if srow.get("id") in stale_nonblocking_error_ids:
+                srow.pop("last_error", None)
     errored = [
         {
-            "id": s.get("id"),
-            "name": s.get("name"),
-            "status": s.get("status"),
-            "last_error": s.get("last_error"),
-            "last_data_source": s.get("last_data_source"),
-            "last_evaluated_at": s.get("last_evaluated_at"),
+            "id": srow.get("id"),
+            "name": srow.get("name"),
+            "status": srow.get("status"),
+            "last_error": srow.get("last_error"),
+            "last_data_source": srow.get("last_data_source"),
+            "last_evaluated_at": srow.get("last_evaluated_at"),
         }
-        for s in strategies
-        if _is_strategy_blocking_error(s.get("last_error"))
+        for srow in strategies
+        if _is_strategy_blocking_error(srow.get("last_error"))
     ][:20]
     orders_open = await db.orders.count_documents({"user_id": user["id"], "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)}})
     positions_count = await db.positions.count_documents({"user_id": user["id"]})
@@ -11995,9 +11397,7 @@ async def ops_diagnostics(user):
     recovery_plan = _build_recovery_plan(
         settings=settings,
         market_open=_is_nse_market_open(),
-        kite_status=kite_status,
-        kotak_status=kotak_status,
-        tick_status=tick_status,
+        tick_status=upstox_status,
         errored=errored,
         orders_open=orders_open,
         readiness=readiness,
@@ -12012,33 +11412,24 @@ async def ops_diagnostics(user):
         "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
         "market_session": market_session_snapshot(),
         "market": {"open": _is_nse_market_open(), "status": "OPEN" if _is_nse_market_open() else "CLOSED"},
-        "broker_preferences": {
-            "data_broker": settings.get("data_broker"),
-            "execution_broker": settings.get("execution_broker"),
-            "fallback_broker": settings.get("fallback_broker"),
-        },
+        "broker_preferences": {"data_broker": "upstox", "execution_broker": "upstox", "fallback_broker": "none"},
         "readiness": readiness,
-        "zerodha": kite_status,
-        "kotak_neo": kotak_status,
         "upstox": upstox_auth_status,
-        "ticker": tick_status,
-        "zerodha_ticker": zerodha_tick_status,
-        "kotak_ticker": kotak_tick_status,
+        "ticker": upstox_status,
+        "brokers": {"upstox": upstox_auth_status},
+        "removed_brokers": ["zerodha", "kite", "kotak_neo"],
+        "removed_segments": ["MCX_FO"],
         "counts": {
             "strategies": len(strategies),
-            "live_strategies": len([s for s in strategies if s.get("status") == "live"]),
-            "paused_strategies": len([s for s in strategies if s.get("status") == "paused"]),
+            "live_strategies": len([srow for srow in strategies if srow.get("status") == "live"]),
+            "paused_strategies": len([srow for srow in strategies if srow.get("status") == "paused"]),
             "errored_strategies": len(errored),
             "open_orders": orders_open,
             "paper_positions": positions_count,
         },
-        "order_sync": {**order_sync, **stale_order_repair, "kotak_checked": kotak_order_sync.get("checked", 0), "kotak_updated": kotak_order_sync.get("updated", 0), "strategy_positions_marked": strategy_position_sync.get("marked_broker_not_found", 0)},
+        "order_sync": {"checked": 0, "updated": 0, "strategy_positions_marked": 0, "source": "upstox_only"},
         "recovery_plan": recovery_plan,
-        "rate_limits": {
-            "kite_history_cache_entries": len(_HISTORY_CACHE),
-            "kite_history_cache_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
-            "kite_historical_min_interval_sec": KITE_HISTORICAL_MIN_INTERVAL_SEC,
-        },
+        "rate_limits": {"history_cache_entries": len(_HISTORY_CACHE)},
         "errored_strategies": errored,
     }
 # ============== Routes: Ops Console - END ==============
@@ -12090,25 +11481,6 @@ async def funds(user=Depends(get_current_user)):
             except Exception as e:
                 logger.warning(f"Upstox margins fetch failed: {e}")
 
-    kite, _ = await get_user_kite(user["id"])
-    if kite:
-        try:
-            margins = kite.margins(segment="equity")
-            avail = margins.get("available", {}) or {}
-            util = margins.get("utilised", {}) or {}
-            return {
-                "source": "live",
-                "available_cash": round(float(avail.get("live_balance") or avail.get("cash") or 0), 2),
-                "opening_balance": round(float(avail.get("opening_balance") or 0), 2),
-                "intraday_payin": round(float(avail.get("intraday_payin") or 0), 2),
-                "used_margin": round(float(util.get("debits") or util.get("exposure") or 0), 2),
-                "m2m_realised": round(float(util.get("m2m_realised") or 0), 2),
-                "m2m_unrealised": round(float(util.get("m2m_unrealised") or 0), 2),
-                "span": round(float(util.get("span") or 0), 2),
-                "delivery_margin": round(float(util.get("delivery") or 0), 2),
-            }
-        except Exception as e:
-            logger.warning(f"funds fetch failed: {e}")
     # Paper / fallback
     positions = await db.positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
     deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
@@ -12127,59 +11499,20 @@ async def funds(user=Depends(get_current_user)):
     }
 
 
-# ============== Routes: Zerodha OAuth ==============
+# ============== Removed legacy broker OAuth routes ==============
 @api.get("/zerodha/login-url")
 async def zerodha_login_url(user=Depends(get_current_user)):
-    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
-    if not keys:
-        raise HTTPException(status_code=400, detail="Save your Zerodha api_key + api_secret on Broker Keys first")
-    api_key = decrypt_secret(keys.get("api_key"))
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Could not decrypt saved Zerodha API key. Save the key again.")
-    return {"url": kite_helper.login_url(api_key), "api_key": _mask_secret(api_key, 6, 0)}
+    raise HTTPException(status_code=410, detail="Zerodha Kite has been removed. QuantG supports Upstox only.")
 
 
 @api.post("/zerodha/exchange")
-async def zerodha_exchange(req: KiteExchangeReq, user=Depends(get_current_user)):
-    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "zerodha"})
-    if not keys:
-        raise HTTPException(status_code=400, detail="Save Zerodha keys first")
-    api_key = decrypt_secret(keys.get("api_key"))
-    api_secret = decrypt_secret(keys.get("api_secret"))
-    if not api_key or not api_secret:
-        raise HTTPException(status_code=400, detail="Could not decrypt saved Zerodha credentials. Save the keys again.")
-    session: Dict[str, Any] = {}
-    try:
-        session = kite_helper.exchange_request_token(
-            api_key, api_secret, req.request_token
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Exchange failed: {e}")
-    expires_at = kite_helper.next_token_expiry_iso()
-    await db.broker_keys.update_one(
-        {"user_id": user["id"], "broker": "zerodha"},
-        {"$set": {
-            "access_token": encrypt_secret(session.get("access_token")),
-            "public_token": encrypt_secret(session.get("public_token")),
-            "kite_user_id": session.get("user_id"),
-            "access_token_obtained_at": datetime.now(timezone.utc).isoformat(),
-            "access_token_expires_at": expires_at,
-        }},
-    )
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if tick_manager:
-        tick_manager.stop_for_user(user["id"])
-    ticker = await _start_user_ticker(user["id"]) if tick_manager else {"started": False, "reason": "tick_manager_missing"}
-    return {"connected": True, "kite_user_id": session.get("user_id"), "expires_at": expires_at, "ticker": ticker}
+async def zerodha_exchange(user=Depends(get_current_user)):
+    raise HTTPException(status_code=410, detail="Zerodha Kite has been removed. QuantG supports Upstox only.")
 
 
 @api.get("/zerodha/status")
 async def zerodha_status(user=Depends(get_current_user)):
-    _, status = await get_user_kite(user["id"])
-    return status
-
-
-
+    return {"connected": False, "removed": True, "reason": "zerodha_removed_upstox_only"}
 
 
 @api.get("/broker/upstox/config")
@@ -12403,17 +11736,9 @@ async def upstox_market_data_start(req: UpstoxSubscribeReq, user=Depends(get_cur
     for instrument_key in req.instruments:
         key = str(instrument_key or "").strip()
         if key.startswith("MCX_FO|"):
-            contract = await _validate_upstox_mcx_instrument_key(key)
-            if not contract:
-                rejected.append({"instrument_key": key, "reason": "not_found_in_upstox_mcx_master"})
-                logger.warning("Rejecting invalid MCX websocket subscription key=%s", key)
-                continue
-            logger.info(
-                "Validated MCX websocket subscription key=%s symbol=%s type=%s",
-                key,
-                contract.get("trading_symbol"),
-                contract.get("instrument_type"),
-            )
+            rejected.append({"instrument_key": key, "reason": "mcx_removed"})
+            logger.warning("Rejecting removed MCX websocket subscription key=%s", key)
+            continue
         valid_instruments.append(key)
     if not valid_instruments:
         raise HTTPException(status_code=400, detail={"message": "No valid Upstox instrument_key supplied.", "rejected": rejected})
@@ -12435,7 +11760,7 @@ async def broker_upstox_status(user=Depends(get_current_user)):
 @api.get("/brokers/status")
 async def brokers_status(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
-    _, kite_status = await get_user_kite(user["id"])
+    upstox = await get_user_upstox_status(user["id"])
     return {
         "version": APP_VERSION,
         "preferences": {
@@ -12443,11 +11768,7 @@ async def brokers_status(user=Depends(get_current_user)):
             "execution_broker": settings.get("execution_broker"),
             "fallback_broker": settings.get("fallback_broker"),
         },
-        "brokers": {
-            "zerodha": kite_status,
-            "kotak_neo": await get_user_kotak_status(user["id"]),
-            "upstox": await get_user_upstox_status(user["id"]),
-        },
+        "brokers": {"upstox": upstox},
     }
 
 
@@ -12519,10 +11840,8 @@ async def diagnostics_health(user=Depends(get_current_user)):
 
 @api.get("/broker/health")
 async def broker_health(user=Depends(get_current_user)):
-    _, kite_status = await get_user_kite(user["id"])
-    tick_manager = getattr(app.state, "tick_manager", None)
-    tick_status = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False}
     settings = await get_user_settings(user["id"])
+    upstox = await get_user_upstox_status(user["id"])
     return {
         "version": APP_VERSION,
         "preferences": {
@@ -12530,73 +11849,24 @@ async def broker_health(user=Depends(get_current_user)):
             "execution_broker": settings.get("execution_broker"),
             "fallback_broker": settings.get("fallback_broker"),
         },
-        "zerodha": {
-            **kite_status,
-            "ticker": tick_status,
-            "healthy": bool(kite_status.get("connected") and tick_status.get("connected") and tick_status.get("last_tick_at")),
-        },
-        "kotak_neo": await get_user_kotak_status(user["id"]),
-        "upstox": await get_user_upstox_status(user["id"]),
-        "cache": {
-            "kite_history_entries": len(_HISTORY_CACHE),
-            "history_ttl_sec": KITE_HISTORY_CACHE_TTL_SEC,
-        },
+        "upstox": upstox,
+        "brokers": {"upstox": upstox},
+        "cache": {"history_entries": len(_HISTORY_CACHE)},
     }
 
 
 @api.get("/market/feed-comparison")
 async def market_feed_comparison(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
-    tick_manager = getattr(app.state, "tick_manager", None)
-    zerodha_tick = tick_manager.status_info(user["id"]) if tick_manager else {"connected": False, "last_error": "tick manager missing"}
-    kotak = await get_user_kotak_status(user["id"])
-    kotak_gateway = kotak.get("gateway") or {}
     upstox = await get_user_upstox_status(user["id"])
-    upstox_gateway = upstox.get("gateway") or {}
-
-    zerodha_last = zerodha_tick.get("last_tick_at")
-    kotak_last = kotak_gateway.get("last_tick_at")
-    upstox_last = upstox_gateway.get("last_tick_at")
-    
-    zerodha_age = _age_ms(zerodha_last)
-    kotak_age = _age_ms(kotak_last)
-    upstox_age = _age_ms(upstox_last)
-    
-    zerodha_healthy = bool(zerodha_tick.get("connected") and zerodha_last and (zerodha_age is None or zerodha_age < 15000))
-    kotak_healthy = bool(kotak_gateway.get("authenticated") and kotak_gateway.get("ticks", 0) > 0 and kotak_last and (kotak_age is None or kotak_age < 15000))
-    upstox_healthy = bool(upstox.get("connected") and upstox_gateway.get("ticks", 0) > 0 and upstox_last and (upstox_age is None or upstox_age < 15000))
-
-    candidates = []
-    if zerodha_healthy:
-        candidates.append(("zerodha", zerodha_age if zerodha_age is not None else 999999))
-    if kotak_healthy:
-        candidates.append(("kotak_neo", kotak_age if kotak_age is not None else 999999))
-    if upstox_healthy:
-        candidates.append(("upstox", upstox_age if upstox_age is not None else 999999))
-
-    recommended = settings.get("data_broker", "upstox")
-    reason = "Keep configured data broker until a healthier live feed is observed."
-    
-    if candidates:
-        candidates.sort(key=lambda x: x[1])
-        best_broker, _ = candidates[0]
-        
-        preferred = settings.get("data_broker", "upstox")
-        pref_healthy = (preferred == "zerodha" and zerodha_healthy) or \
-                       (preferred == "kotak_neo" and kotak_healthy) or \
-                       (preferred == "upstox" and upstox_healthy)
-                       
-        if pref_healthy:
-            recommended = preferred
-            reason = f"Your configured data broker ({recommended}) is healthy and online."
-        else:
-            recommended = best_broker
-            reason = f"{recommended.replace('_', ' ').title()} has fresh ticks and configured broker is stale/unavailable."
-
+    gateway = upstox.get("gateway") or {}
+    last_tick = gateway.get("last_tick_at")
+    age = _age_ms(last_tick)
+    healthy = bool(upstox.get("connected") and (gateway.get("ticks", 0) > 0 or gateway.get("feed_status", {}).get("connected")))
     return {
-        "configured_data_broker": settings.get("data_broker", "upstox"),
-        "recommended_data_broker": recommended,
-        "reason": reason,
+        "configured_data_broker": "upstox",
+        "recommended_data_broker": "upstox",
+        "reason": "QuantG is configured for Upstox-only market data.",
         "price_provider_chain": [
             "Upstox websocket LTP",
             "Upstox REST quote fallback",
@@ -12605,34 +11875,24 @@ async def market_feed_comparison(user=Depends(get_current_user)):
         ],
         "simulated_feed_allowed": bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true",
         "simulated_warning": "Simulated feed active - paper results are not market-valid." if bool(settings.get("allow_simulated_prices")) else None,
-        "zerodha": {
-            "connected": bool(zerodha_tick.get("connected")),
-            "last_tick_at": zerodha_last,
-            "age_ms": zerodha_age,
-            "subscribed_tokens": zerodha_tick.get("subscribed_tokens"),
-            "last_error": zerodha_tick.get("last_error"),
-            "healthy": zerodha_healthy,
-        },
-        "kotak_neo": {
-            "connected": bool(kotak.get("connected")),
-            "authenticated": bool(kotak_gateway.get("authenticated")),
-            "last_tick_at": kotak_last,
-            "age_ms": kotak_age,
-            "subscribed_tokens": kotak_gateway.get("subscribed_tokens", 0),
-            "ticks": kotak_gateway.get("ticks", 0),
-            "order_updates": kotak_gateway.get("order_updates", 0),
-            "last_error": kotak_gateway.get("last_error") or kotak.get("reason"),
-            "healthy": kotak_healthy,
+        "brokers": {
+            "upstox": {
+                "connected": bool(upstox.get("connected")),
+                "authenticated": bool(upstox.get("authenticated")),
+                "last_tick_at": last_tick,
+                "age_ms": age,
+                "subscribed_tokens": gateway.get("subscribed_tokens", 0),
+                "ticks": gateway.get("ticks", 0),
+                "last_error": gateway.get("last_error") or upstox.get("reason"),
+                "healthy": healthy,
+            }
         },
         "upstox": {
             "connected": bool(upstox.get("connected")),
             "authenticated": bool(upstox.get("authenticated")),
-            "last_tick_at": upstox_last,
-            "age_ms": upstox_age,
-            "subscribed_tokens": upstox_gateway.get("subscribed_tokens", 0),
-            "ticks": upstox_gateway.get("ticks", 0),
-            "last_error": upstox_gateway.get("last_error") or upstox.get("reason"),
-            "healthy": upstox_healthy,
+            "last_tick_at": last_tick,
+            "age_ms": age,
+            "healthy": healthy,
         },
     }
 
@@ -12640,12 +11900,9 @@ async def market_feed_comparison(user=Depends(get_current_user)):
 @api.post("/market/auto-data-broker")
 async def market_auto_data_broker(user=Depends(get_current_user)):
     comparison = await market_feed_comparison(user=user)
-    broker = comparison.get("recommended_data_broker")
-    if broker not in {"zerodha", "kotak_neo", "upstox"}:
-        raise HTTPException(status_code=400, detail="No healthy live data broker is available yet.")
-    await db.users.update_one({"id": user["id"]}, {"$set": {"data_broker": broker}})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"data_broker": "upstox", "execution_broker": "upstox", "fallback_broker": "none"}})
     comparison["updated"] = True
-    comparison["configured_data_broker"] = broker
+    comparison["configured_data_broker"] = "upstox"
     return comparison
 
 
@@ -12717,68 +11974,25 @@ async def option_chain(underlying: str, width: int = 5, user=Depends(get_current
     if underlying not in options_helper.SUPPORTED:
         raise HTTPException(status_code=400, detail=f"Underlying must be one of {options_helper.SUPPORTED}")
     width = max(1, min(int(width or 5), 10))
-    kite, _ = await get_user_kite(user["id"])
-    spot = options_helper.get_spot_ltp(kite, underlying) if kite else None
-    if spot is None:
-        spot = {"NIFTY": 24500.0, "BANKNIFTY": 54000.0, "SENSEX": 80500.0}.get(underlying, 100.0)
+    spot = {"NIFTY": 24500.0, "BANKNIFTY": 54000.0, "SENSEX": 80500.0}.get(underlying, 100.0)
+    gw = await get_user_upstox_gateway(user["id"])
+    spot_key = {
+        "NIFTY": "NSE_INDEX|Nifty 50",
+        "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+        "SENSEX": "BSE_INDEX|SENSEX",
+    }.get(underlying)
+    if gw and gw.connected and spot_key:
+        try:
+            quote = await asyncio.to_thread(gw.get_market_quote, [spot_key])
+            spot = float(UpstoxGateway.parse_quote_ltp(quote, spot_key) or spot)
+        except Exception as exc:
+            logger.warning("Upstox spot quote failed for option-chain preview %s: %s", underlying, exc)
     interval = options_helper.STRIKE_INTERVALS[underlying]
     atm = options_helper.round_to_strike(float(spot), interval)
     strikes = [atm + (i * interval) for i in range(-width, width + 1)]
     exchange = options_helper.OPT_EXCHANGE[underlying]
     rows = [{"strike": s, "ce": None, "pe": None} for s in strikes]
-    source = "mock"
-
-    if kite:
-        instruments = options_helper._load_instruments(kite, exchange)
-        today = datetime.now(timezone.utc).date()
-        expiries = sorted({
-            i["expiry"] for i in instruments
-            if i.get("name", "").upper() == underlying and i.get("expiry") and i["expiry"] >= today
-        })
-        expiry = expiries[0] if expiries else None
-        if expiry:
-            by_strike = {s: {"CE": None, "PE": None} for s in strikes}
-            for inst in instruments:
-                strike = int(inst.get("strike") or 0)
-                typ = inst.get("instrument_type")
-                if strike in by_strike and typ in {"CE", "PE"} and inst.get("expiry") == expiry and inst.get("name", "").upper() == underlying:
-                    by_strike[strike][typ] = inst
-            tokens = [
-                f"{exchange}:{inst['tradingsymbol']}"
-                for pair in by_strike.values()
-                for inst in pair.values()
-                if inst
-            ]
-            ltp_map = {}
-            try:
-                for i in range(0, len(tokens), 100):
-                    ltp_map.update(kite.ltp(tokens[i:i + 100]) or {})
-                source = "zerodha"
-            except Exception as e:
-                logger.warning(f"option chain ltp failed: {e}")
-            rows = []
-            for strike in strikes:
-                row = {"strike": strike, "ce": None, "pe": None}
-                for typ, key_name in (("CE", "ce"), ("PE", "pe")):
-                    inst = by_strike[strike].get(typ)
-                    if inst:
-                        key = f"{exchange}:{inst['tradingsymbol']}"
-                        row[key_name] = {
-                            "symbol": inst["tradingsymbol"],
-                            "token": inst.get("instrument_token"),
-                            "ltp": (ltp_map.get(key) or {}).get("last_price"),
-                            "lot_size": inst.get("lot_size"),
-                        }
-                rows.append(row)
-            return {
-                "underlying": underlying,
-                "spot": round(float(spot), 2),
-                "atm": atm,
-                "exchange": exchange,
-                "expiry": expiry.isoformat(),
-                "source": source,
-                "rows": rows,
-            }
+    source = "upstox-preview" if gw and gw.connected else "preview"
 
     return {
         "underlying": underlying,
@@ -12800,18 +12014,11 @@ async def option_chain(underlying: str, width: int = 5, user=Depends(get_current
 
 @api.post("/zerodha/disconnect")
 async def zerodha_disconnect(user=Depends(get_current_user)):
-    await db.broker_keys.update_one(
-        {"user_id": user["id"], "broker": "zerodha"},
-        {"$unset": {"access_token": "", "public_token": "", "access_token_expires_at": "",
-                    "access_token_obtained_at": "", "kite_user_id": ""}},
-    )
-    tick_manager = getattr(app.state, "tick_manager", None)
-    if tick_manager:
-        tick_manager.stop_for_user(user["id"])
-    return {"disconnected": True}
+    await db.broker_keys.delete_many({"user_id": user["id"], "broker": {"$in": ["zerodha", "kite"]}})
+    return {"disconnected": True, "removed": True}
 
 
-# ============== Routes: Profile ==============
+# ============== Routes: Profile ==============# ============== Routes: Profile ==============
 @api.get("/profile/paper-trading-stats")
 async def paper_trading_stats(user=Depends(get_current_user)):
     """Get aggregated P&L from paper trading backtests."""
@@ -12868,28 +12075,12 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
                 status_code=400,
                 detail="Live trading disabled: Reconnect Upstox required before switching to LIVE.",
             )
-        # Find if user has MCX strategies (used to pick which session to check)
-        strategies = await db.strategies.find({"user_id": user["id"]}).to_list(500)
-        has_mcx = any(
-            s.get("instrument_group") == "MCX"
-            or str(s.get("symbol")).upper() in COMMODITY_UNDERLYINGS
-            or "MCX" in str(s.get("symbol")).upper()
-            for s in strategies
-        )
-
-        # Gate: live mode may only be enabled during market hours.
-        # Check MCX session first if the user has MCX strategies; otherwise NSE.
-        if has_mcx:
-            market_open = _is_order_market_open("MCX")
-        else:
-            market_open = _is_nse_market_open()
-        if not market_open:
+        if not _is_nse_market_open():
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Live trading can only be enabled during market hours "
-                    "(NSE 09:15•13:30 IST, MCX 09:00•23:30 IST, Mon–Fri). "
-                    "Switch to LIVE during an active trading session."
+                    "Live trading can only be enabled during NSE/BSE market hours "
+                    "(09:15-15:30 IST, Mon-Fri). Switch to LIVE during an active trading session."
                 ),
             )
 
@@ -12929,8 +12120,17 @@ async def reset_paper_trading(user=Depends(get_current_user)):
     ]
     paper_ledger_strategy_ids = paper_strategy_ids or strategy_ids
     
-    # 2. Clear paper orders
-    orders_res = await db.orders.delete_many({"user_id": user_id, "mode": "paper"})
+    # 2. Clear active/current paper orders while preserving closed history
+    terminal_paper_statuses = list(_closed_order_statuses() | {ORDER_PAPER_FILLED, "PAPER_FILLED", "COMPLETE", "FILLED", "CLOSED"})
+    archived_orders_res = await db.orders.update_many(
+        {"user_id": user_id, "mode": "paper", "status": {"$in": terminal_paper_statuses}},
+        {"$set": {"orderbook_scope": "history", "history_preserved": True, "reset_archived_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    orders_res = await db.orders.delete_many({
+        "user_id": user_id,
+        "mode": "paper",
+        "status": {"$nin": terminal_paper_statuses},
+    })
     
     # 3. Clear paper strategy positions
     sp_res = await db.strategy_positions.delete_many({"user_id": user_id, "mode": "paper"})
@@ -12969,12 +12169,21 @@ async def reset_paper_trading(user=Depends(get_current_user)):
     })
     skipped_res = await db.skipped_signals.delete_many({"user_id": user_id})
     
-    # 7. Clear paper trading backtest/history stats
-    history_res = await db.paper_trading_history.delete_many({"user_id": user_id})
+    # 7. Preserve paper trading backtest/history stats as closed history
+    history_res = await db.paper_trading_history.update_many(
+        {"user_id": user_id},
+        {"$set": {"history_preserved": True, "reset_archived_at": datetime.now(timezone.utc).isoformat()}},
+    )
     
-    # 8. Clear closed paper trades
-    trades_res = await db.trades.delete_many({"user_id": user_id, "mode": "paper"})
-    fills_res = await db.trade_fills.delete_many({"user_id": user_id, "mode": "paper"})
+    # 8. Preserve closed paper trades/fills for reporting history
+    trades_res = await db.trades.update_many(
+        {"user_id": user_id, "mode": "paper"},
+        {"$set": {"history_preserved": True, "reset_archived_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    fills_res = await db.trade_fills.update_many(
+        {"user_id": user_id, "mode": "paper"},
+        {"$set": {"history_preserved": True, "reset_archived_at": datetime.now(timezone.utc).isoformat()}},
+    )
     
     # 9. Clean up options-ledger collections for user's strategies
     open_opt_res = await db.option_open_positions.delete_many({"strategy_id": {"$in": paper_ledger_strategy_ids}})
@@ -13001,14 +12210,15 @@ async def reset_paper_trading(user=Depends(get_current_user)):
         "paper_wallet": {"balance": wallet_doc["balance"], "currency": "INR"},
         "purged": {
             "orders": orders_res.deleted_count,
+            "orders_archived": archived_orders_res.modified_count,
             "strategy_positions": sp_res.deleted_count,
             "broker_positions": pos_res.deleted_count,
             "position_locks": locks_res.deleted_count,
             "signals": sig_res.deleted_count,
             "skipped_signals": skipped_res.deleted_count,
-            "stats_history": history_res.deleted_count,
-            "closed_trades": trades_res.deleted_count,
-            "trade_fills": fills_res.deleted_count,
+            "stats_history": history_res.modified_count,
+            "closed_trades": trades_res.modified_count,
+            "trade_fills": fills_res.modified_count,
             "option_open_positions": open_opt_res.deleted_count,
             "option_daily_pnl": opt_pnl_res.deleted_count,
             "option_trade_journal": opt_journal_res.deleted_count,
@@ -13113,22 +12323,18 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
             broker_symbols_by_user: Dict[str, Dict[str, Dict[str, Any]]] = {}
             
-            recorded_symbols = {"NIFTY": False, "SENSEX": False, "CRUDEOIL": False, "CRUDEOILM": False, "NATURALGAS": False}
+            recorded_symbols = {"NIFTY": False, "SENSEX": False}
 
             for user_row in users:
                 user_id = user_row["id"]
                 
-                # Check Upstox live spot/future prices first if connected.
+                # Check Upstox live index prices first if connected.
                 upstox_gw = await get_user_upstox_gateway(user_id)
                 if upstox_gw and upstox_gw.connected:
                     upstox_keys = {
                         "NIFTY": "NSE_INDEX|Nifty 50",
                         "SENSEX": "BSE_INDEX|SENSEX"
                     }
-                    for comm_symbol in ("CRUDEOIL", "CRUDEOILM", "NATURALGAS"):
-                        contract = await _resolve_upstox_mcx_future_contract(comm_symbol)
-                        if contract and contract.get("instrument_key"):
-                            upstox_keys[comm_symbol] = contract["instrument_key"]
                     try:
                         quotes = await asyncio.to_thread(upstox_gw.get_market_quote, list(upstox_keys.values()))
                         data_node = quotes.get("data", {}) or {}
@@ -13142,27 +12348,7 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                     except Exception as e:
                         logger.warning(f"Upstox spot/future quote failed in monitor loop: {e}")
 
-                settings = await get_user_settings(user_id)
-                if settings.get("data_broker") == "upstox":
-                    continue
-                kite, _ = await get_user_kite(user_id)
-                if not kite:
-                    continue
-                broker_data = kite_helper.safe_positions(kite)
-                net_positions = (broker_data or {}).get("net") or []
-                broker_symbols_by_user[user_id] = {
-                    p.get("tradingsymbol"): p for p in net_positions if p.get("tradingsymbol") and int(p.get("quantity") or 0) != 0
-                }
-                for idx_symbol in ("NIFTY", "SENSEX"):
-                    exch, kite_symbol = options_helper.INDEX_SPOT_SYMBOL[idx_symbol]
-                    key = f"{exch}:{kite_symbol}"
-                    ltp_resp = kite_helper.safe_ltp(kite, [key]) or {}
-                    node = ltp_resp.get(key) or {}
-                    if node.get("last_price"):
-                        option_ledger.record_market_tick(idx_symbol, float(node["last_price"]), "zerodha")
-                        recorded_symbols[idx_symbol] = True
-
-            # Simulated random walk fallback so index/commodity telemetry is never stuck on "Waiting..."
+            # Simulated random walk fallback so index telemetry is never stuck on "Waiting..." in paper.
             import random
             if not recorded_symbols["NIFTY"]:
                 last_nifty = option_ledger.latest_ticks(["NIFTY"]).get("NIFTY")
@@ -13174,16 +12360,6 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                 last_price = float(last_sensex["ltp"]) if last_sensex else 81460.20
                 new_price = round(last_price + random.uniform(-8.0, 8.0), 2)
                 option_ledger.record_market_tick("SENSEX", new_price, "simulated")
-                
-            for comm_symbol, base_price in [("CRUDEOIL", 6550.0), ("CRUDEOILM", 6550.0), ("NATURALGAS", 215.0)]:
-                if recorded_symbols.get(comm_symbol):
-                    continue
-                last_comm = option_ledger.latest_ticks([comm_symbol]).get(comm_symbol)
-                last_price = float(last_comm["ltp"]) if last_comm else base_price
-                step_range = 1.0 if comm_symbol in {"CRUDEOIL", "CRUDEOILM"} else 0.1
-                new_price = round(last_price + random.uniform(-step_range, step_range), 2)
-                option_ledger.record_market_tick(comm_symbol, new_price, "simulated")
-
             now_ist = datetime.now(timezone.utc) + IST_OFFSET
             squareoff_due = now_ist.weekday() < 5 and (now_ist.hour, now_ist.minute) >= (15, 15)
             for pos in positions:
@@ -13449,9 +12625,6 @@ async def startup():
     execution_state_manager.configure(
         db=db,
         get_user_settings=get_user_settings,
-        get_user_kite=get_user_kite,
-        sync_kite_orders=_sync_kite_order_statuses,
-        sync_kotak_orders=_sync_kotak_order_statuses,
         sync_upstox_orders=_sync_upstox_order_statuses,
         sync_strategy_positions=_sync_strategy_positions_with_broker,
         fetch_positions=_fetch_broker_positions_for_user,
@@ -13493,8 +12666,7 @@ async def startup():
         ("orders", [("user_id", 1), ("strategy_id", 1), ("created_at", -1)], {}),
         ("orders", "idempotency_key", {"unique": True, "sparse": True}),
         ("strategy_positions", [("user_id", 1), ("strategy_id", 1), ("status", 1)], {}),
-        ("strategy_positions", "active_instrument_key", {"unique": True, "sparse": True}),
-        ("strategy_positions", "active_strategy_key", {"unique": True, "sparse": True}),
+        ("strategy_positions", "active_strategy_instrument_side_key", {"unique": True, "sparse": True}),
         ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
         ("signals", "id", {"unique": True}),
         ("signals", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
@@ -13522,12 +12694,6 @@ async def startup():
         ("risk_state", "_id", {}),
         ("broker_sync_state", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("system_config", "_id", {}),
-        ("upstox_mcx_option_contracts", "cache_key", {"unique": True}),
-        ("upstox_mcx_option_contracts", [("underlying", 1), ("option_type", 1), ("expiry", 1), ("strike", 1)], {}),
-        ("upstox_mcx_option_contracts", "instrument_key", {}),
-        ("upstox_mcx_future_contracts", "cache_key", {"unique": True}),
-        ("upstox_mcx_future_contracts", [("underlying", 1), ("expiry", 1)], {}),
-        ("upstox_mcx_future_contracts", "instrument_key", {}),
         ("upstox_instrument_cache_meta", "_id", {}),
         ("upstox_instruments", "instrument_key", {"unique": True}),
         ("upstox_instruments", [("trading_symbol", 1), ("segment", 1), ("instrument_type", 1)], {}),
@@ -13540,6 +12706,13 @@ async def startup():
             await db[coll].create_index(key, **opts)
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
+
+    for old_index in ("active_instrument_key_1", "active_strategy_key_1"):
+        try:
+            await db.strategy_positions.drop_index(old_index)
+            logger.warning("Dropped legacy strategy_positions index %s; duplicate scope is strategy+instrument+side now.", old_index)
+        except Exception as e:
+            logger.info("legacy strategy_positions index %s not dropped or absent: %s", old_index, e)
 
     # Create partial unique index for live broker order tracking
     try:
@@ -13584,6 +12757,12 @@ async def startup():
                 synced_modes = await _sync_strategy_modes_to_profile(user_id, True)
                 if synced_modes:
                     logger.warning("Startup synced %s strategy mode(s) to PAPER for user %s", synced_modes, user_id)
+                try:
+                    lifecycle = await _daily_paper_lifecycle_for_user(user_id)
+                    if any(lifecycle.values()):
+                        logger.warning("Paper daily lifecycle prepared for user %s: %s", user_id, lifecycle)
+                except Exception as lifecycle_err:
+                    logger.warning("Paper daily lifecycle failed for user %s: %s", user_id, lifecycle_err)
 
             # Auditing/Migrating user account settings to match target config
             try:
@@ -13596,7 +12775,7 @@ async def startup():
                     }}
                 )
                 
-                # Check strategies for MCX live downgrades or missing fields
+                # Normalize strategies and retire removed MCX commodity rows.
                 user_strats = await db.strategies.find({"user_id": user_id}).to_list(1000)
                 for s in user_strats:
                     s_updates = {}
@@ -13607,11 +12786,12 @@ async def startup():
                     if not s.get("strategy_type"):
                         s_updates["strategy_type"] = _strategy_type(s)
                     
-                    # Force MCX live strategy to paper
-                    if _strategy_instrument_group(s) == "MCX" and s.get("mode") == "live":
+                    if _strategy_instrument_group(s) == "MCX":
+                        s_updates["status"] = "archived"
                         s_updates["mode"] = "paper"
-                        s_updates["last_filter_reason"] = "MCX live strategies downgraded to paper-only automatically."
-                        logger.warning("MCX Live strategy %s auto-downgraded to paper-only", s.get("id"))
+                        s_updates["instrument_group"] = "REMOVED"
+                        s_updates["last_filter_reason"] = "MCX commodity strategies were removed; QuantG is Upstox-only for NSE/BSE/NFO/BFO."
+                        logger.warning("Archived removed MCX strategy %s during startup cleanup", s.get("id"))
                     
                     if s_updates:
                         await db.strategies.update_one({"id": s["id"]}, {"$set": s_updates})
@@ -13639,9 +12819,8 @@ async def startup():
     except Exception as e:
         logger.warning(f"default strategy seeding/reconciliation skipped: {e}")
 
-    # Background strategy runner — uses REAL Kite candles when user is connected,
-    # falls back to MOCK 5-min intraday candles only when no broker session.
-    # Mock data uses unique 5-min timestamps so signal-dedup-by-date works correctly.
+    # Background strategy runner uses Upstox candles when available and paper-safe
+    # mock data only for paper-mode history fallback.
     async def _price_history(user_id: str, symbol: str, days: int = 60, strategy: Optional[dict] = None):
         settings = await get_user_settings(user_id)
         strategy_mode = (strategy or {}).get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
@@ -13655,8 +12834,7 @@ async def startup():
             strategy=strategy,
         ) | {"paper_mode": allow_mock}
 
-    # Resolver for index option contracts — runner uses this when a strategy
-    # has visual_config.options.enabled. Requires a live Kite session.
+    # Resolver for index option contracts used when visual_config.options.enabled.
     async def _resolve_option(user_id: str, underlying: str, signal_action: str,
                               strike_mode: str, otm_points: int = 0,
                               expiry_offset: int = 0, strategy: Optional[dict] = None):
@@ -13666,12 +12844,20 @@ async def startup():
         underlying = str(underlying or "NIFTY").upper()
         strike_mode_u = str(strike_mode or "ATM_BUY").upper()
         action_u = str(signal_action or "BUY").upper()
-        is_mcx = underlying in COMMODITY_UNDERLYINGS
+        if underlying in REMOVED_COMMODITY_UNDERLYINGS:
+            diagnostics = {
+                "resolver_stage": "removed_underlying",
+                "resolver_reason": "mcx_removed",
+                "instrument_key": None,
+                "quote_source": None,
+            }
+            _resolve_option.last_diagnostics = diagnostics
+            return None
         option_side = "CE" if action_u == "BUY" else "PE"
         if "SELL" in strike_mode_u:
             option_side = "PE" if action_u == "BUY" else "CE"
         strike_rule = "OTM1" if int(otm_points or 0) > 0 else "ATM"
-        instrument_type = "MCX_OPTION" if is_mcx else "INDEX_OPTION"
+        instrument_type = "INDEX_OPTION"
         diagnostics: Dict[str, Any] = {
             "resolver_stage": "start",
             "resolver_reason": "starting_upstox_unified_resolver",
@@ -13689,24 +12875,6 @@ async def startup():
 
         upstox_gw = await get_user_upstox_gateway(user_id)
         spot_hint = None
-        if is_mcx:
-            future = await _resolve_upstox_mcx_future_contract(underlying)
-            if future and future.get("instrument_key") and upstox_gw and upstox_gw.connected:
-                try:
-                    q = await asyncio.to_thread(upstox_gw.get_market_quote, [future["instrument_key"]])
-                    spot_hint = UpstoxGateway.parse_quote_ltp(q, future["instrument_key"])
-                    diagnostics.update({
-                        "resolver_stage": "mcx_future_quote",
-                        "resolver_reason": "spot_from_upstox_mcx_future",
-                        "instrument_key": future.get("instrument_key"),
-                        "quote_source": "UPSTOX_LIVE",
-                    })
-                except Exception as exc:
-                    diagnostics.update({
-                        "resolver_stage": "mcx_future_quote",
-                        "resolver_reason": f"upstox_future_quote_failed:{exc}",
-                        "instrument_key": future.get("instrument_key"),
-                    })
 
         resolver = InstrumentResolver(db, upstox_gateway=upstox_gw)
         instrument = await resolver.resolve_instrument_with_source(
@@ -13852,17 +13020,7 @@ async def startup():
         return contract_payload
 
     app.state.tick_manager = RealtimeTickManager()
-    app.state.kotak_gateways = _KOTAK_GATEWAYS
     app.state.upstox_gateways = _UPSTOX_GATEWAYS
-    app.state.mcx_contract_resolver = MCXContractResolver(db)
-    try:
-        await app.state.mcx_contract_resolver.ensure_cache(reason="startup")
-    except Exception as e:
-        logger.warning(f"MCX contract cache startup refresh skipped: {e}")
-    app.state.mcx_refresh_stop = asyncio.Event()
-    app.state.mcx_refresh_task = asyncio.create_task(
-        mcx_instrument_refresh_loop(db, app.state.mcx_refresh_stop)
-    )
     app.state.runner_stop = asyncio.Event()
     app.state.runner_task = asyncio.create_task(
         strategy_runner.runner_loop(db, _price_history, _place_order_core,
@@ -13929,12 +13087,6 @@ async def shutdown():
     try:
         for stream in getattr(app.state, "upstox_portfolio_streams", {}).values():
             stream.stop()
-    except Exception:
-        pass
-    try:
-        app.state.mcx_refresh_stop.set()
-        if app.state.mcx_refresh_task:
-            await asyncio.wait_for(app.state.mcx_refresh_task, timeout=3.0)
     except Exception:
         pass
     client.close()
@@ -14006,17 +13158,19 @@ async def trading_ready_check(user=Depends(get_current_user)):
             bnk_detail = str(exc)[:120]
     checks["banknifty_candles"] = {"ok": bnk_ok, "detail": bnk_detail, "critical": True}
 
-    # 6. MCX instrument master seeded
-    try:
-        mcx_count = await db.upstox_mcx_future_contracts.count_documents({})
-        mcx_ok = mcx_count > 0
-        checks["mcx_instrument_master"] = {
-            "ok": mcx_ok,
-            "detail": f"{mcx_count} MCX futures cached",
-            "critical": False,
-        }
-    except Exception as exc:
-        checks["mcx_instrument_master"] = {"ok": False, "detail": str(exc)[:120], "critical": False}
+    # 6. SENSEX historical candles
+    sensex_ok = False
+    sensex_detail = "not tested"
+    if gw_connected:
+        try:
+            candles = await asyncio.to_thread(
+                gw.get_historical_candles, "BSE_INDEX|SENSEX", "5minute", 3
+            )
+            sensex_ok = bool(candles and len(candles) >= 2)
+            sensex_detail = f"{len(candles or [])} bars" if sensex_ok else "returned empty"
+        except Exception as exc:
+            sensex_detail = str(exc)[:120]
+    checks["sensex_candles"] = {"ok": sensex_ok, "detail": sensex_detail, "critical": False}
 
     # 7. Latest candle freshness for NIFTY (only during market hours)
     market_open = _is_order_market_open("NSE")

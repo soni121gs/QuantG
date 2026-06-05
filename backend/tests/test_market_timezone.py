@@ -1,7 +1,6 @@
 """
 tests/test_market_timezone.py
-Tests timezone correctness, Indian Standard Time (IST) market sessions,
-and MCX/NSE gating boundaries.
+Tests timezone correctness and Indian Standard Time (IST) market sessions.
 """
 from __future__ import annotations
 
@@ -48,19 +47,18 @@ class TestMarketTimezoneCorrectness(unittest.TestCase):
         # Sunday, June 7, 2026. 12:00 IST (06:30 UTC).
         now_utc = datetime(2026, 6, 7, 6, 30, 0, tzinfo=timezone.utc)
         self.assertFalse(MarketSessionService.is_segment_open(DomainType.NSE_FO, now_utc))
-        self.assertFalse(MarketSessionService.is_segment_open(DomainType.MCX_FO, now_utc))
+        self.assertFalse(MarketSessionService.is_segment_open(DomainType.BSE_FO, now_utc))
 
     def test_utc_ist_conversion_safety(self):
         # Verify that a midnight UTC time (which converts to 05:30 IST) is closed for NSE.
         midnight_utc = datetime(2026, 6, 8, 0, 0, 0, tzinfo=timezone.utc)
         self.assertFalse(MarketSessionService.is_segment_open(DomainType.NSE_FO, midnight_utc))
 
-    def test_mcx_different_session_window(self):
-        # MCX open at 09:00 IST (03:30 UTC) and close at 23:30 IST (18:00 UTC).
-        # At 20:00 IST on Monday (14:30 UTC): NSE should be closed, but MCX should be open.
+    def test_bse_uses_index_session_window(self):
+        # At 20:00 IST on Monday (14:30 UTC): NSE and BSE F&O should both be closed.
         now_utc = datetime(2026, 6, 8, 14, 30, 0, tzinfo=timezone.utc)
         self.assertFalse(MarketSessionService.is_segment_open(DomainType.NSE_FO, now_utc))
-        self.assertTrue(MarketSessionService.is_segment_open(DomainType.MCX_FO, now_utc))
+        self.assertFalse(MarketSessionService.is_segment_open(DomainType.BSE_FO, now_utc))
 
 
 if __name__ == "__main__":

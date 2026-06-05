@@ -54,8 +54,6 @@ class BacktestEngine:
             lot_size = 30
         elif underlying.upper() == "SENSEX":
             lot_size = 20
-        elif underlying.upper() == "CRUDEOILM":
-            lot_size = 10
             
         qty = lot_size * int(opt_cfg.get("lots") or 1)
 

@@ -17,17 +17,17 @@ async def test_diagnostics_health_endpoint():
     
     # 1. Setup mock strategies list
     mock_db.strategies.find.return_value.to_list = AsyncMock(return_value=[
-        {"id": "strat_1", "name": "Strategy 1", "status": "live", "mode": "live", "symbol": "CRUDEOIL", "broker": "upstox"}
+        {"id": "strat_1", "name": "Strategy 1", "status": "live", "mode": "live", "symbol": "SENSEX", "broker": "upstox"}
     ])
     
     # 2. Setup mock position locks
     mock_db.strategy_position_locks.find.return_value.to_list = AsyncMock(return_value=[
-        {"strategy_id": "strat_1", "trading_symbol": "CRUDEOIL", "instrument_key": "MCX_FO|12345", "created_at": "2026-05-27T18:00:00Z", "expires_at": "2026-05-27T18:30:00Z"}
+        {"strategy_id": "strat_1", "trading_symbol": "SENSEX", "instrument_key": "BSE_FO|12345", "created_at": "2026-05-27T18:00:00Z", "expires_at": "2026-05-27T18:30:00Z"}
     ])
     
     # 3. Setup mock rejected/cancelled orders list
     mock_db.orders.find.return_value.sort.return_value.limit.return_value.to_list = AsyncMock(return_value=[
-        {"id": "order_1", "symbol": "CRUDEOIL", "side": "BUY", "qty": 1, "status": "REJECTED", "status_message": "Insufficient funds", "created_at": "2026-05-27T18:10:00Z"}
+        {"id": "order_1", "symbol": "SENSEX", "side": "BUY", "qty": 1, "status": "REJECTED", "status_message": "Insufficient funds", "created_at": "2026-05-27T18:10:00Z"}
     ])
     
     # 4. Setup mock Upstox gateway status

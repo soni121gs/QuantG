@@ -57,7 +57,7 @@ def test_calculate_protection_for_position_compliant():
     assert prot_none["protection_status"] == "UNPROTECTED"
 
 
-def test_is_order_market_open_nse_mcx():
+def test_is_order_market_open_upstox_segments_only():
     """Verify that _is_order_market_open checks standard weekdays and hours correctly."""
     from datetime import datetime, timezone
 
@@ -73,13 +73,10 @@ def test_is_order_market_open_nse_mcx():
     now_nse_weekend = datetime(2026, 6, 7, 6, 30, tzinfo=timezone.utc)
     assert _is_order_market_open("NSE", now_nse_weekend) is False
 
-    # 4. MCX Weekday during commodity hours (Wednesday 8:00 PM IST / 2:30 PM UTC)
-    now_mcx_open = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
-    assert _is_order_market_open("MCX", now_mcx_open) is True
-
-    # 5. MCX Weekend (Sunday 8:00 PM IST / 2:30 PM UTC)
-    now_mcx_weekend = datetime(2026, 6, 7, 14, 30, tzinfo=timezone.utc)
-    assert _is_order_market_open("MCX", now_mcx_weekend) is False
+    # 4. Removed segments are always closed.
+    now_removed = datetime(2026, 6, 3, 14, 30, tzinfo=timezone.utc)
+    assert _is_order_market_open("MCX", now_removed) is False
+    assert _is_order_market_open("CDS", now_removed) is False
 
 
 def test_paper_mode_session_enforcement_logic():

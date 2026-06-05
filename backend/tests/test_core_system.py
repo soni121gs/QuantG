@@ -15,28 +15,27 @@ from core.live_safety_firewall import LiveSafetyFirewall
 from core.order_manager import OrderManager
 
 def test_market_domain_isolation():
-    """Asserts that NIFTY options and CRUDEOILM futures resolve to their isolated domains correctly."""
+    """Asserts that only supported Upstox index domains resolve."""
     nifty_dom = resolve_domain_by_underlying("NIFTY")
     assert nifty_dom.name == DomainType.NSE_FO
     assert nifty_dom.exchange == "NFO"
     assert nifty_dom.get_lot_size("NIFTY") == 65
-    
-    crude_dom = resolve_domain_by_underlying("CRUDEOILM")
-    assert crude_dom.name == DomainType.MCX_FO
-    assert crude_dom.exchange == "MCX"
-    assert crude_dom.get_lot_size("CRUDEOILM") == 10
+
+    sensex_dom = resolve_domain_by_underlying("SENSEX")
+    assert sensex_dom.name == DomainType.BSE_FO
+    assert sensex_dom.exchange == "BFO"
+    assert sensex_dom.get_lot_size("SENSEX") == 20
 
 def test_market_clock_schedules():
-    """Validates that NSE F&O schedules do not bleed or affect MCX calendars."""
+    """Validates configured Upstox index schedules."""
     # 20:00 IST (14:30 UTC) - Weekday
     utc_time = datetime(2026, 6, 1, 14, 30, tzinfo=timezone.utc)
     
     nse_status = get_segment_status(DomainType.NSE_FO, now_utc=utc_time)
-    mcx_status = get_segment_status(DomainType.MCX_FO, now_utc=utc_time)
+    bse_status = get_segment_status(DomainType.BSE_FO, now_utc=utc_time)
     
-    # At 20:00 IST, NSE options are closed, but MCX is open!
     assert nse_status["open"] is False
-    assert mcx_status["open"] is True
+    assert bse_status["open"] is False
 
 @pytest.mark.asyncio
 async def test_price_service_live_blocks_simulation():

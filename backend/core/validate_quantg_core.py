@@ -56,7 +56,7 @@ def main():
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     from core.market_clock import get_segment_status, DomainType
     
-    for dom in (DomainType.NSE_FO, DomainType.BSE_FO, DomainType.MCX_FO):
+    for dom in (DomainType.NSE_FO, DomainType.BSE_FO):
         status = get_segment_status(dom)
         print(f" {dom.value}: Status = {status['status']} | Open = {status['open']} | Detail = {status['reason']}")
 

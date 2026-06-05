@@ -1,11 +1,5 @@
-"""QuantG Market Session Service.
+"""QuantG Market Session Service for Upstox NSE/BSE segments."""
 
-Segment-aware market session checks for NSE, BSE, and MCX.
-Each domain has its own session window, allowing MCX to trade when NSE is closed.
-"""
-
-import os
-from enum import Enum
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import logging
@@ -17,28 +11,17 @@ logger = logging.getLogger("quantg.market_session_service")
 IST_OFFSET = timedelta(hours=5, minutes=30)
 NSE_OPEN_MINUTE = 9 * 60 + 15  # 09:15 IST
 NSE_CLOSE_MINUTE = 15 * 60 + 30  # 15:30 IST
-MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))  # 09:00 IST
-MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))  # 23:30 IST
 
 SEGMENT_WINDOWS = {
     DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
     DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
-    DomainType.MCX_FO: (MCX_OPEN_MINUTE, MCX_CLOSE_MINUTE, "MCX commodity"),
 }
 
 
 class MarketSessionService:
     """Segment-aware market session checks.
     
-    Each domain (NSE_FO, BSE_FO, MCX_FO) has its own session window.
-    This allows MCX to run even when NSE is closed.
-    
-    Example:
-        # Check if MCX can trade now
-        is_mcx_open = MarketSessionService.is_segment_open(DomainType.MCX_FO)
-        
-        # Get status for NSE
-        nse_status = MarketSessionService.get_segment_status(DomainType.NSE_FO)
+    Each supported Upstox F&O domain has its own session window.
     """
     
     @staticmethod
@@ -59,7 +42,7 @@ class MarketSessionService:
         """Check if a specific market segment is open.
         
         Args:
-            domain: DomainType enum (NSE_FO, MCX_FO, BSE_FO), MarketDomain object, or string representation.
+            domain: DomainType enum (NSE_FO, BSE_FO), MarketDomain object, or string representation.
             now_utc: Optional datetime for testing
             
         Returns:
@@ -197,10 +180,9 @@ class MarketSessionService:
         """Get status for all market segments.
         
         Returns:
-            dict: Status for NSE_FO, BSE_FO, and MCX_FO
+            dict: Status for NSE_FO and BSE_FO
         """
         return {
             "NSE_FO": MarketSessionService.get_segment_status(DomainType.NSE_FO, now_utc),
             "BSE_FO": MarketSessionService.get_segment_status(DomainType.BSE_FO, now_utc),
-            "MCX_FO": MarketSessionService.get_segment_status(DomainType.MCX_FO, now_utc),
         }

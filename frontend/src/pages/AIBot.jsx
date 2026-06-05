@@ -7,7 +7,7 @@ import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 const SESSION = "default";
 const SUGGESTIONS = [
   "Verify my active strategies and drawdown limits",
-  "Check MCX commodities feed and market status",
+  "Check Upstox feed and market status",
   "Lower my daily loss limit to 6000 INR for protection",
   "Switch terminal to emergency paper mode",
 ];
@@ -16,9 +16,9 @@ const MODES = [
   { id: "brief", label: "Market Brief" },
 ];
 const BRIEF_PROMPTS = [
-  "Create a short market brief for NIFTY, BANKNIFTY, SENSEX, and MCX commodities.",
+  "Create a short market brief for NIFTY, BANKNIFTY, and SENSEX.",
   "Summarize risks before placing live orders today.",
-  "Build a checklist for commodity trades using Upstox instrument keys.",
+  "Build a checklist for index-option trades using Upstox instrument keys.",
 ];
 
 export default function AIBot() {
@@ -142,7 +142,7 @@ export default function AIBot() {
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
             <div>
               <h2 className="font-head text-lg font-semibold text-white flex items-center gap-2"><Activity size={18} className="text-[var(--qd-accent)]" /> Market Analysis</h2>
-              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and MCX commodity feeds.</p>
+              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and Upstox feed state.</p>
             </div>
             <Button
               type="button"

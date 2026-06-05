@@ -100,12 +100,12 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
             from server import get_user_upstox_status
             data = await get_user_upstox_status(user["id"])
         elif name == "get_market_data_status":
-            from server import _UPSTOX_GATEWAYS, _is_nse_market_open, _is_order_market_open, option_ledger
+            from server import _UPSTOX_GATEWAYS, _is_nse_market_open, option_ledger
             gateway = _UPSTOX_GATEWAYS.get(user["id"])
             gateway_status = gateway.status() if gateway else {"connected": False, "last_error": "Upstox gateway not initialized"}
-            latest_ticks = option_ledger.latest_ticks(["NIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS"])
+            latest_ticks = option_ledger.latest_ticks(["NIFTY", "BANKNIFTY", "SENSEX"])
             data = {
-                "market_open": bool(_is_nse_market_open() or _is_order_market_open("MCX")),
+                "market_open": bool(_is_nse_market_open()),
                 "upstox_gateway": gateway_status,
                 "latest_ticks": latest_ticks,
             }
@@ -616,18 +616,16 @@ async def ai_market_analysis(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(50)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from server import watchlist, commodity_watchlist, _market_score_for_strategy, _google_ai_reply
+    from server import watchlist, _market_score_for_strategy, _google_ai_reply
     
     market_rows = await watchlist(user=user)
-    commodity_rows = await commodity_watchlist(user=user)
-    scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in [*market_rows, *commodity_rows]}) for row in strategies]
+    scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in market_rows}) for row in strategies]
     prompt = (
         "Analyze this QuantG market structure snapshot for educational risk context only. "
-        "Mention NIFTY/SENSEX and MCX crude oil/natural gas when relevant. "
+        "Mention NIFTY/BANKNIFTY/SENSEX when relevant. "
         "Keep it concise and do not promise returns.\n\n"
         + json.dumps({
             "market": market_rows[:8],
-            "commodities": commodity_rows,
             "strategy_scores": scores[:12],
         }, default=str)[:9000]
     )

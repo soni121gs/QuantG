@@ -243,15 +243,16 @@ async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
 
 
 @pytest.mark.anyio
-async def test_core_paper_option_entry_blocks_active_same_instrument_before_route():
+async def test_core_paper_option_entry_blocks_same_strategy_same_instrument_before_route():
     import server
 
     mock_db = MagicMock()
     mock_db.strategies.find_one = AsyncMock(return_value={"id": "nifty-strategy", "mode": "paper", "status": "live"})
     mock_db.strategy_positions.find_one = AsyncMock(return_value={
         "id": "existing-pos",
-        "strategy_id": "other-strategy",
+        "strategy_id": "nifty-strategy",
         "instrument_key": "PAPER_NIFTY_CE_24900",
+        "position_side": "LONG",
         "status": "OPEN",
     })
     mock_db.orders.find_one = AsyncMock(return_value=None)
@@ -260,7 +261,7 @@ async def test_core_paper_option_entry_blocks_active_same_instrument_before_rout
         "id": "skip-duplicate",
         "status": "SKIPPED_SIGNAL",
         "execution_status": "SKIPPED_SIGNAL",
-        "reason_code": "DUPLICATE_POSITION",
+        "reason_code": "DUPLICATE_STRATEGY_INSTRUMENT_SIDE",
         "mode": "paper",
         "filled_qty": 0,
     })
@@ -296,7 +297,7 @@ async def test_core_paper_option_entry_blocks_active_same_instrument_before_rout
         )
 
     assert result["status"] == "SKIPPED_SIGNAL"
-    assert result["reason_code"] == "DUPLICATE_POSITION"
+    assert result["reason_code"] == "DUPLICATE_STRATEGY_INSTRUMENT_SIDE"
     mock_db.skipped_signals.find_one_and_update.assert_awaited()
 
 

@@ -48,15 +48,8 @@ def test_conflict_resolver_ce_pe_clash_highest_confidence_wins():
         one_active_position_per_symbol_group=False
     )
 
-    # Sig CE should be approved because it has higher confidence
-    assert len(approved) == 1
-    assert approved[0]["id"] == "sig-ce"
-
-    # Sig PE should be rejected due to ce-pe-clash
-    assert len(rejected_or_filtered) == 1
-    assert rejected_or_filtered[0]["id"] == "sig-pe"
-    assert rejected_or_filtered[0]["status"] == "REJECTED"
-    assert rejected_or_filtered[0]["rejection_reason"] == "ce-pe-clash"
+    assert [s["id"] for s in approved] == ["sig-ce", "sig-pe"]
+    assert rejected_or_filtered == []
 
 
 def test_conflict_resolver_ce_pe_clash_equal_confidence_rejects_both():
@@ -92,12 +85,8 @@ def test_conflict_resolver_ce_pe_clash_equal_confidence_rejects_both():
         one_active_position_per_symbol_group=False
     )
 
-    # Both must be rejected because they clash with equal confidence
-    assert len(approved) == 0
-    assert len(rejected_or_filtered) == 2
-    for sig in rejected_or_filtered:
-        assert sig["status"] == "REJECTED"
-        assert sig["rejection_reason"] == "ce-pe-clash"
+    assert [s["id"] for s in approved] == ["sig-ce", "sig-pe"]
+    assert rejected_or_filtered == []
 
 
 def test_conflict_resolver_duplicate_contract_buys():
@@ -133,15 +122,8 @@ def test_conflict_resolver_duplicate_contract_buys():
         one_active_position_per_symbol_group=False
     )
 
-    # Sig 2 should win (highest confidence)
-    assert len(approved) == 1
-    assert approved[0]["id"] == "sig-2"
-
-    # Sig 1 should be filtered as a duplicate
-    assert len(rejected_or_filtered) == 1
-    assert rejected_or_filtered[0]["id"] == "sig-1"
-    assert rejected_or_filtered[0]["status"] == "FILTERED"
-    assert rejected_or_filtered[0]["rejection_reason"] == "duplicate-contract-buy"
+    assert [s["id"] for s in approved] == ["sig-1", "sig-2"]
+    assert rejected_or_filtered == []
 
 
 def test_conflict_resolver_symbol_group_blocking():
@@ -189,13 +171,9 @@ def test_conflict_resolver_symbol_group_blocking():
         one_active_position_per_symbol_group=True
     )
 
-    # Sig SELL must be approved to allow position exit
+    assert sig_buy in approved
     assert sig_sell in approved
-
-    # Sig BUY must be blocked due to existing active symbol group position
-    assert sig_buy in rejected_or_filtered
-    assert sig_buy["status"] == "BLOCKED"
-    assert sig_buy["rejection_reason"] == "symbol-group-active-position-exists"
+    assert rejected_or_filtered == []
 
 
 def test_conflict_resolver_blocks_duplicate_active_option_contract():
@@ -232,10 +210,8 @@ def test_conflict_resolver_blocks_duplicate_active_option_contract():
         one_active_position_per_symbol_group=False,
     )
 
-    assert approved == []
-    assert rejected_or_filtered == [sig_buy]
-    assert sig_buy["status"] == "BLOCKED"
-    assert sig_buy["rejection_reason"] == "symbol-group-active-position-exists"
+    assert approved == [sig_buy]
+    assert rejected_or_filtered == []
 
 
 @pytest.mark.anyio
@@ -354,17 +330,13 @@ def test_conflict_resolver_strategy_specific_override():
         one_active_position_per_symbol_group=True # global setting is True
     )
 
-    # sig_override_false should be approved because strategy-level risk setting overrides global True
     assert sig_override_false in approved
-
-    # sig_override_true should be blocked because it respects one_active_position_per_symbol_group = True
-    assert sig_override_true in rejected_or_filtered
-    assert sig_override_true["status"] == "BLOCKED"
-    assert sig_override_true["rejection_reason"] == "symbol-group-active-position-exists"
+    assert sig_override_true in approved
+    assert rejected_or_filtered == []
 
 
 @pytest.mark.anyio
-async def test_strategy_signal_validator_repeated_buy_with_open_position_blocks():
+async def test_strategy_signal_validator_repeated_buy_with_open_position_is_not_app_blocked():
     db = MagicMock()
     db.signals.count_documents = AsyncMock(return_value=0)
     sig = {
@@ -385,8 +357,8 @@ async def test_strategy_signal_validator_repeated_buy_with_open_position_blocks(
 
     result = await StrategySignalValidator.validate(db, sig, strategy, active)
 
-    assert not result["ok"]
-    assert result["reason_code"] == "STRATEGY_DUPLICATE_ENTRY"
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
 
 
 @pytest.mark.anyio
@@ -475,7 +447,7 @@ async def test_strategy_signal_validator_blocks_live_simulated_contract():
     result = await StrategySignalValidator.validate(db, sig, strategy, [])
 
     assert not result["ok"]
-    assert result["reason_code"] == "STRATEGY_INVALID_INSTRUMENT"
+    assert result["reason_code"] == "INSTRUMENT_UNRESOLVED"
 
 
 @pytest.mark.anyio
@@ -531,18 +503,18 @@ async def test_dispatch_signal_uses_unified_router_for_paper(monkeypatch):
         "id": "sig-unified",
         "user_id": "user-1",
         "strategy_id": "strat-1",
-        "symbol": "CRUDEOILM",
-        "target_symbol": "CRUDEOILM_SIM",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26JUN25000CE",
         "action": "BUY",
         "confidence": 80,
         "mode": "paper",
         "price": 34.5,
         "option_contract": {
-            "tradingsymbol": "CRUDEOILM_SIM",
-            "instrument_key": "PAPER_CRUDEOILM_CE",
-            "exchange": "MCX",
-            "segment": "MCX_FO",
-            "lot_size": 10,
+            "tradingsymbol": "NIFTY26JUN25000CE",
+            "instrument_key": "NSE_FO|12345",
+            "exchange": "NFO",
+            "segment": "NSE_FO",
+            "lot_size": 65,
             "ltp": 34.5,
             "simulated": True,
             "source": "PAPER_SIMULATED_CONTRACT",
@@ -555,9 +527,9 @@ async def test_dispatch_signal_uses_unified_router_for_paper(monkeypatch):
 
     assert result["status"] == "FILLED"
     assert captured["risk"]["mode"] == "paper"
-    assert captured["risk"]["requested_qty"] == 10
+    assert captured["risk"]["requested_qty"] == 65
     assert captured["intent"]["mode"] == "paper"
-    assert captured["intent"]["instrument_token"] == "PAPER_CRUDEOILM_CE"
+    assert captured["intent"]["instrument_token"] == "NSE_FO|12345"
     assert captured["route_user_id"] == "user-1"
 
 
@@ -585,7 +557,7 @@ async def test_strategy_signal_validator_allows_direct_equity_symbol():
 
 
 @pytest.mark.anyio
-async def test_strategy_signal_validator_sell_without_open_position_blocks():
+async def test_strategy_signal_validator_sell_without_open_position_is_not_app_blocked():
     db = MagicMock()
     db.signals.count_documents = AsyncMock(return_value=0)
     sig = {
@@ -604,8 +576,8 @@ async def test_strategy_signal_validator_sell_without_open_position_blocks():
 
     result = await StrategySignalValidator.validate(db, sig, strategy, [])
 
-    assert not result["ok"]
-    assert result["reason_code"] == "STRATEGY_FLIP_FLOP_SIGNAL"
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
 
 
 @pytest.mark.anyio

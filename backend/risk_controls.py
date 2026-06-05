@@ -55,16 +55,6 @@ MAX_STALE_SEC_BY_STYLE = {
     "balanced": 60,
 }
 
-MCX_MAX_STALE_SEC_BY_STYLE = {
-    "micro_scalp": 45,
-    "momentum": 90,
-    "breakout": 120,
-    "volatile_breakout": 150,
-    "pullback": 120,
-    "balanced": 120,
-}
-
-
 MAX_SPREAD_BPS_BY_STYLE = {
     "micro_scalp": 45,
     "momentum": 65,
@@ -183,6 +173,8 @@ def evaluate_market_data_quality(
     style = str(risk_style or "balanced")
     exch = str(exchange or "NSE").upper()
     token = str(instrument_token or "").strip()
+    if exch in {"MCX", "MCX_FO", "CDS"}:
+        return {"ok": False, "reason": f"{exch} is not supported", "checks": {"exchange": exch}}
     if not token:
         return {"ok": False, "reason": "instrument token unresolved", "checks": {"instrument_token": token, "exchange": exch}}
     if market_open is False:
@@ -191,8 +183,7 @@ def evaluate_market_data_quality(
         return {"ok": False, "reason": "ltp unavailable", "checks": {"ltp": price}}
 
     now = now or datetime.now(timezone.utc)
-    stale_rules = MCX_MAX_STALE_SEC_BY_STYLE if exch == "MCX" else MAX_STALE_SEC_BY_STYLE
-    max_stale = stale_rules.get(style, stale_rules["balanced"])
+    max_stale = MAX_STALE_SEC_BY_STYLE.get(style, MAX_STALE_SEC_BY_STYLE["balanced"])
     parsed_tick_time = parse_market_timestamp(tick_time)
     parsed_received_at = parse_market_timestamp(received_at)
     age_sec = None

@@ -25,7 +25,7 @@ from typing import List, Dict, Any
 from pymongo import ReturnDocument
 
 from safe_exec import safe_run_strategy
-from market_protection import MarketTrendAnalyzer, FakeSignalFilter
+from market_protection import MarketTrendAnalyzer
 
 logger = logging.getLogger("quantg.runner")
 
@@ -67,28 +67,36 @@ def _safe_run(code: str, data: List[dict]) -> List[dict]:
 
 
 def _validate_signal(signal: Dict[str, Any], data: List[dict], strategy: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Return signal diagnostics without blocking strategy decisions.
+
+    The strategy owns trading logic and strategy guards. The runner only needs a
+    normalized confidence/trend envelope for UI/debugging before queuing the
+    signal for platform execution checks.
+    """
     try:
         trend = MarketTrendAnalyzer.analyze(data, lookback=min(50, max(20, len(data))))
-        is_hft = False
-        if strategy:
-            name = str(strategy.get("name") or "").lower()
-            desc = str(strategy.get("description") or "").lower()
-            if "hft" in name or "hft" in desc or "scalper" in name or "scalper" in desc:
-                is_hft = True
-        validation = FakeSignalFilter.validate(signal, data, trend, is_hft=is_hft)
-        threshold = 35.0 if is_hft else SIGNAL_CONFIDENCE_MIN
-        validation["threshold"] = threshold
-        validation["trend"] = trend
-        validation["is_valid"] = bool(validation.get("is_valid")) and float(validation.get("confidence", 0)) >= threshold
-        return validation
+        confidence = signal.get("confidence")
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 85.0
+        return {
+            "is_valid": True,
+            "confidence": confidence,
+            "threshold": None,
+            "reasons": [],
+            "filtered": False,
+            "trend": trend,
+            "platform_note": "strategy-owned-signal-accepted-for-platform-preflight",
+        }
     except Exception as e:
         logger.warning(f"signal validation failed: {e}")
         return {
-            "is_valid": False,
-            "confidence": 0,
-            "threshold": SIGNAL_CONFIDENCE_MIN,
-            "reasons": [f"Validation failed: {e}"],
-            "filtered": True,
+            "is_valid": True,
+            "confidence": 85.0,
+            "threshold": None,
+            "reasons": [f"Diagnostics failed: {e}"],
+            "filtered": False,
             "trend": {},
         }
 
@@ -145,7 +153,6 @@ def _contract_resolution_update(
     signals_count: int,
     clear_reason: str,
     is_paper_mode: bool,
-    is_mcx_underlying: bool,
     diagnostics: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     diagnostics = diagnostics or {}
@@ -168,18 +175,12 @@ def _contract_resolution_update(
         "quote_reject_reason": diagnostics.get("quote_reject_reason"),
     }
     update_doc: Dict[str, Any] = {"$set": update_set, "$inc": inc_set}
-    if is_paper_mode and is_mcx_underlying:
-        update_doc["$set"].update({
-            "halted": False,
-            "is_halted": False,
-            "last_skip_reason_code": "CONTRACT_RESOLUTION_FAILED",
-        })
-        update_doc["$unset"] = {"halt_reason": "", "last_halt_reason": ""}
-    else:
-        update_doc["$set"].update({
-            "halted": True,
-            "halt_reason": "CONTRACT_RESOLUTION_FAILED",
-        })
+    update_doc["$set"].update({
+        "halted": False,
+        "is_halted": False,
+        "last_skip_reason_code": "CONTRACT_RESOLUTION_FAILED",
+    })
+    update_doc["$unset"] = {"halt_reason": "", "last_halt_reason": ""}
     return update_doc
 
 
@@ -266,13 +267,6 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 if not code:
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": eval_set, "$inc": inc_set})
-                    continue
-                if s.get("halted") or s.get("is_halted"):
-                    await db.strategies.update_one(
-                        {"id": s["id"]},
-                        {"$set": {**eval_set, "last_filter_reason": s.get("halt_reason") or "Strategy halted."},
-                         "$inc": inc_set},
-                    )
                     continue
                 # Resolve the symbol whose PRICE HISTORY the strategy will analyse.
                 # When options mode is enabled, we MUST evaluate the strategy
@@ -452,13 +446,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         )
                         if not option_contract:
                             underlying_name = opt_cfg.get("underlying", "NIFTY")
-                            is_mcx_underlying = str(underlying_name).upper() in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
                             resolver_diag = getattr(resolve_option_fn, "last_diagnostics", {}) if resolve_option_fn else {}
-                            clear_reason = (
-                                (resolver_diag.get("resolver_reason") or resolver_diag.get("reason") or f"{underlying_name} MCX contract unresolved.")
-                                if is_mcx_underlying else
-                                (resolver_diag.get("resolver_reason") or resolver_diag.get("reason") or f"Upstox option contract resolution failed for {underlying_name}.")
-                            )
+                            clear_reason = resolver_diag.get("resolver_reason") or resolver_diag.get("reason") or f"Upstox option contract resolution failed for {underlying_name}."
                             update_doc = _contract_resolution_update(
                                 eval_set=eval_set,
                                 inc_set=inc_set,
@@ -466,7 +455,6 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 signals_count=signals_count,
                                 clear_reason=clear_reason,
                                 is_paper_mode=is_paper_mode,
-                                is_mcx_underlying=is_mcx_underlying,
                                 diagnostics=resolver_diag,
                             )
                             await db.strategies.update_one({"id": s["id"]}, update_doc)
@@ -501,7 +489,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "trend_context": signal_validation.get("trend") or {},
                         "visual_config": s.get("visual_config") or {},
                         "option_contract": option_contract,
-                        "exchange": (option_contract.get("exchange") if option_contract else ("MCX" if str(symbol).upper() in {"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"} else "NSE")),
+                        "exchange": (option_contract.get("exchange") if option_contract else "NSE"),
                         "status": "PENDING",
                         "rejection_reason": None,
                         "order_id": None,

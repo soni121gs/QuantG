@@ -2,17 +2,14 @@
 
 Provides the single source of truth for market schedules, holidays, and operational statuses.
 """
-from datetime import datetime, timezone, timedelta
 import os
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 from core.market_domains import DomainType
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 NSE_OPEN_MINUTE = 9 * 60 + 15
 NSE_CLOSE_MINUTE = 15 * 60 + 30
-
-MCX_OPEN_MINUTE = int(os.environ.get("MCX_OPEN_MINUTE", str(9 * 60)))
-MCX_CLOSE_MINUTE = int(os.environ.get("MCX_CLOSE_MINUTE", str(23 * 60 + 30)))
 
 MARKET_HOLIDAYS_IST = {
     item.strip()
@@ -23,7 +20,6 @@ MARKET_HOLIDAYS_IST = {
 SEGMENT_WINDOWS = {
     DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
     DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
-    DomainType.MCX_FO: (MCX_OPEN_MINUTE, MCX_CLOSE_MINUTE, "MCX commodity"),
 }
 
 def get_ist_now(now_utc: Optional[datetime] = None) -> datetime:
@@ -108,19 +104,15 @@ def get_market_clock_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, A
     
     nse = get_segment_status(DomainType.NSE_FO, utc)
     bse = get_segment_status(DomainType.BSE_FO, utc)
-    mcx = get_segment_status(DomainType.MCX_FO, utc)
     
     open_segments = []
     if nse["open"]:
         open_segments.append("NSE")
     if bse["open"]:
         open_segments.append("BSE")
-    if mcx["open"]:
-        open_segments.append("MCX")
-        
     if not open_segments:
         global_status = "CLOSED"
-    elif len(open_segments) == 3:
+    elif len(open_segments) == 2:
         global_status = "ALL OPEN"
     else:
         global_status = " & ".join(open_segments) + " OPEN"
@@ -135,9 +127,7 @@ def get_market_clock_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, A
         "segments": {
             "NSE_FO": nse,
             "BSE_FO": bse,
-            "MCX_FO": mcx
         },
         "NSE_FO": nse,
         "BSE_FO": bse,
-        "MCX_FO": mcx
     }

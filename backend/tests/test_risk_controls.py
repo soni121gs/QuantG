@@ -102,7 +102,7 @@ def test_market_quality_accepts_fresh_tick():
     assert quality["ok"]
 
 
-def test_mcx_quote_with_timestamp_passes():
+def test_removed_mcx_quote_blocks():
     now = datetime.now(timezone.utc)
     quality = evaluate_market_data_quality(
         ltp=6500,
@@ -114,17 +114,18 @@ def test_mcx_quote_with_timestamp_passes():
         risk_style="balanced",
     )
 
-    assert quality["ok"]
+    assert not quality["ok"]
+    assert quality["reason"] == "MCX is not supported"
 
 
-def test_mcx_quote_without_broker_timestamp_uses_received_at():
+def test_supported_quote_without_broker_timestamp_uses_received_at():
     now = datetime.now(timezone.utc)
     quality = evaluate_market_data_quality(
-        ltp=6500,
+        ltp=100,
         tick_time=None,
         received_at=now,
-        instrument_token="MCX_FO|123",
-        exchange="MCX",
+        instrument_token="NSE_FO|123",
+        exchange="NFO",
         market_open=True,
         risk_style="balanced",
     )
@@ -132,14 +133,14 @@ def test_mcx_quote_without_broker_timestamp_uses_received_at():
     assert quality["ok"]
 
 
-def test_mcx_stale_quote_blocks():
+def test_supported_stale_quote_blocks():
     old_tick = datetime.now(timezone.utc) - timedelta(seconds=180)
     quality = evaluate_market_data_quality(
-        ltp=6500,
+        ltp=100,
         tick_time=old_tick,
         received_at=old_tick,
-        instrument_token="MCX_FO|123",
-        exchange="MCX",
+        instrument_token="NSE_FO|123",
+        exchange="NFO",
         market_open=True,
         risk_style="balanced",
     )
@@ -148,14 +149,14 @@ def test_mcx_stale_quote_blocks():
     assert "stale" in quality["reason"]
 
 
-def test_mcx_missing_token_blocks():
+def test_supported_missing_token_blocks():
     now = datetime.now(timezone.utc)
     quality = evaluate_market_data_quality(
-        ltp=6500,
+        ltp=100,
         tick_time=now,
         received_at=now,
         instrument_token="",
-        exchange="MCX",
+        exchange="NFO",
         market_open=True,
     )
 
@@ -163,16 +164,16 @@ def test_mcx_missing_token_blocks():
     assert quality["reason"] == "instrument token unresolved"
 
 
-def test_mcx_market_closed_blocks_with_clear_message():
+def test_supported_market_closed_blocks_with_clear_message():
     now = datetime.now(timezone.utc)
     quality = evaluate_market_data_quality(
-        ltp=6500,
+        ltp=100,
         tick_time=now,
         received_at=now,
-        instrument_token="MCX_FO|123",
-        exchange="MCX",
+        instrument_token="NSE_FO|123",
+        exchange="NFO",
         market_open=False,
     )
 
     assert not quality["ok"]
-    assert quality["reason"] == "MCX market is closed"
+    assert quality["reason"] == "NFO market is closed"

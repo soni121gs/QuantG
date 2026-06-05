@@ -1,6 +1,6 @@
 """QuantG Market Domain Definitions.
 
-Establishes strict domain boundaries between NSE, BSE, and MCX segments.
+Establishes strict domain boundaries between NSE and BSE segments.
 Ensures a strategy is bound to exactly one domain and cannot bleed logic.
 """
 from enum import Enum
@@ -9,7 +9,6 @@ from typing import Set, Dict, Any
 class DomainType(str, Enum):
     NSE_FO = "NSE_FO"
     BSE_FO = "BSE_FO"
-    MCX_FO = "MCX_FO"
 
 class MarketDomain:
     def __init__(self, name: DomainType, exchange: str, segment: str, underlyings: Set[str], lot_sizes: Dict[str, int], strike_intervals: Dict[str, int]):
@@ -48,19 +47,9 @@ BSE_FO_DOMAIN = MarketDomain(
     strike_intervals={"SENSEX": 100}
 )
 
-MCX_FO_DOMAIN = MarketDomain(
-    name=DomainType.MCX_FO,
-    exchange="MCX",
-    segment="MCX_FO",
-    underlyings={"CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"},
-    lot_sizes={"CRUDEOIL": 100, "CRUDEOILM": 10, "NATURALGAS": 1250, "NATGASMINI": 250},
-    strike_intervals={"CRUDEOIL": 100, "CRUDEOILM": 100, "NATURALGAS": 5, "NATGASMINI": 5}
-)
-
 ALL_DOMAINS = {
     DomainType.NSE_FO: NSE_FO_DOMAIN,
     DomainType.BSE_FO: BSE_FO_DOMAIN,
-    DomainType.MCX_FO: MCX_FO_DOMAIN
 }
 
 def resolve_domain_by_underlying(underlying: str) -> MarketDomain:
@@ -69,9 +58,6 @@ def resolve_domain_by_underlying(underlying: str) -> MarketDomain:
         return NSE_FO_DOMAIN
     if und_upper in BSE_FO_DOMAIN.underlyings:
         return BSE_FO_DOMAIN
-    if und_upper in MCX_FO_DOMAIN.underlyings:
-        return MCX_FO_DOMAIN
-    
     # Standard equity fallback (e.g. RELIANCE, TCS) to prevent crashes
     return MarketDomain(
         name=DomainType.NSE_FO,
@@ -87,4 +73,4 @@ def resolve_domain_by_name(name: str) -> MarketDomain:
         domain_enum = DomainType(str(name).upper())
         return ALL_DOMAINS[domain_enum]
     except (ValueError, KeyError):
-        raise ValueError(f"Domain name {name} is unsupported. Must be NSE_FO, BSE_FO, or MCX_FO.")
+        raise ValueError(f"Domain name {name} is unsupported. Must be NSE_FO or BSE_FO.")

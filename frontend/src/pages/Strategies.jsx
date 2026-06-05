@@ -37,7 +37,6 @@ const timeAgo = (iso) => {
 
 const sourceLabel = (source) => {
   if (!source) return "-";
-  if (source.includes("kite-5minute")) return source.includes("tick-live") ? "Legacy ticker" : "Legacy 5m";
   if (source.startsWith("mock-5minute")) return "Mock 5m";
   return source;
 };
@@ -46,9 +45,7 @@ const filters = [
   { id: "all", label: "All Systems" },
   { id: "hft", label: "HFT / Upstox" },
   { id: "buying", label: "Option Buying" },
-  { id: "selling", label: "Option Selling" },
-  { id: "commodity", label: "MCX Commodities" },
-  { id: "live", label: "Live Auto-Traders" },
+  { id: "selling", label: "Option Selling" },  { id: "live", label: "Live Auto-Traders" },
 ];
 
 const noticeFor = (s) => {
@@ -110,10 +107,7 @@ export default function Strategies() {
     } else if (selectedFilter === "buying") {
       result = list.filter((s) => s.strategy_type === "Option Buying");
     } else if (selectedFilter === "selling") {
-      result = list.filter((s) => s.strategy_type === "Option Selling");
-    } else if (selectedFilter === "commodity") {
-      result = list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX");
-    } else if (selectedFilter === "live") {
+      result = list.filter((s) => s.strategy_type === "Option Selling");    } else if (selectedFilter === "live") {
       result = list.filter((s) => s.status === "live");
     }
 
@@ -144,9 +138,7 @@ export default function Strategies() {
       s.description?.toLowerCase().includes("upstox")
     ).length,
     buying: list.filter((s) => s.strategy_type === "Option Buying").length,
-    selling: list.filter((s) => s.strategy_type === "Option Selling").length,
-    commodity: list.filter((s) => s.asset_class === "commodity" || s.instrument_group === "MCX").length,
-    live: list.filter((s) => s.status === "live").length,
+    selling: list.filter((s) => s.strategy_type === "Option Selling").length,    live: list.filter((s) => s.status === "live").length,
   }), [list]);
 
   const toggle = async (id) => {
@@ -370,9 +362,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
   const paused = s.status === "paused";
   const notice = noticeFor(s);
   const editPath = s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`;
-  const scoreValue = score?.score ?? s.ai_confidence_score ?? 0;
-  const isMcx = s.instrument_group === "MCX" || s.asset_class === "commodity" || (s.visual_config?.options?.underlying && ["CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"].includes(s.visual_config.options.underlying.toUpperCase()));
-  
+  const scoreValue = score?.score ?? s.ai_confidence_score ?? 0;  
   const risk = s.visual_config?.risk || {};
   
   const [expanded, setExpanded] = useState(false);
@@ -496,7 +486,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
           <h2 className="mt-1 truncate font-head text-base font-semibold text-white">{s.name}</h2>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-rose-300 animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-cyan-300"}`}>
-              {s.mode === "live" ? "● PRODUCTION LIVE" : (isMcx ? "● PAPER ONLY" : "● PAPER SIMULATED")}
+              {s.mode === "live" ? "PRODUCTION LIVE" : "PAPER SIMULATED"}
             </span>
             <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-white">
               BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
@@ -526,7 +516,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       <div className="hidden">
         <Metric label="Total Capital Required" value={money(s.required_capital)} />
         <Metric label="Strategy Type" value={s.strategy_type || "Option Buying"} />
-        <Metric label="Asset" value={s.asset_class === "commodity" ? "Oil and Gas" : s.asset_class || "equity"} />
+        <Metric label="Asset" value={s.asset_class || "equity"} />
         <Metric label="Data" value={sourceLabel(s.last_data_source)} tone={s.last_data_live ? "text-[var(--qd-profit)]" : ""} />
         <div className="col-span-2 border-t border-[rgba(255,255,255,0.06)] pt-2.5 mt-0.5">
           <Metric label="AI Market Suitability" value={s.market_suitability || "Any Market Condition"} tone="text-indigo-400 font-bold font-mono" />
@@ -721,7 +711,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
                   className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                   <option value="paper">Paper Trading (Simulated)</option>
-                  <option value="live" disabled={isMcx}>Live Trading (Production) {isMcx ? "(Disabled for MCX)" : ""}</option>
+                  <option value="live">Live Trading (Production)</option>
                 </select>
               </div>
             </div>

@@ -25,13 +25,12 @@ class Instrument:
     """Resolved instrument ready for trading.
     
     For NSE/BSE: Index options (NIFTY, BANKNIFTY, SENSEX).
-    For MCX: Commodity futures and options.
     
     Attributes:
-        symbol: Trading symbol (e.g., NIFTY, CRUDEOILM)
-        underlying: Base underlying (NIFTY, NIFTY, CRUDEOILM, etc.)
-        exchange: Exchange code (NSE, BSE, MCX)
-        segment: Segment (NSE_FO, BSE_FO, MCX_FO)
+        symbol: Trading symbol (e.g., NIFTY)
+        underlying: Base underlying (NIFTY, BANKNIFTY, SENSEX, etc.)
+        exchange: Exchange code (NSE, BSE, NFO, BFO)
+        segment: Segment (NSE_FO, BSE_FO)
         instrument_key: Upstox instrument key for API calls
         lot_size: Quantity per contract
         tick_size: Minimum price increment
