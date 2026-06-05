@@ -128,6 +128,9 @@ class PaperAdapter:
             "broker": "paper",
             "execution_tag": intent.get("execution_tag") or f"quantg:{intent['strategy_id'][:18]}:{datetime.now(timezone.utc).strftime('%Y%m%d')}",
             "paper_realism": "UPSTOX_LIKE",
+            "paper_fill_applied": True,
+            "legacy_status": "COMPLETE",
+            "status_message": "FILLED: unified core paper fill applied",
             "pretrade_cost": {
                 "source": "core_paper_upstox_cost_model",
                 "estimated_charges": charges,
@@ -169,6 +172,8 @@ class PaperAdapter:
             "trade_value": trade_value,
             "mode": "paper",
             "created_at": now,
+            "stop_loss": intent.get("stop_loss"),
+            "take_profit": intent.get("take_profit"),
         }
         await self.db.fills.insert_one(fill_doc)
 

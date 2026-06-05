@@ -77,3 +77,21 @@ def test_option_trade_journal_rows_are_counted_when_strategy_is_known():
     assert row["lifetime"]["total_trades"] == 1
     assert row["lifetime"]["net_pnl"] == 125.5
     assert result["data_quality"]["sources"]["option_trade_journal"] == 1
+
+
+def test_leaderboard_excludes_manual_recovery_tool():
+    result = build_strategy_leaderboard(
+        [
+            {"id": "manual_recovery", "name": "MANUAL_RECOVERY"},
+            {"id": "real", "name": "Real Strategy"},
+        ],
+        [],
+        [
+            {"strategy_id": "manual_recovery", "pnl": 0, "exit_time": "2026-06-02T09:30:00Z"},
+            {"strategy_id": "real", "pnl": 100, "exit_time": "2026-06-02T09:31:00Z"},
+        ],
+        now=NOW,
+    )
+
+    assert [row["strategy_id"] for row in result["leaderboard"]] == ["real"]
+    assert result["best_strategy"]["strategy_id"] == "real"

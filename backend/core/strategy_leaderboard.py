@@ -242,7 +242,11 @@ def build_strategy_leaderboard(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    strategy_rows = list(strategies)
+    strategy_rows = [
+        row for row in strategies
+        if str(row.get("id") or "") not in {"manual", "manual_recovery"}
+        and str(row.get("name") or "").upper() != "MANUAL_RECOVERY"
+    ]
     known_ids = {str(row.get("id") or "") for row in strategy_rows if row.get("id")}
     trades, quality = normalize_closed_trades(raw_trades, raw_option_trades, known_ids)
 

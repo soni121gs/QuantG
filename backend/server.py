@@ -3727,6 +3727,9 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     clean = dict(row)
     clean.pop("_id", None)
     clean.pop("user_id", None)
+    for k in ("last_evaluated_at", "last_signal_at", "created_at"):
+        if k in clean and hasattr(clean[k], "isoformat"):
+            clean[k] = clean[k].isoformat()
     clean["asset_class"] = _strategy_asset_class(clean)
     clean["strategy_type"] = _strategy_type(clean)
     clean["required_capital"] = _strategy_required_capital(clean)
@@ -7489,8 +7492,9 @@ async def _persist_core_paper_skipped_order(
     from core.market_domains import resolve_domain_by_underlying
     domain = resolve_domain_by_underlying(symbol)
     
-    now = datetime.now(timezone.utc)
-    session_date = now.date().isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    session_date = now_dt.date().isoformat()
     dedupe_key = f"{strategy_id}:{symbol}:{side}:{reason_code}:{session_date}"
     
     trace = {

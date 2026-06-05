@@ -93,7 +93,11 @@ class RiskManager:
 
         # 5. User Account and Sizing Gates
         user = await self.db.users.find_one({"id": user_id})
-        settings = (user or {}).get("settings") or {}
+        settings = dict((user or {}).get("settings") or {})
+        if user:
+            for key in ("per_strategy_capital", "max_position_size", "max_daily_loss"):
+                if key in user and key not in settings:
+                    settings[key] = user.get(key)
         
         # Calculate daily losses
         daily_loss_limit = float(strategy.get("visual_config", {}).get("risk", {}).get("daily_loss_limit") or settings.get("max_daily_loss") or 10000.0)
@@ -107,12 +111,25 @@ class RiskManager:
             }
 
         # 6. Sizing computation
-        free_margin = 100000.0  # Simulated margin fallback
-        if user and "funds" in user:
-            free_margin = float(user["funds"].get("free_margin") or 100000.0)
-            
-        equity = float(settings.get("per_strategy_capital") or free_margin)
-        max_pos_value = float(settings.get("max_position_size") or equity)
+        free_margin = 100000.0
+        if mode == "paper":
+            wallet = await self.db.paper_wallets.find_one({"user_id": user_id})
+            if isinstance(wallet, dict):
+                free_margin = float(wallet.get("balance") or wallet.get("available_balance") or free_margin)
+        elif user and "funds" in user:
+            free_margin = float(user["funds"].get("free_margin") or free_margin)
+
+        visual = strategy.get("visual_config") or {}
+        visual_risk = visual.get("risk") or {}
+        visual_options = visual.get("options") or {}
+        configured_capital = max(
+            float(settings.get("per_strategy_capital") or 0),
+            float(strategy.get("required_capital") or 0),
+            float(visual_risk.get("required_capital") or 0),
+            float(visual_options.get("required_capital") or 0),
+        )
+        equity = configured_capital or free_margin
+        max_pos_value = float(settings.get("max_position_size") or 0) or max(equity, requested_qty * price)
         
         size_inputs = SizeInputs(
             equity=equity,

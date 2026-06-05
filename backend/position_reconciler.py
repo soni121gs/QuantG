@@ -109,10 +109,8 @@ async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
     settings = await get_user_settings(user_id)
     paper_mode = bool(settings.get("paper_mode", True))
     
-    # 1. Ensure MANUAL_RECOVERY strategy exists
-    await create_manual_recovery_strategy_if_missing(user_id, paper_mode)
-    
-    # 2. Fetch active broker/paper positions
+    # 1. Fetch active broker/paper positions.  MANUAL_RECOVERY is created only
+    # when a real orphan cannot be matched back to a strategy.
     user_doc = {"id": user_id}
     broker_positions = await _fetch_broker_positions_for_user(user_doc, settings)
     
@@ -159,7 +157,11 @@ async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
             # Find owner strategy ID
             resolved_strat_id = None
             recent_order = await db.orders.find_one(
-                {"user_id": user_id, "symbol": symbol, "strategy_id": {"$exists": True, "$ne": None}},
+                {
+                    "user_id": user_id,
+                    "$or": [{"target_symbol": symbol}, {"symbol": symbol}],
+                    "strategy_id": {"$exists": True, "$nin": [None, "", "manual_recovery", "manual"]},
+                },
                 sort=[("created_at", -1)]
             )
             if recent_order:
@@ -171,6 +173,7 @@ async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
             # If still not resolved, assign to MANUAL_RECOVERY
             if not resolved_strat_id:
                 resolved_strat_id = "manual_recovery"
+                await create_manual_recovery_strategy_if_missing(user_id, paper_mode)
                 logger.warning("RECONCILIATION: Orphan %s is unrecoverable. Assigning to MANUAL_RECOVERY.", symbol)
             
             # Retrieve strategy details

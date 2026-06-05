@@ -24,7 +24,7 @@ POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 ACTIVE_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"}
 SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "CRUDEOILM", "NATURALGAS", "NATGASMINI"}
 SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "300"))
-SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "6"))
+SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "0"))
 STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
 PAPER_SIMULATED_SOURCES = {"PAPER_SIMULATED_CONTRACT", "PAPER_SIMULATED_PRICE"}
 
@@ -141,12 +141,14 @@ class StrategySignalValidator:
             return _signal_validation_result(sig, False, "STRATEGY_FLIP_FLOP_SIGNAL", "SELL signal has no open strategy position to exit.")
 
         recent_since = (datetime.now(timezone.utc) - timedelta(seconds=SIGNAL_SPAM_WINDOW_SECONDS)).isoformat()
-        recent_count = await db.signals.count_documents({
-            "user_id": sig.get("user_id"),
-            "strategy_id": sig.get("strategy_id"),
-            "created_at": {"$gte": recent_since},
-        })
-        if recent_count >= SIGNAL_SPAM_THRESHOLD:
+        recent_count = 0
+        if SIGNAL_SPAM_THRESHOLD > 0:
+            recent_count = await db.signals.count_documents({
+                "user_id": sig.get("user_id"),
+                "strategy_id": sig.get("strategy_id"),
+                "created_at": {"$gte": recent_since},
+            })
+        if SIGNAL_SPAM_THRESHOLD > 0 and recent_count >= SIGNAL_SPAM_THRESHOLD:
             return _signal_validation_result(sig, False, "STRATEGY_SIGNAL_SPAM", f"Strategy emitted {recent_count} signals inside {SIGNAL_SPAM_WINDOW_SECONDS}s.", "WARNING")
 
         return _signal_validation_result(sig, True, "OK", "Signal validation passed.", "INFO")
@@ -229,20 +231,39 @@ class ConflictResolver:
 
         # Map active positions to their underlying symbol group
         active_groups = set()
+        active_targets = set()
+        active_tokens = set()
         for pos in active_positions:
             # Standardize symbol group identification
-            group = str(pos.get("symbol_group") or pos.get("symbol") or "").upper()
-            if group:
-                active_groups.add(group)
+            for group in (pos.get("symbol_group"), pos.get("underlying"), pos.get("symbol")):
+                normalized = str(group or "").upper()
+                if normalized:
+                    active_groups.add(normalized)
+            for target in (pos.get("target_symbol"), pos.get("trading_symbol"), pos.get("symbol")):
+                normalized = str(target or "").upper()
+                if normalized:
+                    active_targets.add(normalized)
+            for token in (pos.get("instrument_key"), pos.get("instrument_token")):
+                normalized = str(token or "").upper()
+                if normalized:
+                    active_tokens.add(normalized)
 
         for und, sigs in by_underlying.items():
             # 1. Check One-Active-Position-Per-Symbol-Group rule on a per-signal basis
             filtered_sigs = []
             for sig in sigs:
                 vc = sig.get("visual_config") or {}
-                eff_action = str((sig.get("option_contract") or {}).get("transaction_type") or sig.get("action") or "").upper()
+                option_contract = sig.get("option_contract") or {}
+                eff_action = str(option_contract.get("transaction_type") or sig.get("action") or "").upper()
                 one_active_pos = vc.get("risk", {}).get("one_active_position_per_symbol_group", one_active_position_per_symbol_group)
-                if one_active_pos and und in active_groups:
+                target = str(sig.get("target_symbol") or option_contract.get("tradingsymbol") or option_contract.get("trading_symbol") or "").upper()
+                token = str(option_contract.get("instrument_key") or option_contract.get("instrument_token") or "").upper()
+                duplicate_contract = bool(target and target in active_targets) or bool(token and token in active_tokens)
+                if eff_action == "BUY" and duplicate_contract:
+                    sig["status"] = "BLOCKED"
+                    sig["rejection_reason"] = "symbol-group-active-position-exists"
+                    rejected_or_filtered.append(sig)
+                elif one_active_pos and und in active_groups:
                     if eff_action == "BUY":
                         sig["status"] = "BLOCKED"
                         sig["rejection_reason"] = "symbol-group-active-position-exists"
@@ -360,41 +381,9 @@ class SignalManager:
 
     @staticmethod
     async def validate_strategy_limits(db, strategy_id: str, user_id: str, visual_config: dict) -> Tuple[bool, Optional[str]]:
-        risk = visual_config.get("risk") or {}
-        
-        # 1. Cooldown limits
-        cooldown_min = int(risk.get("cooldown_minutes") or 0)
         strategy = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if not strategy:
             return False, "strategy-not-found"
-
-        if cooldown_min > 0:
-            last_sig_str = strategy.get("last_signal_at")
-            if last_sig_str:
-                try:
-                    last_sig_time = datetime.fromisoformat(last_sig_str)
-                    if last_sig_time.tzinfo is None:
-                        last_sig_time = last_sig_time.replace(tzinfo=timezone.utc)
-                    now_utc = datetime.now(timezone.utc)
-                    elapsed = (now_utc - last_sig_time).total_seconds() / 60.0
-                    if elapsed < cooldown_min:
-                        return False, "cooldown-active"
-                except Exception as e:
-                    logger.warning(f"Failed parsing last_signal_at for {strategy_id}: {e}")
-
-        # 2. Max trades limits
-        max_trades = int(risk.get("max_trades_per_day") or 0)
-        if max_trades > 0:
-            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
-            ist_midnight_utc = ist_midnight - timedelta(hours=5, minutes=30)
-            processed_count = await db.signals.count_documents({
-                "strategy_id": strategy_id,
-                "status": "PROCESSED",
-                "created_at": {"$gte": ist_midnight_utc.isoformat()}
-            })
-            if processed_count >= max_trades:
-                return False, "max-trades-day-reached"
 
         return True, None
 
@@ -487,6 +476,55 @@ async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, A
     lot_size = int((option_contract or {}).get("lot_size") or domain.get_lot_size(symbol) or 1)
     lots = int((sig.get("visual_config") or {}).get("options", {}).get("lots") or sig.get("lots") or 1)
     requested_qty = max(1, lots) * max(1, lot_size)
+    visual_risk = (sig.get("visual_config") or {}).get("risk") or {}
+    stop_loss = sig.get("stop_loss")
+    take_profit = sig.get("take_profit")
+    if side == "BUY" and stop_loss in (None, ""):
+        stop_pct = _positive_float(
+            visual_risk.get("stop_loss_pct"),
+            visual_risk.get("stoploss_pct"),
+            visual_risk.get("stop_pct"),
+        )
+        if stop_pct:
+            stop_loss = round(price * (1 - stop_pct / 100.0), 2)
+    if side == "BUY" and take_profit in (None, ""):
+        target_pct = _positive_float(
+            visual_risk.get("take_profit_pct"),
+            visual_risk.get("target_pct"),
+            visual_risk.get("tp_pct"),
+        )
+        if target_pct:
+            take_profit = round(price * (1 + target_pct / 100.0), 2)
+
+    if side == "BUY":
+        target_key = str(target_symbol or "").upper()
+        token_key = str(
+            (option_contract or {}).get("instrument_key")
+            or (option_contract or {}).get("instrument_token")
+            or ""
+        ).upper()
+        duplicate_match = {
+            "user_id": user_id,
+            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+            "$or": [
+                {"target_symbol": target_key},
+                {"trading_symbol": target_key},
+                {"symbol": target_key},
+            ],
+        }
+        if token_key:
+            duplicate_match["$or"].extend([
+                {"instrument_key": token_key},
+                {"instrument_token": token_key},
+            ])
+        existing_contract_position = await db.strategy_positions.find_one(duplicate_match, {"_id": 0, "id": 1, "strategy_id": 1})
+        if existing_contract_position:
+            return {
+                "ok": False,
+                "status": "SKIPPED",
+                "reason": f"Active position already exists for {target_symbol}.",
+                "reason_code": "SYMBOL_GROUP_ACTIVE_POSITION_EXISTS",
+            }
 
     idem_key = sig.get("idempotency_key") or f"sig:{sig['id']}"
     order_mgr = OrderManager(db)
@@ -505,8 +543,8 @@ async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, A
         requested_qty=requested_qty,
         price=price,
         mode=mode,
-        stop_loss=sig.get("stop_loss"),
-        take_profit=sig.get("take_profit"),
+        stop_loss=stop_loss,
+        take_profit=take_profit,
         lot_size=lot_size,
     )
     if not risk_res.get("ok"):
@@ -533,8 +571,8 @@ async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, A
         exchange=(option_contract or {}).get("exchange") or sig.get("exchange") or domain.exchange,
         segment=(option_contract or {}).get("segment") or sig.get("segment") or domain.segment,
         mode=mode,
-        stop_loss=sig.get("stop_loss"),
-        take_profit=sig.get("take_profit"),
+        stop_loss=stop_loss,
+        take_profit=take_profit,
         idempotency_key=idem_key,
     )
     if option_contract:

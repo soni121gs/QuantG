@@ -27,6 +27,15 @@ class PortfolioLedger:
         price = float(fill["price"])
         mode = fill["mode"]
         now_str = datetime.now(timezone.utc).isoformat()
+        stop_loss = fill.get("stop_loss")
+        take_profit = fill.get("take_profit")
+        protection = {
+            "stoploss_price": stop_loss,
+            "stop_loss": stop_loss,
+            "target_price": take_profit,
+            "take_profit": take_profit,
+            "protection_status": "PROTECTED" if stop_loss or take_profit else "UNPROTECTED",
+        }
 
         # Group positions by strategy and mode
         pos = await self.db.strategy_positions.find_one({
@@ -59,7 +68,8 @@ class PortfolioLedger:
                 "brokerage": float(fill.get("brokerage", 0.0)),
                 "created_at": now_str,
                 "updated_at": now_str,
-                "source_fill_id": fill["id"]
+                "source_fill_id": fill["id"],
+                "tp_sl_tsl_config": protection,
             }
             await self.db.strategy_positions.insert_one(position_doc)
             
@@ -68,11 +78,19 @@ class PortfolioLedger:
                 {"user_id": user_id, "symbol": target_symbol, "mode": mode},
                 {
                     "$set": {
+                        "strategy_id": strategy_id,
+                        "symbol": target_symbol,
+                        "target_symbol": target_symbol,
+                        "underlying": fill["symbol"],
+                        "mode": mode,
                         "quantity": qty,
                         "open_quantity": qty,
                         "qty": qty,
                         "average_buy_price": price,
                         "avg_price": price,
+                        "stop_loss": stop_loss,
+                        "take_profit": take_profit,
+                        "tp_sl_tsl_config": protection,
                         "updated_at": now_str
                     }
                 },
@@ -109,11 +127,19 @@ class PortfolioLedger:
                     {"user_id": user_id, "symbol": target_symbol, "mode": mode},
                     {
                         "$set": {
+                            "strategy_id": strategy_id,
+                            "symbol": target_symbol,
+                            "target_symbol": target_symbol,
+                            "underlying": fill["symbol"],
+                            "mode": mode,
                             "quantity": new_qty,
                             "open_quantity": new_qty,
                             "qty": new_qty,
                             "average_buy_price": avg_price,
                             "avg_price": avg_price,
+                            "stop_loss": stop_loss,
+                            "take_profit": take_profit,
+                            "tp_sl_tsl_config": protection,
                             "updated_at": now_str
                         }
                     }

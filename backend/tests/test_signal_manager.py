@@ -198,8 +198,48 @@ def test_conflict_resolver_symbol_group_blocking():
     assert sig_buy["rejection_reason"] == "symbol-group-active-position-exists"
 
 
+def test_conflict_resolver_blocks_duplicate_active_option_contract():
+    active_pos = {
+        "id": "pos-active",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol_group": "NIFTY 23400 PE 09 JUN 26",
+        "symbol": "NIFTY 23400 PE 09 JUN 26",
+        "target_symbol": "NIFTY 23400 PE 09 JUN 26",
+        "instrument_key": "NSE_FO|42296",
+        "status": "OPEN",
+    }
+    sig_buy = {
+        "id": "sig-buy",
+        "user_id": "user-1",
+        "strategy_id": "strat-2",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY 23400 PE 09 JUN 26",
+        "action": "SELL",
+        "confidence": 95.0,
+        "visual_config": {"options": {"strike_mode": "ATM_BUY"}},
+        "option_contract": {
+            "instrument_key": "NSE_FO|42296",
+            "option_type": "PE",
+            "transaction_type": "BUY",
+        },
+        "status": "PENDING",
+    }
+
+    approved, rejected_or_filtered = ConflictResolver.resolve(
+        pending_signals=[sig_buy],
+        active_positions=[active_pos],
+        one_active_position_per_symbol_group=False,
+    )
+
+    assert approved == []
+    assert rejected_or_filtered == [sig_buy]
+    assert sig_buy["status"] == "BLOCKED"
+    assert sig_buy["rejection_reason"] == "symbol-group-active-position-exists"
+
+
 @pytest.mark.anyio
-async def test_signal_manager_cooldown_active():
+async def test_signal_manager_cooldown_active_is_not_a_hard_blocker():
     db = MagicMock()
     
     # Configure mock strategy under active cooldown (last signal was 5 minutes ago, cooldown is 15 minutes)
@@ -217,8 +257,8 @@ async def test_signal_manager_cooldown_active():
     }
 
     ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
-    assert not ok
-    assert reason == "cooldown-active"
+    assert ok
+    assert reason is None
 
 
 @pytest.mark.anyio
@@ -245,7 +285,7 @@ async def test_signal_manager_cooldown_expired_is_approved():
 
 
 @pytest.mark.anyio
-async def test_signal_manager_max_trades_reached():
+async def test_signal_manager_max_trades_is_not_a_hard_blocker():
     db = MagicMock()
     
     db.strategies.find_one = AsyncMock(return_value={
@@ -265,8 +305,8 @@ async def test_signal_manager_max_trades_reached():
     }
 
     ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
-    assert not ok
-    assert reason == "max-trades-day-reached"
+    assert ok
+    assert reason is None
 
 
 def test_conflict_resolver_strategy_specific_override():
@@ -350,7 +390,7 @@ async def test_strategy_signal_validator_repeated_buy_with_open_position_blocks(
 
 
 @pytest.mark.anyio
-async def test_strategy_signal_validator_signal_spam_blocks():
+async def test_strategy_signal_validator_signal_spam_is_not_a_hard_blocker():
     db = MagicMock()
     db.signals.count_documents = AsyncMock(return_value=99)
     sig = {
@@ -370,8 +410,8 @@ async def test_strategy_signal_validator_signal_spam_blocks():
 
     result = await StrategySignalValidator.validate(db, sig, strategy, [])
 
-    assert not result["ok"]
-    assert result["reason_code"] == "STRATEGY_SIGNAL_SPAM"
+    assert result["ok"]
+    assert result["reason_code"] == "OK"
 
 
 @pytest.mark.anyio
@@ -473,6 +513,7 @@ async def test_dispatch_signal_uses_unified_router_for_paper(monkeypatch):
     captured = {}
     db = MagicMock()
     db.orders.find_one = AsyncMock(return_value=None)
+    db.strategy_positions.find_one = AsyncMock(return_value=None)
 
     async def fake_risk(self, **kwargs):
         captured["risk"] = kwargs
@@ -565,3 +606,39 @@ async def test_strategy_signal_validator_sell_without_open_position_blocks():
 
     assert not result["ok"]
     assert result["reason_code"] == "STRATEGY_FLIP_FLOP_SIGNAL"
+
+
+@pytest.mark.anyio
+async def test_strategy_signal_validator_allows_bearish_option_buy_entry_when_flat():
+    db = MagicMock()
+    db.signals.count_documents = AsyncMock(return_value=0)
+    sig = {
+        "id": "sig-bearish-put-entry",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26060524900PE",
+        "option_type": "PE",
+        "action": "SELL",
+        "confidence": 80,
+        "mode": "paper",
+        "visual_config": {"options": {"strike_mode": "ATM_BUY"}},
+        "option_contract": {
+            "instrument_key": "NSE_FO|12345",
+            "option_type": "PE",
+            "strike": 24900,
+            "transaction_type": "BUY",
+        },
+    }
+    strategy = {
+        "id": "strat-1",
+        "user_id": "user-1",
+        "mode": "paper",
+        "status": "live",
+        "visual_config": {"options": {"strike_mode": "ATM_BUY"}},
+    }
+
+    result = await StrategySignalValidator.validate(db, sig, strategy, [])
+
+    assert result["ok"]
+    assert result["reason_code"] == "OK"

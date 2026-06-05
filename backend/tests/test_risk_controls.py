@@ -42,6 +42,24 @@ def test_position_size_blocks_when_less_than_one_lot_allowed():
     assert result.quantity == 0
 
 
+def test_position_size_allows_one_option_lot_when_stop_risk_fits_daily_limit():
+    result = compute_position_size(SizeInputs(
+        equity=25_000,
+        free_margin=500_000,
+        requested_qty=65,
+        lot_size=65,
+        entry_price=126.1,
+        stop_loss_price=119.16,
+        max_position_value=50_000,
+        daily_loss_limit=450,
+        risk_style="micro_scalp",
+    ))
+
+    assert result.allowed
+    assert result.quantity == 65
+    assert result.order_value == 8196.5
+
+
 def test_market_quality_blocks_stale_micro_scalp_tick():
     old_tick = datetime.now(timezone.utc) - timedelta(seconds=45)
     quality = evaluate_market_data_quality(

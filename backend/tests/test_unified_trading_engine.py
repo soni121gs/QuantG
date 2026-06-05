@@ -489,6 +489,103 @@ class TestInstrumentResolver:
         assert inst.source == InstrumentSource.UPSTOX_MASTER
         assert inst.symbol == "NIFTY26FEB24850CE"
         assert inst.instrument_key == "NSE_FO|12345"
+
+    @pytest.mark.asyncio
+    async def test_nse_paper_with_simulation_disabled_does_not_fabricate_key(self):
+        """Paper realism mode must not leak PAPER_* keys into Upstox quote/order paths."""
+        db = AsyncMock()
+        upstox = MagicMock()
+        upstox.connected = True
+        upstox.get_market_quote.return_value = {
+            "data": {"NSE_INDEX|Nifty 50": {"last_price": 24850.0}}
+        }
+        upstox.parse_quote_ltp.return_value = 24850.0
+        upstox.get_option_chain.return_value = {"status": "success", "data": []}
+        resolver = InstrumentResolver(db, upstox_gateway=upstox)
+
+        inst = await resolver.resolve_instrument_with_source(
+            underlying="NIFTY",
+            instrument_type="INDEX_OPTION",
+            option_side="PE",
+            strike_rule="ATM",
+            mode="paper",
+            allow_simulated=False,
+        )
+
+        assert inst is None
+        assert resolver.last_diagnostics["reason"] == "no_upstox_option_match"
+
+    @pytest.mark.asyncio
+    async def test_nse_spot_resolution_accepts_upstox_alternate_response_key(self):
+        """Upstox may return index quotes under colon keys instead of the requested pipe key."""
+        db = AsyncMock()
+        upstox = MagicMock()
+        upstox.connected = True
+        upstox.latest_tick.return_value = None
+        upstox.get_market_quote.return_value = {
+            "data": {"NSE_INDEX:Nifty 50": {"last_price": 23391.0}}
+        }
+        upstox.parse_quote_ltp.return_value = None
+        upstox.get_option_chain.return_value = {
+            "status": "success",
+            "data": [{
+                "strike_price": 23400,
+                "expiry": date.today().isoformat(),
+                "call_options": {},
+                "put_options": {
+                    "instrument_key": "NSE_FO|57049",
+                    "trading_symbol": "NIFTY26060423400PE",
+                    "lot_size": 65,
+                },
+            }],
+        }
+        resolver = InstrumentResolver(db, upstox_gateway=upstox)
+
+        inst = await resolver.resolve_instrument_with_source(
+            underlying="NIFTY",
+            instrument_type="INDEX_OPTION",
+            option_side="PE",
+            strike_rule="ATM",
+            mode="paper",
+            allow_simulated=False,
+        )
+
+        assert inst is not None
+        assert inst.instrument_key == "NSE_FO|57049"
+        assert inst.source == InstrumentSource.UPSTOX_MASTER
+
+    @pytest.mark.asyncio
+    async def test_nse_option_resolution_search_fallback_after_chain_miss(self):
+        """Instrument search is used when option chain omits the target strike row."""
+        db = AsyncMock()
+        upstox = MagicMock()
+        upstox.connected = True
+        upstox.latest_tick.return_value = {"ltp": 23391.0}
+        upstox.get_option_chain.return_value = {"status": "success", "data": []}
+        upstox.search_instruments.return_value = {
+            "data": [{
+                "instrument_key": "NSE_FO|57049",
+                "trading_symbol": "NIFTY26060423400PE",
+                "instrument_type": "PE",
+                "strike_price": 23400,
+                "lot_size": 65,
+                "expiry": date.today().isoformat(),
+            }]
+        }
+        resolver = InstrumentResolver(db, upstox_gateway=upstox)
+
+        inst = await resolver.resolve_instrument_with_source(
+            underlying="NIFTY",
+            instrument_type="INDEX_OPTION",
+            option_side="PE",
+            strike_rule="ATM",
+            mode="paper",
+            allow_simulated=False,
+        )
+
+        assert inst is not None
+        assert inst.instrument_key == "NSE_FO|57049"
+        assert resolver.last_diagnostics["reason"] == "matched_upstox_search"
     
     @pytest.mark.asyncio
     async def test_mcx_paper_simulation_on_master_fail(self):

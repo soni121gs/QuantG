@@ -98,8 +98,6 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     daily_loss_limit = _positive(inputs.daily_loss_limit)
     style = str(inputs.risk_style or "balanced")
 
-    print(f"[DEBUG_SIZE] requested={requested}, entry={entry}, equity={equity}, free_margin={free_margin}, daily_loss_limit={daily_loss_limit}", flush=True)
-
     if requested <= 0:
         return SizeResult(False, 0, "requested quantity is zero", 0.0, 0.0, 0.0, {})
     if entry <= 0:
@@ -109,7 +107,7 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     unit_loss = abs(entry - stop) if stop > 0 else max(entry * 0.06, 1.0)
     risk_fraction = RISK_FRACTION_BY_STYLE.get(style, RISK_FRACTION_BY_STYLE["balanced"])
     base_risk_budget = equity * risk_fraction
-    risk_budget = min(base_risk_budget, daily_loss_limit * 0.35) if daily_loss_limit > 0 else base_risk_budget
+    risk_budget = min(base_risk_budget, daily_loss_limit) if daily_loss_limit > 0 else base_risk_budget
 
     qty_risk = floor(risk_budget / unit_loss) if unit_loss > 0 else 0
     qty_margin = floor((free_margin * float(inputs.margin_buffer or 0.85)) / entry) if free_margin > 0 else requested
@@ -126,6 +124,16 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     order_value = round(quantity * entry, 2)
 
     if quantity < lot_size:
+        one_lot_risk = unit_loss * lot_size
+        one_lot_value = entry * lot_size
+        near_one_lot_risk_budget = risk_budget >= one_lot_risk * 0.98
+        if (
+            requested <= lot_size
+            and near_one_lot_risk_budget
+            and free_margin * float(inputs.margin_buffer or 0.85) >= one_lot_value
+            and max_position_value >= one_lot_value
+        ):
+            return SizeResult(True, lot_size, "accepted one lot within stop-risk budget tolerance", risk_budget, unit_loss, round(one_lot_value, 2), caps)
         reason = "risk budget, margin, or max position cap allows less than one lot"
         if caps.get("margin", 0) < lot_size:
             reason = "insufficient margin"
