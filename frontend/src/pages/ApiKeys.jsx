@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail } from "../lib/api";
 import { KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy } from "lucide-react";
@@ -22,7 +22,7 @@ export default function ApiKeys() {
 
   const defaultUpstoxRedirect = () => `${window.location.origin}/api/broker/upstox/callback`;
 
-  const load = () =>
+  const load = useCallback(() =>
     Promise.all([
       api.get("/broker/keys").then((r) => setKeys(r.data)),
       api.get("/upstox/status").then((r) => setUpstoxStatus(r.data)).catch(() => {}),
@@ -35,9 +35,9 @@ export default function ApiKeys() {
         setUpstoxRedirectUri(uri);
         setForm((prev) => ({ ...prev, redirect_uri: uri }));
       }),
-    ]);
+    ]), []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     if (params.get("upstox") === "connected") {
@@ -45,7 +45,7 @@ export default function ApiKeys() {
       navigate("/broker-keys", { replace: true });
       load();
     }
-  }, [params, navigate]);
+  }, [params, navigate, load]);
 
   const save = async (e) => {
     e.preventDefault();

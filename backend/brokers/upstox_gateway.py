@@ -1021,6 +1021,8 @@ class UpstoxGateway:
     def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
         if not self.access_token:
             raise RuntimeError("Upstox access token is missing. Complete OAuth login first.")
+        if str(self.access_token).startswith("mock_live_upstox_token") and "/v2/order/place" in path:
+            raise RuntimeError("Upstox live order blocked: mock token cannot place production orders.")
         if str(self.access_token).startswith("mock_live_upstox_token"):
             return self._handle_mock_request(method, path, kwargs)
         base = self.hft_base_url if hft else self.api_base_url

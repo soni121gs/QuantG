@@ -424,6 +424,18 @@ class TestUpstoxFeedAuthProductionFix(unittest.TestCase):
         self.assertEqual(result["reason"], "mock_token_blocked")
         self.assertIn("mock token", result["message"])
 
+    def test_mock_token_blocks_live_order_placement(self):
+        """Verify that mock Upstox tokens cannot simulate production order placement."""
+        from brokers.upstox_gateway import UpstoxGateway
+
+        gw = UpstoxGateway.__new__(UpstoxGateway)
+        gw.access_token = "mock_live_upstox_token_123"
+
+        with self.assertRaises(RuntimeError) as ctx:
+            gw._request("POST", "/v2/order/place", hft=True, json={})
+
+        self.assertIn("mock token cannot place production orders", str(ctx.exception))
+
     def test_get_user_upstox_status_detailed_telemetry(self):
         """Verify that get_user_upstox_status exposes all new telemetry details."""
         import asyncio

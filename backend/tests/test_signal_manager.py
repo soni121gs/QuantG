@@ -614,3 +614,55 @@ async def test_strategy_signal_validator_allows_bearish_option_buy_entry_when_fl
 
     assert result["ok"]
     assert result["reason_code"] == "OK"
+
+
+@pytest.mark.anyio
+async def test_live_signal_dispatch_uses_server_order_core_boundary(monkeypatch):
+    captured = {}
+
+    db = MagicMock()
+    db.strategy_positions.find_one = AsyncMock(return_value=None)
+    db.orders.find_one = AsyncMock(return_value=None)
+
+    async def fake_evaluate_order(self, **kwargs):
+        captured["risk"] = kwargs
+        return {"ok": True, "quantity": kwargs["requested_qty"]}
+
+    async def fake_place_order(**kwargs):
+        captured["order"] = kwargs
+        return {"id": "order-live-1", "status": "PENDING_BROKER", "mode": "live"}
+
+    monkeypatch.setattr("core.risk_manager.RiskManager.evaluate_order", fake_evaluate_order)
+
+    sig = {
+        "id": "sig-live",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26JUN25000CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "live",
+        "price": 34.5,
+        "option_contract": {
+            "tradingsymbol": "NIFTY26JUN25000CE",
+            "instrument_key": "NSE_FO|12345",
+            "exchange": "NFO",
+            "segment": "NSE_FO",
+            "lot_size": 65,
+            "ltp": 34.5,
+            "source": "UPSTOX_LIVE",
+        },
+        "visual_config": {"options": {"enabled": True, "lots": 1}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "live", "status": "live"}
+
+    result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy, fake_place_order)
+
+    assert result["status"] == "PENDING_BROKER"
+    assert captured["risk"]["mode"] == "live"
+    assert captured["risk"]["requested_qty"] == 65
+    assert captured["order"]["source"] == "signal:strategy:strat-1"
+    assert captured["order"]["option_contract"]["instrument_key"] == "NSE_FO|12345"
+    assert captured["order"]["qty"] == 1
+    assert captured["order"]["idempotency_key"] == "sig:sig-live"

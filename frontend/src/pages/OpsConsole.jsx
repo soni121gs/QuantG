@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { 
   Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, 
   Wifi, Power, Play, SquareArrowOutUpRight, Key, CheckCircle2, 
@@ -37,7 +37,7 @@ export default function OpsConsole() {
   const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
   const [reconciliationBreaks, setReconciliationBreaks] = useState(null);
 
-  const loadPendingUsers = async () => {
+  const loadPendingUsers = useCallback(async () => {
     if (user?.role !== "owner") return;
     try {
       const r = await api.get("/ops/pending-users");
@@ -45,9 +45,9 @@ export default function OpsConsole() {
     } catch (e) {
       console.error("Failed to load pending users", e);
     }
-  };
+  }, [user?.role]);
 
-  const loadNeedsReview = async () => {
+  const loadNeedsReview = useCallback(async () => {
     try {
       const r = await api.get("/ops/reconciliation/breaks");
       setReconciliationBreaks(r.data);
@@ -55,7 +55,7 @@ export default function OpsConsole() {
     } catch (e) {
       console.error("Failed to load needs review orders", e);
     }
-  };
+  }, []);
 
   const handleApprove = async (userId, name) => {
     try {
@@ -78,7 +78,7 @@ export default function OpsConsole() {
     }
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const r = await api.get("/ops/diagnostics");
       setData(r.data);
@@ -91,7 +91,7 @@ export default function OpsConsole() {
     } catch (e) {
       console.error("Ops diagnostics loading failed", e);
     }
-  };
+  }, []);
 
   useEffect(() => {
     load().catch(() => {});
@@ -103,7 +103,7 @@ export default function OpsConsole() {
       loadNeedsReview().catch(() => {});
     }, 4000);
     return () => clearInterval(t);
-  }, [user]);
+  }, [user, load, loadPendingUsers, loadNeedsReview]);
 
   const run = async (key, url, confirmText) => {
     if (confirmText && !window.confirm(confirmText)) return;

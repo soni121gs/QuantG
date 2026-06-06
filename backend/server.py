@@ -9501,6 +9501,9 @@ async def _sync_kotak_order_statuses(user_id: str) -> Dict[str, int]:
 
 
 async def _sync_upstox_order_statuses(user_id: str, *, force: bool = False) -> Dict[str, int]:
+    upstox_status = await get_user_upstox_status(user_id)
+    if not upstox_status.get("token_valid"):
+        return {"checked": 0, "updated": 0, "reason": upstox_status.get("reason") or "upstox_token_invalid"}
     gateway = await get_user_upstox_gateway(user_id)
     if not gateway or not gateway.connected:
         return {"checked": 0, "updated": 0, "reason": "upstox_not_connected"}
@@ -10932,7 +10935,13 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
                 "validated_at": token_validated_at,
             }
     else:
-        logger.warning("Upstox token missing for user=%s; live trading and ticker require reconnect", user_id)
+        _log_throttled(
+            f"upstox-token-missing:{user_id}",
+            300.0,
+            logging.INFO,
+            "Upstox token missing for user=%s; live trading and ticker require reconnect",
+            user_id,
+        )
     missing = [
         name
         for name, value in {
@@ -12063,26 +12072,7 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
     
     if "paper_mode" in update and update["paper_mode"] is False:
-        if not os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true":
-            raise HTTPException(
-                status_code=400,
-                detail="Live trading mode cannot be enabled: CORE_ENGINE_LIVE_ENABLED is set to false in the environment.",
-            )
-    if "paper_mode" in update and update["paper_mode"] is False:
-        upstox_status = await get_user_upstox_status(user["id"])
-        if not upstox_status.get("token_valid"):
-            raise HTTPException(
-                status_code=400,
-                detail="Live trading disabled: Reconnect Upstox required before switching to LIVE.",
-            )
-        if not _is_nse_market_open():
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Live trading can only be enabled during NSE/BSE market hours "
-                    "(09:15-15:30 IST, Mon-Fri). Switch to LIVE during an active trading session."
-                ),
-            )
+        update["allow_simulated_prices"] = False
 
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")
@@ -12329,6 +12319,9 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                 user_id = user_row["id"]
                 
                 # Check Upstox live index prices first if connected.
+                upstox_status = await get_user_upstox_status(user_id)
+                if not upstox_status.get("token_valid"):
+                    continue
                 upstox_gw = await get_user_upstox_gateway(user_id)
                 if upstox_gw and upstox_gw.connected:
                     upstox_keys = {
@@ -12559,6 +12552,9 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
 
                 if in_market_hours:
                     try:
+                        upstox_status = await get_user_upstox_status(user_id)
+                        if not upstox_status.get("token_valid"):
+                            continue
                         gw = await get_user_upstox_gateway(user_id)
                         if gw and gw.connected:
                             streams = getattr(app.state, "upstox_portfolio_streams", None)
@@ -13388,7 +13384,8 @@ async def get_trading_live_readiness(user=Depends(get_current_user)):
     })
 
     try:
-        reconciliation = await broker_reconciliation_summary(db, user_id, await get_user_upstox_gateway(user_id))
+        reconciliation_gateway = await get_user_upstox_gateway(user_id) if token_valid else None
+        reconciliation = await broker_reconciliation_summary(db, user_id, reconciliation_gateway)
     except Exception as exc:
         reconciliation = {"status": "UNKNOWN", "errors": [str(exc)[:200]], "pending_orders": []}
     recon_ok = str(reconciliation.get("status") or "").upper() in {"OK", "READY", "NO_GATEWAY"} and not reconciliation.get("errors")

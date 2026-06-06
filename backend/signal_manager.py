@@ -233,7 +233,13 @@ def _positive_float(*values: Any) -> Optional[float]:
     return None
 
 
-async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any]:
+async def _dispatch_signal_via_unified_engine(
+    db,
+    user_id: str,
+    sig: Dict[str, Any],
+    strategy: Dict[str, Any],
+    place_order_fn=None,
+) -> Dict[str, Any]:
     from core.event_store import CoreEventStore
     from core.execution_router import ExecutionRouter
     from core.market_domains import resolve_domain_by_underlying
@@ -358,6 +364,26 @@ async def _dispatch_signal_via_unified_engine(db, user_id: str, sig: Dict[str, A
             "reason_code": risk_res.get("status") or "RISK_BLOCKED",
         }
 
+    if mode == "live":
+        if place_order_fn is None:
+            raise ValueError("Live signal execution requires the server order core boundary.")
+        return await place_order_fn(
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            qty=max(1, lots) if option_contract else int(sig.get("qty") or sig.get("quantity") or requested_qty),
+            order_type=str(sig.get("order_type") or "MARKET").upper(),
+            product=sig.get("product"),
+            source=f"signal:strategy:{sig['strategy_id']}",
+            option_contract=option_contract,
+            exchange=(option_contract or {}).get("exchange") or sig.get("exchange") or "NSE",
+            price=price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            idempotency_key=idem_key,
+            signal_id=sig["id"],
+        )
+
     intent_doc = order_mgr.compile_order_intent(
         strategy_id=sig["strategy_id"],
         symbol=symbol,
@@ -481,7 +507,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                         for sig in approved:
                             try:
                                 strategy = await db.strategies.find_one({"id": sig["strategy_id"], "user_id": user_id}) or {}
-                                order_res = await _dispatch_signal_via_unified_engine(db, user_id, sig, strategy)
+                                order_res = await _dispatch_signal_via_unified_engine(db, user_id, sig, strategy, place_order_fn)
                                 
                                 now_str = datetime.now(timezone.utc).isoformat()
                                 order_status = str(order_res.get("status") or "").upper()
