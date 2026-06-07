@@ -10346,9 +10346,20 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         intent_doc["execution_tag"] = _new_execution_tag(strategy_id)
         if paper:
             intent_doc["paper_realism"] = "UPSTOX_LIKE"
+        if option_contract and not paper:
+            intent_doc["instrument_token"] = (
+                option_contract.get("instrument_key")
+                or option_contract.get("instrument_token")
+                or ""
+            )
 
         ledger = PortfolioLedger(db)
-        router = ExecutionRouter(db, ledger)
+        router = ExecutionRouter(
+            db,
+            ledger,
+            place_upstox_fn=_place_upstox_order,
+            resolve_upstox_token_fn=_upstox_instrument_token,
+        )
         order_res = await router.route_intent(user_id, intent_doc)
         return _clean_order_response(order_res)
 

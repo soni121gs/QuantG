@@ -20,14 +20,15 @@ Both adapters:
 This ensures strategies can trade paper and live without code changes—only the
 mode flag changes where the order goes.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Callable, Awaitable, Optional
 from datetime import datetime, timezone
+import os
 import uuid
 import logging
 
 from core.portfolio_ledger import PortfolioLedger
 from core.paper_broker import PaperWallet
-from execution_bridge import submit_order as bridge_submit_order
+from execution_bridge import submit_order as bridge_submit_order, ExecutionDispatchPayload
 
 logger = logging.getLogger("quantg.execution_router")
 
@@ -184,124 +185,146 @@ class PaperAdapter:
 
 class UpstoxLiveAdapter:
     """Live trading execution adapter.
-    
-    Dispatches orders to Upstox broker for real execution on market.
-    
-    Part of the unified pipeline:
-    - Receives identical OrderIntent as PaperAdapter
-    - Applies identical risk checks via RiskManager
-    - Creates order/fill records in the same schema
-    - Updates portfolio ledger identically
-    
-    Differences from PaperAdapter:
-    - Fills are async (subject to market conditions)
-    - Requires broker connection (Upstox API)
-    - Real fund deduction via margin
-    - Real market slippage
-    
-    Safety measures:
-    - Requires CORE_ENGINE_LIVE_ENABLED environment flag
-    - Requires user.live_arm_state.armed = true
-    - Requires Upstox OAuth authentication
+
+    Dispatches orders to Upstox via execution_bridge.submit_order().
+
+    Requires two callbacks injected at construction time by server.py:
+      place_upstox_fn      — coroutine that places the actual Upstox order
+      resolve_upstox_token_fn — sync fn(exchange, tradingsymbol, token) -> Optional[str]
+
+    Safety gates (in order):
+      1. CORE_ENGINE_LIVE_ENABLED env flag
+      2. MCX permanently blocked
+      3. live_arm_state.armed = true
+      4. live_arm_state.global_live_enabled = true
+      5. instrument_token valid Upstox key (contains '|', not PAPER_/mock_/"0")
     """
-    def __init__(self, db, ledger: PortfolioLedger):
+
+    def __init__(
+        self,
+        db,
+        ledger: PortfolioLedger,
+        *,
+        place_upstox_fn: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
+        resolve_upstox_token_fn: Optional[Callable[[str, str, str], Optional[str]]] = None,
+    ):
         self.db = db
         self.ledger = ledger
+        self._place_upstox_fn = place_upstox_fn
+        self._resolve_upstox_token_fn = resolve_upstox_token_fn
 
     async def execute(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
-        """Dispatches concrete trade execution payloads to Upstox's production endpoints."""
+        """Dispatches a live OrderIntent to Upstox via execution_bridge.submit_order()."""
         now = datetime.now(timezone.utc).isoformat()
-        
-        # Double check live safety arm switch and global core live flag
-        import os
-        live_enabled = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
-        if not live_enabled:
-            raise RuntimeError("Live execution blocked: CORE_ENGINE_LIVE_ENABLED is set to false in the environment.")
 
+        # Gate 1: env flag
+        if not os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true":
+            raise RuntimeError("Live execution blocked: CORE_ENGINE_LIVE_ENABLED is not true.")
+
+        # Gate 2: MCX permanently blocked
         if intent.get("segment") == "MCX_FO" or intent.get("exchange") == "MCX":
             raise RuntimeError("Execution blocked: MCX has been removed from QuantG.")
 
+        # Gate 3 & 4: arm state
         arm = await self.db.live_arm_state.find_one({"user_id": user_id})
         if not arm or not arm.get("armed"):
-            raise RuntimeError("Live execution blocked: System is not armed.")
-            
-        logger.info(f"Live order intent approved. Routing to broker: {intent['target_symbol']}")
-        
-        # Call legacy bridge function to perform actual placement
-        # Wrap it with preflight metrics logging
-        try:
-            from fastapi import HTTPException
-            from pydantic import BaseModel
-            
-            # Reconstruct model payload for the bridge
-            class RefModel(BaseModel):
-                exchange: str
-                tradingsymbol: str
-                instrument_token: str
-                segment: str
-                broker: str = "upstox"
-                asset_class: str = "OPTION_LONG"
-                
-            class IntentModel(BaseModel):
-                instrument: RefModel
-                quantity: int
-                intent: str
-                stop_loss: Optional[float] = None
-                take_profit: Optional[float] = None
+            raise RuntimeError("Live execution blocked: live_arm_state.armed is not true.")
+        if not arm.get("global_live_enabled"):
+            raise RuntimeError("Live execution blocked: live_arm_state.global_live_enabled is not true.")
 
-            ref = RefModel(
-                exchange=intent["exchange"],
-                tradingsymbol=intent["target_symbol"],
-                instrument_token=intent.get("instrument_token") or "0",
-                segment=intent["segment"]
+        # Gate 5: instrument token must be a real Upstox instrument key
+        instrument_token = str(intent.get("instrument_token") or "").strip()
+        if not instrument_token or instrument_token == "0":
+            raise RuntimeError(
+                f"Live execution blocked: instrument_token missing or '0' for {intent.get('target_symbol')}."
             )
-            intent_model = IntentModel(
-                instrument=ref,
-                quantity=intent["qty"],
-                intent="OPEN_LONG" if intent["side"] == "BUY" else "CLOSE_LONG"
+        if instrument_token.upper().startswith("PAPER_"):
+            raise RuntimeError(
+                f"Live execution blocked: PAPER_ instrument_key cannot be used: {instrument_token}"
             )
-            
-            # Dispatch actual trade call to upstox API
-            submit_res = await bridge_submit_order(
-                user_id=user_id,
-                intent=intent_model,
-                order_type=intent.get("order_type", "MARKET"),
-                product="MIS",
-                price=intent["requested_price"],
-                tag=intent.get("execution_tag") or f"quantg:{intent['strategy_id'][:18]}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+        if instrument_token.lower().startswith("mock_"):
+            raise RuntimeError(
+                f"Live execution blocked: mock instrument_key cannot be used: {instrument_token}"
             )
-            
-            broker_order_id = submit_res.get("broker_order_id") or submit_res.get("order_id")
-            order_doc = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "strategy_id": intent["strategy_id"],
-                "symbol": intent["symbol"],
-                "target_symbol": intent["target_symbol"],
-                "side": intent["side"],
-                "qty": intent["qty"],
-                "filled_qty": 0,
-                "pending_qty": intent["qty"],
-                "status": "PLACED",
-                "execution_status": "PLACED",
-                "requested_price": intent["requested_price"],
-                "price": intent["requested_price"],
-                "exchange": intent["exchange"],
-                "segment": intent["segment"],
-                "mode": "live",
-                "broker": "upstox",
-                "broker_order_id": broker_order_id,
-                "idempotency_key": intent.get("idempotency_key"),
-                "created_at": now,
-                "updated_at": now
-            }
-            
-            await self.db.orders.insert_one(order_doc)
-            return order_doc
-            
-        except Exception as e:
-            logger.error(f"Live broker trade dispatch failed: {e}")
-            raise RuntimeError(f"Broker rejected live order intent: {e}")
+        if "|" not in instrument_token:
+            raise RuntimeError(
+                f"Live execution blocked: instrument_key must contain '|' (Upstox format): {instrument_token}"
+            )
+
+        # Callbacks must be injected from server.py when constructing ExecutionRouter
+        if self._place_upstox_fn is None:
+            raise RuntimeError(
+                "CORE_LIVE_ADAPTER_NOT_CONFIGURED: place_upstox_fn not injected. "
+                "Pass place_upstox_fn=_place_upstox_order when constructing ExecutionRouter."
+            )
+
+        resolve_fn = self._resolve_upstox_token_fn or (
+            lambda exchange, tradingsymbol, tok: tok if "|" in str(tok or "") else None
+        )
+
+        # Build correct ExecutionDispatchPayload for execution_bridge
+        price_val = intent.get("requested_price")
+        payload = ExecutionDispatchPayload(
+            broker="upstox",
+            segment=str(intent["segment"]),
+            exchange=str(intent["exchange"]),
+            tradingsymbol=str(intent.get("target_symbol") or intent.get("symbol") or ""),
+            instrument_token=instrument_token,
+            quantity=int(intent["qty"]),
+            order_type=str(intent.get("order_type") or "MARKET").upper(),
+            side=str(intent["side"]).upper(),
+            product=str(intent.get("product") or "MIS").upper(),
+            price=float(price_val) if price_val else None,
+            stop_loss=intent.get("stop_loss"),
+            take_profit=intent.get("take_profit"),
+            tag=intent.get("execution_tag") or f"quantg:{intent['strategy_id'][:18]}:{datetime.now(timezone.utc).strftime('%Y%m%d')}",
+            validity="DAY",
+        )
+
+        logger.info(
+            "Live order dispatching user=%s symbol=%s side=%s qty=%s token=%s",
+            user_id, payload.tradingsymbol, payload.side, payload.quantity, instrument_token,
+        )
+
+        submit_res = await bridge_submit_order(
+            user_id,
+            payload,
+            place_upstox=self._place_upstox_fn,
+            resolve_upstox_token=resolve_fn,
+        )
+
+        if not submit_res.get("ok"):
+            raise RuntimeError(
+                f"Upstox order rejected for {payload.tradingsymbol}: {submit_res.get('error')}"
+            )
+
+        broker_order_id = submit_res.get("broker_order_id")
+        order_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "strategy_id": intent["strategy_id"],
+            "symbol": intent["symbol"],
+            "target_symbol": intent.get("target_symbol", intent["symbol"]),
+            "side": intent["side"],
+            "qty": intent["qty"],
+            "filled_qty": 0,
+            "pending_qty": intent["qty"],
+            "status": "PLACED",
+            "execution_status": "PLACED",
+            "requested_price": price_val,
+            "price": price_val,
+            "exchange": intent["exchange"],
+            "segment": intent["segment"],
+            "mode": "live",
+            "broker": "upstox",
+            "broker_order_id": broker_order_id,
+            "idempotency_key": intent.get("idempotency_key"),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        await self.db.orders.insert_one(order_doc)
+        return order_doc
 
 class BacktestAdapter:
     def __init__(self, ledger_records: list):
@@ -334,10 +357,22 @@ class BacktestAdapter:
         return fill_doc
 
 class ExecutionRouter:
-    def __init__(self, db, ledger: PortfolioLedger):
+    def __init__(
+        self,
+        db,
+        ledger: PortfolioLedger,
+        *,
+        place_upstox_fn: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
+        resolve_upstox_token_fn: Optional[Callable[[str, str, str], Optional[str]]] = None,
+    ):
         self.db = db
         self.paper_adapter = PaperAdapter(db, ledger)
-        self.live_adapter = UpstoxLiveAdapter(db, ledger)
+        self.live_adapter = UpstoxLiveAdapter(
+            db,
+            ledger,
+            place_upstox_fn=place_upstox_fn,
+            resolve_upstox_token_fn=resolve_upstox_token_fn,
+        )
 
     async def route_intent(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
         mode = str(intent["mode"]).lower()

@@ -66,36 +66,55 @@ class ReadinessChecker:
             }
         """
         checks = {}
-        
+
         try:
-            # 1. Check live arm status
+            # 1. Check live arm status (armed)
             arm_state = await self.db.live_arm_state.find_one({"user_id": user_id})
             checks["live_armed"] = bool(arm_state and arm_state.get("armed"))
-            
-            # 2. Check Upstox OAuth
+
+            # 2. Check global_live_enabled (must be true alongside armed)
+            checks["global_live_enabled"] = bool(arm_state and arm_state.get("global_live_enabled"))
+
+            # 3. Check Upstox OAuth via broker_keys (same source as live_entry_preflight)
+            broker_keys = await self.db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
+            has_token = bool(broker_keys and broker_keys.get("access_token"))
+            checks["upstox_authenticated"] = has_token
+
+            # 4. Check token is not a mock/test token
+            mock_token = has_token and str(broker_keys.get("access_token", "")).startswith("mock_")
+            checks["token_not_mock"] = has_token and not mock_token
+
+            # 5. Check NSE_FO permission (from user profile)
             user = await self.db.users.find_one({"id": user_id})
-            checks["upstox_authenticated"] = bool(
-                user and user.get("upstox_token")
-            )
-            
-            # 3. Check NSE_FO permission
             allowed_segments = user.get("allowed_segments") or [] if user else []
             checks["nse_fo_permission"] = "NSE_FO" in allowed_segments
-            
-            # 4. Check BSE_FO permission
+
+            # 6. Check BSE_FO permission
             checks["bse_fo_permission"] = "BSE_FO" in allowed_segments
-            
+
+            # 7. No UNKNOWN_NEEDS_REVIEW live orders (blocks reconciliation-clean trading)
+            unknown_order = await self.db.orders.find_one({
+                "user_id": user_id,
+                "status": "UNKNOWN_NEEDS_REVIEW",
+                "mode": "live",
+            })
+            checks["no_unknown_review_orders"] = unknown_order is None
+
+            # 8. No broker reconciliation mismatch
+            recon = await self.db.risk_state.find_one({"_id": f"position_reconciliation:{user_id}"})
+            checks["no_reconciliation_mismatch"] = not bool(recon and recon.get("mismatch"))
+
             all_ready = all(checks.values())
             return {
                 "ready": all_ready,
-                "checks": checks
+                "checks": checks,
             }
         except Exception as e:
             logger.error(f"Live readiness check failed: {e}")
             return {
                 "ready": False,
                 "checks": checks,
-                "error": str(e)
+                "error": str(e),
             }
     
     async def check_paper_readiness(self, user_id: str) -> Dict[str, Any]:
