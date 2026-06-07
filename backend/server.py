@@ -14913,6 +14913,29 @@ async def startup():
                 await _reconcile_stale_orders_for_user(user_id)
             except Exception as reconcile_err:
                 logger.warning("Startup stale order reconciliation failed for user %s: %s", user_id, reconcile_err)
+
+            # Broker position reconciliation for live users on restart.
+            # Compares local strategy_positions ledger against broker's live portfolio
+            # so ghost positions and orphan broker positions are surfaced immediately.
+            try:
+                if not settings.get("paper_mode", True):
+                    from core.reconciliation import CoreReconciliation
+                    user_doc = await db.users.find_one({"id": user_id}) or {"id": user_id}
+                    broker_positions = await _fetch_broker_positions_for_user(user_doc, settings)
+                    rec = CoreReconciliation(db)
+                    rec_result = await rec.reconcile_portfolio(user_id, broker_positions, mode="live")
+                    if rec_result.get("mismatch_detected"):
+                        logger.critical(
+                            "STARTUP BROKER RECONCILIATION MISMATCH for user %s: %s",
+                            user_id, rec_result["mismatches"],
+                        )
+                    else:
+                        logger.info(
+                            "Startup broker reconciliation passed for user %s (%d symbols checked)",
+                            user_id, len(rec_result.get("checked_symbols", [])),
+                        )
+            except Exception as broker_rec_err:
+                logger.warning("Startup broker reconciliation failed for user %s: %s", user_id, broker_rec_err)
     except Exception as e:
         logger.warning(f"default strategy seeding/reconciliation skipped: {e}")
 

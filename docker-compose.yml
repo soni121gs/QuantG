@@ -34,7 +34,7 @@ services:
       OPTION_LEDGER_PATH: /data/runtime_state.sqlite3
       CORE_ENGINE_ENABLED: "true"
       CORE_ENGINE_PAPER_ENABLED: "true"
-      CORE_ENGINE_LIVE_ENABLED: "${CORE_ENGINE_LIVE_ENABLED:-true}"
+      CORE_ENGINE_LIVE_ENABLED: "${CORE_ENGINE_LIVE_ENABLED:-false}"
       LEGACY_EXECUTION_WRITES_ENABLED: "false"
     volumes:
       - backend-state:/data
