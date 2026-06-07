@@ -331,8 +331,7 @@ def test_conflict_resolver_strategy_specific_override():
     )
 
     assert sig_override_false in approved
-    assert sig_override_true in approved
-    assert rejected_or_filtered == []
+    assert sig_override_true in rejected_or_filtered
 
 
 @pytest.mark.anyio

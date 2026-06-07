@@ -173,6 +173,7 @@ class OptionStateLedger:
         max_trades_day: int = 2,
         required_capital: float = 0.0,
         daily_loss_limit: float = 0.0,
+        exit_mode: str = "tp_sl_tsl_or_signal",
     ) -> None:
         max_lots = 1  # Core invariant: one lot maximum.
         now = utc_now()
@@ -193,6 +194,7 @@ class OptionStateLedger:
                         "cooldown_minutes": cooldown_minutes,
                         "max_trades_day": max_trades_day,
                         "required_capital": required_capital,
+                        "exit_mode": exit_mode,
                         "updated_at": iso(now),
                     },
                     "$setOnInsert": {
@@ -769,6 +771,14 @@ class OptionStateLedger:
     def exit_signal_for_position(self, position: Dict[str, Any]) -> Optional[str]:
         if position.get("status") != POSITION_FILLED:
             return None
+        
+        # Check strategy exit mode to determine if premium TP/SL checks should run
+        strategy_id = position.get("strategy_id")
+        state = self.db.option_strategy_states.find_one({"strategy_id": strategy_id})
+        exit_mode = state.get("exit_mode", "tp_sl_tsl_or_signal") if state else "tp_sl_tsl_or_signal"
+        if exit_mode in ("signal_only", "indicator_only"):
+            return None
+
         ltp = float(position["ltp"])
         side = _normalize_side(position.get("position_side"))
         if side == SIDE_SHORT:

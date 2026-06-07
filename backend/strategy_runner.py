@@ -411,28 +411,37 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 ).upper()
                 option_resolution_requested = bool(opt_cfg.get("enabled")) and instrument_type not in {"FUTURE", "FUTURES", "FUTCOM", "COMMODITY_FUTURE"}
                 option_buying_mode = option_resolution_requested and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
-                if option_buying_mode and action == "SELL":
-                    # In option-buying strategies a SELL signal has two meanings:
-                    # with an active position it is an exit, while flat it is a PE entry.
+                if option_buying_mode:
+                    # In option-buying strategies, exit can be SELL (for CE) or BUY (for PE)
                     active_position = await db.strategy_positions.find_one(
                         {
                             "user_id": s["user_id"],
                             "strategy_id": s["id"],
                             "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
                         },
-                        {"_id": 0, "id": 1},
+                        {"_id": 0, "id": 1, "instrument_key": 1, "trading_symbol": 1},
                     )
                     if active_position and close_strategy_fn:
-                        await close_strategy_fn(s["user_id"], s["id"], reason="strategy-sell-signal")
-                        await db.strategies.update_one(
-                            {"id": s["id"]},
-                            {"$set": {**eval_set,
-                                      "last_signal_action": action,
-                                      "last_signals_count": signals_count,
-                                      "last_filter_reason": "SELL signal used as option-buying exit."},
-                             "$inc": inc_set},
-                        )
-                        continue
+                        inst_key = str(active_position.get("instrument_key") or active_position.get("trading_symbol") or "").upper()
+                        is_pe = "PE" in inst_key or inst_key.endswith("PE")
+                        is_exit = (action == "SELL" and not is_pe) or (action == "BUY" and is_pe)
+                        
+                        risk_cfg = (vc or {}).get("risk") or {}
+                        exit_mode = risk_cfg.get("exit_mode", "tp_sl_tsl_or_signal")
+                        if exit_mode == "tp_sl_only":
+                            is_exit = False
+                            
+                        if is_exit:
+                            await close_strategy_fn(s["user_id"], s["id"], reason=f"strategy-{action.lower()}-signal")
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_signal_action": action,
+                                          "last_signals_count": signals_count,
+                                          "last_filter_reason": f"{action} signal used as option-buying exit."},
+                                 "$inc": inc_set},
+                            )
+                            continue
                 if option_resolution_requested and resolve_option_fn:
                     try:
                         option_contract = await resolve_option_fn(

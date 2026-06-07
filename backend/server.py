@@ -1656,6 +1656,414 @@ RETAIL_LIVE_STATE_CODE = """def run(data):
 """
 
 
+NIFTY_ATM_MOMENTUM_CODE = """def run(data):
+    if len(data) < 45:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for value in values[1:]:
+            out.append(value * k + out[-1] * (1 - k))
+        return out
+
+    def avg(values):
+        return sum(values) / max(1, len(values))
+
+    ema8 = ema(closes, 8)
+    ema21 = ema(closes, 21)
+    ema34 = ema(closes, 34)
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    best = 0.0
+
+    for i in range(34, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and (clock < '09:30' or clock > '14:45'):
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'NIFTY momentum time exit'})
+                position = "NONE"
+            continue
+        recent_range = max(highs[i-12:i+1]) - min(lows[i-12:i+1])
+        candle_range = max(0.01, avg([highs[j] - lows[j] for j in range(i-10, i+1)]))
+        momentum = closes[i] - closes[i-3]
+        avg_vol = avg(vols[i-20:i])
+        vol_ok = vols[i] >= avg_vol * 0.95
+        bullish = ema8[i] > ema21[i] > ema34[i] and closes[i] > max(highs[i-4:i]) and momentum > max(recent_range * 0.16, candle_range * 0.55) and vol_ok
+        bearish = ema8[i] < ema21[i] < ema34[i] and closes[i] < min(lows[i-4:i]) and momentum < -max(recent_range * 0.16, candle_range * 0.55) and vol_ok
+
+        if position == "LONG":
+            if bearish or closes[i] < ema8[i]:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NIFTY momentum CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or closes[i] > ema8[i]:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NIFTY momentum PE exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'NIFTY CE momentum with true EMA and volume'})
+                position = "LONG"
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'NIFTY PE momentum with true EMA and volume'})
+                position = "SHORT"
+    return signals
+"""
+
+
+BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
+    if len(data) < 45:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+
+    def avg(values):
+        return sum(values) / max(1, len(values))
+
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    best = 0.0
+
+    for i in range(24, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and (clock < '09:35' or clock > '14:35'):
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'BANKNIFTY breakout time exit'})
+                position = "NONE"
+            continue
+        channel_high = max(highs[i-12:i])
+        channel_low = min(lows[i-12:i])
+        channel_mid = (channel_high + channel_low) / 2
+        avg_range = max(0.01, avg([highs[j] - lows[j] for j in range(i-12, i)]))
+        atr = max(0.01, avg([max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-14, i)]))
+        avg_vol = avg(vols[i-20:i])
+        vol_ok = vols[i] >= avg_vol * 1.05
+        bullish = closes[i] > channel_high and closes[i] - closes[i-1] > avg_range * 0.45 and avg_range > atr * 0.45 and vol_ok
+        bearish = closes[i] < channel_low and closes[i-1] - closes[i] > avg_range * 0.45 and avg_range > atr * 0.45 and vol_ok
+
+        if position == "LONG":
+            if bearish or closes[i] < channel_mid:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY CE breakout exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or closes[i] > channel_mid:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY PE breakout exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY CE confirmed range breakout'})
+                position = "LONG"
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY PE confirmed range breakdown'})
+                position = "SHORT"
+    return signals
+"""
+
+
+NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
+    if len(data) < 45:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+
+    def avg(values):
+        return sum(values) / max(1, len(values))
+
+    weighted = 0.0
+    total_vol = 0.0
+    vwap = []
+    for h, l, c, v in zip(highs, lows, closes, vols):
+        weighted += ((h + l + c) / 3.0) * v
+        total_vol += v
+        vwap.append(weighted / max(1.0, total_vol))
+
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    best = 0.0
+
+    for i in range(25, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and (clock < '09:45' or clock > '14:30'):
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'VWAP time exit'})
+                position = "NONE"
+            continue
+        avg_vol = avg(vols[i-20:i])
+        body = abs(closes[i] - closes[i-1])
+        range_avg = max(0.01, avg([highs[j] - lows[j] for j in range(i-10, i)]))
+        no_trade_zone = range_avg * 0.20
+        trend_up = closes[i] > vwap[i] + no_trade_zone and closes[i-1] <= vwap[i-1]
+        trend_down = closes[i] < vwap[i] - no_trade_zone and closes[i-1] >= vwap[i-1]
+        vol_ok = vols[i] >= avg_vol * 1.20 and body >= range_avg * 0.35
+
+        if position == "LONG":
+            if trend_down or closes[i] < vwap[i]:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'VWAP CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if trend_up or closes[i] > vwap[i]:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'VWAP PE exit'})
+                position = "NONE"
+        else:
+            if trend_up and vol_ok:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'VWAP CE breakout with volume'})
+                position = "LONG"
+            elif trend_down and vol_ok:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'VWAP PE breakdown with volume'})
+                position = "SHORT"
+    return signals
+"""
+
+
+SENSEX_RSI_PULLBACK_CODE = """def run(data):
+    if len(data) < 65:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+
+    def sma(values, period):
+        out = []
+        for i in range(len(values)):
+            if i < period - 1:
+                out.append(values[i])
+            else:
+                out.append(sum(values[i-period+1:i+1]) / period)
+        return out
+
+    def rsi_at(i, period):
+        gains = 0.0
+        losses = 0.0
+        for j in range(i - period + 1, i + 1):
+            change = closes[j] - closes[j-1]
+            gains += max(change, 0)
+            losses += max(-change, 0)
+        rs = (gains / period) / max(0.0001, losses / period)
+        return 100 - (100 / (1 + rs))
+
+    sma20 = sma(closes, 20)
+    sma50 = sma(closes, 50)
+    rsi = [50.0 if i < 14 else rsi_at(i, 14) for i in range(len(closes))]
+    signals = []
+    position = "NONE"
+    entry = 0.0
+
+    for i in range(50, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and (clock < '10:00' or clock > '14:25'):
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'SENSEX RSI time exit'})
+                position = "NONE"
+            continue
+        trend_up = closes[i] >= sma50[i] and sma20[i] >= sma50[i] * 0.998
+        trend_down = closes[i] <= sma50[i] and sma20[i] <= sma50[i] * 1.002
+        bullish = trend_up and rsi[i-1] <= 34 and rsi[i] >= 40 and closes[i] > max(highs[i-4:i])
+        bearish = trend_down and rsi[i-1] >= 66 and rsi[i] <= 60 and closes[i] < min(lows[i-4:i])
+
+        if position == "LONG":
+            if bearish or rsi[i] > 68 or closes[i] < sma20[i]:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'SENSEX RSI CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or rsi[i] < 32 or closes[i] > sma20[i]:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'SENSEX RSI PE exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'SENSEX RSI pullback CE with trend filter'})
+                position = "LONG"
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'SENSEX RSI pullback PE with trend filter'})
+                position = "SHORT"
+    return signals
+"""
+
+
+NIFTY_MICRO_TREND_CODE = """def run(data):
+    if len(data) < 45:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+
+    def sma_at(i, period):
+        return sum(closes[i-period+1:i+1]) / period
+
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    best = 0.0
+
+    for i in range(25, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '14:35':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Micro trend time exit'})
+                position = "NONE"
+            continue
+        sma20 = sma_at(i, 20)
+        sma20_prev = sma_at(i-1, 20)
+        range_avg = max(0.01, sum(highs[j] - lows[j] for j in range(i-10, i)) / 10)
+        no_trade_zone = range_avg * 0.25
+        bullish = closes[i] > sma20 + no_trade_zone and closes[i-1] <= sma20_prev
+        bearish = closes[i] < sma20 - no_trade_zone and closes[i-1] >= sma20_prev
+
+        if position == "LONG":
+            if bearish or closes[i] < sma20:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Micro trend CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or closes[i] > sma20:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Micro trend PE exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Micro trend CE cross with no-trade zone'})
+                position = "LONG"
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Micro trend PE cross with no-trade zone'})
+                position = "SHORT"
+    return signals
+"""
+
+
+NIFTY_QUICK_SCALPER_CODE = """def run(data):
+    if len(data) < 35:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for value in values[1:]:
+            out.append(value * k + out[-1] * (1 - k))
+        return out
+
+    ema3 = ema(closes, 3)
+    ema9 = ema(closes, 9)
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    last_entry_i = -100
+
+    for i in range(15, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '14:15':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'Quick scalper time exit'})
+                position = "NONE"
+            continue
+        avg_vol = sum(vols[i-10:i]) / 10
+        range_avg = max(0.01, sum(highs[j] - lows[j] for j in range(i-8, i)) / 8)
+        move = abs(closes[i] - closes[i-1])
+        vol_ok = vols[i] >= avg_vol * 1.05
+        no_trade = move < range_avg * 0.28
+        bullish = ema3[i] > ema9[i] and ema3[i-1] <= ema9[i-1] and not no_trade and vol_ok
+        bearish = ema3[i] < ema9[i] and ema3[i-1] >= ema9[i-1] and not no_trade and vol_ok
+
+        if position == "LONG":
+            if bearish or i - last_entry_i >= 6:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Quick scalper CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or i - last_entry_i >= 6:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Quick scalper PE exit'})
+                position = "NONE"
+        elif i - last_entry_i >= 4:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'Quick EMA CE scalp with noise guard'})
+                position = "LONG"
+                last_entry_i = i
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'Quick EMA PE scalp with noise guard'})
+                position = "SHORT"
+                last_entry_i = i
+    return signals
+"""
+
+
+BANKNIFTY_STD_BAND_SCALPER_CODE = """def run(data):
+    if len(data) < 40:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+    band_mult = 1.5
+    signals = []
+    position = "NONE"
+    entry = 0.0
+    best = 0.0
+
+    for i in range(24, len(data)):
+        if closes[i] <= 0:
+            continue
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '14:25':
+            if position != "NONE":
+                signals.append({'date': data[i]['date'], 'action': 'SELL' if position == "LONG" else 'BUY', 'reason': 'BANKNIFTY band time exit'})
+                position = "NONE"
+            continue
+        chunk = closes[i-20:i]
+        sma = sum(chunk) / 20
+        std = (sum((x - sma) ** 2 for x in chunk) / 20) ** 0.5
+        upper = sma + band_mult * std
+        lower = sma - band_mult * std
+        avg_vol = sum(vols[i-20:i]) / 20
+        range_avg = max(0.01, sum(highs[j] - lows[j] for j in range(i-10, i)) / 10)
+        body = abs(closes[i] - closes[i-1])
+        vol_ok = vols[i] >= avg_vol * 1.05 and body >= range_avg * 0.35
+        bullish = closes[i] > upper and closes[i-1] <= upper and vol_ok
+        bearish = closes[i] < lower and closes[i-1] >= lower and vol_ok
+
+        if position == "LONG":
+            if bearish or closes[i] < sma:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY band CE exit'})
+                position = "NONE"
+        elif position == "SHORT":
+            if bullish or closes[i] > sma:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY band PE exit'})
+                position = "NONE"
+        else:
+            if bullish:
+                signals.append({'date': data[i]['date'], 'action': 'BUY', 'reason': 'BANKNIFTY volatility CE breakout with volume'})
+                position = "LONG"
+            elif bearish:
+                signals.append({'date': data[i]['date'], 'action': 'SELL', 'reason': 'BANKNIFTY volatility PE breakdown with volume'})
+                position = "SHORT"
+    return signals
+"""
+
+
+BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = BANKNIFTY_STD_BAND_SCALPER_CODE.replace("band_mult = 1.5", "band_mult = 1.25").replace("volatility CE breakout with volume", "sensitive volatility CE breakout with volume").replace("volatility PE breakdown with volume", "sensitive volatility PE breakdown with volume")
+
+
 DEFAULT_OPTION_STRATEGIES = [
     {
         "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
@@ -3219,7 +3627,36 @@ STANDARD_STRATEGY_CATALOG = [
 ]
 
 
-for _template in [*DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]:
+UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
+    "UPSTOX NIFTY ATM Option Momentum Buyer": (NIFTY_ATM_MOMENTUM_CODE, "momentum", "Upstox live trend and momentum with true EMA, volume, time and exit guards"),
+    "UPSTOX BANKNIFTY ATM Option Breakout Buyer": (BANKNIFTY_ATM_BREAKOUT_CODE, "breakout", "BANKNIFTY range breakout with ATR, volume, duplicate-sensitive exit controls"),
+    "NIFTY VWAP Trend Breakout": (NIFTY_VWAP_TREND_BREAKOUT_CODE, "breakout", "NIFTY VWAP breakout with volume, no-trade zone and internal exits"),
+    "SENSEX Swing RSI Pullback": (SENSEX_RSI_PULLBACK_CODE, "pullback", "SENSEX RSI pullback with trend filter and internal exits"),
+    "NIFTY Micro-Lot Trend Follower": (NIFTY_MICRO_TREND_CODE, "momentum", "NIFTY baseline trend follower with no-trade zone and trailing exits"),
+    "NIFTY HFT Quick Scalper": (NIFTY_QUICK_SCALPER_CODE, "micro_scalp", "Candle-based quick scalper with noise, volume, cooldown and time guards"),
+    "BANKNIFTY HFT Momentum Scalper": (BANKNIFTY_STD_BAND_SCALPER_CODE, "breakout", "BANKNIFTY standard-deviation breakout with volume and exit controls"),
+    "NIFTY Quick EMA Scalper": (NIFTY_QUICK_SCALPER_CODE, "micro_scalp", "True EMA quick scalp with noise, volume, cooldown and time guards"),
+    "BANKNIFTY Volatility Breakout": (BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE, "volatile_breakout", "Sensitive BANKNIFTY volatility breakout with volume and exit controls"),
+}
+
+
+for _template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]:
+    upgraded = UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME.get(str(_template.get("name") or ""))
+    if upgraded:
+        _template["python_code"] = upgraded[0]
+        _template["risk_style"] = upgraded[1]
+        _template["market_suitability"] = upgraded[2]
+        if "risk" not in _template or not isinstance(_template["risk"], dict):
+            _template["risk"] = {}
+        # Only internal-exit strategies may use signal_only/indicator_only
+        if str(_template.get("name") or "") in {
+            "UPSTOX NIFTY ATM Option Momentum Buyer",
+            "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+        }:
+            _template["risk"]["exit_mode"] = "signal_only"
+        else:
+            _template["risk"]["exit_mode"] = "signal_or_tp_sl_trailing"
+        continue
     if str(_template.get("strategy_type") or "").lower() == "option buying":
         _template["python_code"] = RETAIL_LIVE_STATE_CODE
         _template["market_suitability"] = _template.get("market_suitability") or "Retail live momentum"
@@ -3777,6 +4214,7 @@ def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
         max_trades_day=int(risk.get("max_trades_day") or 3),
         required_capital=float(required_capital or 0),
         daily_loss_limit=float(risk.get("daily_loss_limit") or 0),
+        exit_mode=risk.get("exit_mode", "tp_sl_tsl_or_signal"),
     )
 
 
@@ -6029,6 +6467,80 @@ async def _execution_preflight(
             strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=None, market_session=market_session,
         )
 
+    # Live execution quality guards
+    if _intent_is_entry(intent.intent) and not paper and option_contract:
+        contract_ltp = float(option_contract.get("ltp") or ltp or 0)
+        # 1. Minimum Premium Check (LTP >= 1.0)
+        if contract_ltp < 1.0:
+            return _preflight_response(
+                ok=False, reason_code="PRICE_UNAVAILABLE",
+                reason=f"Live option entry skipped: Option premium is too low (LTP {contract_ltp} < 1.0).",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=contract_ltp, market_session=market_session
+            )
+
+        # 2. Market Data Quality (staleness, spread, etc.)
+        risk_style = (strategy_row or {}).get("risk_style") or ((strategy_row or {}).get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
+        bid = float(option_contract.get("bid") or 0)
+        ask = float(option_contract.get("ask") or 0)
+        received_at = option_contract.get("received_at") or market_snapshot.get("received_at")
+        quality = evaluate_market_data_quality(
+            ltp=contract_ltp,
+            tick_time=option_contract.get("tick_time") or option_contract.get("timestamp") or received_at,
+            received_at=received_at,
+            instrument_token=option_contract.get("instrument_key") or instr.instrument_token,
+            exchange=instr.exchange,
+            market_open=market_session.get("open"),
+            bid=bid if bid > 0 else None,
+            ask=ask if ask > 0 else None,
+            risk_style=str(risk_style),
+        )
+        if not quality.get("ok"):
+            reason = quality.get("reason")
+            reason_code = "SKIPPED_QUOTE_STALE" if "stale" in reason.lower() or "timestamp" in reason.lower() else "PRICE_UNAVAILABLE"
+            return _preflight_response(
+                ok=False, reason_code=reason_code,
+                reason=f"Live option entry skipped: market data quality failed. Reason: {reason}",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=contract_ltp, market_session=market_session
+            )
+
+        # 3. Expired Contract Check
+        expiry_val = option_contract.get("expiry")
+        if expiry_val:
+            try:
+                from datetime import date
+                exp_date = date.fromisoformat(str(expiry_val))
+                if exp_date < date.today():
+                    return _preflight_response(
+                        ok=False, reason_code="EXPIRED_CONTRACT",
+                        reason=f"Live option entry skipped: contract is expired ({expiry_val} < today).",
+                        strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=contract_ltp, market_session=market_session
+                    )
+            except Exception:
+                pass
+
+        # 4. Duplicate Active Option Contract check account-wide
+        target_instrument_key = option_contract.get("instrument_key") or option_contract.get("instrument_token") or instr.instrument_token
+        existing_contract = await db.strategy_positions.find_one({
+            "user_id": user_id,
+            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+            "instrument_key": str(target_instrument_key),
+        })
+        if existing_contract:
+            return _preflight_response(
+                ok=False, reason_code="DUPLICATE_ACTIVE_OPTION_CONTRACT",
+                reason=f"Live option entry blocked: active position for option contract {option_contract.get('tradingsymbol')} already exists in strategy {existing_contract.get('strategy_id')}.",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=contract_ltp, market_session=market_session
+            )
+
+        # 5. Feed Connectivity Check
+        upstox_gw = await get_user_upstox_gateway(user_id)
+        if not upstox_gw or not upstox_gw.connected:
+            return _preflight_response(
+                ok=False, reason_code="FEED_DISCONNECTED",
+                reason="Live option entry skipped: Upstox gateway feed is disconnected or offline.",
+                strategy_id=strategy_id, intent=intent, option_contract=option_contract, ltp=contract_ltp, market_session=market_session
+            )
+
     price_validation = _price_integrity_guard(
         paper=paper,
         intent=intent,
@@ -7003,7 +7515,9 @@ async def _persist_core_paper_skipped_order(
     reason_code: str,
     idempotency_key: Optional[str],
     signal_id: Optional[str],
-    market_snapshot: Dict[str, Any]
+    market_snapshot: Dict[str, Any],
+    mode: str = "paper",
+    broker: str = "paper"
 ) -> Dict[str, Any]:
     from core.market_domains import resolve_domain_by_underlying
     domain = resolve_domain_by_underlying(symbol)
@@ -7024,6 +7538,9 @@ async def _persist_core_paper_skipped_order(
         "quote_timestamp": market_snapshot.get("received_at"),
         "reason": reason,
         "reason_code": reason_code,
+        "quote_age_at_decision": market_snapshot.get("quote_age"),
+        "spread_at_decision": market_snapshot.get("spread"),
+        "spread_bps_at_decision": market_snapshot.get("spread_bps"),
     }
     
     doc_seed = {
@@ -7049,8 +7566,8 @@ async def _persist_core_paper_skipped_order(
         "status_message": f"{ORDER_SKIPPED_SIGNAL}: {reason}",
         "reason_code": reason_code,
         "skip_reason": reason,
-        "mode": "paper",
-        "broker": "paper",
+        "mode": mode,
+        "broker": broker,
         "source": f"strategy:{strategy_id}" if strategy_id != "manual" else "manual",
         "signal_id": signal_id,
         "created_at": now,
@@ -8131,8 +8648,16 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
     CORE_ENGINE_ENABLED = os.environ.get("CORE_ENGINE_ENABLED", "false").lower() == "true"
     CORE_ENGINE_PAPER_ENABLED = os.environ.get("CORE_ENGINE_PAPER_ENABLED", "false").lower() == "true"
+    CORE_ENGINE_LIVE_ENABLED = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
 
-    if CORE_ENGINE_ENABLED and CORE_ENGINE_PAPER_ENABLED and paper:
+    use_core_engine = False
+    if CORE_ENGINE_ENABLED:
+        if paper and CORE_ENGINE_PAPER_ENABLED:
+            use_core_engine = True
+        elif not paper and CORE_ENGINE_LIVE_ENABLED:
+            use_core_engine = True
+
+    if use_core_engine:
         from core.risk_manager import RiskManager
         from core.order_manager import OrderManager
         from core.execution_router import ExecutionRouter
@@ -8185,7 +8710,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 ],
             })
             if existing_position:
-                reason = f"Core paper entry blocked: same strategy/instrument/side position already exists for {target_symbol}."
+                reason = f"Core {'paper' if paper else 'live'} entry blocked: same strategy/instrument/side position already exists for {target_symbol}."
                 skip_doc = await _persist_core_paper_skipped_order(
                     user_id=user_id,
                     strategy_id=strategy_id or "manual",
@@ -8203,14 +8728,18 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                         "received_at": (option_contract or {}).get("received_at"),
                         "source": (option_contract or {}).get("source") or "preflight",
                     },
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
                 )
                 return _clean_order_response(skip_doc)
-        
-        # Check staleness in Core path of _place_order_core
-        received_at = (option_contract or {}).get("received_at")
-        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0):
-            if not received_at or parse_market_timestamp(received_at) is None:
-                logger.warning("Core paper option order skipped: Upstox quote timestamp is missing for %s.", option_contract.get("tradingsymbol") or symbol)
+
+            account_duplicate = await db.strategy_positions.find_one({
+                "user_id": user_id,
+                "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+                "instrument_key": str(target_instrument_key),
+            })
+            if account_duplicate:
+                reason = f"Core {'paper' if paper else 'live'} entry blocked: active position for option contract {target_symbol} already exists in strategy {account_duplicate.get('strategy_id')}."
                 skip_doc = await _persist_core_paper_skipped_order(
                     user_id=user_id,
                     strategy_id=strategy_id or "manual",
@@ -8219,51 +8748,149 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     side=side,
                     qty=qty or 1,
                     price=price or 0.0,
-                    reason="Upstox quote timestamp is missing.",
-                    reason_code="SKIPPED_QUOTE_STALE",
+                    reason=reason,
+                    reason_code="DUPLICATE_ACTIVE_OPTION_CONTRACT",
                     idempotency_key=idem_key,
                     signal_id=signal_id,
-                    market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+                    market_snapshot={
+                        "ltp": contract_ltp,
+                        "received_at": (option_contract or {}).get("received_at"),
+                        "source": (option_contract or {}).get("source") or "preflight",
+                    },
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
                 )
                 return _clean_order_response(skip_doc)
-            dt = parse_market_timestamp(received_at)
-            if dt:
-                age = (datetime.now(timezone.utc) - dt).total_seconds()
-                if age > 60.0:
-                    logger.warning("Core paper option order skipped: Upstox quote is stale for %s (age %s).", option_contract.get("tradingsymbol") or symbol, age)
-                    skip_doc = await _persist_core_paper_skipped_order(
-                        user_id=user_id,
-                        strategy_id=strategy_id or "manual",
-                        symbol=symbol,
-                        option_contract=option_contract,
-                        side=side,
-                        qty=qty or 1,
-                        price=price or 0.0,
-                        reason=f"Upstox quote is stale ({age:.1f}s age > 60s).",
-                        reason_code="SKIPPED_QUOTE_STALE",
-                        idempotency_key=idem_key,
-                        signal_id=signal_id,
-                        market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
-                    )
-                    return _clean_order_response(skip_doc)
+        
+        # Check expired contract check in Core path
+        received_at = (option_contract or {}).get("received_at")
+        if option_contract:
+            expiry_val = option_contract.get("expiry")
+            if expiry_val:
+                try:
+                    from datetime import date
+                    exp_date = date.fromisoformat(str(expiry_val))
+                    if exp_date < date.today():
+                        logger.warning("Core %s option order skipped: contract %s is expired (%s < today).", "paper" if paper else "live", target_symbol, expiry_val)
+                        skip_doc = await _persist_core_paper_skipped_order(
+                            user_id=user_id,
+                            strategy_id=strategy_id or "manual",
+                            symbol=symbol,
+                            option_contract=option_contract,
+                            side=side,
+                            qty=qty or 1,
+                            price=price or 0.0,
+                            reason=f"Contract is expired ({expiry_val} < today).",
+                            reason_code="EXPIRED_CONTRACT",
+                            idempotency_key=idem_key,
+                            signal_id=signal_id,
+                            market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
+                            mode="paper" if paper else "live",
+                            broker="paper" if paper else "upstox",
+                        )
+                        return _clean_order_response(skip_doc)
+                except Exception as e:
+                    logger.warning(f"Error checking option expiry date: {e}")
 
-        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0) and contract_ltp <= 0:
-            logger.warning("Core paper option order skipped: fresh Upstox LTP required for %s.", option_contract.get("tradingsymbol") or symbol)
-            skip_doc = await _persist_core_paper_skipped_order(
-                user_id=user_id,
-                strategy_id=strategy_id or "manual",
-                symbol=symbol,
-                option_contract=option_contract,
-                side=side,
-                qty=qty or 1,
-                price=price or 0.0,
-                reason="Fresh real Upstox option LTP is required during live market hours.",
-                reason_code="PRICE_UNAVAILABLE",
-                idempotency_key=idem_key,
-                signal_id=signal_id,
-                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+        # Check feed connected/snapshot received in Core path
+        if option_contract and not simulated_contract:
+            upstox_gw = await get_user_upstox_gateway(user_id)
+            allow_simulated_prices = bool((await get_user_settings(user_id)).get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
+            if (not upstox_gw or not upstox_gw.connected) and not allow_simulated_prices:
+                reason = "Upstox gateway feed is disconnected or offline."
+                skip_doc = await _persist_core_paper_skipped_order(
+                    user_id=user_id,
+                    strategy_id=strategy_id or "manual",
+                    symbol=symbol,
+                    option_contract=option_contract,
+                    side=side,
+                    qty=qty or 1,
+                    price=price or 0.0,
+                    reason=reason,
+                    reason_code="FEED_DISCONNECTED",
+                    idempotency_key=idem_key,
+                    signal_id=signal_id,
+                    market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
+                )
+                return _clean_order_response(skip_doc)
+        
+        # Check staleness in Core path of _place_order_core
+        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0):
+            # 1. Minimum Premium Guard
+            if contract_ltp < 1.0:
+                logger.warning("Core %s option order skipped: minimum premium guard failed for %s (LTP %.2f < 1.0).", "paper" if paper else "live", target_symbol, contract_ltp)
+                skip_doc = await _persist_core_paper_skipped_order(
+                    user_id=user_id,
+                    strategy_id=strategy_id or "manual",
+                    symbol=symbol,
+                    option_contract=option_contract,
+                    side=side,
+                    qty=qty or 1,
+                    price=price or 0.0,
+                    reason=f"Option premium is too low (LTP {contract_ltp} < 1.0).",
+                    reason_code="PRICE_UNAVAILABLE",
+                    idempotency_key=idem_key,
+                    signal_id=signal_id,
+                    market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
+                )
+                return _clean_order_response(skip_doc)
+
+            # 2. Market Data Quality (staleness, spread, token presence, etc.)
+            risk_style = (strategy_row or {}).get("risk_style") or ((strategy_row or {}).get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
+            bid = float(option_contract.get("bid") or 0)
+            ask = float(option_contract.get("ask") or 0)
+            quality = evaluate_market_data_quality(
+                ltp=contract_ltp,
+                tick_time=option_contract.get("tick_time") or option_contract.get("timestamp") or received_at,
+                received_at=received_at,
+                instrument_token=option_contract.get("instrument_key") or target_symbol,
+                exchange=domain.exchange,
+                market_open=market_session.get("open"),
+                bid=bid if bid > 0 else None,
+                ask=ask if ask > 0 else None,
+                risk_style=str(risk_style),
             )
-            return _clean_order_response(skip_doc)
+            
+            # Calculate observability variables for snapshot
+            parsed_received_at = parse_market_timestamp(received_at)
+            quote_age = (datetime.now(timezone.utc) - parsed_received_at).total_seconds() if parsed_received_at else None
+            spread = ask - bid if (bid > 0 and ask > 0) else None
+            spread_bps = ((ask - bid) / contract_ltp * 10000) if (bid > 0 and ask > 0 and contract_ltp > 0) else None
+            
+            if not quality.get("ok"):
+                reason = quality.get("reason")
+                reason_code = "SKIPPED_QUOTE_STALE" if "stale" in reason.lower() or "timestamp" in reason.lower() else "PRICE_UNAVAILABLE"
+                logger.warning("Core %s option order skipped: market data quality failed for %s. Reason: %s", "paper" if paper else "live", target_symbol, reason)
+                skip_doc = await _persist_core_paper_skipped_order(
+                    user_id=user_id,
+                    strategy_id=strategy_id or "manual",
+                    symbol=symbol,
+                    option_contract=option_contract,
+                    side=side,
+                    qty=qty or 1,
+                    price=price or 0.0,
+                    reason=reason,
+                    reason_code=reason_code,
+                    idempotency_key=idem_key,
+                    signal_id=signal_id,
+                    market_snapshot={
+                        "ltp": contract_ltp,
+                        "received_at": received_at,
+                        "bid": bid if bid > 0 else None,
+                        "ask": ask if ask > 0 else None,
+                        "spread": spread,
+                        "spread_bps": spread_bps,
+                        "quote_age": quote_age,
+                        "source": "upstox-cache"
+                    },
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
+                )
+                return _clean_order_response(skip_doc)
 
         paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else (0.0 if market_session.get("open") else _get_paper_ltp(symbol, option_contract)))
         if paper_ltp <= 0:
@@ -8275,11 +8902,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 side=side,
                 qty=qty or 1,
                 price=price or 0.0,
-                reason="Paper price unavailable.",
+                reason="Paper price unavailable." if paper else "Live price unavailable.",
                 reason_code="PRICE_UNAVAILABLE",
                 idempotency_key=idem_key,
                 signal_id=signal_id,
-                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"}
+                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
+                mode="paper" if paper else "live",
+                broker="paper" if paper else "upstox",
             )
             return _clean_order_response(skip_doc)
 
@@ -8298,7 +8927,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             side=side,
             requested_qty=_qty_shares,
             price=paper_ltp,
-            mode="paper",
+            mode="paper" if paper else "live",
             stop_loss=stop_loss,
             take_profit=take_profit,
             lot_size=_lot_size
@@ -8319,13 +8948,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             price=paper_ltp,
             exchange=domain.exchange,
             segment=domain.segment,
-            mode="paper",
+            mode="paper" if paper else "live",
             stop_loss=stop_loss,
             take_profit=take_profit,
             idempotency_key=idem_key
         )
         intent_doc["execution_tag"] = _new_execution_tag(strategy_id)
-        intent_doc["paper_realism"] = "UPSTOX_LIKE"
+        if paper:
+            intent_doc["paper_realism"] = "UPSTOX_LIKE"
 
         ledger = PortfolioLedger(db)
         router = ExecutionRouter(db, ledger)

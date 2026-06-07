@@ -157,12 +157,25 @@ class StrategyMisbehaviorDetector:
 
 
 class ConflictResolver:
-    """No app-level conflict arbitration.
+    """Arbitrate signal conflicts using symbol-group locking."""
 
-    Different strategies may intentionally trade the same instrument. Duplicate
-    protection is enforced later at the platform boundary for the same
-    user+strategy+instrument+side only.
-    """
+    @staticmethod
+    def _get_symbol_group(item: Dict[str, Any]) -> str:
+        # Check explicit symbol_group first
+        g = item.get("symbol_group")
+        if g:
+            return str(g).upper().strip()
+        
+        # Fallback to symbol or target_symbol match
+        for field in ("symbol", "target_symbol"):
+            val = item.get(field)
+            if val:
+                val_upper = str(val).upper().strip()
+                for name in ("NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "NATURALGAS"):
+                    if name in val_upper:
+                        return name
+                return val_upper
+        return "UNKNOWN"
 
     @staticmethod
     def resolve(
@@ -170,7 +183,110 @@ class ConflictResolver:
         active_positions: List[Dict[str, Any]],
         one_active_position_per_symbol_group: bool = True
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        return list(pending_signals), []
+        # 1. Identify active positions that are not closed
+        active_pos_by_strat = {}
+        for pos in active_positions:
+            if pos.get("status") not in ("CLOSED", "EXITED"):
+                active_pos_by_strat[pos["strategy_id"]] = pos
+
+        # 2. Separate pending signals into exits vs entries
+        exits = []
+        entries = []
+        exiting_strategies = set()
+
+        for sig in pending_signals:
+            strat_id = sig["strategy_id"]
+            if strat_id in active_pos_by_strat:
+                exits.append(sig)
+                exiting_strategies.add(strat_id)
+            else:
+                entries.append(sig)
+
+        # 3. Determine currently locked groups (exits will release their locks)
+        locked_groups = set()
+        for strat_id, pos in active_pos_by_strat.items():
+            if strat_id not in exiting_strategies:
+                locked_groups.add(ConflictResolver._get_symbol_group(pos))
+
+        approved = list(exits)
+        rejected = []
+
+        # 4. Group remaining entries by confidence descending
+        # Sort by confidence descending
+        entries.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
+
+        # Group by confidence value using a dictionary
+        from collections import defaultdict
+        conf_groups = defaultdict(list)
+        for sig in entries:
+            conf_groups[sig.get("confidence", 0.0)].append(sig)
+
+        # Process each confidence level from highest to lowest
+        sorted_confidences = sorted(conf_groups.keys(), reverse=True)
+        for conf in sorted_confidences:
+            sigs_at_conf = conf_groups[conf]
+            
+            # Group these signals by their symbol group
+            group_to_sigs = defaultdict(list)
+            for sig in sigs_at_conf:
+                group_to_sigs[ConflictResolver._get_symbol_group(sig)].append(sig)
+
+            for g, sigs in group_to_sigs.items():
+                # Separate by whether they require group locking
+                locking_sigs = []
+                non_locking_sigs = []
+                for s in sigs:
+                    # Check visual_config override, default to global setting
+                    sig_override = s.get("visual_config", {}).get("risk", {}).get("one_active_position_per_symbol_group")
+                    use_lock = sig_override if sig_override is not None else one_active_position_per_symbol_group
+                    if use_lock:
+                        locking_sigs.append(s)
+                    else:
+                        non_locking_sigs.append(s)
+
+                # Non-locking signals are always approved
+                approved.extend(non_locking_sigs)
+
+                # Process locking signals
+                if not locking_sigs:
+                    continue
+
+                if g in locked_groups:
+                    # Group is already locked, reject all locking signals at this level
+                    for s in locking_sigs:
+                        s["rejection_reason"] = "conflict-blocked: symbol group is locked"
+                        rejected.append(s)
+                else:
+                    if len(locking_sigs) > 1:
+                        # Clash! Multiple signals try to lock the same group at same confidence
+                        for s in locking_sigs:
+                            s["rejection_reason"] = f"conflict-blocked: clash at confidence {conf}"
+                            rejected.append(s)
+                    else:
+                        # Exactly one locking signal, approve and lock the group
+                        s = locking_sigs[0]
+                        approved.append(s)
+                        locked_groups.add(g)
+
+        # Ensure order matches inputs where possible (exits first, then approved entries)
+        approved_ids = {s["id"] for s in approved}
+        
+        final_approved = [s for s in pending_signals if s["id"] in approved_ids]
+        final_rejected = [s for s in pending_signals if s["id"] not in approved_ids]
+        
+        # Sync rejection reason for final_rejected
+        rejected_by_id = {s["id"]: s for s in rejected}
+        for s in final_rejected:
+            if s["id"] in rejected_by_id:
+                s["rejection_reason"] = rejected_by_id[s["id"]].get("rejection_reason") or "conflict-blocked"
+            else:
+                s["rejection_reason"] = s.get("rejection_reason") or "conflict-blocked"
+
+        logger.info(
+            "ConflictResolver: resolved %d approved signals, %d rejected signals. Locked groups: %s. Active positions count: %d.",
+            len(final_approved), len(final_rejected), list(locked_groups), len(active_positions)
+        )
+        return final_approved, final_rejected
 
 
 class SignalManager:
@@ -364,8 +480,8 @@ async def _dispatch_signal_via_unified_engine(
             "reason_code": risk_res.get("status") or "RISK_BLOCKED",
         }
 
-    if mode == "live":
-        if place_order_fn is None:
+    if mode == "live" or (mode == "paper" and place_order_fn is not None):
+        if mode == "live" and place_order_fn is None:
             raise ValueError("Live signal execution requires the server order core boundary.")
         return await place_order_fn(
             user_id=user_id,
