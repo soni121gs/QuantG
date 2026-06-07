@@ -72,7 +72,6 @@ def test_default_strategy_templates_are_sandbox_runnable():
 def test_ema_named_default_strategies_use_true_ema_formula():
     ema_names = {
         "UPSTOX NIFTY ATM Option Momentum Buyer",
-        "NIFTY HFT Quick Scalper",
         "NIFTY Quick EMA Scalper",
     }
 

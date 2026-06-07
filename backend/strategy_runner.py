@@ -26,6 +26,7 @@ from pymongo import ReturnDocument
 
 from safe_exec import safe_run_strategy
 from market_protection import MarketTrendAnalyzer
+from core.option_selector_v2 import select_option_contract
 
 logger = logging.getLogger("quantg.runner")
 
@@ -468,6 +469,90 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             )
                             await db.strategies.update_one({"id": s["id"]}, update_doc)
                             continue
+
+                        # ---- OptionSelector v2 quality gate ----
+                        _v2_direction = str(last_sig.get("direction") or "CE").upper()
+                        _v2_preference = str(last_sig.get("option_selection_preference") or "ATM").upper()
+                        _v2_mode = "paper" if is_paper_mode else "live"
+                        _v2_spot = float(option_contract.get("spot") or 0)
+                        _v2_underlying = str(opt_cfg.get("underlying", "NIFTY")).upper()
+                        _v2_confidence = float(last_sig.get("confidence") or 85.0)
+
+                        _v2_result = select_option_contract(
+                            underlying=_v2_underlying,
+                            direction=_v2_direction,
+                            preference=_v2_preference,
+                            mode=_v2_mode,
+                            signal_confidence=_v2_confidence,
+                            spot=_v2_spot,
+                            resolved_contract=option_contract,
+                        )
+
+                        if not _v2_result["ok"]:
+                            _skip_reason = _v2_result["reason_code"]
+                            logger.warning(
+                                "option_selector_v2 blocked signal strategy=%s underlying=%s direction=%s reason=%s",
+                                s["id"], _v2_underlying, _v2_direction, _skip_reason,
+                            )
+                            # Store diagnostic telemetry for the status endpoint
+                            try:
+                                await db.option_selector_decisions.insert_one({
+                                    "strategy_id": s["id"],
+                                    "user_id": s["user_id"],
+                                    "underlying": _v2_underlying,
+                                    "direction": _v2_direction,
+                                    "preference": _v2_preference,
+                                    "selected_contract": None,
+                                    "selected_strike_mode": None,
+                                    "quality_score": 0,
+                                    "reason_code": _skip_reason,
+                                    "mode": _v2_mode,
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                })
+                            except Exception:
+                                pass
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {
+                                    **eval_set,
+                                    "last_signals_count": signals_count,
+                                    "last_signal_action": action,
+                                    "last_filter_reason": f"{_skip_reason}: option quality gate blocked signal.",
+                                },
+                                 "$inc": inc_set},
+                            )
+                            continue
+
+                        # Attach v2 metadata to the resolved contract
+                        option_contract = _v2_result["selected_contract"]
+                        option_contract["option_quality_score"] = _v2_result["quality_score"]
+                        option_contract["selected_strike_mode"] = _v2_result["selected_strike_mode"]
+                        option_contract["v2_warnings"] = _v2_result.get("warnings", [])
+
+                        # Store telemetry for diagnostics endpoint
+                        try:
+                            await db.option_selector_decisions.insert_one({
+                                "strategy_id": s["id"],
+                                "user_id": s["user_id"],
+                                "underlying": _v2_underlying,
+                                "direction": _v2_direction,
+                                "preference": _v2_preference,
+                                "selected_contract": {
+                                    "instrument_key": option_contract.get("instrument_key"),
+                                    "tradingsymbol": option_contract.get("tradingsymbol"),
+                                    "strike": option_contract.get("strike"),
+                                    "ltp": option_contract.get("ltp"),
+                                },
+                                "selected_strike_mode": _v2_result["selected_strike_mode"],
+                                "quality_score": _v2_result["quality_score"],
+                                "reason_code": _v2_result["reason_code"],
+                                "mode": _v2_mode,
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        except Exception:
+                            pass
+                        # ---- end OptionSelector v2 gate ----
+
                     except Exception as e:
                         logger.warning(f"option resolve failed for {s['id']}: {e}")
                         await db.strategies.update_one(
@@ -492,7 +577,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "target_symbol": target_symbol,
                         "option_type": option_type,
                         "action": action,
-                        "confidence": float(signal_validation.get("confidence", 85.0)),
+                        "confidence": float(last_sig.get("confidence") or signal_validation.get("confidence", 85.0)),
                         "price": signal_price,
                         "ltp": signal_price,
                         "trend_context": signal_validation.get("trend") or {},
@@ -504,6 +589,22 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "order_id": None,
                         "created_at": now_str,
                         "processed_at": None,
+                        "setup_type": last_sig.get("setup_type") or "breakout",
+                        "entry_reason": last_sig.get("entry_reason") or last_sig.get("reason") or "Legacy entry signal",
+                        "target_R": float(last_sig.get("target_R") or 2.0),
+                        "initial_stop_R": float(last_sig.get("initial_stop_R") or 1.0),
+                        "trail_after_R": float(last_sig.get("trail_after_R") or 1.5),
+                        "max_hold_minutes": int(last_sig.get("max_hold_minutes") or 60),
+                        "invalidation_rule": last_sig.get("invalidation_rule") or "time_or_stop",
+                        "regime_required": last_sig.get("regime_required") or "any",
+                        "option_selection_preference": last_sig.get("option_selection_preference") or "ATM",
+                        "signal_version": last_sig.get("signal_version") or "v13",
+                        "strategy_logic_version": last_sig.get("strategy_logic_version") or "1.0",
+                        "default_strategy_version": s.get("default_strategy_version") or "v13-live-brain-r1",
+                        # OptionSelector v2 metadata
+                        "option_quality_score": (option_contract or {}).get("option_quality_score"),
+                        "selected_strike_mode": (option_contract or {}).get("selected_strike_mode"),
+                        "v2_selector_warnings": (option_contract or {}).get("v2_warnings"),
                     }
                     
                     await db.signals.insert_one(signal_doc)

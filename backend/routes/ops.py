@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -610,4 +610,520 @@ async def ops_cleanup_orphan_positions(req: OpsActionReq = None, user=Depends(ge
         "cleaned_count": cleaned,
         "mode": "executed" if (confirm and is_owner) else "dry-run",
         "message": "Orphan positions cleaned up successfully." if (confirm and is_owner) else "Dry-run completed. No records deleted."
+    }
+
+
+@router.get("/strategy-code-audit")
+async def ops_strategy_code_audit(user=Depends(get_current_user)):
+    from core.strategy_brain_schema import calculate_code_hash
+    
+    # Fetch all strategies for this user
+    db_strategies = await db.strategies.find({"user_id": user["id"]}).to_list(1000)
+    
+    # Group by code hash to identify duplicate code groups
+    hash_groups = {}
+    for s in db_strategies:
+        code = s.get("python_code") or ""
+        ch = calculate_code_hash(code)
+        hash_groups.setdefault(ch, []).append(s)
+        
+    duplicate_groups = []
+    for ch, group_strats in hash_groups.items():
+        if len(group_strats) > 1:
+            duplicate_groups.append({
+                "code_hash": ch,
+                "strategy_ids": [s.get("id") or str(s.get("_id")) for s in group_strats],
+                "names": [s.get("name") for s in group_strats],
+                "count": len(group_strats)
+            })
+            
+    # Process each strategy
+    strategies_report = []
+    live_count = 0
+    for s in db_strategies:
+        code = s.get("python_code") or ""
+        ch = calculate_code_hash(code)
+        is_dup = len(hash_groups[ch]) > 1
+        
+        status = s.get("status")
+        if status == "live":
+            live_count += 1
+            
+        underlying = s.get("underlying") or s.get("visual_config", {}).get("symbol") or s.get("visual_config", {}).get("options", {}).get("underlying") or ""
+        underlying = str(underlying).upper()
+        
+        instrument_group = s.get("instrument_group") or s.get("visual_config", {}).get("exchange")
+        if instrument_group:
+            instrument_group = str(instrument_group).upper()
+        else:
+            instrument_group = "BFO" if underlying == "SENSEX" else "NFO"
+            
+        risk_style = s.get("risk_style") or s.get("visual_config", {}).get("risk", {}).get("risk_style") or s.get("risk", {}).get("risk_style")
+        exit_mode = s.get("exit_mode") or s.get("risk", {}).get("exit_mode") or s.get("visual_config", {}).get("risk", {}).get("exit_mode") or "signal_or_tp_sl_trailing"
+        
+        strategies_report.append({
+            "strategy_id": s.get("id") or str(s.get("_id")),
+            "name": s.get("name"),
+            "status": status,
+            "mode": s.get("mode") or "paper",
+            "broker": s.get("broker") or "upstox",
+            "underlying": underlying,
+            "instrument_group": instrument_group,
+            "code_hash": ch,
+            "duplicate_code_group": ch if is_dup else None,
+            "risk_style": risk_style,
+            "exit_mode": exit_mode,
+            "default_strategy_version": s.get("default_strategy_version"),
+            "strategy_logic_version": s.get("strategy_logic_version"),
+            "signal_schema_status": s.get("signal_schema_status")
+        })
+        
+    return {
+        "ok": True,
+        "total_strategies": len(db_strategies),
+        "live_strategies": live_count,
+        "duplicate_code_groups": duplicate_groups,
+        "strategies": strategies_report
+    }
+
+
+@router.get("/default-strategy-catalog-audit")
+async def ops_default_strategy_catalog_audit(user=Depends(get_current_user)):
+    from server import DEFAULT_OPTION_STRATEGIES
+    from core.strategy_brain_schema import calculate_code_hash
+    
+    # Group default strategies by code hash
+    hash_groups = {}
+    for t in DEFAULT_OPTION_STRATEGIES:
+        code = t.get("python_code") or ""
+        ch = calculate_code_hash(code)
+        hash_groups.setdefault(ch, []).append(t.get("name"))
+        
+    strategies_report = []
+    any_shares = False
+    for t in DEFAULT_OPTION_STRATEGIES:
+        code = t.get("python_code") or ""
+        ch = calculate_code_hash(code)
+        shares = len(hash_groups[ch]) > 1
+        if shares:
+            any_shares = True
+            
+        underlying = t.get("underlying") or t.get("visual_config", {}).get("options", {}).get("underlying") or ""
+        underlying = str(underlying).upper()
+        
+        instrument_group = t.get("instrument_group") or t.get("visual_config", {}).get("exchange")
+        if instrument_group:
+            instrument_group = str(instrument_group).upper()
+        else:
+            instrument_group = "BFO" if underlying == "SENSEX" else "NFO"
+            
+        risk_style = t.get("risk_style") or t.get("risk", {}).get("risk_style") or t.get("visual_config", {}).get("risk", {}).get("risk_style")
+        exit_mode = t.get("exit_mode") or t.get("risk", {}).get("exit_mode") or t.get("visual_config", {}).get("risk", {}).get("exit_mode") or "signal_or_tp_sl_trailing"
+        
+        strategies_report.append({
+            "name": t.get("name"),
+            "underlying": underlying,
+            "instrument_group": instrument_group,
+            "required_capital": t.get("required_capital"),
+            "risk_style": risk_style,
+            "exit_mode": exit_mode,
+            "market_suitability": t.get("market_suitability"),
+            "code_hash": ch,
+            "shares_code": shares
+        })
+        
+    mcx_excluded = all(
+        str(t.get("instrument_group") or "").upper() != "MCX"
+        and "CRUDE" not in str(t.get("name") or "").upper()
+        and "NATURAL GAS" not in str(t.get("name") or "").upper()
+        for t in DEFAULT_OPTION_STRATEGIES
+    )
+    
+    return {
+        "ok": True,
+        "total_default_strategies": len(DEFAULT_OPTION_STRATEGIES),
+        "names": [t.get("name") for t in DEFAULT_OPTION_STRATEGIES],
+        "mcx_crude_naturalgas_excluded": mcx_excluded,
+        "shares_code_with_another": any_shares,
+        "strategies": strategies_report
+    }
+
+
+@router.post("/v13/strategy-brain/dry-run")
+async def ops_v13_strategy_brain_dry_run(user=Depends(get_current_user)):
+    from server import DEFAULT_OPTION_STRATEGIES
+    from core.strategy_brain_schema import calculate_code_hash
+    
+    db_strategies = await db.strategies.find({"user_id": user["id"]}).to_list(1000)
+    db_names = {s["name"] for s in db_strategies if s.get("name")}
+    
+    # 1. strategies_to_insert: names of default strategies not in DB
+    strategies_to_insert = [
+        t["name"] for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in db_names
+    ]
+    
+    # 2. strategies_to_update_by_name: names of default strategies that are in DB
+    strategies_to_update_by_name = [
+        t["name"] for t in DEFAULT_OPTION_STRATEGIES if t["name"] in db_names
+    ]
+    
+    # 3. duplicate_strategy_names: names that appear > 1 time in DB for this user
+    name_counts = {}
+    for s in db_strategies:
+        name = s.get("name")
+        if name:
+            name_counts[name] = name_counts.get(name, 0) + 1
+    duplicate_strategy_names = [name for name, count in name_counts.items() if count > 1]
+    
+    # 4. duplicate_code_hashes: code hashes that appear > 1 time in DB for this user
+    hash_counts = {}
+    for s in db_strategies:
+        code = s.get("python_code") or ""
+        ch = calculate_code_hash(code)
+        hash_counts[ch] = hash_counts.get(ch, 0) + 1
+    duplicate_code_hashes = [ch for ch, count in hash_counts.items() if count > 1]
+    
+    # 5. old_default_versions: mapping of default strategy name to its default_strategy_version
+    default_names = {t["name"] for t in DEFAULT_OPTION_STRATEGIES}
+    old_default_versions = {
+        s["name"]: s.get("default_strategy_version")
+        for s in db_strategies
+        if s.get("name") in default_names and s.get("default_strategy_version")
+    }
+    
+    # 6. missing_v13_signal_metadata: list of names in DB missing signal_schema_status == "V13_SIGNAL"
+    missing_v13_signal_metadata = [
+        s["name"] for s in db_strategies
+        if s.get("signal_schema_status") != "V13_SIGNAL"
+    ]
+    
+    # 7. strategies_that_use_signal_only_exit: list of strategy names using exit_mode == "signal_only"
+    strategies_that_use_signal_only_exit = []
+    for s in db_strategies:
+        exit_mode = s.get("exit_mode") or s.get("risk", {}).get("exit_mode") or s.get("visual_config", {}).get("risk", {}).get("exit_mode")
+        if exit_mode == "signal_only":
+            strategies_that_use_signal_only_exit.append(s["name"])
+            
+    # 8. MCX_removed_confirmed: confirm no MCX/CRUDE/NATURALGAS strategies are in the catalog
+    mcx_removed_confirmed = all(
+        str(t.get("instrument_group") or "").upper() != "MCX"
+        and "CRUDE" not in str(t.get("name") or "").upper()
+        and "NATURAL GAS" not in str(t.get("name") or "").upper()
+        for t in DEFAULT_OPTION_STRATEGIES
+    )
+    
+    return {
+        "ok": True,
+        "strategies_to_insert": strategies_to_insert,
+        "strategies_to_update_by_name": strategies_to_update_by_name,
+        "duplicate_strategy_names": duplicate_strategy_names,
+        "duplicate_code_hashes": duplicate_code_hashes,
+        "old_default_versions": old_default_versions,
+        "missing_v13_signal_metadata": missing_v13_signal_metadata,
+        "strategies_that_use_signal_only_exit": strategies_that_use_signal_only_exit,
+        "MCX_removed_confirmed": mcx_removed_confirmed
+    }
+
+
+@router.get("/r-exit-status")
+async def ops_r_exit_status(user=Depends(get_current_user)):
+    from server import _current_ltp_for_symbol
+    user_id = user["id"]
+    
+    active_positions = await db.strategy_positions.find({
+        "user_id": user_id,
+        "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}
+    }, {"_id": 0}).to_list(1000)
+    
+    positions_report = []
+    for pos in active_positions:
+        symbol = pos.get("trading_symbol") or pos.get("symbol")
+        if not symbol:
+            continue
+            
+        exchange = pos.get("exchange") or ("NFO" if symbol.endswith(("CE", "PE")) else "NSE")
+        is_option_buy = (
+            pos.get("position_side") == "LONG"
+            and (
+                exchange in {"NFO", "BFO"}
+                or symbol.endswith(("CE", "PE"))
+                or pos.get("option_type") in {"CE", "PE"}
+            )
+        )
+        if not is_option_buy:
+            continue
+            
+        current_price = await _current_ltp_for_symbol(user_id, symbol, exchange)
+        
+        strat = await db.strategies.find_one({"id": pos.get("strategy_id"), "user_id": user_id})
+        strategy_name = strat.get("name") if strat else pos.get("strategy_id")
+        
+        entry_time_str = pos.get("entry_time") or pos.get("created_at")
+        elapsed_minutes = 0.0
+        if entry_time_str:
+            try:
+                entry_dt = datetime.fromisoformat(entry_time_str.replace("Z", "+00:00"))
+                if entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                elapsed_minutes = round((datetime.now(timezone.utc) - entry_dt.astimezone(timezone.utc)).total_seconds() / 60.0, 2)
+            except Exception:
+                pass
+                
+        positions_report.append({
+            "strategy_id": pos.get("strategy_id"),
+            "strategy_name": strategy_name,
+            "symbol": symbol,
+            "position_side": pos.get("position_side"),
+            "status": pos.get("status"),
+            "ltp": current_price,
+            "average_buy_price": pos.get("average_buy_price"),
+            "r_initial_risk_amount": pos.get("r_initial_risk_amount"),
+            "r_stop_loss_price": pos.get("r_stop_loss_price"),
+            "r_take_profit_price": pos.get("r_take_profit_price"),
+            "r_current_R": pos.get("r_current_R"),
+            "r_max_R_seen": pos.get("r_max_R_seen"),
+            "r_trailing_active": pos.get("r_trailing_active"),
+            "r_trailing_stop_price": pos.get("r_trailing_stop_price"),
+            "best_price_seen": pos.get("best_price_seen"),
+            "elapsed_minutes": elapsed_minutes,
+            "max_hold_minutes": pos.get("max_hold_minutes"),
+        })
+        
+    return {
+        "ok": True,
+        "positions": positions_report
+    }
+
+
+@router.get("/option-selector-status")
+async def option_selector_status(user=Depends(get_current_user)):
+    """
+    Returns the last 100 OptionSelector v2 decisions for the authenticated user.
+
+    Each record contains:
+        strategy_id, underlying, direction, preference, selected_strike_mode,
+        quality_score, reason_code, mode, created_at,
+        selected_contract.instrument_key / tradingsymbol / strike / ltp
+    """
+    user_id = user["id"]
+    raw_rows = await db.option_selector_decisions.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(100)
+
+    rows = []
+    for row in raw_rows:
+        contract = row.get("selected_contract") or {}
+        rows.append({
+            "strategy_id": row.get("strategy_id"),
+            "underlying": row.get("underlying"),
+            "direction": row.get("direction"),
+            "preference": row.get("preference"),
+            "selected_strike_mode": row.get("selected_strike_mode"),
+            "quality_score": row.get("quality_score"),
+            "reason_code": row.get("reason_code"),
+            "mode": row.get("mode"),
+            "created_at": row.get("created_at"),
+            "instrument_key": contract.get("instrument_key"),
+            "tradingsymbol": contract.get("tradingsymbol"),
+            "strike": contract.get("strike"),
+            "ltp": contract.get("ltp"),
+        })
+
+    blocked = [r for r in rows if r["reason_code"] != "SELECTED"]
+    selected = [r for r in rows if r["reason_code"] == "SELECTED"]
+
+    return {
+        "ok": True,
+        "total": len(rows),
+        "selected_count": len(selected),
+        "blocked_count": len(blocked),
+        "decisions": rows,
+    }
+
+
+@router.get("/signal-priority-status")
+async def signal_priority_status(user=Depends(get_current_user)):
+    """
+    Returns the last 100 ConflictResolver priority decisions for the authenticated user.
+
+    Each record contains:
+        strategy_name, symbol_group, action, confidence, option_quality_score,
+        target_R, priority_score, decision (APPROVED/SKIPPED), reason_code, created_at
+
+    user_id is intentionally omitted from the response.
+    """
+    user_id = user["id"]
+    raw_rows = await db.signal_priority_decisions.find(
+        {"user_id": user_id},
+        {"_id": 0, "user_id": 0},   # exclude user_id from output
+    ).sort("created_at", -1).to_list(100)
+
+    approved_count = sum(1 for r in raw_rows if r.get("decision") == "APPROVED")
+    skipped_count = sum(1 for r in raw_rows if r.get("decision") == "SKIPPED")
+
+    return {
+        "ok": True,
+        "total": len(raw_rows),
+        "approved_count": approved_count,
+        "skipped_count": skipped_count,
+        "decisions": raw_rows,
+    }
+
+
+@router.get("/live-readiness")
+async def ops_live_readiness(user=Depends(get_current_user)):
+    """
+    Comprehensive live-readiness check for the QuantG ops dashboard.
+
+    Returns status=READY only when all critical checks pass.
+    Informational fields (counts, versions, feature flags) are always included.
+
+    Critical checks (any failure → NOT_READY):
+      1. CORE_ENGINE_LIVE_ENABLED env flag
+      2. User armed + global_live_enabled
+      3. Global kill-switch inactive
+      4. Upstox token valid (not mock)
+      5. Market data feed connected
+    """
+    from server import (
+        APP_VERSION, get_git_info, get_user_upstox_status, get_user_upstox_gateway,
+    )
+    import os as _os
+
+    user_id = user["id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    reasons: list = []
+
+    # ── git / version ──────────────────────────────────────────────────────
+    try:
+        commit, branch, _ = get_git_info()
+    except Exception:
+        commit, branch = "unknown", "unknown"
+
+    # ── 1. CORE_ENGINE_LIVE_ENABLED ────────────────────────────────────────
+    live_env = _os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
+    if not live_env:
+        reasons.append("CORE_ENGINE_LIVE_ENABLED not set to true")
+
+    # ── 2. Arm state ───────────────────────────────────────────────────────
+    arm_doc = await db.live_arm_state.find_one({"user_id": user_id})
+    armed = bool(arm_doc and arm_doc.get("armed"))
+    global_live_enabled = bool(arm_doc and arm_doc.get("global_live_enabled"))
+    if not (armed and global_live_enabled):
+        reasons.append("System not armed (armed=False or global_live_enabled=False)")
+
+    # ── 3. Kill switch ─────────────────────────────────────────────────────
+    ks_doc = await db.risk_state.find_one({"_id": "global_kill_switch"})
+    kill_active = bool(ks_doc and ks_doc.get("active"))
+    if kill_active:
+        reasons.append("Global kill-switch is active")
+
+    # ── 4. Upstox token valid ──────────────────────────────────────────────
+    try:
+        upstox_status = await get_user_upstox_status(user_id)
+    except Exception:
+        upstox_status = {}
+    token_valid = bool(upstox_status.get("connected") and upstox_status.get("token_valid"))
+    # Reject mock tokens explicitly
+    broker_keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
+    mock_token = bool(broker_keys and str(broker_keys.get("access_token", "")).startswith("mock_"))
+    if mock_token:
+        token_valid = False
+    if not token_valid:
+        reasons.append("Upstox token missing, invalid, or is a mock token")
+
+    # ── 5. Feed connected ──────────────────────────────────────────────────
+    feed_connected = False
+    latest_tick_age_seconds = None
+    try:
+        upstox_gw = await get_user_upstox_gateway(user_id)
+        if upstox_gw:
+            gw_status = upstox_gw.status()
+            feed_connected = bool(gw_status.get("feed_running") or gw_status.get("ws_running"))
+            last_tick = gw_status.get("last_tick_time") or gw_status.get("last_tick_at")
+            if last_tick:
+                try:
+                    lt = datetime.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+                    lt_utc = lt if lt.tzinfo else lt.replace(tzinfo=timezone.utc)
+                    latest_tick_age_seconds = round(
+                        (datetime.now(timezone.utc) - lt_utc.astimezone(timezone.utc)).total_seconds(), 1
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if not feed_connected:
+        reasons.append("Upstox market data feed not connected")
+
+    # ── Informational counts ───────────────────────────────────────────────
+    live_strategy_count = await db.strategies.count_documents(
+        {"user_id": user_id, "mode": "live", "status": "live"}
+    )
+    open_positions_count = await db.strategy_positions.count_documents(
+        {"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER", "EXITING"]}}
+    )
+    pending_orders_count = await db.orders.count_documents(
+        {"user_id": user_id, "mode": "live", "status": {"$in": ["PLACED", "PENDING_BROKER", "OPEN"]}}
+    )
+    unknown_orders_count = await db.orders.count_documents(
+        {"user_id": user_id, "status": "UNKNOWN_NEEDS_REVIEW"}
+    )
+
+    # ── Feature-active flags (based on recent decisions) ───────────────────
+    cutoff_1h = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    option_selector_active = bool(
+        await db.option_selector_decisions.find_one(
+            {"user_id": user_id, "created_at": {"$gte": cutoff_1h}}
+        )
+    )
+    r_exit_active = bool(
+        await db.strategy_positions.find_one(
+            {"user_id": user_id, "r_stop_loss_price": {"$exists": True},
+             "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER"]}}
+        )
+    )
+    signal_priority_active = bool(
+        await db.signal_priority_decisions.find_one(
+            {"user_id": user_id, "created_at": {"$gte": cutoff_1h}}
+        )
+    )
+
+    # ── Default strategy version (from most recent live strategy) ──────────
+    recent_strat = await db.strategies.find_one(
+        {"user_id": user_id, "mode": "live"},
+        sort=[("updated_at", -1)],
+    )
+    default_strategy_version = (
+        (recent_strat or {}).get("default_strategy_version")
+        or (recent_strat or {}).get("strategy_version")
+        or "v13-live-brain-r1"
+    )
+
+    status = "READY" if not reasons else "NOT_READY"
+
+    return {
+        "status": status,
+        "reasons": reasons,
+        "app_version": APP_VERSION,
+        "git_commit": commit,
+        "git_branch": branch,
+        "CORE_ENGINE_LIVE_ENABLED": live_env,
+        "arm_state": {
+            "armed": armed,
+            "global_live_enabled": global_live_enabled,
+        },
+        "kill_switch_active": kill_active,
+        "upstox_token_valid": token_valid,
+        "feed_connected": feed_connected,
+        "latest_tick_age_seconds": latest_tick_age_seconds,
+        "live_strategy_count": live_strategy_count,
+        "open_positions_count": open_positions_count,
+        "pending_orders_count": pending_orders_count,
+        "unknown_orders_count": unknown_orders_count,
+        "default_strategy_version": default_strategy_version,
+        "option_selector_active": option_selector_active,
+        "r_exit_active": r_exit_active,
+        "signal_priority_active": signal_priority_active,
+        "timestamp": now_iso,
     }

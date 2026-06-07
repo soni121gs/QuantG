@@ -156,8 +156,39 @@ class StrategyMisbehaviorDetector:
             return
 
 
+# ---------------------------------------------------------------------------
+# Priority scoring — pure function, no DB
+# ---------------------------------------------------------------------------
+
+def compute_priority_score(sig: Dict[str, Any]) -> float:
+    """Compute the ranking score for an entry signal.
+
+    Formula:
+        priority_score =
+            confidence                          (0-100)
+          + option_quality_score * 0.4          (0-40)
+          + target_R * 5                        (typically 0-25)
+          - warnings_penalty                    (-5 per v2 warning, max -20)
+
+    Safe defaults used when fields are missing.
+    """
+    confidence = float(sig.get("confidence") or 85.0)
+    quality_raw = sig.get("option_quality_score")
+    quality = float(quality_raw) if quality_raw is not None else 0.0
+    target_r_raw = sig.get("target_R")
+    target_r = float(target_r_raw) if target_r_raw is not None else 2.0
+    warnings = sig.get("v2_selector_warnings") or []
+    penalty = min(len(warnings) * 5.0, 20.0)
+    score = confidence + quality * 0.4 + target_r * 5.0 - penalty
+    return round(score, 4)
+
+
+# ---------------------------------------------------------------------------
+# Conflict resolver (synchronous — no DB)
+# ---------------------------------------------------------------------------
+
 class ConflictResolver:
-    """Arbitrate signal conflicts using symbol-group locking."""
+    """Arbitrate signal conflicts using symbol-group locking and priority scoring."""
 
     @staticmethod
     def _get_symbol_group(item: Dict[str, Any]) -> str:
@@ -167,11 +198,12 @@ class ConflictResolver:
             return str(g).upper().strip()
         
         # Fallback to symbol or target_symbol match
+        # IMPORTANT: check BANKNIFTY before NIFTY because "NIFTY" is a substring of "BANKNIFTY"
         for field in ("symbol", "target_symbol"):
             val = item.get(field)
             if val:
                 val_upper = str(val).upper().strip()
-                for name in ("NIFTY", "BANKNIFTY", "SENSEX", "CRUDEOIL", "NATURALGAS"):
+                for name in ("BANKNIFTY", "NIFTY", "SENSEX", "CRUDEOIL", "NATURALGAS"):
                     if name in val_upper:
                         return name
                 return val_upper
@@ -183,16 +215,34 @@ class ConflictResolver:
         active_positions: List[Dict[str, Any]],
         one_active_position_per_symbol_group: bool = True
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Returns (approved, rejected) lists.
+
+        Each rejected signal carries:
+          - rejection_reason: canonical reason_code string
+          - priority_score: computed score
+          - competing_signal_ids: list of competing signal ids
+          - selected_signal_id: id of the winner (if applicable)
+
+        Guarantees:
+          1. Exits always win — never blocked by entry conflict logic.
+          2. Active group exposure blocks new entries (SKIPPED_GROUP_EXPOSURE_ACTIVE).
+          3. When multiple entries compete for the same group, the one with the
+             highest priority_score wins (SKIPPED_LOWER_PRIORITY_SIGNAL for losers).
+          4. Tie-breaker order: confidence → option_quality_score → created_at (newest) → strategy_id.
+        """
+        from collections import defaultdict
+
         # 1. Identify active positions that are not closed
-        active_pos_by_strat = {}
+        active_pos_by_strat: Dict[str, Dict[str, Any]] = {}
         for pos in active_positions:
             if pos.get("status") not in ("CLOSED", "EXITED"):
                 active_pos_by_strat[pos["strategy_id"]] = pos
 
-        # 2. Separate pending signals into exits vs entries
-        exits = []
-        entries = []
-        exiting_strategies = set()
+        # 2. Separate exits from entries
+        exits: List[Dict[str, Any]] = []
+        entries: List[Dict[str, Any]] = []
+        exiting_strategies: set = set()
 
         for sig in pending_signals:
             strat_id = sig["strategy_id"]
@@ -202,91 +252,169 @@ class ConflictResolver:
             else:
                 entries.append(sig)
 
-        # 3. Determine currently locked groups (exits will release their locks)
-        locked_groups = set()
+        # 3. Determine groups already locked by non-exiting active positions
+        locked_groups: set = set()
+        locked_group_position: Dict[str, str] = {}  # group -> strategy_id holding lock
         for strat_id, pos in active_pos_by_strat.items():
             if strat_id not in exiting_strategies:
-                locked_groups.add(ConflictResolver._get_symbol_group(pos))
+                g = ConflictResolver._get_symbol_group(pos)
+                locked_groups.add(g)
+                locked_group_position[g] = strat_id
 
-        approved = list(exits)
-        rejected = []
+        approved: List[Dict[str, Any]] = list(exits)
+        rejected: List[Dict[str, Any]] = []
 
-        # 4. Group remaining entries by confidence descending
-        # Sort by confidence descending
-        entries.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
-
-        # Group by confidence value using a dictionary
-        from collections import defaultdict
-        conf_groups = defaultdict(list)
+        # 4. Compute priority scores for all entries
         for sig in entries:
-            conf_groups[sig.get("confidence", 0.0)].append(sig)
+            sig["_priority_score"] = compute_priority_score(sig)
 
-        # Process each confidence level from highest to lowest
-        sorted_confidences = sorted(conf_groups.keys(), reverse=True)
-        for conf in sorted_confidences:
-            sigs_at_conf = conf_groups[conf]
-            
-            # Group these signals by their symbol group
-            group_to_sigs = defaultdict(list)
-            for sig in sigs_at_conf:
-                group_to_sigs[ConflictResolver._get_symbol_group(sig)].append(sig)
+        # 5. Group entries by symbol group
+        group_entries: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        non_locking_entries: List[Dict[str, Any]] = []
 
-            for g, sigs in group_to_sigs.items():
-                # Separate by whether they require group locking
-                locking_sigs = []
-                non_locking_sigs = []
+        for sig in entries:
+            g = ConflictResolver._get_symbol_group(sig)
+            # Check per-signal override for locking
+            sig_override = (sig.get("visual_config") or {}).get("risk", {}).get("one_active_position_per_symbol_group")
+            use_lock = sig_override if sig_override is not None else one_active_position_per_symbol_group
+            if use_lock:
+                group_entries[g].append(sig)
+            else:
+                non_locking_entries.append(sig)
+
+        # Non-locking signals always approved
+        approved.extend(non_locking_entries)
+
+        # 6. For each group: if locked → reject all; if contested → pick winner by priority
+        for g, sigs in group_entries.items():
+            if g in locked_groups:
+                # Group already has an active position — block all new entries
                 for s in sigs:
-                    # Check visual_config override, default to global setting
-                    sig_override = s.get("visual_config", {}).get("risk", {}).get("one_active_position_per_symbol_group")
-                    use_lock = sig_override if sig_override is not None else one_active_position_per_symbol_group
-                    if use_lock:
-                        locking_sigs.append(s)
-                    else:
-                        non_locking_sigs.append(s)
+                    s["rejection_reason"] = "SKIPPED_GROUP_EXPOSURE_ACTIVE"
+                    s["priority_score"] = s.pop("_priority_score", 0.0)
+                    s["skip_reason"] = "SKIPPED_GROUP_EXPOSURE_ACTIVE"
+                    s["competing_signal_ids"] = []
+                    s["selected_signal_id"] = None
+                rejected.extend(sigs)
+                continue
 
-                # Non-locking signals are always approved
-                approved.extend(non_locking_sigs)
+            if len(sigs) == 1:
+                # Only one entry for this group — approve directly
+                s = sigs[0]
+                s["priority_score"] = s.pop("_priority_score", 0.0)
+                approved.append(s)
+                locked_groups.add(g)
+                continue
 
-                # Process locking signals
-                if not locking_sigs:
-                    continue
+            # Multiple entries competing for same group — pick winner by priority_score
+            def _sort_key(s: Dict[str, Any]) -> Tuple:
+                return (
+                    s.get("_priority_score", 0.0),               # higher is better
+                    float(s.get("confidence") or 0.0),
+                    float(s.get("option_quality_score") or 0.0),
+                    # newest created_at wins on tie (lexicographic ISO string)
+                    str(s.get("created_at") or ""),
+                    # deterministic final tiebreak: larger strategy_id string wins
+                    str(s.get("strategy_id") or ""),
+                )
 
-                if g in locked_groups:
-                    # Group is already locked, reject all locking signals at this level
-                    for s in locking_sigs:
-                        s["rejection_reason"] = "conflict-blocked: symbol group is locked"
-                        rejected.append(s)
-                else:
-                    if len(locking_sigs) > 1:
-                        # Clash! Multiple signals try to lock the same group at same confidence
-                        for s in locking_sigs:
-                            s["rejection_reason"] = f"conflict-blocked: clash at confidence {conf}"
-                            rejected.append(s)
-                    else:
-                        # Exactly one locking signal, approve and lock the group
-                        s = locking_sigs[0]
-                        approved.append(s)
-                        locked_groups.add(g)
+            ranked = sorted(sigs, key=_sort_key, reverse=True)
+            winner = ranked[0]
+            losers = ranked[1:]
 
-        # Ensure order matches inputs where possible (exits first, then approved entries)
+            winner["priority_score"] = winner.pop("_priority_score", 0.0)
+            competing_ids = [s["id"] for s in ranked]
+
+            approved.append(winner)
+            locked_groups.add(g)
+
+            for s in losers:
+                s["rejection_reason"] = "SKIPPED_LOWER_PRIORITY_SIGNAL"
+                s["priority_score"] = s.pop("_priority_score", 0.0)
+                s["skip_reason"] = "SKIPPED_LOWER_PRIORITY_SIGNAL"
+                s["competing_signal_ids"] = competing_ids
+                s["selected_signal_id"] = winner["id"]
+                rejected.append(s)
+
+        # 7. Restore original ordering and return
         approved_ids = {s["id"] for s in approved}
-        
         final_approved = [s for s in pending_signals if s["id"] in approved_ids]
         final_rejected = [s for s in pending_signals if s["id"] not in approved_ids]
-        
-        # Sync rejection reason for final_rejected
+
+        # Sync rejection metadata for final_rejected list
         rejected_by_id = {s["id"]: s for s in rejected}
         for s in final_rejected:
             if s["id"] in rejected_by_id:
-                s["rejection_reason"] = rejected_by_id[s["id"]].get("rejection_reason") or "conflict-blocked"
+                r = rejected_by_id[s["id"]]
+                s["rejection_reason"] = r.get("rejection_reason") or "conflict-blocked"
+                s["priority_score"] = r.get("priority_score", 0.0)
+                s["skip_reason"] = r.get("skip_reason") or s["rejection_reason"]
+                s["competing_signal_ids"] = r.get("competing_signal_ids") or []
+                s["selected_signal_id"] = r.get("selected_signal_id")
             else:
                 s["rejection_reason"] = s.get("rejection_reason") or "conflict-blocked"
+                s["priority_score"] = s.get("_priority_score", compute_priority_score(s))
+                s.pop("_priority_score", None)
 
         logger.info(
-            "ConflictResolver: resolved %d approved signals, %d rejected signals. Locked groups: %s. Active positions count: %d.",
-            len(final_approved), len(final_rejected), list(locked_groups), len(active_positions)
+            "ConflictResolver: %d approved, %d rejected. Locked groups: %s. Active positions: %d.",
+            len(final_approved), len(final_rejected), sorted(locked_groups), len(active_positions)
         )
         return final_approved, final_rejected
+
+
+async def store_priority_decisions(
+    db,
+    user_id: str,
+    approved: List[Dict[str, Any]],
+    rejected: List[Dict[str, Any]],
+    strategy_map: Dict[str, Dict[str, Any]],
+) -> None:
+    """Persist priority decisions to db.signal_priority_decisions for diagnostics."""
+    now = datetime.now(timezone.utc).isoformat()
+    docs = []
+
+    for sig in approved:
+        strat = strategy_map.get(sig["strategy_id"]) or {}
+        docs.append({
+            "user_id": user_id,
+            "strategy_id": sig.get("strategy_id"),
+            "strategy_name": strat.get("name"),
+            "symbol_group": ConflictResolver._get_symbol_group(sig),
+            "action": sig.get("action"),
+            "confidence": sig.get("confidence"),
+            "option_quality_score": sig.get("option_quality_score"),
+            "target_R": sig.get("target_R"),
+            "priority_score": sig.get("priority_score"),
+            "decision": "APPROVED",
+            "reason_code": "APPROVED",
+            "created_at": now,
+        })
+
+    for sig in rejected:
+        strat = strategy_map.get(sig["strategy_id"]) or {}
+        docs.append({
+            "user_id": user_id,
+            "strategy_id": sig.get("strategy_id"),
+            "strategy_name": strat.get("name"),
+            "symbol_group": ConflictResolver._get_symbol_group(sig),
+            "action": sig.get("action"),
+            "confidence": sig.get("confidence"),
+            "option_quality_score": sig.get("option_quality_score"),
+            "target_R": sig.get("target_R"),
+            "priority_score": sig.get("priority_score", 0.0),
+            "decision": "SKIPPED",
+            "reason_code": sig.get("rejection_reason") or "CONFLICT_BLOCKED",
+            "competing_signal_ids": sig.get("competing_signal_ids") or [],
+            "selected_signal_id": sig.get("selected_signal_id"),
+            "created_at": now,
+        })
+
+    if docs:
+        try:
+            await db.signal_priority_decisions.insert_many(docs, ordered=False)
+        except Exception as e:
+            logger.warning("Failed to store priority decisions: %s", e)
 
 
 class SignalManager:
@@ -366,6 +494,23 @@ async def _dispatch_signal_via_unified_engine(
     mode = _strategy_mode(strategy, sig)
     if mode not in {"paper", "live"}:
         raise ValueError(f"Unified strategy execution requires paper/live mode, got {mode or 'blank'}.")
+
+    # Hard gate: all live signals must pass the 12-point preflight before any order is created.
+    # Paper signals are unaffected. A failed preflight returns SKIPPED_SIGNAL — no FAILED broker order.
+    if mode == "live":
+        from core.live_entry_preflight import live_entry_preflight
+        pf = await live_entry_preflight(db, user_id, sig, strategy)
+        if not pf["ok"]:
+            logger.warning(
+                "live_preflight BLOCKED sig=%s check=%s: %s",
+                sig.get("id"), pf.get("failed_check"), pf.get("detail", ""),
+            )
+            return {
+                "ok": False,
+                "status": "SKIPPED_SIGNAL",
+                "reason": f"LIVE_PREFLIGHT: {pf.get('failed_check')} — {pf.get('detail', '')}",
+                "reason_code": "LIVE_PREFLIGHT_NOT_READY",
+            }
 
     option_contract = sig.get("option_contract") or None
     symbol = str(sig.get("symbol") or "").upper()
@@ -601,9 +746,19 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
 
                     # Coordinate conflicts across pre-validated signals
                     if pre_validated:
+                        # Build strategy name map for telemetry
+                        strat_ids = {sig["strategy_id"] for sig in pre_validated}
+                        strategy_map: Dict[str, Dict[str, Any]] = {}
+                        for sid in strat_ids:
+                            st = await db.strategies.find_one({"id": sid, "user_id": user_id}) or {}
+                            strategy_map[sid] = st
+
                         approved, rejected = ConflictResolver.resolve(
                             pre_validated, active_positions, one_active_position_per_symbol_group=one_active_group
                         )
+
+                        # Persist priority decisions for diagnostics
+                        await store_priority_decisions(db, user_id, approved, rejected, strategy_map)
 
                         # Handle rejected/filtered signals
                         for sig in rejected:
@@ -612,9 +767,14 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             await db.signals.update_one(
                                 {"id": sig["id"]},
                                 {"$set": {
-                                    "status": sig["status"],
-                                    "rejection_reason": validation["reason_code"],
-                                    "rejection_detail": validation,
+                                    "status": "SKIPPED_SIGNAL",
+                                    "rejection_reason": sig["rejection_reason"],
+                                    "rejection_detail": {
+                                        "reason_code": sig["rejection_reason"],
+                                        "priority_score": sig.get("priority_score", 0.0),
+                                        "competing_signal_ids": sig.get("competing_signal_ids") or [],
+                                        "selected_signal_id": sig.get("selected_signal_id"),
+                                    },
                                     "processed_at": datetime.now(timezone.utc).isoformat()
                                 }}
                             )

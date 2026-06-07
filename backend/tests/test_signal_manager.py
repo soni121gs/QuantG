@@ -6,7 +6,7 @@ import pytest
 import uuid
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 from signal_manager import ConflictResolver, SignalManager
 from signal_manager import StrategySignalValidator
@@ -656,7 +656,11 @@ async def test_live_signal_dispatch_uses_server_order_core_boundary(monkeypatch)
     }
     strategy = {"id": "strat-1", "user_id": "user-1", "mode": "live", "status": "live"}
 
-    result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy, fake_place_order)
+    # Preflight is unit-tested separately; mock it to pass so this test stays
+    # focused on verifying the server order boundary (place_order_fn) is called.
+    _pf_pass = {"ok": True, "reason_code": "LIVE_PREFLIGHT_PASSED", "checks": []}
+    with patch("core.live_entry_preflight.live_entry_preflight", AsyncMock(return_value=_pf_pass)):
+        result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy, fake_place_order)
 
     assert result["status"] == "PENDING_BROKER"
     assert captured["risk"]["mode"] == "live"

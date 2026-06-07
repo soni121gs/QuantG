@@ -66,19 +66,12 @@ def _mock_db():
 
 def test_seeded_strategy_exit_mode_matrix():
     """1. Seeded strategy exit_mode matrix test.
-    Verify that only the two strategies with internal exits are seeded with signal_only.
-    All others must be seeded with signal_or_tp_sl_trailing.
+    Verify that all option strategies are seeded with signal_or_tp_sl_trailing.
     """
     for strat in DEFAULT_OPTION_STRATEGIES:
         name = strat["name"]
         exit_mode = strat.get("risk", {}).get("exit_mode")
-        if name in {
-            "UPSTOX NIFTY ATM Option Momentum Buyer",
-            "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
-        }:
-            assert exit_mode == "signal_only", f"{name} should have exit_mode signal_only"
-        else:
-            assert exit_mode == "signal_or_tp_sl_trailing", f"{name} should have exit_mode signal_or_tp_sl_trailing"
+        assert exit_mode == "signal_or_tp_sl_trailing", f"{name} should have exit_mode signal_or_tp_sl_trailing"
 
 
 @pytest.mark.anyio
