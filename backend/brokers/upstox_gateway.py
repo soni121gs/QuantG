@@ -1018,7 +1018,8 @@ class UpstoxGateway:
             
         return {"status": "success", "data": {}}
 
-    def _request(self, method: str, path: str, *, hft: bool = False, **kwargs: Any) -> Dict[str, Any]:
+    def _request(self, method: str, path: str, *, hft: bool = False, _retry: int = 3, **kwargs: Any) -> Dict[str, Any]:
+        import time as _time
         if not self.access_token:
             raise RuntimeError("Upstox access token is missing. Complete OAuth login first.")
         if str(self.access_token).startswith("mock_live_upstox_token") and "/v2/order/place" in path:
@@ -1035,14 +1036,28 @@ class UpstoxGateway:
             "X-Algo-Name": algo_name,
         })
         self.last_request_at = datetime.now(timezone.utc).isoformat()
-        response = requests.request(
-            method.upper(),
-            f"{base}{path}",
-            headers=headers,
-            timeout=self.timeout,
-            **kwargs,
-        )
-        return self._decode_response(response)
+        last_exc: Optional[Exception] = None
+        for attempt in range(max(1, _retry)):
+            response = requests.request(
+                method.upper(),
+                f"{base}{path}",
+                headers=headers,
+                timeout=self.timeout,
+                **kwargs,
+            )
+            if response.status_code == 429:
+                wait = min(int(response.headers.get("Retry-After", "1")), 60)
+                logger.warning(
+                    "Upstox rate-limited (429) on %s %s — backing off %ss (attempt %d/%d)",
+                    method.upper(), path, wait, attempt + 1, _retry,
+                )
+                if attempt < _retry - 1:
+                    _time.sleep(wait)
+                    continue
+                last_exc = RuntimeError(f"Upstox API 429: rate limit exceeded after {_retry} attempts on {path}")
+                break
+            return self._decode_response(response)
+        raise last_exc or RuntimeError(f"Upstox API request failed after {_retry} attempts")
 
     def _decode_response(self, response: requests.Response) -> Dict[str, Any]:
         try:

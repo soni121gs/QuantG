@@ -57,6 +57,23 @@ class RiskManager:
                     "quantity": 0
                 }
 
+        # 2b. Broker reconciliation mismatch gate (live entry orders only).
+        # Blocks new entries when the local ledger disagrees with the broker's live
+        # portfolio. Exits are still permitted so open positions can be closed.
+        if mode == "live" and side.upper() == "BUY":
+            recon = await self.db.risk_state.find_one({"_id": f"position_reconciliation:{user_id}"})
+            if recon and recon.get("mismatch_detected"):
+                return {
+                    "ok": False,
+                    "status": "REJECTED_RECONCILIATION_MISMATCH",
+                    "reason": (
+                        "Live entry blocked: broker position reconciliation mismatch detected. "
+                        f"Mismatches: {recon.get('mismatches', [])}. "
+                        "Resolve positions and re-run reconciliation before placing new entries."
+                    ),
+                    "quantity": 0,
+                }
+
         # 3. Strategy config lookup for sizing only. Do not block because a
         # strategy is "bad", halted, low confidence, or otherwise app-judged.
         strategy = await self.db.strategies.find_one({"id": strategy_id, "user_id": user_id})
@@ -149,9 +166,95 @@ class RiskManager:
                 "quantity": 0
             }
 
+        # 7. Options Greeks exposure check (applies when trading options)
+        sym_upper = (target_symbol or "").upper()
+        if "CE" in sym_upper or "PE" in sym_upper:
+            greeks_result = await self._check_greeks_exposure(
+                user_id=user_id,
+                target_symbol=sym_upper,
+                side=side,
+                quantity=size_res.quantity,
+                lot_size=lot_size,
+                mode=mode,
+                settings=settings,
+                visual_risk=visual_risk,
+            )
+            if not greeks_result["ok"]:
+                return {
+                    "ok": False,
+                    "status": "REJECTED_GREEKS_LIMIT",
+                    "reason": greeks_result["reason"],
+                    "quantity": 0
+                }
+
         return {
             "ok": True,
             "status": "APPROVED",
             "reason": "Risk verification passed.",
             "quantity": size_res.quantity
         }
+
+    async def _check_greeks_exposure(
+        self,
+        *,
+        user_id: str,
+        target_symbol: str,
+        side: str,
+        quantity: int,
+        lot_size: int,
+        mode: str,
+        settings: dict,
+        visual_risk: dict,
+    ) -> dict:
+        """Check net delta exposure across all open option positions.
+
+        Uses a 0.5 ATM delta proxy — adequate for a pre-trade exposure cap.
+        CE long = +delta, CE short = -delta, PE long = -delta, PE short = +delta.
+        """
+        DELTA_PROXY = 0.5
+
+        is_call = target_symbol.endswith("CE")
+        if is_call:
+            order_delta = DELTA_PROXY * quantity if side == "BUY" else -DELTA_PROXY * quantity
+        else:
+            order_delta = -DELTA_PROXY * quantity if side == "BUY" else DELTA_PROXY * quantity
+
+        max_net_delta = float(
+            visual_risk.get("max_net_delta")
+            or settings.get("max_net_delta")
+            or 50.0
+        )
+
+        try:
+            open_positions = await self.db.strategy_positions.find(
+                {"user_id": user_id, "mode": mode, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}}
+            ).to_list(length=200)
+        except Exception:
+            return {"ok": True, "net_delta": order_delta}
+
+        portfolio_delta = 0.0
+        for pos in open_positions:
+            sym = (pos.get("target_symbol") or "").upper()
+            if "CE" not in sym and "PE" not in sym:
+                continue
+            pos_qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
+            pos_side = (pos.get("side") or "BUY").upper()
+            pos_is_call = sym.endswith("CE")
+            if pos_is_call:
+                portfolio_delta += DELTA_PROXY * pos_qty if pos_side == "BUY" else -DELTA_PROXY * pos_qty
+            else:
+                portfolio_delta += -DELTA_PROXY * pos_qty if pos_side == "BUY" else DELTA_PROXY * pos_qty
+
+        projected_delta = portfolio_delta + order_delta
+        if abs(projected_delta) > max_net_delta:
+            return {
+                "ok": False,
+                "reason": (
+                    f"Net delta exposure limit breached: projected delta {projected_delta:+.1f} "
+                    f"exceeds cap of ±{max_net_delta:.0f}. "
+                    f"Current portfolio delta: {portfolio_delta:+.1f}, order delta: {order_delta:+.1f}."
+                ),
+                "net_delta": projected_delta,
+            }
+
+        return {"ok": True, "net_delta": projected_delta}
