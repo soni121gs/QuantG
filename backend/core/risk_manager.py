@@ -57,6 +57,23 @@ class RiskManager:
                     "quantity": 0
                 }
 
+        # 2b. Broker reconciliation mismatch gate (live entry orders only).
+        # Blocks new entries when the local ledger disagrees with the broker's live
+        # portfolio. Exits are still permitted so open positions can be closed.
+        if mode == "live" and side.upper() == "BUY":
+            recon = await self.db.risk_state.find_one({"_id": f"position_reconciliation:{user_id}"})
+            if recon and recon.get("mismatch_detected"):
+                return {
+                    "ok": False,
+                    "status": "REJECTED_RECONCILIATION_MISMATCH",
+                    "reason": (
+                        "Live entry blocked: broker position reconciliation mismatch detected. "
+                        f"Mismatches: {recon.get('mismatches', [])}. "
+                        "Resolve positions and re-run reconciliation before placing new entries."
+                    ),
+                    "quantity": 0,
+                }
+
         # 3. Strategy config lookup for sizing only. Do not block because a
         # strategy is "bad", halted, low confidence, or otherwise app-judged.
         strategy = await self.db.strategies.find_one({"id": strategy_id, "user_id": user_id})

@@ -9396,37 +9396,55 @@ async def _mark_order_submitted(order_id: str, user_id: str, submit: Dict[str, A
             "message": str(exc),
         })
         raise RuntimeError(str(exc))
-    try:
-        row = await db.orders.find_one_and_update(
-            {"id": order_id, "user_id": user_id},
-            {"$set": {
-                "status": canonical,
-                "legacy_status": "PENDING_BROKER",
-                "execution_status": canonical,
-                "broker_status": broker_status,
-                "broker_order_id": broker_order_id,
-                "execution_attempts": int(submit.get("attempts") or 1),
-                "execution_recovered": bool(submit.get("recovered")),
-                "broker_response": submit.get("raw") or submit.get("broker_order") or submit,
-                "updated_at": now,
-            }, "$unset": {"placement_owner": "", "placement_lock_until": ""}},
-            projection={"_id": 0},
-            return_document=ReturnDocument.AFTER,
-        )
-        await _append_order_event(order_id, user_id, "ORDER_PLACED", {
-            "broker_order_id": broker_order_id,
-            "broker_status": broker_status,
+    update_doc = {
+        "$set": {
             "status": canonical,
-        })
-        return row or {}
-    except DuplicateKeyError:
-        existing = await db.orders.find_one(
-            {"user_id": user_id, "broker_order_id": broker_order_id},
-            {"_id": 0},
-        )
-        if existing:
-            return existing
-        raise
+            "legacy_status": "PENDING_BROKER",
+            "execution_status": canonical,
+            "broker_status": broker_status,
+            "broker_order_id": broker_order_id,
+            "execution_attempts": int(submit.get("attempts") or 1),
+            "execution_recovered": bool(submit.get("recovered")),
+            "broker_response": submit.get("raw") or submit.get("broker_order") or submit,
+            "updated_at": now,
+        },
+        "$unset": {"placement_owner": "", "placement_lock_until": ""},
+    }
+    last_db_exc: Optional[Exception] = None
+    for _attempt in range(3):
+        try:
+            row = await db.orders.find_one_and_update(
+                {"id": order_id, "user_id": user_id},
+                update_doc,
+                projection={"_id": 0},
+                return_document=ReturnDocument.AFTER,
+            )
+            await _append_order_event(order_id, user_id, "ORDER_PLACED", {
+                "broker_order_id": broker_order_id,
+                "broker_status": broker_status,
+                "status": canonical,
+            })
+            return row or {}
+        except DuplicateKeyError:
+            existing = await db.orders.find_one(
+                {"user_id": user_id, "broker_order_id": broker_order_id},
+                {"_id": 0},
+            )
+            if existing:
+                return existing
+            raise
+        except Exception as db_exc:
+            last_db_exc = db_exc
+            if _attempt < 2:
+                await asyncio.sleep(0.5 * (2 ** _attempt))
+    # All retries exhausted — broker accepted order but local record has no broker_order_id.
+    # Raise a tagged error so the caller can attempt a broker-side cancel.
+    logger.critical(
+        "DB_PERSIST_FAILURE after 3 attempts: broker_order_id=%s order_id=%s user=%s — "
+        "broker has the order but local DB write failed. Caller will attempt cancel.",
+        broker_order_id, order_id, user_id,
+    )
+    raise RuntimeError(f"BROKER_ORDER_ORPHAN:{broker_order_id}:{last_db_exc}")
 
 
 def _paper_delta(intent_name: str, quantity: int) -> int:
@@ -10781,11 +10799,41 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                     raise RuntimeError(f"{instr.broker} accepted no broker_order_id for {instr.tradingsymbol}; cannot track PLACED state.")
                 order_doc = await _mark_order_submitted(order_doc["id"], user_id, submit)
             except Exception as exc:
-                await _cancel_strategy_reservation(position_reservation, str(exc))
+                exc_msg = str(exc)
+                # Orphan recovery: broker accepted the order but local DB write exhausted
+                # all retries. Attempt a best-effort broker-side cancel to avoid a ghost
+                # position, then surface the order as UNKNOWN_NEEDS_REVIEW for manual fix.
+                if exc_msg.startswith("BROKER_ORDER_ORPHAN:"):
+                    parts = exc_msg.split(":", 2)
+                    orphan_broker_id = parts[1] if len(parts) > 1 else ""
+                    try:
+                        gw = await get_user_upstox_gateway(user_id)
+                        if gw and gw.connected and orphan_broker_id:
+                            await asyncio.to_thread(gw.cancel_order, orphan_broker_id)
+                            logger.critical(
+                                "ORPHAN_CANCEL_SUCCESS broker_order_id=%s order_id=%s user=%s",
+                                orphan_broker_id, order_doc.get("id"), user_id,
+                            )
+                    except Exception as cancel_exc:
+                        logger.critical(
+                            "ORPHAN_CANCEL_FAILED broker_order_id=%s order_id=%s user=%s — MANUAL INTERVENTION REQUIRED: %s",
+                            orphan_broker_id, order_doc.get("id"), user_id, cancel_exc,
+                        )
+                    await db.orders.update_one(
+                        {"id": order_doc["id"], "user_id": user_id},
+                        {"$set": {
+                            "status": ORDER_UNKNOWN_NEEDS_REVIEW,
+                            "broker_order_id": orphan_broker_id or None,
+                            "status_message": "DB persist failed after broker accepted; cancel attempted.",
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                await _cancel_strategy_reservation(position_reservation, exc_msg)
                 if exposure_reservation:
-                    await _close_order_exposure_reservation(order_doc["id"], user_id, status="RELEASED", reason=str(exc))
+                    await _close_order_exposure_reservation(order_doc["id"], user_id, status="RELEASED", reason=exc_msg)
                     exposure_reservation = None
-                order_doc = await _mark_order_rejected(order_doc["id"], user_id, str(exc))
+                if not exc_msg.startswith("BROKER_ORDER_ORPHAN:"):
+                    order_doc = await _mark_order_rejected(order_doc["id"], user_id, exc_msg)
                 raise HTTPException(
                     status_code=400,
                     detail=f"Broker rejected order: {exc}",
@@ -11214,6 +11262,43 @@ async def _advance_pending_order_from_broker(
                     exit_price = float(avg_price or order.get("price") or pos.get("average_buy_price") or 0)
                     await _close_strategy_position_record(pos, exit_price=exit_price, reason="broker-exit-complete")
                     changed_positions += 1
+        elif canonical == ORDER_PARTIAL_FILL:
+            # Partial fill: update position quantity to reflect only what actually filled.
+            # The order remains active (pending the remainder). Position sizing must track
+            # the real filled quantity so P&L and risk calculations stay accurate.
+            partial_qty = int(filled_qty or 0)
+            logger.warning(
+                "PARTIAL FILL broker_order_id=%s user=%s symbol=%s filled=%s pending=%s avg_price=%s",
+                broker_order_id, user_id,
+                (order.get("instrument") or {}).get("tradingsymbol") or order.get("symbol", ""),
+                partial_qty, pending_qty, avg_price,
+            )
+            await _append_order_event(order["id"], user_id, "ORDER_PARTIAL_FILL_RECEIVED", {
+                "broker_order_id": str(broker_order_id),
+                "filled_qty": partial_qty,
+                "pending_qty": pending_qty,
+                "avg_price": avg_price,
+            })
+            if strategy_id and is_entry and partial_qty > 0:
+                match = {
+                    "user_id": user_id,
+                    "entry_broker_order_id": str(broker_order_id),
+                    "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
+                }
+                positions = await db.strategy_positions.find(match, {"_id": 0}).to_list(20)
+                for pos in positions:
+                    res = await db.strategy_positions.update_one(
+                        {"id": pos["id"], "user_id": user_id},
+                        {"$set": {
+                            "quantity": partial_qty,
+                            "open_quantity": partial_qty,
+                            "status": "PARTIAL_FILL",
+                            "average_buy_price": float(avg_price or pos.get("average_buy_price") or 0),
+                            "partial_fill_pending_qty": pending_qty,
+                            "updated_at": now,
+                        }},
+                    )
+                    changed_positions += res.modified_count
         elif canonical in {ORDER_CANCELLED, ORDER_REJECTED}:
             await _close_order_exposure_reservation(order["id"], user_id, status="RELEASED", reason=f"broker-{canonical.lower()}")
             if strategy_id and is_entry:
@@ -11221,7 +11306,7 @@ async def _advance_pending_order_from_broker(
                     {
                         "user_id": user_id,
                         "entry_broker_order_id": str(broker_order_id),
-                        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]},
+                        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "PARTIAL_FILL"]},
                     },
                     {
                         "$set": {"status": canonical, "legacy_status": normalized, "updated_at": now, "broker_status_message": status_message or normalized},
