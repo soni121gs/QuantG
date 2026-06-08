@@ -967,7 +967,7 @@ async def _fetch_strategy_history(
                         token,
                         feed_started,
                     )
-                min_required = 2 if interval != "day" else min_intraday_bars
+                min_required = min_intraday_bars if interval != "day" else 2
                 if live_data and len(live_data) >= min_required:
                     is_live_source = bool(tick) or bool(candle_freshness.get("fresh"))
                     return {

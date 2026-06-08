@@ -541,39 +541,56 @@ class UpstoxGateway:
         if interval == "day":
             return daily_bars if daily_bars else None
 
-        # 2. Intraday OHLC bars via market-quote/ohlc
+        # 2. Try V3 intraday API — supports index instrument keys unlike V2
+        v3_interval_min = {"1minute": 1, "minute": 1, "5minute": 1, "15minute": 1, "30minute": 30}.get(interval, 1)
         try:
-            ohlc_url = f"/v2/market-quote/ohlc?instrument_key={encoded_key}&interval={ohlc_interval_code}"
-            res = self._request("GET", ohlc_url)
-            if isinstance(res, dict) and res.get("status") == "success":
-                data_node = res.get("data") or {}
-                node = data_node.get(instrument_key) or (
-                    next(iter(data_node.values()), {}) if data_node else {}
-                )
-                ohlc = node.get("ohlc") or {}
-                last_price = node.get("last_price") or node.get("ltp")
-                close_px = float(last_price or ohlc.get("close") or 0)
-                if close_px > 0:
-                    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-                    floored_min = (ist_now.minute // 5) * 5
-                    bar_dt = ist_now.replace(minute=floored_min, second=0, microsecond=0)
-                    bar_date_str = bar_dt.strftime("%Y-%m-%d %H:%M")
-                    intraday_bars.append({
-                        "date":   bar_date_str,
-                        "open":   float(ohlc.get("open") or close_px),
-                        "high":   float(ohlc.get("high") or close_px),
-                        "low":    float(ohlc.get("low")  or close_px),
-                        "close":  close_px,
-                        "volume": int(node.get("volume") or node.get("total_buy_quantity") or 0),
-                    })
+            v3_raw = self.get_intraday_candles_v3(instrument_key, unit="minutes", interval=v3_interval_min)
+            if v3_raw and len(v3_raw) >= 10:
+                if interval == "5minute":
+                    v3_raw = self._resample_to_5min(v3_raw)
+                if v3_raw and len(v3_raw) >= 5:
+                    intraday_bars = v3_raw
                     logger.info(
-                        "Upstox index OHLC ok key=%s ltp=%s bar=%s",
-                        instrument_key, close_px, bar_date_str,
+                        "Upstox index V3 intraday ok key=%s count=%s interval=%s",
+                        instrument_key, len(intraday_bars), interval,
                     )
         except Exception as exc:
-            logger.warning("Upstox index OHLC fetch failed key=%s: %s", instrument_key, exc)
+            logger.debug("Upstox V3 intraday failed for index key=%s: %s", instrument_key, exc)
 
-        # 3. If OHLC didn't give intraday bars, synthesise a session from daily close
+        # 3. Fall back to market-quote/ohlc if V3 didn't return enough bars
+        if not intraday_bars:
+            try:
+                ohlc_url = f"/v2/market-quote/ohlc?instrument_key={encoded_key}&interval={ohlc_interval_code}"
+                res = self._request("GET", ohlc_url)
+                if isinstance(res, dict) and res.get("status") == "success":
+                    data_node = res.get("data") or {}
+                    node = data_node.get(instrument_key) or (
+                        next(iter(data_node.values()), {}) if data_node else {}
+                    )
+                    ohlc = node.get("ohlc") or {}
+                    last_price = node.get("last_price") or node.get("ltp")
+                    close_px = float(last_price or ohlc.get("close") or 0)
+                    if close_px > 0:
+                        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+                        floored_min = (ist_now.minute // 5) * 5
+                        bar_dt = ist_now.replace(minute=floored_min, second=0, microsecond=0)
+                        bar_date_str = bar_dt.strftime("%Y-%m-%d %H:%M")
+                        intraday_bars.append({
+                            "date":   bar_date_str,
+                            "open":   float(ohlc.get("open") or close_px),
+                            "high":   float(ohlc.get("high") or close_px),
+                            "low":    float(ohlc.get("low")  or close_px),
+                            "close":  close_px,
+                            "volume": int(node.get("volume") or node.get("total_buy_quantity") or 0),
+                        })
+                        logger.info(
+                            "Upstox index OHLC ok key=%s ltp=%s bar=%s",
+                            instrument_key, close_px, bar_date_str,
+                        )
+            except Exception as exc:
+                logger.warning("Upstox index OHLC fetch failed key=%s: %s", instrument_key, exc)
+
+        # 4. If no intraday bars yet, synthesise a session from daily close
         if not intraday_bars and daily_bars:
             last_close = daily_bars[-1]["close"]
             intraday_bars = self._synthesise_session_bars(last_close, interval)
@@ -582,7 +599,7 @@ class UpstoxGateway:
                 len(intraday_bars), last_close, instrument_key,
             )
 
-        # 4. Merge: daily bars as background context + today's intraday bars
+        # 5. Merge: daily bars as background context + today's intraday bars
         today_str = (
             (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30))
             .strftime("%Y-%m-%d")
