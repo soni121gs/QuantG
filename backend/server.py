@@ -918,7 +918,7 @@ async def _fetch_strategy_history(
     if sym_upper in REMOVED_COMMODITY_UNDERLYINGS or "MCX" in sym_upper or sym_upper.endswith("FUT"):
         if not allow_mock:
             raise ValueError(f"MCX commodity history has been removed from QuantG: {sym_upper}")
-        return {"data": [], "source": "removed-mcx", "is_live": False, "interval": interval, "removed": True}
+        return {"data": [], "source": "removed-mcx", "is_live": False, "interval": interval, "removed": True, "paper_mode": allow_mock}
 
     settings = await get_user_settings(user_id)
     data_broker = settings.get("data_broker", "upstox")
@@ -978,6 +978,7 @@ async def _fetch_strategy_history(
                         "last_candle_at": candle_freshness.get("last_candle_at"),
                         "latest_candle_age_sec": candle_freshness.get("age_sec"),
                         "interval": interval,
+                        "paper_mode": allow_mock,
                     }
             
             # Raise explicit error instead of silently falling back to mock candles
@@ -1014,15 +1015,17 @@ async def _fetch_strategy_history(
                     "source": f"mock-day:{sym_upper}",
                     "is_live": False,
                     "interval": "day",
+                    "paper_mode": True,
                 }
             return {
                 "data": intraday_series(sym["base"], bars=max(250, min_intraday_bars + 1)),
                 "source": f"mock-5minute:{sym_upper}",
                 "is_live": False,
                 "interval": "5minute",
+                "paper_mode": True,
             }
 
-    return {"data": [], "source": "none", "is_live": False, "interval": interval}
+    return {"data": [], "source": "none", "is_live": False, "interval": interval, "paper_mode": allow_mock}
 
 
 # ============== Routes: Auth ==============

@@ -255,8 +255,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
             if idx > 0 and idx % 20 == 0:
                 renewed = await _acquire_lock(db)
                 if not renewed:
-                    logger.warning("runner lost lock mid-batch at strategy index %d — stopping tick early", idx)
-                    break
+                    logger.warning("runner lost lock mid-batch at strategy index %d — continuing without lock renewal", idx)
             try:
                 code = s.get("python_code") or ""
                 eval_set: Dict[str, Any] = {
@@ -363,17 +362,22 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 # Don't re-fire the same signal we already acted on
                 if last_sig_date and last_sig_date == last_fired_date:
                     await db.strategies.update_one({"id": s["id"]},
-                                                   {"$set": {**eval_set, "last_signals_count": signals_count},
+                                                   {"$set": {**eval_set,
+                                                             "last_signals_count": signals_count,
+                                                             "last_filter_reason": "Duplicate signal (already fired for this candle)"},
                                                     "$inc": inc_set})
                     continue
 
                 # Allow signals from the last 3 candles (~15 min on 5-min bars).
                 # Anything older is considered stale and ignored — prevents firing
                 # ancient signals on a runner restart.
-                recent_dates = {d.get("date") for d in data[-3:]}
-                if last_sig_date not in recent_dates:
+                recent_dates = {str(d.get("date") or "").strip()[:16] for d in data[-3:]}
+                norm_sig_date = str(last_sig_date or "").strip()[:16]
+                if norm_sig_date not in recent_dates:
                     await db.strategies.update_one({"id": s["id"]},
-                                                   {"$set": {**eval_set, "last_signals_count": signals_count},
+                                                   {"$set": {**eval_set,
+                                                             "last_signals_count": signals_count,
+                                                             "last_filter_reason": f"Stale signal (date={last_sig_date!r} not in last 3 candles)"},
                                                     "$inc": inc_set})
                     continue
 
@@ -641,9 +645,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 try:
                     await db.strategies.update_one(
                         {"id": s.get("id")},
-                        {"$set": {"last_evaluated_at": datetime.now(timezone.utc).isoformat(),
-                                  "last_error": str(e)[:200]},
-                         "$inc": {"evaluations": 1}},
+                        {"$set": {**eval_set, "last_error": str(e)[:200]},
+                         "$inc": inc_set},
                     )
                 except Exception:
                     pass
