@@ -105,10 +105,16 @@ def calculate_protection_for_position(average_buy_price: float, side: str, strat
 async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
     """Compare broker, paper broker, strategy ledger, and database states to repair mismatches."""
     from server import get_user_settings, _fetch_broker_positions_for_user, option_ledger
-    
+
     settings = await get_user_settings(user_id)
     paper_mode = bool(settings.get("paper_mode", True))
-    
+
+    # Paper mode: positions are simulated and never exist at a live broker.
+    # Broker reconciliation would always see them as orphans/stale and close
+    # them incorrectly. Skip entirely for paper users.
+    if paper_mode:
+        return {"orphans_healed": 0, "stale_closed": 0, "quantities_aligned": 0, "protections_verified": 0}
+
     # 1. Fetch active broker/paper positions.  MANUAL_RECOVERY is created only
     # when a real orphan cannot be matched back to a strategy.
     user_doc = {"id": user_id}
