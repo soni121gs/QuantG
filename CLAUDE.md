@@ -78,7 +78,8 @@ cd /opt/QuantG && git pull origin main
 
 **Backend-only change** (Python, routes):
 ```bash
-docker-compose restart backend
+# IMPORTANT: restart alone does NOT reload Python code — must rebuild first
+docker-compose build backend && docker-compose up -d backend
 ```
 
 **Frontend change** (JSX, CSS — requires rebuild):
@@ -106,7 +107,7 @@ docker-compose logs backend --tail=30
 ```powershell
 cd "d:\Quant\QuantG"
 git add <files> && git commit -m "fix: ..." && git push origin main
-ssh -i C:\Users\MG\.ssh\codex_quantg_vps root@82.180.145.183 "cd /opt/QuantG && git pull origin main && docker-compose restart backend"
+ssh -i "C:\Users\MG\.ssh\codex_quantg_vps" root@82.180.145.183 "cd /opt/QuantG && git pull origin main && docker-compose build backend && docker-compose up -d backend"
 ```
 
 ---
