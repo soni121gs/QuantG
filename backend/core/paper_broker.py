@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import logging
 
+from pymongo.errors import DuplicateKeyError
+
 logger = logging.getLogger("quantg.paper_broker")
 
 PAPER_INITIAL_BALANCE = 500_000.0   # ₹5,00,000
@@ -89,6 +91,23 @@ class PaperWallet:
         amount = max(0.0, round(float(amount), 2))
         if amount == 0.0:
             return
+
+        # Idempotency: the same exit order must never credit the wallet twice.
+        # A unique index on paper_wallet_credits.order_id makes this atomic.
+        if order_id:
+            try:
+                await self.db.paper_wallet_credits.insert_one({
+                    "order_id": order_id,
+                    "user_id": user_id,
+                    "amount": amount,
+                    "credited_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except DuplicateKeyError:
+                logger.warning(
+                    "Paper wallet: credit for order %s already applied — duplicate skipped",
+                    order_id,
+                )
+                return
 
         now = datetime.now(timezone.utc).isoformat()
         await self.db.paper_wallets.update_one(
