@@ -6765,6 +6765,59 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
     return result
 
 
+@api.get("/strategies/live-backtest-comparison")
+async def live_backtest_comparison(user=Depends(get_current_user)):
+    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    out = []
+    for s in strategies:
+        latest_backtest = await db.paper_trading_history.find_one(
+            {"user_id": user["id"], "strategy_id": s["id"]},
+            {"_id": 0},
+            sort=[("created_at", -1)],
+        )
+        live_orders = await db.orders.find(
+            {"user_id": user["id"], "strategy_id": s["id"]},
+            {"_id": 0},
+        ).sort("created_at", -1).to_list(200)
+        fill_summary = await _fill_ledger_summary(user["id"], mode="live", strategy_id=s["id"])
+        completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
+        live_pnl = fill_summary["realised_pnl"]
+        live_win_rate = fill_summary["win_rate"]
+        backtest_pnl = float((latest_backtest or {}).get("pnl") or 0)
+        drift = round(live_pnl - backtest_pnl, 2) if latest_backtest else None
+        out.append({
+            "strategy_id": s["id"],
+            "name": s.get("name"),
+            "status": s.get("status"),
+            "last_data_source": s.get("last_data_source"),
+            "last_data_live": s.get("last_data_live"),
+            "last_signal_validation": s.get("last_signal_validation"),
+            "last_filter_reason": s.get("last_filter_reason"),
+            "live": {
+                "orders": len(live_orders),
+                "completed": len(completed),
+                "fills": fill_summary["fill_count"],
+                "realised_pnl": live_pnl,
+                "realised_pnl_source": fill_summary["source"],
+                "win_rate": live_win_rate,
+            },
+            "backtest": {
+                "available": bool(latest_backtest),
+                "pnl": round(backtest_pnl, 2),
+                "win_rate": (latest_backtest or {}).get("win_rate"),
+                "trades": (latest_backtest or {}).get("trades_count"),
+                "created_at": (latest_backtest or {}).get("created_at"),
+            },
+            "drift": drift,
+            "verdict": (
+                "needs_backtest" if not latest_backtest else
+                "live_lagging" if drift is not None and drift < -abs(backtest_pnl) * 0.25 else
+                "tracking"
+            ),
+        })
+    return {"items": out}
+
+
 @api.get("/strategies/{sid}", response_model=StrategyOut)
 async def get_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
@@ -12428,59 +12481,6 @@ async def trade_journal(user=Depends(get_current_user)):
         "failed_actual_orders": failed_actual,
         "skipped_signals": skipped,
     }
-
-
-@api.get("/strategies/live-backtest-comparison")
-async def live_backtest_comparison(user=Depends(get_current_user)):
-    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    out = []
-    for s in strategies:
-        latest_backtest = await db.paper_trading_history.find_one(
-            {"user_id": user["id"], "strategy_id": s["id"]},
-            {"_id": 0},
-            sort=[("created_at", -1)],
-        )
-        live_orders = await db.orders.find(
-            {"user_id": user["id"], "strategy_id": s["id"]},
-            {"_id": 0},
-        ).sort("created_at", -1).to_list(200)
-        fill_summary = await _fill_ledger_summary(user["id"], mode="live", strategy_id=s["id"])
-        completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
-        live_pnl = fill_summary["realised_pnl"]
-        live_win_rate = fill_summary["win_rate"]
-        backtest_pnl = float((latest_backtest or {}).get("pnl") or 0)
-        drift = round(live_pnl - backtest_pnl, 2) if latest_backtest else None
-        out.append({
-            "strategy_id": s["id"],
-            "name": s.get("name"),
-            "status": s.get("status"),
-            "last_data_source": s.get("last_data_source"),
-            "last_data_live": s.get("last_data_live"),
-            "last_signal_validation": s.get("last_signal_validation"),
-            "last_filter_reason": s.get("last_filter_reason"),
-            "live": {
-                "orders": len(live_orders),
-                "completed": len(completed),
-                "fills": fill_summary["fill_count"],
-                "realised_pnl": live_pnl,
-                "realised_pnl_source": fill_summary["source"],
-                "win_rate": live_win_rate,
-            },
-            "backtest": {
-                "available": bool(latest_backtest),
-                "pnl": round(backtest_pnl, 2),
-                "win_rate": (latest_backtest or {}).get("win_rate"),
-                "trades": (latest_backtest or {}).get("trades_count"),
-                "created_at": (latest_backtest or {}).get("created_at"),
-            },
-            "drift": drift,
-            "verdict": (
-                "needs_backtest" if not latest_backtest else
-                "live_lagging" if drift is not None and drift < -abs(backtest_pnl) * 0.25 else
-                "tracking"
-            ),
-        })
-    return {"items": out}
 
 
 @app.websocket("/api/ws/orders")
