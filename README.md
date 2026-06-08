@@ -1,51 +1,27 @@
 # QuantG
 
-Existing QuantG app: FastAPI backend, React frontend, MongoDB ledger, and
-Upstox-only trading flow.
+NSE/BSE options algo-trading platform. FastAPI backend, React frontend, MongoDB, Upstox broker.
 
-## Local Runbook
+**AI agents: read [CLAUDE.md](CLAUDE.md) first.**
 
-### Local backend
-
-```powershell
-cd backend
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Frontend
-
-```powershell
-cd frontend
-npm install
-npm start
-```
-
-### Docker
-
-Start Docker Desktop first, then:
+## Quick Start (Docker)
 
 ```powershell
 docker compose build
 docker compose up -d
-```
-
-### Health check
-
-```powershell
 curl http://127.0.0.1:8000/api/health
 ```
 
-### Integration test preflights
+## Local Dev (no Docker)
 
-The paper trade tests expect the backend to already be running on
-`127.0.0.1:8000`. If it is not running, tests skip with:
+```powershell
+# Backend
+cd backend && uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
-```text
-Backend not running. Start backend before paper trade test.
+# Frontend
+cd frontend && npm install && npm start
 ```
 
-Docker checks skip with:
+## Production
 
-```text
-Docker daemon not running. Start Docker Desktop or run on VPS.
-```
+See [DEPLOY.md](DEPLOY.md) for VPS deployment steps.
