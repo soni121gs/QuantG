@@ -75,10 +75,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Uploading one deploy bundle to $Vps..."
-scp "$Bundle" "${Vps}:/tmp/quantg-vps-fix.tgz"
+scp -i C:\Users\MG\.ssh\codex_quantg_vps "$Bundle" "${Vps}:/tmp/quantg-vps-fix.tgz"
 
 Write-Host "Rebuilding and restarting QuantG on VPS..."
-ssh $Vps "set -e; mkdir -p $RemoteRoot; tar -xzf /tmp/quantg-vps-fix.tgz -C $RemoteRoot; cp $RemoteRoot/quantg_debug.sh /tmp/quantg_debug.sh; chmod +x /tmp/quantg_debug.sh; cd $RemoteRoot; if docker compose version >/dev/null 2>&1; then COMPOSE='docker compose'; else COMPOSE='docker-compose'; fi; (ufw allow 80/tcp || true); `$COMPOSE down --remove-orphans || true; docker rm -f quantg-frontend quantg-backend quantg-mongo 2>/dev/null || true; `$COMPOSE up -d --build --force-recreate; `$COMPOSE ps; curl -I --max-time 10 http://localhost; docker logs quantg-backend --tail 40"
+ssh -i C:\Users\MG\.ssh\codex_quantg_vps $Vps "set -e; mkdir -p $RemoteRoot; tar -xzf /tmp/quantg-vps-fix.tgz -C $RemoteRoot; cp $RemoteRoot/quantg_debug.sh /tmp/quantg_debug.sh; chmod +x /tmp/quantg_debug.sh; cd $RemoteRoot; if docker compose version >/dev/null 2>&1; then COMPOSE='docker compose'; else COMPOSE='docker-compose'; fi; (ufw allow 80/tcp || true); `$COMPOSE down --remove-orphans || true; docker rm -f quantg-frontend quantg-backend quantg-mongo 2>/dev/null || true; `$COMPOSE up -d --build --force-recreate; `$COMPOSE ps; curl -I --max-time 10 http://localhost; docker logs quantg-backend --tail 40"
 
 Write-Host "Checking public endpoints..."
 $Checks = @(
