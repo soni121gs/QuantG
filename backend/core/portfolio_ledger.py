@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import uuid
 import logging
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("quantg.portfolio_ledger")
 
@@ -16,9 +17,30 @@ class PortfolioLedger:
 
     async def process_fill(self, fill: Dict[str, Any]) -> None:
         """Processes a trade fill, updating or closing corresponding strategy and portfolio positions.
-        
+
+        DB-level fill idempotency: inserts a record into processed_fill_ids with
+        a unique index on fill_id. If the fill was already processed (duplicate key),
+        this method returns immediately — making duplicate fills physically impossible
+        regardless of how many async loops call this simultaneously.
+
         Enforces transaction-by-transaction inventory ledger mapping.
         """
+        # ── DB-level fill idempotency ──────────────────────────────────────────
+        # Attempt to insert a unique marker for this fill_id.
+        # If it already exists (DuplicateKeyError), a previous call already
+        # processed this fill — skip silently. This is the hard guard that
+        # makes duplicate fills impossible regardless of concurrent async loops.
+        fill_id = fill.get("id") or fill.get("fill_id")
+        if fill_id:
+            try:
+                await self.db.processed_fill_ids.insert_one({
+                    "fill_id": fill_id,
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except DuplicateKeyError:
+                logger.warning("Ledger: fill %s already processed — duplicate skipped", fill_id)
+                return
+
         user_id = fill["user_id"]
         strategy_id = fill["strategy_id"]
         target_symbol = fill["target_symbol"]

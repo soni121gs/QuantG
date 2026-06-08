@@ -29,6 +29,19 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
+
+# Position lifecycle pure functions — extracted from server.py to break the
+# monolith incrementally. server.py keeps thin aliases so call sites are unchanged.
+from core.position_lifecycle import (
+    DEFAULT_STRATEGY_RISK as _DEFAULT_STRATEGY_RISK_MODULE,
+    normalize_strategy_risk as _normalize_strategy_risk_module,
+    position_risk_prices as _position_risk_prices_module,
+    exit_reason as _exit_reason_module,
+    parse_iso_dt as _parse_iso_dt_module,
+    adaptive_risk_percentages as _adaptive_risk_percentages_module,
+    _risk_pct as _risk_pct_module,
+    _clamp as _clamp_float_module,
+)
 from pydantic import BaseModel, Field, EmailStr, validator
 
 import upstox_helper
@@ -5270,115 +5283,22 @@ def _ledger_pct(value: Any, default: float) -> float:
     return pct / 100.0 if pct > 1 else pct
 
 
+# Delegates to core.position_lifecycle — local names kept so all call sites work unchanged.
 def _clamp_float(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
+    return _clamp_float_module(value, low, high)
 
 def _adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, Optional[float]]:
-    stop = float(risk["stop_loss_pct"]) if risk.get("stop_loss_pct") not in (None, "") else None
-    target = float(risk["take_profit_pct"]) if risk.get("take_profit_pct") not in (None, "") else None
-    trigger = float(risk["trail_trigger_pct"])
-    step = float(risk["trail_step_pct"])
-    if stop is None or target is None or not risk.get("adaptive_exits_enabled", True) or entry <= 0:
-        return {"stop": stop, "target": target, "trigger": trigger, "step": step}
-
-    style = str(risk.get("risk_style") or "balanced")
-    bounds = {
-        "micro_scalp": (3.5, 7.5, 1.15, 1.35),
-        "momentum": (4.5, 9.5, 1.25, 1.55),
-        "breakout": (5.5, 11.5, 1.35, 1.70),
-        "volatile_breakout": (6.5, 13.5, 1.40, 1.85),
-        "pullback": (4.5, 9.0, 1.25, 1.55),
-        "balanced": (4.5, 10.0, 1.25, 1.55),
-    }
-    min_stop, max_stop, min_r, max_r = bounds.get(style, bounds["balanced"])
-    premium_factor = 1.18 if entry < 75 else 0.88 if entry > 250 else 1.0
-    stop = _clamp_float(stop * premium_factor, min_stop, max_stop)
-    r_multiple = _clamp_float(float(risk.get("target_r_multiple") or min_r), min_r, max_r)
-    target = _clamp_float(max(target, stop * r_multiple), stop * min_r, stop * max_r)
-    trigger = _clamp_float(min(trigger, stop * 0.75), 2.5, max(3.0, stop * 0.95))
-    step = _clamp_float(min(step, stop * 0.45), 1.5, max(2.0, stop * 0.65))
-    return {"stop": stop, "target": target, "trigger": trigger, "step": step}
-
+    return _adaptive_risk_percentages_module(entry, risk)
 
 def _risk_pct(risk: Dict[str, Any], *keys: str, default: Optional[float]) -> Optional[float]:
-    for key in keys:
-        value = risk.get(key)
-        if value not in (None, ""):
-            try:
-                pct = float(value)
-                return pct if pct > 1 else pct * 100.0
-            except (TypeError, ValueError):
-                continue
-    return float(default) if default is not None else None
+    return _risk_pct_module(risk, *keys, default=default)
 
 
 def _normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    raw = dict(risk or {})
-    stop_pct = _risk_pct(raw, "stop_loss_pct", "stoploss_pct", "stop_pct", default=None)
-    target_pct = _risk_pct(raw, "take_profit_pct", "target_pct", "tp_pct", default=None)
-    trail_trigger_pct = _risk_pct(raw, "trail_trigger_pct", default=DEFAULT_STRATEGY_RISK["trail_trigger_pct"])
-    trail_step_pct = _risk_pct(raw, "trail_step_pct", default=DEFAULT_STRATEGY_RISK["trail_step_pct"])
-    risk_style = str(raw.get("risk_style") or DEFAULT_STRATEGY_RISK["risk_style"])
-    target_r_multiple = float(raw.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"])
-    raw.update({
-        "trail_trigger_pct": trail_trigger_pct,
-        "trail_step_pct": trail_step_pct,
-        "trailing_sl_enabled": bool(raw.get("trailing_sl_enabled", True)),
-        "cooldown_minutes": int(raw.get("cooldown_minutes") or DEFAULT_STRATEGY_RISK["cooldown_minutes"]),
-        "max_trades_day": int(raw.get("max_trades_day") or DEFAULT_STRATEGY_RISK["max_trades_day"]),
-        "daily_loss_limit": float(raw.get("daily_loss_limit") or DEFAULT_STRATEGY_RISK["daily_loss_limit"]),
-        "time_exit_minutes": int(raw.get("time_exit_minutes") or DEFAULT_STRATEGY_RISK["time_exit_minutes"]),
-        "indicator_exit_enabled": bool(raw.get("indicator_exit_enabled", DEFAULT_STRATEGY_RISK["indicator_exit_enabled"])),
-        "exit_mode": raw.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
-        "risk_style": risk_style,
-        "adaptive_exits_enabled": bool(raw.get("adaptive_exits_enabled", DEFAULT_STRATEGY_RISK["adaptive_exits_enabled"])),
-        "target_r_multiple": target_r_multiple,
-    })
-    if stop_pct is not None:
-        raw["stop_loss_pct"] = stop_pct
-        raw["stoploss_pct"] = stop_pct
-    if target_pct is not None:
-        raw["take_profit_pct"] = target_pct
-        raw["target_pct"] = target_pct
-    return raw
-
+    return _normalize_strategy_risk_module(risk)
 
 def _position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None) -> Dict[str, Optional[float]]:
-    entry = float(position.get("average_buy_price") or 0)
-    if entry <= 0:
-        return {"stop_loss": None, "take_profit": None, "trailing_sl": None}
-    risk = _normalize_strategy_risk(position.get("tp_sl_tsl_config") or {})
-    side = str(position.get("position_side") or "LONG").upper()
-    stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
-    target_price = risk.get("target_price") or risk.get("take_profit")
-    dynamic = _adaptive_risk_percentages(entry, risk)
-    if stop_price in (None, ""):
-        stop_pct = risk.get("stop_loss_pct")
-        if stop_pct is not None:
-            stop_pct = float(stop_pct)
-            stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
-    if target_price in (None, ""):
-        target_pct = risk.get("take_profit_pct")
-        if target_pct is not None:
-            target_pct = float(target_pct)
-            target_price = entry * (1 + target_pct / 100) if side != "SHORT" else entry * (1 - target_pct / 100)
-    trailing_sl = risk.get("trailing_sl")
-    if risk.get("trailing_sl_enabled") and ltp and ltp > 0:
-        trigger_pct = dynamic["trigger"]
-        step_pct = dynamic["step"]
-        if side == "SHORT" and ltp <= entry * (1 - trigger_pct / 100):
-            candidate = ltp * (1 + step_pct / 100)
-            trailing_sl = min(float(trailing_sl or candidate), candidate)
-        elif side != "SHORT" and ltp >= entry * (1 + trigger_pct / 100):
-            candidate = ltp * (1 - step_pct / 100)
-            trailing_sl = max(float(trailing_sl or 0), candidate)
-    effective_stop = trailing_sl or stop_price
-    return {
-        "stop_loss": round(float(effective_stop), 2) if effective_stop not in (None, "") else None,
-        "take_profit": round(float(target_price), 2) if target_price not in (None, "") else None,
-        "trailing_sl": round(float(trailing_sl), 2) if trailing_sl not in (None, "") else None,
-    }
+    return _position_risk_prices_module(position, ltp)
 
 
 def _sync_option_ledger_strategy(row: Dict[str, Any]) -> None:
@@ -5946,12 +5866,27 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         if not sym or qty_net <= 0:
             continue
 
+        # Circuit breaker: positions that have already been attempted > 3 times
+        # this session are flagged CIRCUIT_BREAKER and removed from normal flow.
+        exit_attempts = int(pos.get("exit_attempts", 0))
+        if exit_attempts >= 3:
+            now_cb = datetime.now(timezone.utc).isoformat()
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id},
+                {"$set": {"status": "CIRCUIT_BREAKER", "updated_at": now_cb,
+                           "last_error": f"Exit circuit breaker: {exit_attempts} prior attempts"}},
+            )
+            logger.warning("Circuit breaker: position %s strategy=%s blocked after %d exit attempts", pos["id"], sid, exit_attempts)
+            results.append({"symbol": sym, "qty": qty_net, "status": "circuit_breaker", "exit_attempts": exit_attempts})
+            continue
+
         # Atomically mark position as EXITING before placing the order.
-        # If another task already started the exit (modified_count=0), skip.
+        # If another task already claimed it (modified_count=0), skip.
         now_str = datetime.now(timezone.utc).isoformat()
         mark_res = await db.strategy_positions.update_one(
             {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
-            {"$set": {"status": "EXITING", "exit_attempt_at": now_str, "updated_at": now_str}},
+            {"$set": {"status": "EXITING", "exit_attempt_at": now_str, "updated_at": now_str},
+             "$inc": {"exit_attempts": 1}},
         )
         if mark_res.modified_count == 0:
             results.append({"symbol": sym, "qty": qty_net, "status": "skipped", "reason": "already-exiting-or-closed"})
@@ -6408,12 +6343,7 @@ async def _place_upstox_order(
 
 
 def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
-        return None
+    return _parse_iso_dt_module(value)
 
 
 def _age_ms(value: Optional[str]) -> Optional[int]:
@@ -14694,128 +14624,14 @@ async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[st
     return None
 
 
+# Superseded by position_monitor.py (run via position_monitor.run_monitor_loop at startup).
+# Kept as thin delegates so any remaining call sites still compile.
 def _mongo_position_exit_reason(position: Dict[str, Any], ltp: float) -> Optional[str]:
-    entry = float(position.get("average_buy_price") or 0)
-    if entry <= 0 or ltp <= 0:
-        return None
-    risk = _normalize_strategy_risk(position.get("tp_sl_tsl_config") or {})
-    side = str(position.get("position_side") or "LONG").upper()
-    prices = _position_risk_prices({**position, "tp_sl_tsl_config": risk}, ltp=ltp)
-    stop_price = prices.get("stop_loss")
-    target_price = prices.get("take_profit")
-    if stop_price is None and target_price is None:
-        return None
-    if stop_price is not None:
-        stop_price = float(stop_price)
-        if side == "SHORT":
-            if ltp >= stop_price:
-                return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
-        else:
-            if ltp <= stop_price:
-                return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
-    if target_price is not None:
-        target_price = float(target_price)
-        if side == "SHORT":
-            if ltp <= target_price:
-                return "take-profit"
-        else:
-            if ltp >= target_price:
-                return "take-profit"
-    time_exit_minutes = int(risk.get("time_exit_minutes") or 0)
-    if time_exit_minutes > 0:
-        entry_dt = _parse_iso_dt(position.get("entry_time"))
-        if entry_dt and (datetime.now(timezone.utc) - entry_dt).total_seconds() >= time_exit_minutes * 60:
-            return f"time-exit-{time_exit_minutes}m"
-    return None
-
+    return _exit_reason_module(position, ltp)
 
 async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
-    logger.info("Mongo strategy position monitor started")
-    while not stop_event.is_set():
-        try:
-            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            is_weekday = ist_now.weekday() < 5
-            minutes_now = ist_now.hour * 60 + ist_now.minute
-            in_market_hours = is_weekday and (9 * 60 + 15 <= minutes_now <= 15 * 60 + 30)
-
-            # Revert positions stuck in EXITING for > 5 minutes back to OPEN so monitor can retry
-            stale_exiting_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-            stuck = await db.strategy_positions.find(
-                {"status": "EXITING", "updated_at": {"$lt": stale_exiting_cutoff}},
-                {"id": 1, "user_id": 1, "_id": 0},
-            ).to_list(100)
-            for sp in stuck:
-                await db.strategy_positions.update_one(
-                    {"id": sp["id"], "status": "EXITING"},
-                    {"$set": {"status": "OPEN", "updated_at": datetime.now(timezone.utc).isoformat()}},
-                )
-                logger.warning("Reverted stuck EXITING position id=%s to OPEN for retry", sp["id"])
-
-            rows = await db.strategy_positions.find(
-                {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
-                {"_id": 0},
-            ).to_list(1000)
-            for pos in rows:
-                user_id = pos.get("user_id")
-                sid = pos.get("strategy_id")
-                symbol = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
-                if not user_id or not sid or not symbol:
-                    continue
-                ltp = await _quote_upstox_instrument_key(user_id, pos.get("instrument_token"))
-                if ltp is None:
-                    settings = await get_user_settings(user_id)
-                    is_paper_pos = pos.get("mode") == "paper"
-                    allow_simulated = bool(settings.get("allow_simulated_prices")) or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
-                    allow_mock_ltp = is_paper_pos and allow_simulated
-                    ltp = await _current_ltp_for_symbol(
-                        user_id,
-                        symbol,
-                        pos.get("exchange") or "NSE",
-                        allow_mock=allow_mock_ltp,
-                        execution_broker="upstox",
-                    )
-                if ltp is None:
-                    await db.strategy_positions.update_one(
-                        {"id": pos["id"], "user_id": user_id},
-                        {"$set": {
-                            "last_ltp": "LTP_UNAVAILABLE",
-                            "last_error": "LTP_UNAVAILABLE: websocket disconnected or price feed offline",
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        }},
-                    )
-                    continue
-                entry = float(pos.get("average_buy_price") or 0)
-                qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
-                side = str(pos.get("position_side") or "LONG").upper()
-                pnl = round((entry - float(ltp)) * qty, 2) if side == "SHORT" else round((float(ltp) - entry) * qty, 2)
-                risk_prices = _position_risk_prices(pos, ltp=float(ltp))
-                risk_update = {}
-                risk = _normalize_strategy_risk(pos.get("tp_sl_tsl_config") or {})
-                if risk_prices.get("stop_loss") is not None:
-                    risk["stoploss_price"] = risk_prices["stop_loss"]
-                    risk["stop_loss"] = risk_prices["stop_loss"]
-                if risk_prices.get("take_profit") is not None:
-                    risk["target_price"] = risk_prices["take_profit"]
-                    risk["take_profit"] = risk_prices["take_profit"]
-                if risk_prices.get("trailing_sl") is not None:
-                    risk["trailing_sl"] = risk_prices["trailing_sl"]
-                risk_update["tp_sl_tsl_config"] = risk
-                await db.strategy_positions.update_one(
-                    {"id": pos["id"], "user_id": user_id},
-                    {"$set": {"last_ltp": float(ltp), "unrealized_pnl": pnl, "last_tick_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(), **risk_update},
-                     "$unset": {"last_error": ""}},
-                )
-                reason = _mongo_position_exit_reason(pos, float(ltp)) if in_market_hours else None
-                if reason:
-                    logger.info("Mongo position monitor exit strategy=%s symbol=%s reason=%s", sid, symbol, reason)
-                    await _close_strategy_positions(user_id, sid, reason=reason)
-        except Exception as e:
-            logger.warning(f"Mongo strategy position monitor error: {e}")
-        slept = 0
-        while not stop_event.is_set() and slept < 30:
-            await asyncio.sleep(1)
-            slept += 1
-    logger.info("Mongo strategy position monitor stopped")
+    # Startup now launches position_monitor.run_monitor_loop instead.
+    logger.warning("_mongo_position_monitor_loop called but superseded by position_monitor.py — no-op")
 
 
 async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
@@ -14951,7 +14767,8 @@ async def startup():
         ("orders", "idempotency_key", {"unique": True, "sparse": True}),
         ("strategy_positions", [("user_id", 1), ("strategy_id", 1), ("status", 1)], {}),
         ("strategy_positions", "active_strategy_instrument_side_key", {"unique": True, "sparse": True}),
-        ("positions", [("user_id", 1), ("symbol", 1)], {"unique": True}),
+        ("positions", [("user_id", 1), ("symbol", 1), ("strategy_id", 1)], {"unique": True, "sparse": True}),
+        ("processed_fill_ids", "fill_id", {"unique": True}),
         ("signals", "id", {"unique": True}),
         ("signals", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
         ("signals", [("strategy_id", 1), ("created_at", -1)], {}),
@@ -14997,6 +14814,14 @@ async def startup():
             logger.warning("Dropped legacy strategy_positions index %s; duplicate scope is strategy+instrument+side now.", old_index)
         except Exception as e:
             logger.info("legacy strategy_positions index %s not dropped or absent: %s", old_index, e)
+
+    # Drop old positions unique index that only used (user_id, symbol) — now keyed per strategy
+    for old_pos_idx in ("user_id_1_symbol_1",):
+        try:
+            await db.positions.drop_index(old_pos_idx)
+            logger.info("Dropped legacy positions index %s; new index includes strategy_id.", old_pos_idx)
+        except Exception as e:
+            logger.info("Legacy positions index %s not present or already dropped: %s", old_pos_idx, e)
 
     # Create partial unique index for live broker order tracking
     try:
@@ -15340,7 +15165,17 @@ async def startup():
     app.state.health_stop = asyncio.Event()
     app.state.health_task = asyncio.create_task(_strategy_health_loop(app.state.health_stop))
     app.state.position_monitor_stop = asyncio.Event()
-    app.state.position_monitor_task = asyncio.create_task(_mongo_position_monitor_loop(app.state.position_monitor_stop))
+    from position_monitor import run_monitor_loop as _run_position_monitor
+    app.state.position_monitor_task = asyncio.create_task(
+        _run_position_monitor(
+            db,
+            app.state.position_monitor_stop,
+            close_fn=_close_strategy_positions,
+            quote_ltp_fn=_quote_upstox_instrument_key,
+            get_ltp_fn=_current_ltp_for_symbol,
+            get_settings_fn=get_user_settings,
+        )
+    )
     app.state.option_engine_stop = asyncio.Event()
     app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     app.state.broker_reconcile_stop = asyncio.Event()

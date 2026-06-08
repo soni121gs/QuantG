@@ -35,6 +35,8 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Market domains (lot sizes, NSE/BSE segments) | `backend/core/market_domains.py` |
 | Strike/contract selection | `backend/core/option_selector_v2.py` |
 | Paper fill simulation | `backend/core/paper_broker.py` |
+| Pure risk / exit-reason functions (no DB) | `backend/core/position_lifecycle.py` |
+| Position monitor loop (extracted from server.py) | `backend/position_monitor.py` |
 | Execution snapshot (positions+orders for UI polling) | `backend/execution_state.py` |
 | Upstox WebSocket V3 feed + REST orders | `backend/brokers/upstox_gateway.py` |
 | Signal processing loop | `backend/signal_manager.py` |
@@ -115,8 +117,9 @@ ssh -i C:\Users\MG\.ssh\codex_quantg_vps root@82.180.145.183 "cd /opt/QuantG && 
 ```
 RESERVED → PENDING_OPEN → PENDING_BROKER → OPEN → FILLED → EXITING → CLOSED
 ```
-- Monitor loop (`_mongo_position_monitor_loop`) queries only `{PENDING_BROKER, OPEN, FILLED}` — not EXITING/CLOSED.
+- Monitor loop (`position_monitor.run_monitor_loop`) queries only `{PENDING_BROKER, OPEN, FILLED}` — not EXITING/CLOSED. Runs every 30 s. Positions stuck in EXITING > 5 min are auto-reverted to OPEN.
 - Always mark position EXITING atomically **before** placing exit order. Revert to OPEN on failure.
+- Exit circuit breaker: after 3 failed exit attempts the position moves to `CIRCUIT_BREAKER` status and is skipped until manually resolved.
 
 ### Idempotency Keys
 - **Entry orders**: `sha256(strategy_id:domain:symbol:side:date:HH:MM)[:32]` — minute-granular, prevents same-candle double-fire
@@ -140,7 +143,7 @@ Always use `"CE" in symbol` (not `symbol.endswith("CE")`).
 - Exit/reduction orders always bypass the delta cap.
 
 ### Lot Sizes
-- NIFTY: 75, BANKNIFTY: 30 (verify in `core/market_domains.py`)
+- NIFTY: 65, BANKNIFTY: 30 (source of truth: `core/market_domains.py`)
 - Always resolve via `resolve_domain_by_underlying(underlying).get_lot_size(underlying)`, not hardcoded.
 
 ### Paper Wallet
@@ -224,6 +227,7 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | `risk_state` | Kill switch, reconciliation state |
 | `risk_reservations` | Pre-order capital reservations |
 | `trade_fills` | Fill records from paper broker / Upstox callbacks |
+| `processed_fill_ids` | Unique index on `fill_id` — prevents duplicate fill processing (DB-level idempotency) |
 
 ---
 
