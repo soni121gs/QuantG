@@ -5967,6 +5967,11 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 "transaction_type": exit_side,
             }
             place_kwargs["qty"] = max(1, math.ceil(qty_net / lot_size))
+            # Pass last known LTP so the minimum-premium guard is bypassed on exit.
+            # The guard only fires when price is absent; for exit we always want to close.
+            last_known_ltp = float(pos.get("last_ltp") or 0)
+            if last_known_ltp > 0:
+                place_kwargs["price"] = last_known_ltp
         else:
             place_kwargs["symbol"] = sym
             place_kwargs["qty"] = qty_net
