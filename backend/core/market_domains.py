@@ -20,13 +20,31 @@ class MarketDomain:
         self.strike_intervals = strike_intervals
 
     def is_underlying_supported(self, underlying: str) -> bool:
-        return str(underlying).upper() in self.underlyings
+        und_upper = str(underlying).upper()
+        if und_upper in self.underlyings:
+            return True
+        for u in self.underlyings:
+            if und_upper.startswith(u):
+                return True
+        return False
 
     def get_lot_size(self, underlying: str) -> int:
-        return self.lot_sizes.get(str(underlying).upper(), 1)
+        und_upper = str(underlying).upper()
+        if und_upper in self.lot_sizes:
+            return self.lot_sizes[und_upper]
+        for key, val in self.lot_sizes.items():
+            if und_upper.startswith(key):
+                return val
+        return 1
 
     def get_strike_interval(self, underlying: str) -> int:
-        return self.strike_intervals.get(str(underlying).upper(), 100)
+        und_upper = str(underlying).upper()
+        if und_upper in self.strike_intervals:
+            return self.strike_intervals[und_upper]
+        for key, val in self.strike_intervals.items():
+            if und_upper.startswith(key):
+                return val
+        return 100
 
 # Isolated Domain Definitions (SEBI 2026 standardized lot sizes)
 NSE_FO_DOMAIN = MarketDomain(
@@ -58,6 +76,15 @@ def resolve_domain_by_underlying(underlying: str) -> MarketDomain:
         return NSE_FO_DOMAIN
     if und_upper in BSE_FO_DOMAIN.underlyings:
         return BSE_FO_DOMAIN
+    
+    # Check startswith to handle option symbols like NIFTY 23200 CE... or NIFTY26FEB...
+    for u in NSE_FO_DOMAIN.underlyings:
+        if und_upper.startswith(u):
+            return NSE_FO_DOMAIN
+    for u in BSE_FO_DOMAIN.underlyings:
+        if und_upper.startswith(u):
+            return BSE_FO_DOMAIN
+
     # Standard equity fallback (e.g. RELIANCE, TCS) to prevent crashes
     return MarketDomain(
         name=DomainType.NSE_FO,

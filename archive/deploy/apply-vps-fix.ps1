@@ -27,6 +27,8 @@ $Files = @(
     "backend/server.py",
     "backend/position_reconciler.py",
     "backend/strategy_runner.py",
+    "backend/core/market_domains.py",
+    "backend/core/risk_manager.py",
     "docker-compose.yml",
     "frontend/Dockerfile.static",
     "frontend/src/contexts/AuthContext.jsx",

@@ -740,5 +740,56 @@ class TestUnifiedPipeline:
         assert router.live_adapter is not None
 
 
+class TestV13OptionBugs:
+    """Test unit fixes for option symbol parsing and Greeks limits."""
+    
+    def test_domain_resolution_option_contract(self):
+        """resolve_domain_by_underlying handles option contract strings."""
+        from core.market_domains import resolve_domain_by_underlying, DomainType
+        
+        domain = resolve_domain_by_underlying("NIFTY 23200 CE 09 JUN 26")
+        assert domain.name == DomainType.NSE_FO
+        assert domain.is_underlying_supported("NIFTY 23200 CE 09 JUN 26") is True
+        assert domain.get_lot_size("NIFTY 23200 CE 09 JUN 26") == 65
+        assert domain.get_strike_interval("NIFTY 23200 CE 09 JUN 26") == 50
+
+    @pytest.mark.asyncio
+    async def test_greeks_exit_order_exempt(self):
+        """Exit orders must bypass the Greeks exposure limit check."""
+        db = AsyncMock()
+        rm = RiskManager(db)
+        
+        # Mock strategy_positions: User currently has a LONG position on CE.
+        db.strategy_positions.find.return_value.to_list = AsyncMock(return_value=[
+            {
+                "target_symbol": "NIFTY 23200 CE 09 JUN 26",
+                "open_quantity": 65,
+                "position_side": "LONG",
+                "status": "OPEN",
+                "strategy_id": "strat_123"
+            }
+        ])
+        
+        # Evaluate a SELL exit order.
+        # Even if projected delta exceeds max_net_delta (e.g. max_net_delta is set very low like 5.0),
+        # this order is reducing/closing the position, so it must be APPROVED.
+        settings = {"max_net_delta": 5.0}
+        visual_risk = {}
+        
+        res = await rm._check_greeks_exposure(
+            user_id="user_123",
+            target_symbol="NIFTY 23200 CE 09 JUN 26",
+            side="SELL",
+            quantity=65,
+            lot_size=65,
+            mode="paper",
+            settings=settings,
+            visual_risk=visual_risk,
+            strategy_id="strat_123"
+        )
+        
+        assert res["ok"] is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

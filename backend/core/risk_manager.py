@@ -178,6 +178,7 @@ class RiskManager:
                 mode=mode,
                 settings=settings,
                 visual_risk=visual_risk,
+                strategy_id=strategy_id,
             )
             if not greeks_result["ok"]:
                 return {
@@ -205,6 +206,7 @@ class RiskManager:
         mode: str,
         settings: dict,
         visual_risk: dict,
+        strategy_id: Optional[str] = None,
     ) -> dict:
         """Check net delta exposure across all open option positions.
 
@@ -213,7 +215,7 @@ class RiskManager:
         """
         DELTA_PROXY = 0.5
 
-        is_call = target_symbol.endswith("CE")
+        is_call = "CE" in target_symbol
         if is_call:
             order_delta = DELTA_PROXY * quantity if side == "BUY" else -DELTA_PROXY * quantity
         else:
@@ -238,14 +240,33 @@ class RiskManager:
             if "CE" not in sym and "PE" not in sym:
                 continue
             pos_qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
-            pos_side = (pos.get("side") or "BUY").upper()
-            pos_is_call = sym.endswith("CE")
+            raw_side = (pos.get("position_side") or pos.get("side") or "BUY").upper()
+            pos_side = "BUY" if raw_side in ("LONG", "BUY") else "SELL"
+            pos_is_call = "CE" in sym
             if pos_is_call:
                 portfolio_delta += DELTA_PROXY * pos_qty if pos_side == "BUY" else -DELTA_PROXY * pos_qty
             else:
                 portfolio_delta += -DELTA_PROXY * pos_qty if pos_side == "BUY" else DELTA_PROXY * pos_qty
 
         projected_delta = portfolio_delta + order_delta
+
+        # Check if this order is reducing/closing an existing position in the same strategy
+        # or if it is reducing the absolute net delta of the portfolio.
+        # Exit/reduction orders should never be blocked by Greeks limits.
+        is_exit_or_reduction = False
+        matching_pos = next(
+            (p for p in open_positions if p.get("target_symbol") == target_symbol),
+            None
+        )
+        if matching_pos:
+            pos_side_raw = (matching_pos.get("position_side") or matching_pos.get("side") or "").upper()
+            if (pos_side_raw in ("LONG", "BUY") and side.upper() == "SELL") or \
+               (pos_side_raw in ("SHORT", "SELL") and side.upper() == "BUY"):
+                is_exit_or_reduction = True
+
+        if is_exit_or_reduction or abs(projected_delta) <= abs(portfolio_delta):
+            return {"ok": True, "net_delta": projected_delta}
+
         if abs(projected_delta) > max_net_delta:
             return {
                 "ok": False,
