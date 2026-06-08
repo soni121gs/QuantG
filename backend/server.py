@@ -14618,12 +14618,31 @@ async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[st
     gateway = await get_user_upstox_gateway(user_id)
     if not gateway or not gateway.connected:
         return None
+    # V3 websocket tick cache (pipe+numeric format keys, most up-to-date)
+    tick = gateway.latest_tick(key)
+    if tick and tick.get("ltp"):
+        return float(tick["ltp"])
     try:
         quote = await asyncio.to_thread(gateway.get_market_quote, [key])
-        return UpstoxGateway.parse_quote_ltp(quote, key)
+        # Try exact key match first (same format in response)
+        ltp = UpstoxGateway.parse_quote_ltp(quote, key)
+        if ltp is not None:
+            return ltp
+        # Upstox REST response uses EXCHANGE:SYMBOL keys while we request with EXCHANGE|TOKEN.
+        # When a single instrument is requested, scan the one response value directly.
+        data = (quote.get("data") if isinstance(quote, dict) else None) or {}
+        for node in data.values():
+            if isinstance(node, dict):
+                for field in ("last_price", "ltp", "last_traded_price"):
+                    v = node.get(field)
+                    if v not in (None, ""):
+                        try:
+                            return float(v)
+                        except Exception:
+                            pass
     except Exception as exc:
         logger.warning("Upstox LTP failed instrument_key=%s: %s", key, exc)
-        return None
+    return None
 
 
 def _mongo_position_exit_reason(position: Dict[str, Any], ltp: float) -> Optional[str]:
