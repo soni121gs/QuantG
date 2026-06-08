@@ -14606,7 +14606,7 @@ async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[st
     if not instrument_key:
         return None
     key = str(instrument_key).strip()
-    if "|" not in key:
+    if "|" not in key and ":" not in key:
         _log_throttled(
             f"invalid-upstox-key:{key}",
             120.0,
@@ -14668,7 +14668,7 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
             for pos in rows:
                 user_id = pos.get("user_id")
                 sid = pos.get("strategy_id")
-                symbol = pos.get("trading_symbol") or pos.get("symbol")
+                symbol = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
                 if not user_id or not sid or not symbol:
                     continue
                 ltp = await _quote_upstox_instrument_key(user_id, pos.get("instrument_token"))

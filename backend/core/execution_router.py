@@ -175,6 +175,7 @@ class PaperAdapter:
             "created_at": now,
             "stop_loss": intent.get("stop_loss"),
             "take_profit": intent.get("take_profit"),
+            "instrument_token": intent.get("instrument_token") or intent.get("instrument_key"),
         }
         await self.db.fills.insert_one(fill_doc)
 

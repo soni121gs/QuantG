@@ -55,6 +55,8 @@ class PortfolioLedger:
                 "strategy_id": strategy_id,
                 "symbol": fill["symbol"],
                 "target_symbol": target_symbol,
+                "trading_symbol": target_symbol,
+                "instrument_token": fill.get("instrument_token"),
                 "mode": mode,
                 "quantity": qty,
                 "open_quantity": qty,
