@@ -107,7 +107,8 @@ class PortfolioLedger:
             if is_entry:
                 # Add to existing position (average up/down)
                 new_qty = pos["open_quantity"] + qty
-                avg_price = ((pos["average_price"] * pos["open_quantity"]) + (price * qty)) / new_qty
+                pos_avg_price = float(pos.get("average_price") or pos.get("average_buy_price") or pos.get("avg_price") or 0)
+                avg_price = ((pos_avg_price * pos["open_quantity"]) + (price * qty)) / new_qty
                 
                 await self.db.strategy_positions.update_one(
                     {"id": pos["id"]},
@@ -154,10 +155,11 @@ class PortfolioLedger:
                 
                 # P&L Calculation
                 pnl = 0.0
+                pos_avg_price = float(pos.get("average_price") or pos.get("average_buy_price") or pos.get("avg_price") or 0)
                 if pos_side == "LONG":
-                    pnl = (price - pos["average_price"]) * exit_qty
+                    pnl = (price - pos_avg_price) * exit_qty
                 else:
-                    pnl = (pos["average_price"] - price) * exit_qty
+                    pnl = (pos_avg_price - price) * exit_qty
                     
                 # Deduct brokerages
                 net_pnl = pnl - float(fill.get("brokerage", 0.0))
