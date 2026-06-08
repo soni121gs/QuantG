@@ -165,7 +165,11 @@ class ExecutionStateManager:
             prices = _risk_prices(avg_price, position_side, risk)
             stop_loss = risk.get("stoploss_price") or risk.get("stop_loss") or prices.get("stop_loss")
             take_profit = risk.get("target_price") or risk.get("take_profit") or prices.get("take_profit")
-            db_ltp = float(row.get("last_ltp") or 0) or None
+            _raw_ltp = row.get("last_ltp")
+            try:
+                db_ltp = float(_raw_ltp) if _raw_ltp and _raw_ltp != "LTP_UNAVAILABLE" else None
+            except (TypeError, ValueError):
+                db_ltp = None
             db_pnl = float(row.get("unrealized_pnl") or 0) if row.get("unrealized_pnl") is not None else None
             out.append({
                 "id": row.get("id"),

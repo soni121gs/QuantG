@@ -13718,21 +13718,25 @@ async def funds(user=Depends(get_current_user)):
             except Exception as e:
                 logger.warning(f"Upstox margins fetch failed: {e}")
 
-    # Paper / fallback
+    # Paper / fallback — read actual wallet balance from db.paper_wallets
+    from core.paper_broker import PaperWallet
+    _pw = PaperWallet(db)
+    wallet_doc = await _pw.get_or_initialize(user["id"])
+    paper_capital = float(wallet_doc.get("balance", 500000.0))
+    initial_balance = float(wallet_doc.get("initial_balance", 500000.0))
     positions = await db.positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
-    deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
-    paper_capital = 500000.0
+    deployed = round(sum(abs(p.get("qty", 0)) * p.get("avg_price", 0) for p in positions), 2)
     return {
         "source": "paper",
-        "available_cash": round(paper_capital - deployed, 2),
-        "opening_balance": paper_capital,
+        "available_cash": round(paper_capital, 2),
+        "opening_balance": initial_balance,
         "intraday_payin": 0.0,
         "used_margin": deployed,
-        "m2m_realised": 0.0,
+        "m2m_realised": round(paper_capital - initial_balance, 2),
         "m2m_unrealised": 0.0,
         "span": 0.0,
         "delivery_margin": 0.0,
-        "note": "Paper-mode estimate. Connect Upstox and switch to LIVE for real margins.",
+        "note": "Paper-mode. Balance reflects actual fills from db.paper_wallets.",
     }
 
 
@@ -14684,20 +14688,24 @@ def _mongo_position_exit_reason(position: Dict[str, Any], ltp: float) -> Optiona
     prices = _position_risk_prices({**position, "tp_sl_tsl_config": risk}, ltp=ltp)
     stop_price = prices.get("stop_loss")
     target_price = prices.get("take_profit")
-    if stop_price is None or target_price is None:
+    if stop_price is None and target_price is None:
         return None
-    stop_price = float(stop_price)
-    target_price = float(target_price)
-    if side == "SHORT":
-        if ltp >= stop_price:
-            return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
-        if ltp <= target_price:
-            return "take-profit"
-    else:
-        if ltp <= stop_price:
-            return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
-        if ltp >= target_price:
-            return "take-profit"
+    if stop_price is not None:
+        stop_price = float(stop_price)
+        if side == "SHORT":
+            if ltp >= stop_price:
+                return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
+        else:
+            if ltp <= stop_price:
+                return "trailing-sl" if prices.get("trailing_sl") else "stop-loss"
+    if target_price is not None:
+        target_price = float(target_price)
+        if side == "SHORT":
+            if ltp <= target_price:
+                return "take-profit"
+        else:
+            if ltp >= target_price:
+                return "take-profit"
     time_exit_minutes = int(risk.get("time_exit_minutes") or 0)
     if time_exit_minutes > 0:
         entry_dt = _parse_iso_dt(position.get("entry_time"))
@@ -14710,6 +14718,24 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
     logger.info("Mongo strategy position monitor started")
     while not stop_event.is_set():
         try:
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            is_weekday = ist_now.weekday() < 5
+            minutes_now = ist_now.hour * 60 + ist_now.minute
+            in_market_hours = is_weekday and (9 * 60 + 15 <= minutes_now <= 15 * 60 + 30)
+
+            # Revert positions stuck in EXITING for > 5 minutes back to OPEN so monitor can retry
+            stale_exiting_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+            stuck = await db.strategy_positions.find(
+                {"status": "EXITING", "updated_at": {"$lt": stale_exiting_cutoff}},
+                {"id": 1, "user_id": 1, "_id": 0},
+            ).to_list(100)
+            for sp in stuck:
+                await db.strategy_positions.update_one(
+                    {"id": sp["id"], "status": "EXITING"},
+                    {"$set": {"status": "OPEN", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+                logger.warning("Reverted stuck EXITING position id=%s to OPEN for retry", sp["id"])
+
             rows = await db.strategy_positions.find(
                 {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"_id": 0},
@@ -14764,7 +14790,7 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
                     {"$set": {"last_ltp": float(ltp), "unrealized_pnl": pnl, "last_tick_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(), **risk_update},
                      "$unset": {"last_error": ""}},
                 )
-                reason = _mongo_position_exit_reason(pos, float(ltp))
+                reason = _mongo_position_exit_reason(pos, float(ltp)) if in_market_hours else None
                 if reason:
                     logger.info("Mongo position monitor exit strategy=%s symbol=%s reason=%s", sid, symbol, reason)
                     await _close_strategy_positions(user_id, sid, reason=reason)
