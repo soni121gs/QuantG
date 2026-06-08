@@ -1,6 +1,7 @@
 """Single source of truth for live execution state (positions, orders, SL/TP)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -361,28 +362,46 @@ class ExecutionStateManager:
             else:
                 sync_meta = {"throttled": True, "reason": "Sync requests throttled to at most once per 5 seconds."}
 
-        broker_positions = await self._fetch_positions(user, settings)
-        strategy_rows = await self._load_strategy_positions(user_id)
+        today = settings.get("today_window_ist") or {}
+        (
+            broker_positions,
+            strategy_rows,
+            orders,
+            skipped_signals,
+            wallet_row_raw,
+            feed_state_raw,
+            active_count,
+            total_count,
+            scanning_count,
+        ) = await asyncio.gather(
+            self._fetch_positions(user, settings),
+            self._load_strategy_positions(user_id),
+            self._load_orders(
+                user_id,
+                paper_mode=bool(settings.get("paper_mode", True)),
+                today_start=today.get("start"),
+                today_end=today.get("end"),
+            ),
+            self._load_skipped_signals(user_id),
+            self._db.paper_wallets.find_one({"user_id": user_id}, {"_id": 0}),
+            self._db.upstox_reconciliation_state.find_one({"_id": "latest"}, {"_id": 0}),
+            self._db.strategies.count_documents({"user_id": user_id, "status": "live"}),
+            self._db.strategies.count_documents({"user_id": user_id}),
+            self._db.signals.count_documents({"user_id": user_id, "status": "PENDING"}),
+        )
+        wallet_row = wallet_row_raw or {}
+        feed_state = feed_state_raw or {}
+        strategy_state = {
+            "active": active_count,
+            "total": total_count,
+            "scanning": scanning_count,
+        }
+
         ledger_risk = self._ledger_risk_by_strategy()
         positions = self._merge_position_risk(broker_positions, strategy_rows, ledger_risk)
-        today = settings.get("today_window_ist") or {}
-        orders = await self._load_orders(
-            user_id,
-            paper_mode=bool(settings.get("paper_mode", True)),
-            today_start=today.get("start"),
-            today_end=today.get("end"),
-        )
-        skipped_signals = await self._load_skipped_signals(user_id)
 
         open_orders = [o for o in orders if o.get("status") in OPEN_ORDER_STATUSES]
         failed_orders = [o for o in orders if o.get("status") == "FAILED"]
-        wallet_row = await self._db.paper_wallets.find_one({"user_id": user_id}, {"_id": 0}) or {}
-        feed_state = await self._db.upstox_reconciliation_state.find_one({"_id": "latest"}, {"_id": 0}) or {}
-        strategy_state = {
-            "active": await self._db.strategies.count_documents({"user_id": user_id, "status": "live"}),
-            "total": await self._db.strategies.count_documents({"user_id": user_id}),
-            "scanning": await self._db.signals.count_documents({"user_id": user_id, "status": "PENDING"}),
-        }
 
         # Calculate position integrity health metrics for the dashboard
         broker_active = [p for p in positions if int(p.get("qty") or 0) != 0]
