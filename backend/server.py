@@ -12892,6 +12892,18 @@ async def upstox_option_chain(
     spot_key = spot_keys.get(underlying)
     if not spot_key:
         raise HTTPException(status_code=400, detail=f"Unsupported option-chain underlying: {underlying}")
+
+    # Auto-detect nearest weekly expiry when caller omits expiry_date.
+    # NSE (NIFTY/BANKNIFTY) expires on Thursday (weekday=3);
+    # BSE (SENSEX) expires on Friday (weekday=4).
+    if not expiry_date:
+        from datetime import date as _date, timedelta as _td
+        expiry_weekday = 4 if underlying == "SENSEX" else 3
+        today = _date.today()
+        days_ahead = (expiry_weekday - today.weekday()) % 7
+        nearest = today + _td(days=days_ahead)
+        expiry_date = nearest.strftime("%Y-%m-%d")
+
     chain = await asyncio.to_thread(gw.get_option_chain, spot_key, expiry_date)
     rows = (chain or {}).get("data") or []
     return {
