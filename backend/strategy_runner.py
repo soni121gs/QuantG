@@ -424,17 +424,17 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         },
                         {"_id": 0, "id": 1, "instrument_key": 1, "trading_symbol": 1},
                     )
-                    if active_position and close_strategy_fn:
+                    if active_position:
                         inst_key = str(active_position.get("instrument_key") or active_position.get("trading_symbol") or "").upper()
                         is_pe = "PE" in inst_key or inst_key.endswith("PE")
                         is_exit = (action == "SELL" and not is_pe) or (action == "BUY" and is_pe)
-                        
+
                         risk_cfg = (vc or {}).get("risk") or {}
                         exit_mode = risk_cfg.get("exit_mode", "tp_sl_tsl_or_signal")
                         if exit_mode == "tp_sl_only":
                             is_exit = False
-                            
-                        if is_exit:
+
+                        if is_exit and close_strategy_fn:
                             await close_strategy_fn(s["user_id"], s["id"], reason=f"strategy-{action.lower()}-signal")
                             await db.strategies.update_one(
                                 {"id": s["id"]},
@@ -444,7 +444,17 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                           "last_filter_reason": f"{action} signal used as option-buying exit."},
                                  "$inc": inc_set},
                             )
-                            continue
+                        else:
+                            # Active position already exists for this strategy — block new same-direction entry.
+                            # Without this guard a new candle BUY signal while already long would open a second position.
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_signals_count": signals_count,
+                                          "last_filter_reason": f"Active position exists — skipping new {action} entry"},
+                                 "$inc": inc_set},
+                            )
+                        continue
                 if option_resolution_requested and resolve_option_fn:
                     try:
                         option_contract = await resolve_option_fn(
