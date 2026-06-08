@@ -305,15 +305,13 @@ export default function OpsConsole() {
               >
                 <RefreshCw size={13} className={busy === "reconcile" ? "animate-spin" : ""} /> Sync Broker
               </button>
-              {user?.role === "owner" && (
-                <button
-                  onClick={resolveReconciliation}
-                  disabled={busy === "resolve-reconciliation" || !reconciliationBreaks?.can_resolve_position_reconciliation}
-                  className="border border-emerald-500/40 disabled:border-white/10 disabled:text-[var(--qd-text-3)] disabled:opacity-50 hover:border-emerald-400 hover:bg-emerald-500/10 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-emerald-300 flex items-center gap-1.5"
-                >
-                  <CheckCircle2 size={13} /> Clear Checked Block
-                </button>
-              )}
+              <button
+                onClick={resolveReconciliation}
+                disabled={busy === "resolve-reconciliation" || !reconciliationBreaks?.can_resolve_position_reconciliation}
+                className="border border-emerald-500/40 disabled:border-white/10 disabled:text-[var(--qd-text-3)] disabled:opacity-50 hover:border-emerald-400 hover:bg-emerald-500/10 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-emerald-300 flex items-center gap-1.5"
+              >
+                <CheckCircle2 size={13} /> Clear Checked Block
+              </button>
             </div>
           </div>
 

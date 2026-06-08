@@ -225,9 +225,6 @@ async def ops_reconciliation_breaks(user=Depends(get_current_user)):
 
 @router.post("/reconciliation/resolve")
 async def ops_resolve_reconciliation(req: OpsActionReq = None, user=Depends(get_current_user)):
-    if user.get("role") != "owner":
-        raise HTTPException(status_code=403, detail="Access denied: Owner role required to resolve reconciliation breaks.")
-
     confirm = bool(req and req.confirm)
     phrase = str((req.note if req else "") or "").strip()
     snapshot = await _reconciliation_break_snapshot(user["id"])
@@ -303,8 +300,6 @@ async def ops_auto_recover(req: OpsActionReq = None, user=Depends(get_current_us
 
 @router.post("/emergency-stop")
 async def ops_emergency_stop(req: OpsActionReq = None, user=Depends(get_current_user)):
-    if user.get("role") != "owner":
-        raise HTTPException(status_code=403, detail="Access denied: Owner role required for emergency stop.")
     from server import option_ledger
 
     now = datetime.now(timezone.utc).isoformat()
@@ -330,8 +325,6 @@ async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)
 
 @router.post("/strategies/enable-all")
 async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_current_user)):
-    if user.get("role") != "owner":
-        raise HTTPException(status_code=403, detail="Access denied: Owner role required to bulk-enable strategies.")
     from server import option_ledger, _sync_option_ledger_strategy
 
     # Only re-enable strategies that were previously PAUSED — never touch draft or custom-stopped ones

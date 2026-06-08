@@ -165,6 +165,8 @@ class ExecutionStateManager:
             prices = _risk_prices(avg_price, position_side, risk)
             stop_loss = risk.get("stoploss_price") or risk.get("stop_loss") or prices.get("stop_loss")
             take_profit = risk.get("target_price") or risk.get("take_profit") or prices.get("take_profit")
+            db_ltp = float(row.get("last_ltp") or 0) or None
+            db_pnl = float(row.get("unrealized_pnl") or 0) if row.get("unrealized_pnl") is not None else None
             out.append({
                 "id": row.get("id"),
                 "strategy_id": row.get("strategy_id"),
@@ -175,6 +177,8 @@ class ExecutionStateManager:
                 "instrument_token": row.get("instrument_token"),
                 "qty": int(row.get("open_quantity") or row.get("quantity") or 0),
                 "avg_price": avg_price,
+                "last_ltp": db_ltp,
+                "db_unrealized_pnl": db_pnl,
                 "status": row.get("status"),
                 "execution_status": row.get("status"),
                 "position_side": position_side,
@@ -264,8 +268,12 @@ class ExecutionStateManager:
                 })
                 if ledger.get("ltp") is not None:
                     bp_merged["ltp"] = ledger.get("ltp")
+                elif sp.get("last_ltp"):
+                    bp_merged["ltp"] = sp.get("last_ltp")
                 if ledger.get("unrealized_pnl") is not None:
                     bp_merged["pnl"] = ledger.get("unrealized_pnl")
+                elif sp.get("db_unrealized_pnl") is not None:
+                    bp_merged["pnl"] = sp.get("db_unrealized_pnl")
             else:
                 # No active strategy row was matched! This is an orphan position.
                 ledger = {}
@@ -310,8 +318,8 @@ class ExecutionStateManager:
                 "symbol": sp_symbol,
                 "qty": sp.get("qty") or 0,
                 "avg_price": sp.get("avg_price") or ledger.get("entry_price") or 0,
-                "ltp": ledger.get("ltp") or sp.get("avg_price") or 0,
-                "pnl": ledger.get("unrealized_pnl") or 0,
+                "ltp": ledger.get("ltp") or sp.get("last_ltp") or sp.get("avg_price") or 0,
+                "pnl": ledger.get("unrealized_pnl") if ledger.get("unrealized_pnl") is not None else (sp.get("db_unrealized_pnl") if sp.get("db_unrealized_pnl") is not None else 0),
                 "mode": sp.get("mode") or "paper",
                 "exchange": sp.get("exchange"),
                 "segment": sp.get("segment"),
