@@ -483,8 +483,9 @@ class UpstoxGateway:
 
         Upstox V2 /v2/historical-candle/intraday does NOT support index keys.
         Strategy:
-          1. Daily bars via the V2 daily endpoint (index keys supported).
-          2. Today's intraday 5-min bars via V3 intraday endpoint (primary).
+          0. V3 historical multi-day 5-min (best: pure intraday data, 5+ days).
+          1. Daily bars via the V2 daily endpoint (fallback context).
+          2. Today's intraday 5-min bars via V3 intraday endpoint.
           3. Fallback: single-bar OHLC from /v2/market-quote/ohlc.
           4. Last resort: synthesise a full session from last daily close.
         """
@@ -499,10 +500,34 @@ class UpstoxGateway:
         ohlc_interval_code = OHLC_INTERVAL_MAP.get(interval, "I1")
         encoded_key = quote(instrument_key)
 
+        # 0. V3 historical multi-day 5-min bars (primary for intraday strategies).
+        # Returns pure consistent 5-min bars across multiple trading days so EMA/
+        # SMA calculations are meaningful. Eliminates the need to mix daily bars
+        # with intraday bars which produces wrong indicator values.
+        if interval != "day":
+            v3_hist_interval = {"5minute": 5, "1minute": 1, "minute": 1,
+                                "15minute": 15, "30minute": 30}.get(interval, 5)
+            try:
+                hist_days = max(days, 10)
+                hist_from = (datetime.now() - timedelta(days=hist_days)).strftime("%Y-%m-%d")
+                hist_to = datetime.now().strftime("%Y-%m-%d")
+                v3_hist_bars = self.get_historical_candles_v3(
+                    instrument_key, unit="minutes", interval=v3_hist_interval,
+                    from_date=hist_from, to_date=hist_to,
+                )
+                if v3_hist_bars and len(v3_hist_bars) >= 50:
+                    logger.info(
+                        "Upstox index V3 historical ok key=%s bars=%d interval=%dmin",
+                        instrument_key, len(v3_hist_bars), v3_hist_interval,
+                    )
+                    return v3_hist_bars
+            except Exception as exc:
+                logger.debug("Upstox V3 historical failed key=%s: %s", instrument_key, exc)
+
         daily_bars: List[Dict[str, Any]] = []
         intraday_bars: List[Dict[str, Any]] = []
 
-        # 1. Daily historical bars
+        # 1. Daily historical bars (fallback context when V3 historical unavailable)
         try:
             now = datetime.now()
             to_date = now.strftime("%Y-%m-%d")
