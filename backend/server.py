@@ -12112,9 +12112,24 @@ async def _fetch_broker_positions_for_user(user: dict, settings: dict) -> List[D
     ).to_list(200)
     out = []
     for r in rows:
-        sym = next((s for s in SYMBOLS if s["symbol"] == r["symbol"]), None)
-        ltp = live_price(sym["base"], SYMBOLS.index(sym))["price"] if sym else r["avg_price"]
-        pnl = round((ltp - r["avg_price"]) * r["qty"], 2)
+        sym = next((s for s in SYMBOLS if s["symbol"] == r.get("symbol")), None)
+        if sym:
+            ltp = live_price(sym["base"], SYMBOLS.index(sym))["price"]
+        else:
+            # Option — use last_ltp from strategy_positions (updated every 30s by monitor)
+            sp_pos = await db.strategy_positions.find_one(
+                {"user_id": user_id, "target_symbol": r.get("symbol"), "status": {"$in": ["OPEN", "FILLED"]}},
+                {"last_ltp": 1, "_id": 0},
+            )
+            raw_ltp = (sp_pos or {}).get("last_ltp")
+            try:
+                ltp = float(raw_ltp) if raw_ltp and raw_ltp != "LTP_UNAVAILABLE" else r.get("avg_price", 0)
+            except (TypeError, ValueError):
+                ltp = r.get("avg_price", 0)
+        avg = r.get("avg_price", 0)
+        qty = r.get("qty", 0)
+        side = str(r.get("position_side") or "LONG").upper()
+        pnl = round((avg - ltp) * qty, 2) if side == "SHORT" else round((ltp - avg) * qty, 2)
         out.append({**r, "ltp": ltp, "pnl": pnl, "mode": "paper"})
     return out
 

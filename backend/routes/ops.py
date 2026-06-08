@@ -593,7 +593,10 @@ async def ops_cleanup_orphan_positions(req: OpsActionReq = None, user=Depends(ge
         if not is_owner:
             raise HTTPException(status_code=403, detail="Access denied: Owner role required for deletion.")
         for orphan in orphans:
-            await db.positions.delete_one({"user_id": user_id, "symbol": orphan["symbol"]})
+            delete_filter = {"user_id": user_id, "symbol": orphan["symbol"]}
+            if orphan.get("strategy_id"):
+                delete_filter["strategy_id"] = orphan["strategy_id"]
+            await db.positions.delete_one(delete_filter)
             cleaned += 1
             
     return {

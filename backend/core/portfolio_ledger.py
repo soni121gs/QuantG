@@ -96,11 +96,12 @@ class PortfolioLedger:
             }
             await self.db.strategy_positions.insert_one(position_doc)
             
-            # Mirror standard portfolio position
+            # Mirror standard portfolio position (keyed by strategy_id to avoid multi-strategy overwrite)
             await self.db.positions.update_one(
-                {"user_id": user_id, "symbol": target_symbol, "mode": mode},
+                {"user_id": user_id, "symbol": target_symbol, "mode": mode, "strategy_id": strategy_id},
                 {
                     "$set": {
+                        "user_id": user_id,
                         "strategy_id": strategy_id,
                         "symbol": target_symbol,
                         "target_symbol": target_symbol,
@@ -148,7 +149,7 @@ class PortfolioLedger:
                 )
                 
                 await self.db.positions.update_one(
-                    {"user_id": user_id, "symbol": target_symbol, "mode": mode},
+                    {"user_id": user_id, "symbol": target_symbol, "mode": mode, "strategy_id": strategy_id},
                     {
                         "$set": {
                             "strategy_id": strategy_id,
@@ -208,10 +209,10 @@ class PortfolioLedger:
                 
                 # Mirror standard portfolio position closure
                 if remaining_qty <= 0:
-                    await self.db.positions.delete_one({"user_id": user_id, "symbol": target_symbol, "mode": mode})
+                    await self.db.positions.delete_one({"user_id": user_id, "symbol": target_symbol, "mode": mode, "strategy_id": strategy_id})
                 else:
                     await self.db.positions.update_one(
-                        {"user_id": user_id, "symbol": target_symbol, "mode": mode},
+                        {"user_id": user_id, "symbol": target_symbol, "mode": mode, "strategy_id": strategy_id},
                         {
                             "$set": {
                                 "quantity": remaining_qty,
