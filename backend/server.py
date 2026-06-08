@@ -5933,6 +5933,7 @@ async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any
 
 
 async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit") -> Dict[str, Any]:
+    from core.market_domains import resolve_domain_by_underlying
     results = []
     positions = await db.strategy_positions.find({
         "user_id": user_id,
@@ -5944,16 +5945,35 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         qty_net = int(pos.get("open_quantity") or pos.get("quantity") or 0)
         if not sym or qty_net <= 0:
             continue
+
+        # Atomically mark position as EXITING before placing the order.
+        # If another task already started the exit (modified_count=0), skip.
+        now_str = datetime.now(timezone.utc).isoformat()
+        mark_res = await db.strategy_positions.update_one(
+            {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
+            {"$set": {"status": "EXITING", "exit_attempt_at": now_str, "updated_at": now_str}},
+        )
+        if mark_res.modified_count == 0:
+            results.append({"symbol": sym, "qty": qty_net, "status": "skipped", "reason": "already-exiting-or-closed"})
+            continue
+
         exit_side = "BUY" if str(pos.get("asset_class") or "").upper() == "OPTION_SHORT" or str(pos.get("position_side") or "").upper() == "SHORT" else "SELL"
+        # Per-position idempotency key — prevents the time-based key from allowing
+        # a new duplicate order each minute when the same position triggers again.
+        pos_exit_idem = f"exit:{pos['id']}:{reason[:20]}"
         place_kwargs: Dict[str, Any] = {
             "user_id": user_id,
             "side": exit_side,
             "order_type": "MARKET",
             "product": pos.get("product"),
             "source": f"{reason}:strategy:{sid}",
+            "idempotency_key": pos_exit_idem,
         }
         if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
-            lot_size = int(pos.get("lot_size") or 1)
+            # Resolve lot_size from position doc first, then fall back to market domain.
+            underlying = pos.get("underlying") or pos.get("symbol_group") or "NIFTY"
+            domain_lot = resolve_domain_by_underlying(underlying).get_lot_size(underlying)
+            lot_size = int(pos.get("lot_size") or domain_lot or 1)
             place_kwargs["symbol"] = sym
             place_kwargs["option_contract"] = {
                 "tradingsymbol": sym,
@@ -5962,13 +5982,12 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 "lot_size": lot_size,
                 "strike": pos.get("strike"),
                 "expiry": pos.get("expiry"),
-                "underlying": pos.get("underlying"),
+                "underlying": underlying,
                 "option_type": pos.get("option_type"),
                 "transaction_type": exit_side,
             }
             place_kwargs["qty"] = max(1, math.ceil(qty_net / lot_size))
             # Pass last known LTP so the minimum-premium guard is bypassed on exit.
-            # The guard only fires when price is absent; for exit we always want to close.
             last_known_ltp = float(pos.get("last_ltp") or 0)
             if last_known_ltp > 0:
                 place_kwargs["price"] = last_known_ltp
@@ -5980,6 +5999,12 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             result = await _place_order_core(**place_kwargs)
             results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "ok", "order_id": result.get("id")})
         except Exception as e:
+            # Exit order failed — reopen the position so the monitor can retry.
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
+                {"$set": {"status": "OPEN", "exit_error": str(e)[:200], "updated_at": datetime.now(timezone.utc).isoformat()},
+                 "$unset": {"exit_attempt_at": ""}},
+            )
             results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "failed", "error": str(e)})
     if reason in ("risk-trigger", "feed-stale", "R_TARGET_HIT", "R_STOP_LOSS_HIT", "R_TRAILING_STOP_HIT", "R_TIME_EXIT"):
         await db.strategies.update_one({"id": sid, "user_id": user_id}, {"$set": {
@@ -15279,6 +15304,33 @@ async def startup():
     app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     app.state.broker_reconcile_stop = asyncio.Event()
     app.state.broker_reconcile_task = asyncio.create_task(_broker_reconciliation_loop(app.state.broker_reconcile_stop))
+
+    # Subscribe V3 websocket to instrument tokens of any open positions so LTP is
+    # available immediately after restart, not only after the first strategy signal.
+    async def _subscribe_open_position_tokens_on_startup():
+        await asyncio.sleep(8)  # wait for gateways to authenticate
+        try:
+            users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(200)
+            for user_row in users:
+                uid = user_row["id"]
+                gateway = await get_user_upstox_gateway(uid)
+                if not gateway or not gateway.connected:
+                    continue
+                open_positions = await db.strategy_positions.find(
+                    {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
+                    {"instrument_token": 1, "_id": 0},
+                ).to_list(200)
+                tokens = [
+                    p["instrument_token"] for p in open_positions
+                    if p.get("instrument_token") and "|" in str(p.get("instrument_token", ""))
+                ]
+                if tokens:
+                    gateway.start_market_data_ws(tokens, mode="ltpc")
+                    logger.info("Startup: subscribed %d open-position tokens for user %s", len(tokens), uid)
+        except Exception as _sub_err:
+            logger.warning("Startup option token subscription failed: %s", _sub_err)
+
+    asyncio.create_task(_subscribe_open_position_tokens_on_startup())
     logger.info("QuantG API started")
 
 

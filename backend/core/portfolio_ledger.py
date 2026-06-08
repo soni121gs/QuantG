@@ -47,6 +47,27 @@ class PortfolioLedger:
         })
 
         if not pos:
+            # Guard: a SELL fill with no matching OPEN position could be a duplicate
+            # exit fill (the first exit already closed the LONG position). Creating a
+            # new SHORT position from that fill would be wrong — it accumulates phantom
+            # short exposure from every redundant exit order.
+            if side == "SELL":
+                closed_long = await self.db.strategy_positions.find_one({
+                    "user_id": user_id,
+                    "strategy_id": strategy_id,
+                    "target_symbol": target_symbol,
+                    "mode": mode,
+                    "position_side": "LONG",
+                    "status": {"$in": ["CLOSED", "EXITING"]},
+                })
+                if closed_long:
+                    logger.warning(
+                        "Ledger: SELL fill for %s (strategy=%s) found no OPEN LONG but a "
+                        "CLOSED/EXITING one exists — duplicate exit fill, skipping.",
+                        target_symbol, strategy_id,
+                    )
+                    return
+
             # Create a brand new position (No pre-existing open state)
             pos_id = f"pos_{uuid.uuid4().hex[:12]}"
             position_doc = {
