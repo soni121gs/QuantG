@@ -1431,13 +1431,13 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 @api.get("/market/watchlist")
 async def watchlist(user=Depends(get_current_user)):
     upstox_rows = await _upstox_watchlist_rows(user["id"])
-    if upstox_rows and any(row.get("source") == "upstox" for row in upstox_rows):
+    if upstox_rows:
         return upstox_rows
-    out = []
-    for i, srow in enumerate(SYMBOLS):
-        lp = live_price(srow["base"], i)
-        out.append({"symbol": srow["symbol"], "name": srow["name"], **lp, "source": "mock"})
-    return out
+    # Gateway offline fallback — return base prices for NIFTY and SENSEX only
+    return [
+        {"symbol": s["symbol"], "name": s["name"], "price": s["base"], "change": 0.0, "pct": 0.0, "source": "fallback"}
+        for s in INDEX_WATCHLIST
+    ]
 
 
 @api.get("/market/commodities")
@@ -6123,6 +6123,12 @@ UPSTOX_EQUITY_INSTRUMENTS = {
     "SENSEX": "BSE_INDEX|SENSEX",
 }
 
+# Watchlist shows only the two main indices with real-time data from the WS feed.
+INDEX_WATCHLIST = [
+    {"symbol": "NIFTY",  "name": "Nifty 50",  "key": "NSE_INDEX|Nifty 50", "base": 24850.40},
+    {"symbol": "SENSEX", "name": "BSE Sensex", "key": "BSE_INDEX|SENSEX",   "base": 81460.20},
+]
+
 
 def _public_base_url(request: Optional[Request] = None) -> str:
     explicit = (os.environ.get("APP_PUBLIC_URL") or os.environ.get("PUBLIC_APP_URL") or "").strip().rstrip("/")
@@ -6222,37 +6228,46 @@ async def _validate_upstox_mcx_instrument_key(instrument_key: Optional[str]) -> 
 
 
 async def _upstox_watchlist_rows(user_id: str) -> List[Dict[str, Any]]:
+    """Return live NIFTY and SENSEX rows from the V3 WS tick cache (fastest) with REST fallback."""
     gateway = await get_user_upstox_gateway(user_id)
-    if not gateway or not gateway.connected:
-        return []
-    keys = [_upstox_instrument_token("NSE", s["symbol"]) for s in SYMBOLS]
-    keys = [k for k in keys if k]
-    if not keys:
-        return []
-    try:
-        quote = await asyncio.to_thread(gateway.get_market_quote, keys)
-    except Exception as exc:
-        logger.warning("Upstox watchlist quote failed: %s", exc)
-        return []
     out: List[Dict[str, Any]] = []
-    for s in SYMBOLS:
-        token = _upstox_instrument_token("NSE", s["symbol"])
-        ltp = UpstoxGateway.parse_quote_ltp(quote, token) if token else None
+    for s in INDEX_WATCHLIST:
+        ltp: Optional[float] = None
+        source = "fallback"
+        if gateway and gateway.connected:
+            tick = gateway.latest_tick(s["key"])
+            if tick and tick.get("ltp"):
+                ltp = float(tick["ltp"])
+                source = "upstox"
+            else:
+                try:
+                    quote = await asyncio.to_thread(gateway.get_market_quote, [s["key"]])
+                    parsed = UpstoxGateway.parse_quote_ltp(quote, s["key"])
+                    if parsed is None:
+                        data = (quote.get("data") if isinstance(quote, dict) else None) or {}
+                        for node in data.values():
+                            if isinstance(node, dict):
+                                for field in ("last_price", "ltp", "last_traded_price"):
+                                    v = node.get(field)
+                                    if v not in (None, ""):
+                                        try:
+                                            parsed = float(v)
+                                        except Exception:
+                                            pass
+                                        if parsed is not None:
+                                            break
+                            if parsed is not None:
+                                break
+                    if parsed is not None:
+                        ltp = float(parsed)
+                        source = "upstox"
+                except Exception as exc:
+                    logger.warning("Upstox watchlist REST failed for %s: %s", s["key"], exc)
         if ltp is None:
-            lp = live_price(s["base"], SYMBOLS.index(s))
-            out.append({**lp, "symbol": s["symbol"], "name": s["name"], "source": "upstox_pending", "feed": "upstox-rest"})
-            continue
-        change = round(float(ltp) - s["base"], 2)
+            ltp = s["base"]
+        change = round(ltp - s["base"], 2)
         pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
-        out.append({
-            "symbol": s["symbol"],
-            "name": s["name"],
-            "price": float(ltp),
-            "change": change,
-            "pct": pct,
-            "source": "upstox",
-            "feed": "upstox-rest",
-        })
+        out.append({"symbol": s["symbol"], "name": s["name"], "price": ltp, "change": change, "pct": pct, "source": source})
     return out
 
 
