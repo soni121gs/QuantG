@@ -13622,8 +13622,9 @@ async def funds(user=Depends(get_current_user)):
     """Return broker funds & margins when live, otherwise a paper-money snapshot."""
     settings = await get_user_settings(user["id"])
     execution_broker = settings.get("execution_broker", "upstox")
-    
-    if execution_broker == "upstox":
+    paper_mode = bool(settings.get("paper_mode", True))
+
+    if execution_broker == "upstox" and not paper_mode:
         upstox_gw = await get_user_upstox_gateway(user["id"])
         if upstox_gw and upstox_gw.connected:
             try:
