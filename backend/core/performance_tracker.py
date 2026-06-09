@@ -31,17 +31,23 @@ class PerformanceTracker:
         bt_score = backtest.get("strategy_score", 0.0) if backtest else 0.0
         bt_drawdown = backtest.get("max_drawdown_pct", 0.0) if backtest else 0.0
 
-        # 2. Fetch Paper Trading Metrics
-        paper_fills = await self.db.fills.find({
+        # 2. Fetch Paper Trading Metrics from closed trade records
+        paper_trades = await self.db.trades.find({
             "strategy_id": strategy_id,
-            "mode": "paper"
+            "user_id": user_id,
+            "mode": "paper",
         }).to_list(length=1000)
 
-        paper_trades_count = len(paper_fills)
-        paper_pnl = sum(float(f["price"]) * float(f["qty"]) * (1 if f["side"] == "SELL" else -1) for f in paper_fills)
-        
-        # Calculate paper win/loss metrics
-        paper_wins = sum(1 for f in paper_fills if f["side"] == "SELL" and float(f["price"]) > 0) # simplified proxy
+        paper_trades_count = len(paper_trades)
+        paper_pnl = sum(
+            float(t.get("net_pnl") or t.get("realised_pnl") or 0)
+            for t in paper_trades
+        )
+
+        paper_wins = sum(
+            1 for t in paper_trades
+            if float(t.get("net_pnl") or t.get("realised_pnl") or 0) > 0
+        )
         paper_win_rate = round(paper_wins / max(1, paper_trades_count), 2)
 
         # 3. Calculate time-bracket P&Ls from strategy positions
