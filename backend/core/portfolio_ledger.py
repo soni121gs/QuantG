@@ -94,6 +94,40 @@ class PortfolioLedger:
             pos_id = f"pos_{uuid.uuid4().hex[:12]}"
             opt = fill.get("option_contract") or {}
             is_option = bool(opt) or fill.get("asset_type") == "option"
+
+            # ── FIX 1: Hard validation for option positions ────────────────────
+            # An option position missing instrument_key, lot_size, expiry, or
+            # underlying CANNOT be exited later — _close_strategy_positions needs
+            # all of these to reconstruct the exit order. Reject the fill now
+            # rather than silently create an un-closeable ghost position.
+            if is_option:
+                _ikey_val = fill.get("instrument_key") or opt.get("instrument_key")
+                _lot_val  = int(opt.get("lot_size") or fill.get("lot_size") or 0)
+                _exp_val  = opt.get("expiry") or fill.get("expiry")
+                _under    = opt.get("underlying") or fill.get("underlying") or fill.get("symbol")
+                _otype    = opt.get("option_type") or fill.get("option_type")
+                missing = []
+                if not _ikey_val:
+                    missing.append("instrument_key")
+                if _lot_val <= 0:
+                    missing.append("lot_size")
+                if not _exp_val:
+                    missing.append("expiry")
+                if not _under:
+                    missing.append("underlying")
+                if not _otype:
+                    missing.append("option_type")
+                if missing:
+                    logger.error(
+                        "Ledger REJECTED option fill for %s (fill_id=%s): missing fields %s. "
+                        "Position NOT created. Fix the order path that omits these fields.",
+                        target_symbol, fill_id, missing,
+                    )
+                    raise ValueError(
+                        f"Option position creation rejected: fill is missing {missing} "
+                        f"for {target_symbol}. Cannot create an un-closeable position."
+                    )
+
             position_doc = {
                 "id": pos_id,
                 "user_id": user_id,

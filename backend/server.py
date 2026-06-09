@@ -5852,7 +5852,7 @@ async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any
     }, {"_id": 0}).to_list(1000)
 
 
-async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit") -> Dict[str, Any]:
+async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit", ltp_source: str = "") -> Dict[str, Any]:
     from core.market_domains import resolve_domain_by_underlying
     results = []
     positions = await db.strategy_positions.find({
@@ -5866,22 +5866,28 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         if not sym or qty_net <= 0:
             continue
 
-        # Circuit breaker: positions that have already been attempted > 3 times
-        # this session are flagged CIRCUIT_BREAKER and removed from normal flow.
-        exit_attempts = int(pos.get("exit_attempts", 0))
-        if exit_attempts >= 3:
+        # FIX 4: Smart circuit breaker — only counts genuine ORDER_REJECTED failures.
+        # Data failures (LTP_UNAVAILABLE, PRICE_BELOW_MINIMUM) do NOT count because
+        # they are transient feed issues, not real order rejections. We track them
+        # separately in exit_data_failures. Only exit_order_failures triggers the breaker.
+        exit_order_failures = int(pos.get("exit_order_failures", 0))
+        if exit_order_failures >= 3:
             now_cb = datetime.now(timezone.utc).isoformat()
             await db.strategy_positions.update_one(
                 {"id": pos["id"], "user_id": user_id},
                 {"$set": {"status": "CIRCUIT_BREAKER", "updated_at": now_cb,
-                           "last_error": f"Exit circuit breaker: {exit_attempts} prior attempts"}},
+                           "last_error": f"Exit circuit breaker: {exit_order_failures} genuine order failures"}},
             )
-            logger.warning("Circuit breaker: position %s strategy=%s blocked after %d exit attempts", pos["id"], sid, exit_attempts)
-            results.append({"symbol": sym, "qty": qty_net, "status": "circuit_breaker", "exit_attempts": exit_attempts})
+            logger.warning(
+                "Circuit breaker: position %s strategy=%s blocked after %d genuine order failures",
+                pos["id"], sid, exit_order_failures,
+            )
+            results.append({"symbol": sym, "qty": qty_net, "status": "circuit_breaker", "exit_order_failures": exit_order_failures})
             continue
 
         # Atomically mark position as EXITING before placing the order.
         # If another task already claimed it (modified_count=0), skip.
+        # FIX 4: do NOT increment exit_attempts here — we increment selectively on failure below.
         now_str = datetime.now(timezone.utc).isoformat()
         mark_res = await db.strategy_positions.update_one(
             {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
@@ -5923,25 +5929,66 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 "transaction_type": exit_side,
             }
             place_kwargs["qty"] = max(1, math.ceil(qty_net / lot_size))
-            # Pass last known LTP so the minimum-premium guard is bypassed on exit.
-            last_known_ltp = float(pos.get("last_ltp") or 0)
+            # FIX 3: Always pass a price for exit orders. Prefer last_ltp from WS/REST.
+            # If unavailable, fall back to average_buy_price so the exit is not blocked
+            # by the price guard in _place_order_core.
+            raw_ltp = pos.get("last_ltp")
+            try:
+                last_known_ltp = float(raw_ltp) if raw_ltp and raw_ltp != "LTP_UNAVAILABLE" else 0.0
+            except (TypeError, ValueError):
+                last_known_ltp = 0.0
+            if last_known_ltp <= 0:
+                last_known_ltp = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
             if last_known_ltp > 0:
                 place_kwargs["price"] = last_known_ltp
         else:
             place_kwargs["symbol"] = sym
             place_kwargs["qty"] = qty_net
             place_kwargs["exchange"] = pos.get("exchange") or "NSE"
+        # FIX 3: mark as exit so _place_order_core skips all price quality guards
+        place_kwargs["is_exit_order"] = True
         try:
             result = await _place_order_core(**place_kwargs)
             results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "ok", "order_id": result.get("id")})
         except Exception as e:
-            # Exit order failed — reopen the position so the monitor can retry.
+            err_str = str(e)
+            # FIX 4: Classify failure type.
+            # Data failures: LTP_UNAVAILABLE, PRICE_UNAVAILABLE, FEED_DISCONNECTED
+            # These do NOT count against the circuit breaker — they are transient.
+            # Genuine order failures: everything else (broker rejection, auth error, etc.)
+            _data_failure_keywords = (
+                "ltp_unavailable", "price_unavailable", "feed_disconnected",
+                "price unavailable", "feed offline", "instrument not subscribed",
+            )
+            is_data_failure = any(kw in err_str.lower() for kw in _data_failure_keywords)
+            exit_failure_reason = "DATA_FAILURE" if is_data_failure else "ORDER_REJECTED"
+
+            now_fail = datetime.now(timezone.utc).isoformat()
+            update_on_fail: Dict[str, Any] = {
+                "$set": {
+                    "status": "OPEN",
+                    "exit_error": err_str[:200],
+                    "exit_failure_reason": exit_failure_reason,
+                    "updated_at": now_fail,
+                },
+                "$unset": {"exit_attempt_at": ""},
+            }
+            if not is_data_failure:
+                # Only genuine order failures advance the circuit breaker counter
+                update_on_fail["$inc"] = {"exit_order_failures": 1}
+            else:
+                update_on_fail["$inc"] = {"exit_data_failures": 1}
+
             await db.strategy_positions.update_one(
                 {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
-                {"$set": {"status": "OPEN", "exit_error": str(e)[:200], "updated_at": datetime.now(timezone.utc).isoformat()},
-                 "$unset": {"exit_attempt_at": ""}},
+                update_on_fail,
             )
-            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "failed", "error": str(e)})
+            logger.warning(
+                "Exit %s for %s (%s): %s — failure_type=%s",
+                exit_side, sym, pos["id"], err_str[:200], exit_failure_reason,
+            )
+            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "failed",
+                            "error": err_str, "failure_reason": exit_failure_reason})
     if reason in ("risk-trigger", "feed-stale", "R_TARGET_HIT", "R_STOP_LOSS_HIT", "R_TRAILING_STOP_HIT", "R_TIME_EXIT"):
         await db.strategies.update_one({"id": sid, "user_id": user_id}, {"$set": {
             "status": "paused",
@@ -10027,7 +10074,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                             stop_loss: Optional[float] = None,
                             take_profit: Optional[float] = None,
                             idempotency_key: Optional[str] = None,
-                            signal_id: Optional[str] = None) -> dict:
+                            signal_id: Optional[str] = None,
+                            is_exit_order: bool = False) -> dict:
     side = (side or "").upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
@@ -10040,6 +10088,17 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
     if order_type == "LIMIT" and price is None:
         raise HTTPException(status_code=400, detail="LIMIT orders require a price")
+
+    # FIX 5: Check gateway_blocked before placing ANY new order (not exits — they must go through)
+    if not is_exit_order and _GATEWAY_BLOCKED.get(user_id):
+        logger.warning(
+            "FIX5 ORDER BLOCKED: user=%s gateway not connected at market open — order for %s rejected",
+            user_id, symbol,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gateway not connected for user {user_id}. Reconnect Upstox before placing orders.",
+        )
 
     settings = dict(await get_user_settings(user_id))
     strategy_id = await _strategy_source_id(source)
@@ -10239,7 +10298,10 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 return _clean_order_response(skip_doc)
         
         # Check staleness in Core path of _place_order_core
-        if option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0):
+        # FIX 3: exit orders bypass ALL price quality guards — they must go through
+        # regardless of LTP availability. A MARKET exit with a stale/fallback price
+        # is always better than leaving a position permanently stuck.
+        if not is_exit_order and option_contract and market_session.get("open") and not simulated_contract and not (price and price > 0):
             # 1. Minimum Premium Guard
             if contract_ltp < 1.0:
                 logger.warning("Core %s option order skipped: minimum premium guard failed for %s (LTP %.2f < 1.0).", "paper" if paper else "live", target_symbol, contract_ltp)
@@ -10316,23 +10378,33 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
         paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else (0.0 if market_session.get("open") else _get_paper_ltp(symbol, option_contract)))
         if paper_ltp <= 0:
-            skip_doc = await _persist_core_paper_skipped_order(
-                user_id=user_id,
-                strategy_id=strategy_id or "manual",
-                symbol=symbol,
-                option_contract=option_contract,
-                side=side,
-                qty=qty or 1,
-                price=price or 0.0,
-                reason="Paper price unavailable." if paper else "Live price unavailable.",
-                reason_code="PRICE_UNAVAILABLE",
-                idempotency_key=idem_key,
-                signal_id=signal_id,
-                market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
-                mode="paper" if paper else "live",
-                broker="paper" if paper else "upstox",
-            )
-            return _clean_order_response(skip_doc)
+            # FIX 3: exit orders with no price use a nominal ₹0.05 MARKET fill.
+            # This lets paper exits process without a real price rather than being
+            # permanently blocked — the position is closed and the wallet is credited ₹0.
+            if is_exit_order:
+                logger.warning(
+                    "EXIT order for %s has paper_ltp=0 — using ₹0.05 nominal for MARKET exit (is_exit_order=True)",
+                    target_symbol,
+                )
+                paper_ltp = 0.05
+            else:
+                skip_doc = await _persist_core_paper_skipped_order(
+                    user_id=user_id,
+                    strategy_id=strategy_id or "manual",
+                    symbol=symbol,
+                    option_contract=option_contract,
+                    side=side,
+                    qty=qty or 1,
+                    price=price or 0.0,
+                    reason="Paper price unavailable." if paper else "Live price unavailable.",
+                    reason_code="PRICE_UNAVAILABLE",
+                    idempotency_key=idem_key,
+                    signal_id=signal_id,
+                    market_snapshot={"ltp": contract_ltp, "received_at": received_at, "source": "upstox-cache"},
+                    mode="paper" if paper else "live",
+                    broker="paper" if paper else "upstox",
+                )
+                return _clean_order_response(skip_doc)
 
         risk_mgr = RiskManager(db)
         _lot_size = domain.get_lot_size(symbol)
@@ -14751,6 +14823,212 @@ app.add_middleware(
 )
 
 
+# ── FIX 5 + FIX 7: Daily gateway health check + token refresh scheduler ────────
+# In-memory cache: user_id → True/False. True = gateway not connected at 9:10 IST.
+# This blocks new order placement until the user reconnects.
+_GATEWAY_BLOCKED: Dict[str, bool] = {}
+
+def _ist_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+async def check_all_gateways_at_market_open() -> Dict[str, Any]:
+    """FIX 5: Check every user's WS gateway at 9:10 AM IST. Block orders for disconnected users."""
+    results: Dict[str, Any] = {}
+    users = await db.users.find({}, {"_id": 0, "id": 1, "email": 1}).to_list(1000)
+    for row in users:
+        uid = row["id"]
+        try:
+            gw = await get_user_upstox_gateway(uid)
+            connected = bool(gw and gw.connected)
+            ws_ok = bool(gw and getattr(gw, "_ws_running", False))
+            blocked = not connected
+            _GATEWAY_BLOCKED[uid] = blocked
+            await db.gateway_health.update_one(
+                {"user_id": uid},
+                {"$set": {
+                    "user_id": uid,
+                    "gateway_connected": connected,
+                    "ws_running": ws_ok,
+                    "gateway_blocked": blocked,
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }},
+                upsert=True,
+            )
+            if blocked:
+                logger.warning(
+                    "FIX5 GATEWAY CHECK: USER %s gateway NOT connected — all new order placement BLOCKED",
+                    uid,
+                )
+            results[uid] = {"connected": connected, "ws_running": ws_ok, "blocked": blocked}
+        except Exception as e:
+            logger.warning("Gateway health check failed for user %s: %s", uid, e)
+            results[uid] = {"error": str(e)}
+    return results
+
+
+async def request_upstox_token_refresh_for_user(user_id: str) -> Dict[str, Any]:
+    """FIX 7: Send Upstox push notification asking user to approve token refresh."""
+    keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
+    if not keys:
+        return {"ok": False, "reason": "no_keys"}
+    api_key = decrypt_secret(keys.get("api_key")) if keys.get("api_key") else None
+    if not api_key:
+        return {"ok": False, "reason": "no_api_key"}
+    try:
+        import requests as _req
+        # Upstox V3 token request — sends a push notification to user's phone.
+        # The user taps "Approve" and Upstox posts the new token to our webhook.
+        request_id = f"quantg_{user_id[:8]}_{int(datetime.now(timezone.utc).timestamp())}"
+        resp = _req.post(
+            f"https://api.upstox.com/v3/login/auth/token/request/{request_id}",
+            headers={
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"client_id": api_key},
+            timeout=10,
+        )
+        payload = resp.json() if resp.content else {}
+        ok = resp.status_code in (200, 201, 202)
+        logger.info(
+            "FIX7 TOKEN PUSH: user=%s status=%s payload=%s",
+            user_id, resp.status_code, str(payload)[:200],
+        )
+        await db.gateway_health.update_one(
+            {"user_id": user_id},
+            {"$set": {"token_push_sent_at": datetime.now(timezone.utc).isoformat(),
+                      "token_push_ok": ok}},
+            upsert=True,
+        )
+        return {"ok": ok, "status_code": resp.status_code, "payload": payload}
+    except Exception as e:
+        logger.warning("FIX7 TOKEN PUSH failed for user %s: %s", user_id, e)
+        return {"ok": False, "reason": str(e)}
+
+
+async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
+    """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times."""
+    _token_push_done_date: Optional[str] = None
+    _gateway_check_done_date: Optional[str] = None
+    logger.info("Daily gateway scheduler started")
+    while not stop_event.is_set():
+        try:
+            ist = _ist_now()
+            today = ist.date().isoformat()
+            hour, minute = ist.hour, ist.minute
+
+            # 8:50 AM IST — send Upstox push notification to all users (FIX 7)
+            if hour == 8 and minute == 50 and _token_push_done_date != today:
+                _token_push_done_date = today
+                logger.info("Daily scheduler: 8:50 AM IST — sending token refresh push to all users")
+                users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                for row in users:
+                    await request_upstox_token_refresh_for_user(row["id"])
+
+            # 9:10 AM IST — gateway health check for all users (FIX 5)
+            if hour == 9 and minute == 10 and _gateway_check_done_date != today:
+                _gateway_check_done_date = today
+                logger.info("Daily scheduler: 9:10 AM IST — running gateway health check for all users")
+                results = await check_all_gateways_at_market_open()
+                blocked = [uid for uid, r in results.items() if r.get("blocked")]
+                if blocked:
+                    logger.warning(
+                        "FIX5: %d users have blocked gateways at market open: %s",
+                        len(blocked), blocked,
+                    )
+                else:
+                    logger.info("FIX5: All %d user gateways connected at market open", len(results))
+        except Exception as e:
+            logger.warning("Daily scheduler error: %s", e)
+        # Sleep in 10-second slices for responsive shutdown
+        slept = 0
+        while not stop_event.is_set() and slept < 60:
+            await asyncio.sleep(10)
+            slept += 10
+    logger.info("Daily gateway scheduler stopped")
+
+
+@api.post("/gateway/check-all")
+async def gateway_check_all(user=Depends(get_current_user)):
+    """FIX 5: Manually trigger gateway health check for all users (admin use)."""
+    results = await check_all_gateways_at_market_open()
+    return {"results": results, "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
+@api.get("/gateway/status")
+async def gateway_status_all(user=Depends(get_current_user)):
+    """FIX 5 + 7: Returns WS gateway status + token refresh info for ALL users."""
+    users = await db.users.find({}, {"_id": 0, "id": 1, "email": 1}).to_list(1000)
+    out = []
+    for row in users:
+        uid = row["id"]
+        gw = _UPSTOX_GATEWAYS.get(uid)
+        gw_st = gw.status() if gw else {}
+        health_doc = await db.gateway_health.find_one({"user_id": uid}, {"_id": 0})
+        out.append({
+            "user_id": uid,
+            "email": row.get("email"),
+            "ws_running": gw_st.get("ws_running", False),
+            "gateway_connected": gw_st.get("connected", False),
+            "gateway_blocked": _GATEWAY_BLOCKED.get(uid, False),
+            "token_refresh_count": gw_st.get("token_refresh_count", 0),
+            "token_refresh_last_at": gw_st.get("token_refresh_last_at"),
+            "token_push_sent_at": (health_doc or {}).get("token_push_sent_at"),
+            "token_push_ok": (health_doc or {}).get("token_push_ok"),
+            "last_checked_at": (health_doc or {}).get("checked_at"),
+        })
+    return {"gateways": out, "total": len(out)}
+
+
+@api.post("/webhook/upstox/token/{user_id}")
+async def upstox_token_webhook(user_id: str, request: Request):
+    """FIX 7: Upstox posts the new access token here after user approves push notification."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    new_token = (
+        payload.get("access_token")
+        or payload.get("token")
+        or payload.get("data", {}).get("access_token")
+    )
+    if not new_token:
+        logger.warning("FIX7 WEBHOOK: no access_token in payload for user %s: %s", user_id, payload)
+        return {"ok": False, "reason": "no_access_token_in_payload"}
+
+    # Encrypt and store the new token in broker_keys
+    try:
+        from cryptography.fernet import Fernet
+        encrypted = encrypt_secret(str(new_token))
+    except Exception:
+        encrypted = str(new_token)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.broker_keys.update_one(
+        {"user_id": user_id, "broker": "upstox"},
+        {"$set": {
+            "access_token": encrypted,
+            "token_refreshed_at": now_iso,
+            "token_refresh_source": "upstox_push_webhook",
+        }},
+    )
+
+    # Invalidate cached validation and gateway so they reload with new token
+    _UPSTOX_TOKEN_VALIDATION_CACHE.pop(user_id, None)
+    old_gw = _UPSTOX_GATEWAYS.pop(user_id, None)
+
+    # Reconnect gateway with the new token
+    gw = await get_user_upstox_gateway(user_id)
+    if gw:
+        gw.access_token = str(new_token)
+        await _start_user_upstox_ticker(user_id)
+        _GATEWAY_BLOCKED[user_id] = False
+
+    logger.info("FIX7 WEBHOOK: TOKEN REFRESHED for user %s at %s — gateway reconnected", user_id, now_iso)
+    return {"ok": True, "user_id": user_id, "refreshed_at": now_iso}
+
+
 @app.on_event("startup")
 async def startup():
     app.state.option_ledger = option_ledger
@@ -15214,6 +15492,9 @@ async def startup():
     app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     app.state.broker_reconcile_stop = asyncio.Event()
     app.state.broker_reconcile_task = asyncio.create_task(_broker_reconciliation_loop(app.state.broker_reconcile_stop))
+    # FIX 5 + FIX 7: Daily scheduler for gateway health check + token refresh push
+    app.state.daily_scheduler_stop = asyncio.Event()
+    app.state.daily_scheduler_task = asyncio.create_task(_daily_scheduler_loop(app.state.daily_scheduler_stop))
 
     # Subscribe V3 websocket to instrument tokens of any open positions so LTP is
     # available immediately after restart, not only after the first strategy signal.
@@ -15288,6 +15569,12 @@ async def shutdown():
         app.state.broker_reconcile_stop.set()
         if app.state.broker_reconcile_task:
             await asyncio.wait_for(app.state.broker_reconcile_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.daily_scheduler_stop.set()
+        if getattr(app.state, "daily_scheduler_task", None):
+            await asyncio.wait_for(app.state.daily_scheduler_task, timeout=3.0)
     except Exception:
         pass
     try:
