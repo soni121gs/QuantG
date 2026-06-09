@@ -15000,9 +15000,14 @@ async def request_upstox_token_refresh_for_user(user_id: str) -> Dict[str, Any]:
 
 
 async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
-    """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times."""
+    """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times.
+
+    8:50 AM IST — token refresh push to all users + paper daily lifecycle reset
+    9:10 AM IST — gateway health check for all users
+    """
     _token_push_done_date: Optional[str] = None
     _gateway_check_done_date: Optional[str] = None
+    _lifecycle_reset_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -15010,13 +15015,30 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             today = ist.date().isoformat()
             hour, minute = ist.hour, ist.minute
 
-            # 8:50 AM IST — send Upstox push notification to all users (FIX 7)
+            # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
                 _token_push_done_date = today
                 logger.info("Daily scheduler: 8:50 AM IST — sending token refresh push to all users")
                 users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
                 for row in users:
                     await request_upstox_token_refresh_for_user(row["id"])
+
+            # 8:50 AM IST — paper daily lifecycle: reset order/signal counts, today_pnl
+            if hour == 8 and minute == 50 and _lifecycle_reset_done_date != today:
+                _lifecycle_reset_done_date = today
+                logger.info("Daily scheduler: 8:50 AM IST — running paper daily lifecycle reset")
+                try:
+                    users_lc = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                    for row in users_lc:
+                        uid = row["id"]
+                        try:
+                            summary = await _daily_paper_lifecycle_for_user(uid)
+                            if any(summary.values()):
+                                logger.info("Daily lifecycle reset user=%s: %s", uid, summary)
+                        except Exception as _ue:
+                            logger.warning("Daily lifecycle failed for user %s: %s", uid, _ue)
+                except Exception as _lc_err:
+                    logger.warning("Daily lifecycle user scan failed: %s", _lc_err)
 
             # 9:10 AM IST — gateway health check for all users (FIX 5)
             if hour == 9 and minute == 10 and _gateway_check_done_date != today:
