@@ -15195,16 +15195,19 @@ async def startup():
                 gateway = await get_user_upstox_gateway(uid)
                 if not gateway or not gateway.connected:
                     continue
+                # Start index feed (NIFTY/BANKNIFTY/SENSEX) so the WS is running
+                await _start_user_upstox_ticker(uid)
+                # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
-                    {"instrument_token": 1, "_id": 0},
+                    {"instrument_key": 1, "_id": 0},
                 ).to_list(200)
                 tokens = [
-                    p["instrument_token"] for p in open_positions
-                    if p.get("instrument_token") and "|" in str(p.get("instrument_token", ""))
+                    p["instrument_key"] for p in open_positions
+                    if p.get("instrument_key") and "|" in str(p.get("instrument_key", ""))
                 ]
                 if tokens:
-                    gateway.start_market_data_ws(tokens, mode="ltpc")
+                    await asyncio.to_thread(gateway.start_market_data_ws, tokens, "ltpc")
                     logger.info("Startup: subscribed %d open-position tokens for user %s", len(tokens), uid)
         except Exception as _sub_err:
             logger.warning("Startup option token subscription failed: %s", _sub_err)
