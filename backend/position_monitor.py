@@ -96,7 +96,7 @@ async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
             continue
 
         # ── Fetch LTP ──────────────────────────────────────────────────────────
-        ltp = await quote_ltp_fn(user_id, pos.get("instrument_token"))
+        ltp = await quote_ltp_fn(user_id, pos.get("instrument_key") or pos.get("instrument_token"))
         if ltp is None:
             settings = await get_settings_fn(user_id)
             is_paper = pos.get("mode") == "paper"
