@@ -92,6 +92,8 @@ class PortfolioLedger:
 
             # Create a brand new position (No pre-existing open state)
             pos_id = f"pos_{uuid.uuid4().hex[:12]}"
+            opt = fill.get("option_contract") or {}
+            is_option = bool(opt) or fill.get("asset_type") == "option"
             position_doc = {
                 "id": pos_id,
                 "user_id": user_id,
@@ -101,7 +103,7 @@ class PortfolioLedger:
                 "trading_symbol": target_symbol,
                 "instrument_key": fill.get("instrument_key"),
                 "instrument_token": fill.get("instrument_token"),
-                "exchange": fill.get("exchange") or "NSE",
+                "exchange": fill.get("exchange") or ("NFO" if is_option else "NSE"),
                 "mode": mode,
                 "quantity": qty,
                 "open_quantity": qty,
@@ -115,8 +117,19 @@ class PortfolioLedger:
                 "brokerage": float(fill.get("brokerage", 0.0)),
                 "created_at": now_str,
                 "updated_at": now_str,
+                "entry_time": now_str,
                 "source_fill_id": fill["id"],
                 "tp_sl_tsl_config": protection,
+                # Option contract fields — required by _close_strategy_positions to build exit orders
+                "asset_type": "option" if is_option else (fill.get("asset_type") or "equity"),
+                "asset_class": fill.get("asset_class") or ("OPTION_LONG" if is_option and side == "BUY" else ("OPTION_SHORT" if is_option and side == "SELL" else None)),
+                "product": fill.get("product") or opt.get("product") or "MIS",
+                "lot_size": int(opt.get("lot_size") or fill.get("lot_size") or 1),
+                "strike": opt.get("strike"),
+                "expiry": opt.get("expiry"),
+                "option_type": opt.get("option_type"),
+                "underlying": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
+                "symbol_group": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
             }
             await self.db.strategy_positions.insert_one(position_doc)
             

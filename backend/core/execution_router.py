@@ -178,6 +178,11 @@ class PaperAdapter:
             "take_profit": intent.get("take_profit"),
             "instrument_key": intent.get("instrument_key"),
             "instrument_token": intent.get("instrument_token") or intent.get("instrument_key"),
+            "option_contract": intent.get("option_contract"),
+            "asset_type": intent.get("asset_type"),
+            "asset_class": intent.get("asset_class"),
+            "product": intent.get("product"),
+            "underlying": (intent.get("option_contract") or {}).get("underlying") or intent.get("symbol"),
         }
         await self.db.fills.insert_one(fill_doc)
 

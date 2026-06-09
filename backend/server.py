@@ -5913,7 +5913,8 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             place_kwargs["option_contract"] = {
                 "tradingsymbol": sym,
                 "exchange": pos.get("exchange", "NFO"),
-                "instrument_token": pos.get("instrument_token"),
+                "instrument_key": pos.get("instrument_key") or pos.get("instrument_token"),
+                "instrument_token": pos.get("instrument_token") or pos.get("instrument_key"),
                 "lot_size": lot_size,
                 "strike": pos.get("strike"),
                 "expiry": pos.get("expiry"),
@@ -10375,6 +10376,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             idempotency_key=idem_key
         )
         intent_doc["execution_tag"] = _new_execution_tag(strategy_id)
+        intent_doc["product"] = product or "MIS"
         if paper:
             intent_doc["paper_realism"] = "UPSTOX_LIKE"
         if option_contract:
@@ -10385,6 +10387,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             )
             intent_doc["instrument_key"] = _ikey
             intent_doc["instrument_token"] = _ikey
+            # Store option_contract so execution_router can pass it to fill_doc
+            # and portfolio_ledger can extract strike/expiry/lot_size/etc.
+            intent_doc["option_contract"] = option_contract
+            intent_doc["asset_type"] = "option"
+            intent_doc["asset_class"] = "OPTION_LONG" if side == "BUY" else "OPTION_SHORT"
+            intent_doc["lot_size"] = int(option_contract.get("lot_size") or _lot_size or 1)
+            intent_doc["underlying"] = option_contract.get("underlying") or symbol
 
         ledger = PortfolioLedger(db)
         router = ExecutionRouter(
@@ -12334,6 +12343,8 @@ async def portfolio(user=Depends(get_current_user)):
     gross_pnl = round(fill_summary["realised_pnl"] + charges + open_pnl, 2)
     total_pnl = round(fill_summary["realised_pnl"] + open_pnl, 2)
     deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
+    from core.paper_broker import PaperWallet as _PW
+    _wallet_balance = await _PW(db).get_balance(user["id"])
     orders_count = await db.orders.count_documents({"user_id": user["id"]})
     strategies_count = await db.strategies.count_documents({"user_id": user["id"]})
     live_strategies = await db.strategies.count_documents({"user_id": user["id"], "status": "live"})
@@ -12365,7 +12376,7 @@ async def portfolio(user=Depends(get_current_user)):
         "pnl_source": "none" if not position_modes else position_modes[0] if len(position_modes) == 1 else "mixed",
         "open_positions": len(positions),
         "deployed": deployed,
-        "available": round(500000.0 - deployed, 2),
+        "available": round(float(_wallet_balance or 0), 2),
         "orders": orders_count,
         "strategies": strategies_count,
         "live_strategies": live_strategies,
@@ -13684,6 +13695,14 @@ async def funds(user=Depends(get_current_user)):
     initial_balance = float(wallet_doc.get("initial_balance", 500000.0))
     positions = await db.positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
     deployed = round(sum(abs(p.get("qty", 0)) * p.get("avg_price", 0) for p in positions), 2)
+    # Sum unrealized P&L from strategy_positions (updated every 30s by position monitor)
+    open_sp = await db.strategy_positions.find(
+        {"user_id": user["id"], "status": {"$in": ["OPEN", "FILLED"]}, "mode": "paper"},
+        {"unrealized_pnl": 1, "unrealised_pnl": 1, "_id": 0},
+    ).to_list(200)
+    m2m_unrealised = round(sum(
+        float(p.get("unrealized_pnl") or p.get("unrealised_pnl") or 0) for p in open_sp
+    ), 2)
     return {
         "source": "paper",
         "available_cash": round(paper_capital, 2),
@@ -13691,7 +13710,7 @@ async def funds(user=Depends(get_current_user)):
         "intraday_payin": 0.0,
         "used_margin": deployed,
         "m2m_realised": round(paper_capital - initial_balance, 2),
-        "m2m_unrealised": 0.0,
+        "m2m_unrealised": m2m_unrealised,
         "span": 0.0,
         "delivery_margin": 0.0,
         "note": "Paper-mode. Balance reflects actual fills from db.paper_wallets.",
