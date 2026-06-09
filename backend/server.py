@@ -10377,12 +10377,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         intent_doc["execution_tag"] = _new_execution_tag(strategy_id)
         if paper:
             intent_doc["paper_realism"] = "UPSTOX_LIKE"
-        if option_contract and not paper:
-            intent_doc["instrument_token"] = (
+        if option_contract:
+            _ikey = (
                 option_contract.get("instrument_key")
                 or option_contract.get("instrument_token")
                 or ""
             )
+            intent_doc["instrument_key"] = _ikey
+            intent_doc["instrument_token"] = _ikey
 
         ledger = PortfolioLedger(db)
         router = ExecutionRouter(
@@ -10392,6 +10394,16 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             resolve_upstox_token_fn=_upstox_instrument_token,
         )
         order_res = await router.route_intent(user_id, intent_doc)
+        # Subscribe this instrument to the WS feed so position monitor gets live ticks
+        if option_contract and intent_doc.get("instrument_key"):
+            try:
+                _gw = await get_user_upstox_gateway(user_id)
+                if _gw:
+                    asyncio.create_task(asyncio.to_thread(
+                        _gw.start_market_data_ws, [intent_doc["instrument_key"]], "ltpc"
+                    ))
+            except Exception:
+                pass
         return _clean_order_response(order_res)
 
     if not paper:

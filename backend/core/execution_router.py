@@ -172,9 +172,11 @@ class PaperAdapter:
             "net_pnl": 0.0,
             "trade_value": trade_value,
             "mode": "paper",
+            "exchange": intent.get("exchange"),
             "created_at": now,
             "stop_loss": intent.get("stop_loss"),
             "take_profit": intent.get("take_profit"),
+            "instrument_key": intent.get("instrument_key"),
             "instrument_token": intent.get("instrument_token") or intent.get("instrument_key"),
         }
         await self.db.fills.insert_one(fill_doc)
