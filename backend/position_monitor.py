@@ -109,6 +109,24 @@ async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
                 execution_broker="upstox",
             )
 
+        # ── Fallback: paper_quote_cache for paper positions (WS may not be subscribed to options) ──
+        if ltp is None and pos.get("mode") == "paper":
+            ikey = pos.get("instrument_key") or pos.get("cache_key") or pos.get("subscribed_key")
+            if not ikey:
+                # Derive instrument_key from trading_symbol via instruments collection
+                trading_sym = pos.get("trading_symbol") or pos.get("target_symbol")
+                if trading_sym:
+                    inst_doc = await db.upstox_instruments.find_one(
+                        {"tradingsymbol": trading_sym}, {"instrument_key": 1, "_id": 0}
+                    )
+                    if inst_doc:
+                        ikey = inst_doc.get("instrument_key")
+            if ikey:
+                cache_doc = await db.paper_quote_cache.find_one({"instrument_key": ikey})
+                if cache_doc and cache_doc.get("ltp") is not None:
+                    ltp = float(cache_doc["ltp"])
+                    logger.debug("position_monitor: LTP %.2f from paper_quote_cache for %s", ltp, ikey)
+
         if ltp is None:
             await db.strategy_positions.update_one(
                 {"id": pos["id"], "user_id": user_id},
