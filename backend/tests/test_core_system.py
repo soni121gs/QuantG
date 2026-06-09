@@ -46,16 +46,28 @@ async def test_price_service_live_blocks_simulation():
     with pytest.raises(RuntimeError, match="Live price fetch failed"):
         await service.get_price("NSE:RELIANCE", mode="live", allow_simulation=True)
 
+def _ledger_db_mock():
+    """MagicMock db with every collection method the ledger touches awaitable."""
+    db = MagicMock()
+    db.processed_fill_ids.insert_one = AsyncMock()
+    db.processed_fill_ids.delete_one = AsyncMock()
+    db.strategy_positions.find_one = AsyncMock(return_value=None)
+    db.strategy_positions.insert_one = AsyncMock()
+    db.strategy_positions.update_one = AsyncMock()
+    db.positions.update_one = AsyncMock()
+    db.positions.delete_one = AsyncMock()
+    db.trade_fills.insert_one = AsyncMock()
+    db.trades.insert_one = AsyncMock()
+    db.strategies.update_one = AsyncMock()
+    return db
+
+
 @pytest.mark.asyncio
 async def test_portfolio_ledger_forces_fill_constraint():
     """Enforces the strict rule: No fill = no position. A position cannot exist without a fill."""
-    db = MagicMock()
-    db.strategy_positions.find_one = AsyncMock(return_value=None)
-    db.strategy_positions.insert_one = AsyncMock()
-    db.positions.update_one = AsyncMock()
-    
+    db = _ledger_db_mock()
     ledger = PortfolioLedger(db)
-    
+
     fill = {
         "id": "fill_test_999",
         "user_id": "user-1",
@@ -67,14 +79,104 @@ async def test_portfolio_ledger_forces_fill_constraint():
         "price": 120.0,
         "mode": "paper"
     }
-    
-    await ledger.process_fill(fill)
-    
+
+    result = await ledger.process_fill(fill)
+
     # Assert database position insertion was triggered on receiving a fill
     db.strategy_positions.insert_one.assert_called_once()
     inserted_pos = db.strategy_positions.insert_one.call_args[0][0]
     assert inserted_pos["source_fill_id"] == "fill_test_999"
     assert inserted_pos["quantity"] == 65
+    # Spine contract: result dict + audit row
+    assert result["accepted"] is True
+    assert result["action"] == "OPEN"
+    db.trade_fills.insert_one.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_ledger_exit_fill_matches_exiting_position():
+    """THE stuck-position fix: an exit fill must close a position in EXITING status."""
+    db = _ledger_db_mock()
+    exiting_pos = {
+        "id": "pos_abc",
+        "user_id": "user-1",
+        "strategy_id": "strategy-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "mode": "paper",
+        "status": "EXITING",
+        "position_side": "LONG",
+        "open_quantity": 65,
+        "average_price": 120.0,
+        "average_buy_price": 120.0,
+        "entry_charges": 30.0,
+        "entry_time": "2026-06-10T04:00:00+00:00",
+    }
+    db.strategy_positions.find_one = AsyncMock(return_value=exiting_pos)
+    ledger = PortfolioLedger(db)
+
+    result = await ledger.process_fill({
+        "id": "fill_exit_1",
+        "user_id": "user-1",
+        "strategy_id": "strategy-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "side": "SELL",
+        "qty": 65,
+        "price": 130.0,
+        "charges": 40.0,
+        "mode": "paper",
+        "exit_reason": "take-profit",
+    })
+
+    assert result["accepted"] is True
+    assert result["action"] == "CLOSE"
+    assert result["qty_closed"] == 65
+    # net = (130-120)*65 - 40 exit charges - 30 entry charges = 580
+    assert result["realized_pnl"] == pytest.approx(580.0)
+    # The EXITING→OPEN query must include EXITING
+    query = db.strategy_positions.find_one.call_args[0][0]
+    assert "EXITING" in query["status"]["$in"]
+    # Round-trip trade row written on close
+    db.trades.insert_one.assert_called_once()
+    trade_row = db.trades.insert_one.call_args[0][0]
+    assert trade_row["net_pnl"] == pytest.approx(580.0)
+    assert trade_row["exit_reason"] == "take-profit"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_ledger_rejects_duplicate_exit_fill():
+    """A SELL fill with no live position but a CLOSED LONG = duplicate exit → REJECTED, not a phantom SHORT."""
+    db = _ledger_db_mock()
+
+    async def find_one_side_effect(query, *a, **k):
+        status = query.get("status")
+        if isinstance(status, dict) and "EXITING" in status.get("$in", []):
+            return None  # no live position
+        if status == "CLOSED":
+            return {"id": "pos_closed", "position_side": "LONG", "status": "CLOSED"}
+        return None
+
+    db.strategy_positions.find_one = AsyncMock(side_effect=find_one_side_effect)
+    ledger = PortfolioLedger(db)
+
+    result = await ledger.process_fill({
+        "id": "fill_dup_exit",
+        "user_id": "user-1",
+        "strategy_id": "strategy-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "side": "SELL",
+        "qty": 65,
+        "price": 130.0,
+        "mode": "paper",
+    })
+
+    assert result["accepted"] is False
+    assert result["action"] == "DUPLICATE_EXIT"
+    # No position created, no trade written
+    db.strategy_positions.insert_one.assert_not_called()
+    db.trades.insert_one.assert_not_called()
 
 def test_order_manager_idempotency():
     """Tests the secure compilation of composite idempotency keys."""

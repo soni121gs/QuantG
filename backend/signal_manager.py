@@ -696,7 +696,11 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                 try:
                     user_settings = await db.users.find_one({"id": user_id}, {"settings": 1})
                     settings = (user_settings or {}).get("settings") or {}
-                    one_active_group = bool(settings.get("one_active_position_per_symbol_group", True))
+                    # MULTI-STRATEGY: default False. The old default of True meant ONE
+                    # position per underlying across the whole account — with 9 NIFTY/
+                    # SENSEX strategies, the first fill locked everyone else out.
+                    # Users can still opt in via settings for conservative accounts.
+                    one_active_group = bool(settings.get("one_active_position_per_symbol_group", False))
 
                     # Retrieve all active strategy positions for user
                     active_positions = await db.strategy_positions.find({

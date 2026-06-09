@@ -87,7 +87,10 @@ class PaperAdapter:
         trade_value = round(final_price * qty, 2)
 
         # ------------------------------------------------------------------
-        # Paper wallet balance check & update
+        # Paper wallet: BUY debits up-front (funds gate). SELL credits are
+        # DEFERRED until the ledger ACCEPTS the fill — a rejected duplicate
+        # exit fill must never put money in the wallet (that is exactly how
+        # the paper wallet got over-credited by ₹75k in production).
         # ------------------------------------------------------------------
         if side == "BUY":
             total_cost = round(trade_value + charges, 2)
@@ -99,9 +102,6 @@ class PaperAdapter:
                     f"have ₹{current_balance:,.2f}. "
                     f"Reset paper account to restore ₹5,00,000."
                 )
-        else:  # SELL / exit: credit back proceeds
-            proceeds = round(trade_value - charges, 2)
-            await self.wallet.credit(user_id, max(0.0, proceeds), order_id)
 
         order_doc = {
             "id": order_id,
@@ -183,12 +183,71 @@ class PaperAdapter:
             "asset_class": intent.get("asset_class"),
             "product": intent.get("product"),
             "underlying": (intent.get("option_contract") or {}).get("underlying") or intent.get("symbol"),
+            "exit_reason": intent.get("exit_reason"),
         }
         await self.db.fills.insert_one(fill_doc)
 
-        # Update Portfolio Ledger (Hard Rule: No fill = no position)
-        await self.ledger.process_fill(fill_doc)
+        # ------------------------------------------------------------------
+        # Update Portfolio Ledger FIRST (Hard Rule: No fill = no position).
+        # The ledger is the validator: it rejects duplicate exit fills and
+        # invalid option fills. Wallet money only moves on acceptance.
+        # ------------------------------------------------------------------
+        try:
+            ledger_result = await self.ledger.process_fill(fill_doc)
+        except Exception:
+            # Ledger rejected the fill outright (e.g. option fill missing
+            # critical fields). Undo the BUY debit so funds aren't stranded,
+            # mark the order rejected, then propagate.
+            if side == "BUY":
+                await self.wallet.credit(
+                    user_id, round(trade_value + charges, 2), f"{order_id}:refund"
+                )
+            await self.db.orders.update_one(
+                {"id": order_id},
+                {"$set": {
+                    "status": "REJECTED",
+                    "execution_status": "REJECTED",
+                    "status_message": "REJECTED: ledger refused fill (invalid position data)",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            raise
 
+        accepted = bool((ledger_result or {}).get("accepted", True))
+        if not accepted:
+            action = (ledger_result or {}).get("action", "REJECTED")
+            # Duplicate / rejected fill: no position change happened.
+            # BUY → refund the debit. SELL → simply never credit.
+            if side == "BUY":
+                await self.wallet.credit(
+                    user_id, round(trade_value + charges, 2), f"{order_id}:refund"
+                )
+            await self.db.orders.update_one(
+                {"id": order_id},
+                {"$set": {
+                    "status": "REJECTED",
+                    "execution_status": "REJECTED",
+                    "status_message": f"REJECTED: ledger refused fill ({action})",
+                    "ledger_action": action,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            order_doc["status"] = "REJECTED"
+            order_doc["execution_status"] = "REJECTED"
+            order_doc["ledger_action"] = action
+            logger.warning(
+                "PaperAdapter: ledger rejected fill (%s) for order %s side=%s — no wallet movement",
+                action, order_id, side,
+            )
+            return order_doc
+
+        # SELL / exit accepted by the ledger → NOW credit the proceeds.
+        if side == "SELL":
+            proceeds = round(trade_value - charges, 2)
+            await self.wallet.credit(user_id, max(0.0, proceeds), order_id)
+
+        order_doc["ledger_action"] = (ledger_result or {}).get("action")
+        order_doc["realized_pnl"] = (ledger_result or {}).get("realized_pnl", 0.0)
         return order_doc
 
 class UpstoxLiveAdapter:

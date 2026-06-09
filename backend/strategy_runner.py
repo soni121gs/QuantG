@@ -81,10 +81,21 @@ def _validate_signal(signal: Dict[str, Any], data: List[dict], strategy: Dict[st
             confidence = float(confidence)
         except (TypeError, ValueError):
             confidence = 85.0
+        # Enforce the minimum-confidence gate (SIGNAL_CONFIDENCE_MIN, default 45).
+        # This was previously declared but never applied — every signal passed.
+        if confidence < SIGNAL_CONFIDENCE_MIN:
+            return {
+                "is_valid": False,
+                "confidence": confidence,
+                "threshold": SIGNAL_CONFIDENCE_MIN,
+                "reasons": [f"confidence {confidence:.1f} below minimum {SIGNAL_CONFIDENCE_MIN:.1f}"],
+                "filtered": True,
+                "trend": trend,
+            }
         return {
             "is_valid": True,
             "confidence": confidence,
-            "threshold": None,
+            "threshold": SIGNAL_CONFIDENCE_MIN,
             "reasons": [],
             "filtered": False,
             "trend": trend,
@@ -572,7 +583,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             {"$set": {**eval_set, "last_error": str(e)[:200],
                                       "last_signals_count": signals_count},
                              "$inc": inc_set})
-                                  # Insert signal into db.signals collection instead of placing order directly
+                        # CRITICAL: option resolution failed — do NOT fall through and
+                        # queue a signal with option_contract=None/stale. That is how
+                        # un-closeable ghost positions were created.
+                        continue
+
+                # Insert signal into db.signals collection instead of placing order directly
                 try:
                     target_symbol = option_contract["tradingsymbol"] if option_contract else symbol
                     option_type = option_contract.get("option_type") if option_contract else None

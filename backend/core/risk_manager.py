@@ -6,12 +6,24 @@ session, wallet/margin and optional kill-switch constraints before execution.
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 import logging
+import os
+import re
 
 from core.market_domains import resolve_domain_by_underlying, DomainType
 from core.market_session_service import MarketSessionService
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
 
 logger = logging.getLogger("quantg.risk_manager")
+
+# Option symbols end with strike digits + CE/PE (e.g. NIFTY26JUN24850CE).
+# A substring check like `"CE" in symbol` wrongly matches equities (RELIANCE).
+_OPTION_SUFFIX_RE = re.compile(r"\d(CE|PE)$")
+
+
+def _option_type_of(symbol: str) -> Optional[str]:
+    """Return 'CE' / 'PE' if the symbol is an option tradingsymbol, else None."""
+    m = _OPTION_SUFFIX_RE.search((symbol or "").upper().strip())
+    return m.group(1) if m else None
 
 class RiskManager:
     def __init__(self, db):
@@ -168,7 +180,7 @@ class RiskManager:
 
         # 7. Options Greeks exposure check (applies when trading options)
         sym_upper = (target_symbol or "").upper()
-        if "CE" in sym_upper or "PE" in sym_upper:
+        if _option_type_of(sym_upper):
             greeks_result = await self._check_greeks_exposure(
                 user_id=user_id,
                 target_symbol=sym_upper,
@@ -215,16 +227,24 @@ class RiskManager:
         """
         DELTA_PROXY = 0.5
 
-        is_call = "CE" in target_symbol
+        is_call = _option_type_of(target_symbol) == "CE"
         if is_call:
             order_delta = DELTA_PROXY * quantity if side == "BUY" else -DELTA_PROXY * quantity
         else:
             order_delta = -DELTA_PROXY * quantity if side == "BUY" else DELTA_PROXY * quantity
 
+        # Default cap 500 (env-overridable). The old default of 50 deadlocked the
+        # platform: one NIFTY lot (65) at 0.5 delta = 32.5, so a single open
+        # position blocked every further option entry account-wide.
+        try:
+            _env_delta_cap = float(os.environ.get("QUANTG_MAX_NET_DELTA", "") or 0)
+        except ValueError:
+            _env_delta_cap = 0.0
         max_net_delta = float(
             visual_risk.get("max_net_delta")
             or settings.get("max_net_delta")
-            or 50.0
+            or _env_delta_cap
+            or 500.0
         )
 
         try:
@@ -237,12 +257,13 @@ class RiskManager:
         portfolio_delta = 0.0
         for pos in open_positions:
             sym = (pos.get("target_symbol") or "").upper()
-            if "CE" not in sym and "PE" not in sym:
+            pos_opt_type = _option_type_of(sym)
+            if not pos_opt_type:
                 continue
             pos_qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
             raw_side = (pos.get("position_side") or pos.get("side") or "BUY").upper()
             pos_side = "BUY" if raw_side in ("LONG", "BUY") else "SELL"
-            pos_is_call = "CE" in sym
+            pos_is_call = pos_opt_type == "CE"
             if pos_is_call:
                 portfolio_delta += DELTA_PROXY * pos_qty if pos_side == "BUY" else -DELTA_PROXY * pos_qty
             else:

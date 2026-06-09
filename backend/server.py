@@ -5945,9 +5945,11 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             continue
 
         exit_side = "BUY" if str(pos.get("asset_class") or "").upper() == "OPTION_SHORT" or str(pos.get("position_side") or "").upper() == "SHORT" else "SELL"
-        # Per-position idempotency key — prevents the time-based key from allowing
-        # a new duplicate order each minute when the same position triggers again.
-        pos_exit_idem = f"exit:{pos['id']}:{reason[:20]}"
+        # EXIT GUARANTEE: idempotency key is the position id ALONE. A position has
+        # exactly ONE exit, regardless of which reason fires it or how many times.
+        # (The old key included reason[:20] — a position whose exit reason changed
+        # between monitor ticks could place a second exit order.)
+        pos_exit_idem = f"exit:{pos['id']}"
         place_kwargs: Dict[str, Any] = {
             "user_id": user_id,
             "side": exit_side,
@@ -5955,6 +5957,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             "product": pos.get("product"),
             "source": f"{reason}:strategy:{sid}",
             "idempotency_key": pos_exit_idem,
+            "exit_reason": reason,
         }
         if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
             # Resolve lot_size from position doc first, then fall back to market domain.
@@ -5995,7 +5998,66 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         place_kwargs["is_exit_order"] = True
         try:
             result = await _place_order_core(**place_kwargs)
-            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "ok", "order_id": result.get("id")})
+            res_status = str(result.get("status") or result.get("execution_status") or "").upper()
+            ledger_action = result.get("ledger_action")
+
+            if res_status == "FILLED":
+                results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "ok", "order_id": result.get("id")})
+
+            elif res_status == "REJECTED" and ledger_action == "DUPLICATE_EXIT":
+                # Ledger says a CLOSED position for this contract already exists —
+                # this EXITING doc is a stale duplicate. Reconcile it as CLOSED so
+                # the monitor stops re-firing exits for it.
+                now_dup = datetime.now(timezone.utc).isoformat()
+                await db.strategy_positions.update_one(
+                    {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
+                    {"$set": {"status": "CLOSED", "closed_at": now_dup, "updated_at": now_dup,
+                              "exit_reason": "duplicate-exit-reconciled"}},
+                )
+                logger.warning("Exit for %s pos=%s reconciled as duplicate (already closed elsewhere)", sym, pos["id"])
+                results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "reconciled-duplicate"})
+
+            elif res_status in ("REJECTED", "SKIPPED"):
+                # Exit order did not fill. Void the idempotency key on any order doc
+                # holding it so the NEXT monitor tick can retry — otherwise the
+                # per-position key would block exit retries forever.
+                now_rej = datetime.now(timezone.utc).isoformat()
+                await db.orders.update_many(
+                    {"user_id": user_id, "idempotency_key": pos_exit_idem,
+                     "status": {"$nin": ["FILLED", "COMPLETE"]}},
+                    {"$set": {"idempotency_key": f"{pos_exit_idem}:void:{now_rej}"}},
+                )
+                await db.strategy_positions.update_one(
+                    {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
+                    {"$set": {"status": "OPEN", "updated_at": now_rej,
+                              "exit_error": f"exit order {res_status}: {str(result.get('reason') or result.get('status_message') or '')[:160]}"},
+                     "$inc": {"exit_order_failures": 1},
+                     "$unset": {"exit_attempt_at": ""}},
+                )
+                logger.warning("Exit %s for %s pos=%s %s — idem key voided, reverted to OPEN for retry",
+                               exit_side, sym, pos["id"], res_status)
+                results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "failed",
+                                "error": str(result.get("reason") or res_status)})
+            else:
+                # Unknown shape (e.g. existing-order return from idempotency block).
+                # If the existing order FILLED the ledger already closed the position;
+                # otherwise void the stale key and revert for retry.
+                existing_filled = res_status in ("FILLED", "COMPLETE") or bool(result.get("paper_fill_applied"))
+                if not existing_filled:
+                    now_unk = datetime.now(timezone.utc).isoformat()
+                    await db.orders.update_many(
+                        {"user_id": user_id, "idempotency_key": pos_exit_idem,
+                         "status": {"$nin": ["FILLED", "COMPLETE"]}},
+                        {"$set": {"idempotency_key": f"{pos_exit_idem}:void:{now_unk}"}},
+                    )
+                    await db.strategy_positions.update_one(
+                        {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
+                        {"$set": {"status": "OPEN", "updated_at": now_unk},
+                         "$unset": {"exit_attempt_at": ""}},
+                    )
+                results.append({"symbol": sym, "qty": qty_net, "side": exit_side,
+                                "status": "ok" if existing_filled else "retry-scheduled",
+                                "order_id": result.get("id")})
         except Exception as e:
             err_str = str(e)
             # FIX 4: Classify failure type.
@@ -6010,6 +6072,16 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             exit_failure_reason = "DATA_FAILURE" if is_data_failure else "ORDER_REJECTED"
 
             now_fail = datetime.now(timezone.utc).isoformat()
+            # Void the per-position idempotency key on any non-filled order doc so
+            # the next monitor tick is free to retry this exit.
+            try:
+                await db.orders.update_many(
+                    {"user_id": user_id, "idempotency_key": pos_exit_idem,
+                     "status": {"$nin": ["FILLED", "COMPLETE"]}},
+                    {"$set": {"idempotency_key": f"{pos_exit_idem}:void:{now_fail}"}},
+                )
+            except Exception:
+                pass
             update_on_fail: Dict[str, Any] = {
                 "$set": {
                     "status": "OPEN",
@@ -10158,7 +10230,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                             take_profit: Optional[float] = None,
                             idempotency_key: Optional[str] = None,
                             signal_id: Optional[str] = None,
-                            is_exit_order: bool = False) -> dict:
+                            is_exit_order: bool = False,
+                            exit_reason: Optional[str] = None) -> dict:
     side = (side or "").upper()
     if side not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
@@ -10261,7 +10334,11 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             or (option_contract or {}).get("instrument_token")
             or target_symbol
         )
-        if strategy_id and str(side or "").upper() == "BUY":
+        # Entry-duplicate gates apply to NEW entries only. Exit orders (including
+        # BUY exits of OPTION_SHORT positions) must never be blocked by them —
+        # the account_duplicate check used to match the very EXITING position
+        # being closed, permanently blocking short-option exits.
+        if strategy_id and not is_exit_order and str(side or "").upper() == "BUY":
             core_position_side = "SHORT" if str(side or "").upper() == "SELL" else "LONG"
             side_key = _strategy_side_key(user_id, strategy_id, str(target_instrument_key), core_position_side)
             existing_position = await db.strategy_positions.find_one({
@@ -10297,35 +10374,12 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 )
                 return _clean_order_response(skip_doc)
 
-            account_duplicate = await db.strategy_positions.find_one({
-                "user_id": user_id,
-                "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
-                "instrument_key": str(target_instrument_key),
-            })
-            if account_duplicate:
-                reason = f"Core {'paper' if paper else 'live'} entry blocked: active position for option contract {target_symbol} already exists in strategy {account_duplicate.get('strategy_id')}."
-                skip_doc = await _persist_core_paper_skipped_order(
-                    user_id=user_id,
-                    strategy_id=strategy_id or "manual",
-                    symbol=symbol,
-                    option_contract=option_contract,
-                    side=side,
-                    qty=qty or 1,
-                    price=price or 0.0,
-                    reason=reason,
-                    reason_code="DUPLICATE_ACTIVE_OPTION_CONTRACT",
-                    idempotency_key=idem_key,
-                    signal_id=signal_id,
-                    market_snapshot={
-                        "ltp": contract_ltp,
-                        "received_at": (option_contract or {}).get("received_at"),
-                        "source": (option_contract or {}).get("source") or "preflight",
-                    },
-                    mode="paper" if paper else "live",
-                    broker="paper" if paper else "upstox",
-                )
-                return _clean_order_response(skip_doc)
-        
+            # MULTI-STRATEGY: the old account-wide duplicate check (one active
+            # position per option contract across ALL strategies) is removed.
+            # Each strategy manages its own positions; the per-strategy duplicate
+            # guard above is sufficient. Two strategies holding the same contract
+            # is valid — they entered on independent signals and exit independently.
+
         # Check expired contract check in Core path
         received_at = (option_contract or {}).get("received_at")
         if option_contract:
@@ -10496,19 +10550,25 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         # For equity strategies lot_size=1 so this is a no-op.
         _qty_lots = qty or 1
         _qty_shares = _qty_lots * _lot_size
-        risk_res = await risk_mgr.evaluate_order(
-            user_id=user_id,
-            strategy_id=strategy_id or "manual",
-            symbol=symbol,
-            target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
-            side=side,
-            requested_qty=_qty_shares,
-            price=paper_ltp,
-            mode="paper" if paper else "live",
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            lot_size=_lot_size
-        )
+        if is_exit_order:
+            # EXIT GUARANTEE: exits bypass the risk manager entirely. Risk gates
+            # (daily loss, sizing, Greeks, kill switch) exist to stop NEW exposure —
+            # blocking or resizing an exit only locks losing positions open.
+            risk_res = {"ok": True, "quantity": _qty_shares, "reason": "exit-order-bypass"}
+        else:
+            risk_res = await risk_mgr.evaluate_order(
+                user_id=user_id,
+                strategy_id=strategy_id or "manual",
+                symbol=symbol,
+                target_symbol=option_contract["tradingsymbol"] if option_contract else symbol,
+                side=side,
+                requested_qty=_qty_shares,
+                price=paper_ltp,
+                mode="paper" if paper else "live",
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                lot_size=_lot_size
+            )
 
         if not risk_res["ok"]:
             from core.event_store import CoreEventStore
@@ -10532,6 +10592,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         )
         intent_doc["execution_tag"] = _new_execution_tag(strategy_id)
         intent_doc["product"] = product or "MIS"
+        if is_exit_order:
+            intent_doc["exit_reason"] = exit_reason or source
         if paper:
             intent_doc["paper_realism"] = "UPSTOX_LIKE"
         if option_contract:
@@ -14999,15 +15061,69 @@ async def request_upstox_token_refresh_for_user(user_id: str) -> Dict[str, Any]:
         return {"ok": False, "reason": str(e)}
 
 
+async def _eod_square_off_all_users() -> Dict[str, Any]:
+    """EXIT GUARANTEE: 15:15 IST unconditional square-off of EVERY open position.
+
+    This is the last line of defense — by 15:15 IST nothing may stay open:
+      1. Resurrect dead-end positions (STALE_NEEDS_REVIEW, CIRCUIT_BREAKER) to OPEN
+         with failure counters reset, so the close path will pick them up.
+      2. Revert any position stuck in EXITING back to OPEN for a fresh exit order.
+      3. Call _close_strategy_positions for every (user, strategy) with live positions.
+    """
+    now_str = datetime.now(timezone.utc).isoformat()
+    summary: Dict[str, Any] = {"resurrected": 0, "exiting_reverted": 0, "strategies_swept": 0, "errors": []}
+
+    # 1. Resurrect dead-end statuses the monitor never scans
+    res = await db.strategy_positions.update_many(
+        {"status": {"$in": ["STALE_NEEDS_REVIEW", "CIRCUIT_BREAKER"]},
+         "open_quantity": {"$gt": 0}},
+        {"$set": {"status": "OPEN", "exit_order_failures": 0, "exit_data_failures": 0,
+                  "updated_at": now_str,
+                  "last_error": "EOD square-off: resurrected from dead-end status"}},
+    )
+    summary["resurrected"] = res.modified_count
+
+    # 2. Free positions stuck mid-exit so they get a fresh exit order
+    res = await db.strategy_positions.update_many(
+        {"status": "EXITING"},
+        {"$set": {"status": "OPEN", "updated_at": now_str},
+         "$unset": {"exit_attempt_at": ""}},
+    )
+    summary["exiting_reverted"] = res.modified_count
+
+    # 3. Sweep every (user, strategy) holding live positions
+    pairs = await db.strategy_positions.aggregate([
+        {"$match": {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
+                    "open_quantity": {"$gt": 0}}},
+        {"$group": {"_id": {"user_id": "$user_id", "strategy_id": "$strategy_id"}}},
+    ]).to_list(500)
+    for pair in pairs:
+        uid = pair["_id"].get("user_id")
+        sid = pair["_id"].get("strategy_id")
+        if not uid or not sid:
+            continue
+        try:
+            await _close_strategy_positions(uid, sid, reason="eod-square-off")
+            summary["strategies_swept"] += 1
+        except Exception as exc:
+            summary["errors"].append(f"{uid}/{sid}: {str(exc)[:120]}")
+            logger.error("EOD square-off failed for user=%s strategy=%s: %s", uid, sid, exc)
+
+    logger.info("EOD square-off complete: %s", summary)
+    return summary
+
+
 async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times.
 
     8:50 AM IST — token refresh push to all users + paper daily lifecycle reset
     9:10 AM IST — gateway health check for all users
+    15:15 IST   — unconditional square-off of all open positions (exit guarantee)
     """
     _token_push_done_date: Optional[str] = None
     _gateway_check_done_date: Optional[str] = None
     _lifecycle_reset_done_date: Optional[str] = None
+    _squareoff_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -15053,6 +15169,21 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     )
                 else:
                     logger.info("FIX5: All %d user gateways connected at market open", len(results))
+
+            # 15:15 IST — unconditional EOD square-off (exit guarantee, weekdays only).
+            # Window check (>= 15:15, before 15:30) instead of exact-minute so a slow
+            # tick can never skip it. _squareoff_done_date makes it once per day.
+            if (
+                ist.weekday() < 5
+                and _squareoff_done_date != today
+                and (hour == 15 and 15 <= minute < 30)
+            ):
+                _squareoff_done_date = today
+                logger.info("Daily scheduler: 15:15 IST — EOD unconditional square-off starting")
+                try:
+                    await _eod_square_off_all_users()
+                except Exception as _sq_err:
+                    logger.error("EOD square-off run failed: %s", _sq_err)
         except Exception as e:
             logger.warning("Daily scheduler error: %s", e)
         # Sleep in 10-second slices for responsive shutdown
