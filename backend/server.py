@@ -86,6 +86,7 @@ from core.strategy_leaderboard import build_strategy_leaderboard
 from core.instrument_resolver import InstrumentResolver
 from core.models import InstrumentSource
 from core.quote_service import QuoteService
+from upstox_analytics import UpstoxAnalyticsClient
 from upstox_trading_quality import (
     apply_broker_truth_event,
     broker_reconciliation_summary,
@@ -1438,6 +1439,51 @@ async def watchlist(user=Depends(get_current_user)):
         {"symbol": s["symbol"], "name": s["name"], "price": s["base"], "change": 0.0, "pct": 0.0, "source": "fallback"}
         for s in INDEX_WATCHLIST
     ]
+
+
+@api.get("/market/candles/{instrument_key:path}")
+async def market_candles(
+    instrument_key: str,
+    interval: str = "1day",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    """Historical OHLCV candles via Analytics Token.
+
+    instrument_key: e.g. NSE_INDEX|Nifty 50 or NSE_FO|42278
+    interval: 1minute | 30minute | 1day | 1week | 1month
+    from_date / to_date: YYYY-MM-DD (default: last 30 days)
+    """
+    if not _analytics:
+        raise HTTPException(status_code=503, detail="Analytics Token not configured on server.")
+    candles = await _analytics.get_historical_candles(instrument_key, interval, from_date, to_date)
+    return {"instrument_key": instrument_key, "interval": interval, "candles": candles, "count": len(candles)}
+
+
+@api.get("/market/analytics/option-chain")
+async def analytics_option_chain(
+    instrument_key: str,
+    expiry_date: str,
+    user=Depends(get_current_user),
+):
+    """Option chain for any expiry date via Analytics Token (no user OAuth required)."""
+    if not _analytics:
+        raise HTTPException(status_code=503, detail="Analytics Token not configured on server.")
+    data = await _analytics.get_option_chain(instrument_key, expiry_date)
+    return data
+
+
+@api.get("/market/analytics/expiry-dates")
+async def analytics_expiry_dates(
+    instrument_key: str,
+    user=Depends(get_current_user),
+):
+    """Available option expiry dates for an underlying via Analytics Token."""
+    if not _analytics:
+        raise HTTPException(status_code=503, detail="Analytics Token not configured on server.")
+    dates = await _analytics.get_option_expiry_dates(instrument_key)
+    return {"instrument_key": instrument_key, "expiry_dates": dates}
 
 
 @api.get("/market/commodities")
@@ -6228,43 +6274,65 @@ async def _validate_upstox_mcx_instrument_key(instrument_key: Optional[str]) -> 
 
 
 async def _upstox_watchlist_rows(user_id: str) -> List[Dict[str, Any]]:
-    """Return live NIFTY and SENSEX rows from the V3 WS tick cache (fastest) with REST fallback."""
+    """Return live NIFTY and SENSEX rows.
+
+    Source priority:
+      1. V3 WS tick cache (freshest, sub-second)
+      2. Analytics Token LTP endpoint (system-level, no daily OAuth needed)
+      3. User gateway REST quote
+      4. Base price fallback (never fails)
+    """
     gateway = await get_user_upstox_gateway(user_id)
     out: List[Dict[str, Any]] = []
     for s in INDEX_WATCHLIST:
         ltp: Optional[float] = None
         source = "fallback"
+
+        # 1 — WS tick cache
         if gateway and gateway.connected:
             tick = gateway.latest_tick(s["key"])
             if tick and tick.get("ltp"):
                 ltp = float(tick["ltp"])
-                source = "upstox"
-            else:
-                try:
-                    quote = await asyncio.to_thread(gateway.get_market_quote, [s["key"]])
-                    parsed = UpstoxGateway.parse_quote_ltp(quote, s["key"])
-                    if parsed is None:
-                        data = (quote.get("data") if isinstance(quote, dict) else None) or {}
-                        for node in data.values():
-                            if isinstance(node, dict):
-                                for field in ("last_price", "ltp", "last_traded_price"):
-                                    v = node.get(field)
-                                    if v not in (None, ""):
-                                        try:
-                                            parsed = float(v)
-                                        except Exception:
-                                            pass
-                                        if parsed is not None:
-                                            break
-                            if parsed is not None:
-                                break
-                    if parsed is not None:
-                        ltp = float(parsed)
-                        source = "upstox"
-                except Exception as exc:
-                    logger.warning("Upstox watchlist REST failed for %s: %s", s["key"], exc)
+                source = "upstox_ws"
+
+        # 2 — Analytics Token (works even when user OAuth expired)
+        if ltp is None and _analytics:
+            ltp_map = await _analytics.get_ltp([s["key"]])
+            val = ltp_map.get(s["key"])
+            if val is not None:
+                ltp = float(val)
+                source = "analytics"
+
+        # 3 — User gateway REST fallback
+        if ltp is None and gateway and gateway.connected:
+            try:
+                quote = await asyncio.to_thread(gateway.get_market_quote, [s["key"]])
+                parsed = UpstoxGateway.parse_quote_ltp(quote, s["key"])
+                if parsed is None:
+                    data = (quote.get("data") if isinstance(quote, dict) else None) or {}
+                    for node in data.values():
+                        if isinstance(node, dict):
+                            for field in ("last_price", "ltp", "last_traded_price"):
+                                v = node.get(field)
+                                if v not in (None, ""):
+                                    try:
+                                        parsed = float(v)
+                                    except Exception:
+                                        pass
+                                    if parsed is not None:
+                                        break
+                        if parsed is not None:
+                            break
+                if parsed is not None:
+                    ltp = float(parsed)
+                    source = "upstox_rest"
+            except Exception as exc:
+                logger.warning("Upstox watchlist REST failed for %s: %s", s["key"], exc)
+
+        # 4 — Base price fallback
         if ltp is None:
             ltp = s["base"]
+
         change = round(ltp - s["base"], 2)
         pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
         out.append({"symbol": s["symbol"], "name": s["name"], "price": ltp, "change": change, "pct": pct, "source": source})
@@ -14714,32 +14782,36 @@ async def _quote_upstox_instrument_key(user_id: str, instrument_key: Optional[st
         )
         return None
     gateway = await get_user_upstox_gateway(user_id)
-    if not gateway or not gateway.connected:
-        return None
-    # V3 websocket tick cache (pipe+numeric format keys, most up-to-date)
-    tick = gateway.latest_tick(key)
-    if tick and tick.get("ltp"):
-        return float(tick["ltp"])
-    try:
-        quote = await asyncio.to_thread(gateway.get_market_quote, [key])
-        # Try exact key match first (same format in response)
-        ltp = UpstoxGateway.parse_quote_ltp(quote, key)
-        if ltp is not None:
-            return ltp
-        # Upstox REST response uses EXCHANGE:SYMBOL keys while we request with EXCHANGE|TOKEN.
-        # When a single instrument is requested, scan the one response value directly.
-        data = (quote.get("data") if isinstance(quote, dict) else None) or {}
-        for node in data.values():
-            if isinstance(node, dict):
-                for field in ("last_price", "ltp", "last_traded_price"):
-                    v = node.get(field)
-                    if v not in (None, ""):
-                        try:
-                            return float(v)
-                        except Exception:
-                            pass
-    except Exception as exc:
-        logger.warning("Upstox LTP failed instrument_key=%s: %s", key, exc)
+    if gateway and gateway.connected:
+        # V3 websocket tick cache (freshest)
+        tick = gateway.latest_tick(key)
+        if tick and tick.get("ltp"):
+            return float(tick["ltp"])
+        try:
+            quote = await asyncio.to_thread(gateway.get_market_quote, [key])
+            ltp = UpstoxGateway.parse_quote_ltp(quote, key)
+            if ltp is not None:
+                return ltp
+            data = (quote.get("data") if isinstance(quote, dict) else None) or {}
+            for node in data.values():
+                if isinstance(node, dict):
+                    for field in ("last_price", "ltp", "last_traded_price"):
+                        v = node.get(field)
+                        if v not in (None, ""):
+                            try:
+                                return float(v)
+                            except Exception:
+                                pass
+        except Exception as exc:
+            logger.warning("Upstox LTP failed instrument_key=%s: %s", key, exc)
+
+    # Analytics Token fallback — works even when user OAuth token is expired
+    if _analytics:
+        ltp_map = await _analytics.get_ltp([key])
+        val = ltp_map.get(key)
+        if val is not None:
+            return float(val)
+
     return None
 
 
@@ -14842,6 +14914,11 @@ app.add_middleware(
 # In-memory cache: user_id → True/False. True = gateway not connected at 9:10 IST.
 # This blocks new order placement until the user reconnects.
 _GATEWAY_BLOCKED: Dict[str, bool] = {}
+
+# System-level read-only market data client — uses the long-lived Analytics Token
+# (1-year TTL, no daily refresh). Provides LTP, candles, option chain without
+# depending on any user's OAuth token.
+_analytics: Optional[UpstoxAnalyticsClient] = None
 
 def _ist_now() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -15046,6 +15123,14 @@ async def upstox_token_webhook(user_id: str, request: Request):
 
 @app.on_event("startup")
 async def startup():
+    global _analytics
+    _analytics_token = os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip()
+    if _analytics_token:
+        _analytics = UpstoxAnalyticsClient(_analytics_token)
+        logger.info("Upstox Analytics Token loaded — system market data client ready (1-year TTL)")
+    else:
+        logger.warning("UPSTOX_ANALYTICS_TOKEN not set — analytics market data disabled")
+
     app.state.option_ledger = option_ledger
     execution_state_manager.configure(
         db=db,
