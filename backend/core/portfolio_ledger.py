@@ -283,8 +283,11 @@ class PortfolioLedger:
                 "mode": mode,
                 "quantity": qty,
                 "open_quantity": qty,
+                "qty": qty,
                 "average_price": price,
                 "average_buy_price": price,
+                "avg_price": price,
+                "entry_price": price,
                 "position_side": "LONG" if side == "BUY" else "SHORT",
                 "status": "OPEN",
                 "realised_pnl": 0.0,
@@ -449,6 +452,8 @@ class PortfolioLedger:
             update_fields["status"] = "CLOSED"
             update_fields["closed_at"] = now_str
             update_fields["exit_reason"] = fill.get("exit_reason") or pos.get("exit_reason") or "exit-fill"
+            update_fields["unrealised_pnl"] = 0.0
+            update_fields["unrealized_pnl"] = 0.0
 
         await self.db.strategy_positions.update_one(
             {"id": pos["id"]},

@@ -62,17 +62,19 @@ class PerformanceTracker:
         
         for pos in positions:
             pos_pnl = float(pos.get("realised_pnl") or 0.0)
-            created_at_str = pos.get("created_at")
-            if created_at_str:
-                created_at = datetime.fromisoformat(created_at_str)
-                if created_at.tzinfo is None:
-                    created_at = created_at.replace(tzinfo=timezone.utc)
-                
-                if created_at >= today_start:
+            # Use closed_at for closed positions so P&L lands in the day it was realised,
+            # not the day the position was opened. Fall back to created_at for open positions.
+            ts_str = pos.get("closed_at") or pos.get("created_at")
+            if ts_str:
+                ts = datetime.fromisoformat(ts_str)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+
+                if ts >= today_start:
                     today_pnl += pos_pnl
-                if created_at >= seven_days_ago:
+                if ts >= seven_days_ago:
                     seven_day_pnl += pos_pnl
-                if created_at >= thirty_days_ago:
+                if ts >= thirty_days_ago:
                     thirty_day_pnl += pos_pnl
 
         # 4. Status recommendation model
