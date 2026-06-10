@@ -247,7 +247,14 @@ class PaperAdapter:
             await self.wallet.credit(user_id, max(0.0, proceeds), order_id)
 
         order_doc["ledger_action"] = (ledger_result or {}).get("action")
-        order_doc["realized_pnl"] = (ledger_result or {}).get("realized_pnl", 0.0)
+        realized_pnl = float((ledger_result or {}).get("realized_pnl") or 0.0)
+        order_doc["realized_pnl"] = realized_pnl
+        order_doc["net_pnl"] = realized_pnl
+        if realized_pnl:
+            await self.db.orders.update_one(
+                {"id": order_id},
+                {"$set": {"net_pnl": realized_pnl, "realized_pnl": realized_pnl}},
+            )
         return order_doc
 
 class UpstoxLiveAdapter:

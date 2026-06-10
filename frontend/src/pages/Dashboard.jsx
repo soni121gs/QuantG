@@ -437,7 +437,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [p, w, f, t, c, s, leaderboard, chain] = await Promise.all([
+      const [p, w, f, t, c, s, leaderboard] = await Promise.all([
         api.get("/portfolio"),
         api.get("/market/watchlist"),
         api.get("/funds"),
@@ -450,9 +450,10 @@ export default function Dashboard() {
       setPf(p.data);
       setWatch(w.data);
       setFunds(f.data);
-      setTelemetry(t.data);      setMarketSession(s.data);
-      setStrategyAnalytics(leaderboard.data);
-      setOptionChain(chain.data);
+      setTelemetry(t.data);
+      setMarketSession(c.data);
+      setStrategyAnalytics(s.data);
+      setOptionChain(leaderboard.data);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -465,9 +466,9 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const pnl = executionSummary.net_pnl ?? pf?.net_pnl ?? pf?.total_pnl ?? 0;
-  const grossPnl = executionSummary.gross_pnl ?? pf?.gross_pnl ?? pnl;
-  const charges = executionSummary.charges ?? pf?.charges ?? 0;
+  const pnl = executionSummary.net_pnl || pf?.net_pnl || pf?.total_pnl || 0;
+  const grossPnl = executionSummary.gross_pnl || pf?.gross_pnl || pnl;
+  const charges = executionSummary.charges || pf?.charges || 0;
   const openPositions = executionSummary.open_positions ?? pf?.open_positions ?? positions.length;
   const strategies = useMemo(() => telemetry?.strategies_page_data || [], [telemetry?.strategies_page_data]);
   const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;

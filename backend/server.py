@@ -10076,7 +10076,7 @@ async def _fill_ledger_summary(
             window["$gte"] = start
         if end is not None:
             window["$lt"] = end
-        query["filled_at"] = window
+        query["created_at"] = window
     fills = await db.trade_fills.find(query, {"_id": 0}).to_list(10000)
     realised_fills = [row for row in fills if float(row.get("realised_pnl") or 0) != 0]
     wins = len([row for row in realised_fills if float(row.get("realised_pnl") or 0) > 0])
