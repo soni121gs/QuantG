@@ -25,6 +25,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, Dict, Optional
 
+from ltp_cache import get_cached_ltp as _get_cached_ltp
 from core.position_lifecycle import (
     exit_reason,
     normalize_strategy_risk,
@@ -40,15 +41,35 @@ LTP_SYMBOL              = "SYMBOL_LTP"
 LTP_PAPER_CACHE         = "PAPER_CACHE"
 LTP_ENTRY_PRICE         = "ENTRY_PRICE_FALLBACK"
 
+# Poll interval: 5s during market hours so HFT scalpers get timely exits,
+# 30s outside hours (just stale-EXITING cleanup).
+_POLL_INTERVAL_IN_HOURS  = int(os.environ.get("POSITION_MONITOR_POLL_SECONDS", "5"))
+_POLL_INTERVAL_OUT_HOURS = 30
+
+# Force-close all positions at this IST minute-of-day (15:10 = 910 minutes)
+_SQUAREOFF_MINUTE_IST = 15 * 60 + 10
+
 
 # ── IST helpers ────────────────────────────────────────────────────────────────
 
+def _ist_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+
 def _in_market_hours() -> bool:
-    ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    ist = _ist_now()
     if ist.weekday() >= 5:
         return False
     minutes = ist.hour * 60 + ist.minute
     return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
+
+
+def _squareoff_due() -> bool:
+    """True when IST time has reached or passed 15:10 on a weekday."""
+    ist = _ist_now()
+    if ist.weekday() >= 5:
+        return False
+    return ist.hour * 60 + ist.minute >= _SQUAREOFF_MINUTE_IST
 
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
@@ -68,15 +89,16 @@ async def run_monitor_loop(
     get_ltp_fn(user_id, symbol, exchange, allow_mock, execution_broker) → float | None
     get_settings_fn(user_id)                → dict of user settings
     """
-    logger.info("Position monitor started")
+    logger.info("Position monitor started (in-hours poll=%ss)", _POLL_INTERVAL_IN_HOURS)
     while not stop_event.is_set():
+        in_hours = _in_market_hours()
         try:
             await _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
         except Exception as exc:
             logger.warning("Position monitor tick error: %s", exc)
-        # 30-second sleep broken into 1-second slices so stop_event is responsive
+        interval = _POLL_INTERVAL_IN_HOURS if in_hours else _POLL_INTERVAL_OUT_HOURS
         slept = 0
-        while not stop_event.is_set() and slept < 30:
+        while not stop_event.is_set() and slept < interval:
             await asyncio.sleep(1)
             slept += 1
     logger.info("Position monitor stopped")
@@ -84,6 +106,7 @@ async def run_monitor_loop(
 
 async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn) -> None:
     in_hours = _in_market_hours()
+    squareoff = _squareoff_due()
 
     # ── Revert positions stuck in EXITING > 5 minutes ─────────────────────────
     stale_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
@@ -109,7 +132,7 @@ async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
         # FIX 9: isolate each position — a crash on one never stops the rest
         try:
             await _process_one_position(
-                db, pos, in_hours, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn
+                db, pos, in_hours, squareoff, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn
             )
         except Exception as pos_exc:
             logger.error(
@@ -135,12 +158,14 @@ async def _resolve_ltp(
     symbol  = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
     ikey    = pos.get("instrument_key") or pos.get("instrument_token")
 
-    # ── Source 1: V3 WS cache → REST (via quote_ltp_fn) ──────────────────────
-    # quote_ltp_fn already tries WS tick first, then REST get_market_quote.
+    # ── Source 1: V3 WS cache → REST (via quote_ltp_fn), with shared TTL cache ─
+    # The TTL cache ensures position_monitor and position_guardian share one
+    # REST fetch per instrument per 2.5 s, staying inside Upstox rate limits.
     if ikey:
-        ltp = await quote_ltp_fn(user_id, ikey)
+        cache_key = f"ltp:{user_id}:{ikey}"
+        ltp = await _get_cached_ltp(cache_key, quote_ltp_fn, user_id, ikey)
         if ltp is not None:
-            return float(ltp), LTP_WS_CACHE  # covers both WS and REST in one call
+            return float(ltp), LTP_WS_CACHE
 
     # ── Source 2: Symbol-based get_ltp ────────────────────────────────────────
     try:
@@ -199,13 +224,50 @@ async def _resolve_ltp(
 
 
 async def _process_one_position(
-    db, pos, in_hours, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn
+    db, pos, in_hours, squareoff, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn
 ) -> None:
     user_id = pos.get("user_id")
     sid     = pos.get("strategy_id")
     symbol  = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
     if not user_id or not sid or not symbol:
         return
+
+    # ── 15:10 IST force-close ─────────────────────────────────────────────────
+    # All positions must be closed by 15:10 regardless of their individual
+    # max_hold_minutes or SL/TP levels. Fire exit and return immediately.
+    if squareoff:
+        logger.info(
+            "position_monitor: squareoff-1510 firing for pos=%s user=%s symbol=%s",
+            pos.get("id"), user_id, symbol,
+        )
+        await close_fn(user_id, sid, reason="intraday-squareoff-1510")
+        return
+
+    # ── Stamp default SL/TP on UNPROTECTED positions (F7 fix) ────────────────
+    # Positions created without stop_loss/take_profit in the intent are stamped
+    # UNPROTECTED by the ledger. Without these, exit_reason() returns None and
+    # SL/TP exits never fire. Assign defaults from DEFAULT_STRATEGY_RISK now.
+    risk_cfg = pos.get("tp_sl_tsl_config") or {}
+    if not risk_cfg.get("stop_loss_pct") and not risk_cfg.get("stoploss_price"):
+        entry_price = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
+        if entry_price > 0:
+            default_sl_pct = 15.0  # Widened from 8%; Phase 4 ExitPolicy replaces at entry.
+            default_tp_pct = 25.0  # Widened from 12%; keeps 1.67R ratio.
+            risk_cfg = dict(risk_cfg)
+            risk_cfg["stop_loss_pct"] = default_sl_pct
+            risk_cfg["take_profit_pct"] = default_tp_pct
+            risk_cfg["protection_status"] = "PROTECTED_DEFAULTS"
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id},
+                {"$set": {"tp_sl_tsl_config": risk_cfg,
+                          "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            pos = {**pos, "tp_sl_tsl_config": risk_cfg}
+            logger.warning(
+                "position_monitor: UNPROTECTED pos=%s user=%s symbol=%s — "
+                "assigned default SL=%.0f%% TP=%.0f%%. Check order path for missing stop_loss.",
+                pos.get("id"), user_id, symbol, default_sl_pct, default_tp_pct,
+            )
 
     # ── Fetch LTP with full fallback chain ────────────────────────────────────
     ltp, ltp_source = await _resolve_ltp(db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn)

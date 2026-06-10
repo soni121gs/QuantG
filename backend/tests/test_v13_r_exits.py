@@ -408,9 +408,99 @@ async def test_backward_compatible_recovery():
         assert exit_reason is None
         
     assert mock_db.strategy_positions.update_one.call_count == 2
-    
+
     fallback_set = mock_db.strategy_positions.update_one.call_args_list[0][0][1]["$set"]
     assert fallback_set["r_initial_risk_amount"] == 10.0
     assert fallback_set["r_stop_loss_price"] == 85.0
     assert fallback_set["r_take_profit_price"] == 125.0
     assert fallback_set["r_metadata_source"] == "fallback"
+
+
+# ── Trail / Breakeven tests ────────────────────────────────────────────────────
+
+def test_trail_trigger_pct_set_by_exit_policy():
+    """build_exit_policy must emit trail_trigger_pct and trail_step_pct, not just trailing_sl_pct."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from exit_policy import build_exit_policy, TRAIL_AFTER_R
+
+    policy = build_exit_policy(underlying_atr_pct=0.3, option_premium=100.0)
+    assert policy is not None, "build_exit_policy returned None — check ATR/premium inputs"
+    assert "trail_trigger_pct" in policy, "trail_trigger_pct missing from exit_policy output"
+    assert "trail_step_pct" in policy, "trail_step_pct missing from exit_policy output"
+    expected_trigger = round(policy["stop_loss_pct"] * TRAIL_AFTER_R, 2)
+    assert policy["trail_trigger_pct"] == expected_trigger, (
+        f"trail_trigger_pct={policy['trail_trigger_pct']} != stop_loss_pct*TRAIL_AFTER_R={expected_trigger}"
+    )
+    assert policy["trail_step_pct"] == round(policy["stop_loss_pct"] * 0.5, 2), \
+        "trail_step_pct must be half of stop_loss_pct"
+    print(f"PASS test_trail_trigger_pct_set_by_exit_policy "
+          f"(sl={policy['stop_loss_pct']}%, trigger={policy['trail_trigger_pct']}%, step={policy['trail_step_pct']}%)")
+
+
+def test_trail_activates_at_1r():
+    """position_lifecycle: trail must NOT be active below +1R, must activate at exactly +1R.
+
+    adaptive_exits_enabled=False is used so trigger_pct is taken verbatim (no clamping).
+    """
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from core.position_lifecycle import position_risk_prices
+
+    pos = {
+        "average_buy_price": 100.0,
+        "position_side": "LONG",
+        "tp_sl_tsl_config": {
+            "stop_loss_pct": 10.0,
+            "take_profit_pct": 15.0,
+            "trail_trigger_pct": 10.0,  # activates at +10% = +1R
+            "trail_step_pct": 5.0,
+            "trailing_sl_enabled": True,
+            "adaptive_exits_enabled": False,  # use raw trigger, no adaptive clamping
+        },
+    }
+
+    # Below trigger: ltp = 109 (< entry * 1.10 = 110) — trail must NOT be active
+    prices_below = position_risk_prices(pos, ltp=109.0)
+    tsl_below = prices_below.get("trailing_sl")
+    assert not tsl_below or tsl_below == 0, (
+        f"Trail must not activate below trigger; trailing_sl={tsl_below}"
+    )
+
+    # At trigger: ltp = 112 (>= 110) — trail must be active
+    prices_above = position_risk_prices(pos, ltp=112.0)
+    tsl_above = prices_above.get("trailing_sl")
+    assert tsl_above and tsl_above > 0, (
+        f"Trail must activate at +1R; trailing_sl={tsl_above}"
+    )
+    print(f"PASS test_trail_activates_at_1r (tsl_below={tsl_below}, tsl_above={tsl_above:.2f})")
+
+
+def test_trail_locks_breakeven():
+    """position_lifecycle: once trail is active, trailing_sl must never be below entry."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from core.position_lifecycle import position_risk_prices
+
+    entry = 100.0
+    pos = {
+        "average_buy_price": entry,
+        "position_side": "LONG",
+        "tp_sl_tsl_config": {
+            "stop_loss_pct": 10.0,
+            "take_profit_pct": 15.0,
+            "trail_trigger_pct": 10.0,
+            "trail_step_pct": 5.0,
+            "trailing_sl_enabled": True,
+            "adaptive_exits_enabled": False,  # raw trigger; activates at ltp >= 110
+        },
+    }
+
+    # ltp=111: past trigger; candidate = 111 * 0.95 = 105.45, breakeven floor clamps to entry=100
+    # Since 105.45 > 100, the floor doesn't lower it — but the key guarantee is tsl >= entry
+    prices = position_risk_prices(pos, ltp=111.0)
+    tsl = prices.get("trailing_sl")
+    assert tsl is not None and tsl >= entry, (
+        f"Trailing SL {tsl} must be >= entry {entry} once trail is active (breakeven floor)"
+    )
+    print(f"PASS test_trail_locks_breakeven (entry={entry}, ltp=111, tsl={tsl:.2f})")

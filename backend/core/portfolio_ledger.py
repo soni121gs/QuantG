@@ -70,6 +70,9 @@ class PortfolioLedger:
             "price": float(fill.get("price") or 0),
             "charges": float(fill.get("charges") or fill.get("brokerage") or 0.0),
             "brokerage": float(fill.get("brokerage") or 0.0),
+            "stt": float(fill.get("stt") or 0.0),
+            "slippage": float(fill.get("slippage") or 0.0),
+            "exchange_txn": float(fill.get("exchange_txn") or 0.0),
             "trade_value": fill.get("trade_value"),
             "mode": fill.get("mode"),
             "action": action,
@@ -132,6 +135,10 @@ class PortfolioLedger:
             "exit_time": now_str,
             "duration_minutes": duration_min,
             "exit_fill_id": fill.get("id") or fill.get("fill_id"),
+            "exit_brokerage": round(float(fill.get("brokerage") or 0.0), 4),
+            "exit_stt": round(float(fill.get("stt") or 0.0), 4),
+            "exit_slippage": round(float(fill.get("slippage") or 0.0), 4),
+            "exit_exchange_txn": round(float(fill.get("exchange_txn") or 0.0), 4),
             "created_at": now_str,
         }
         try:

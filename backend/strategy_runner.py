@@ -27,10 +27,14 @@ from pymongo import ReturnDocument
 from safe_exec import safe_run_strategy
 from market_protection import MarketTrendAnalyzer
 from core.option_selector_v2 import select_option_contract
+from market_regime import update_regime, get_cached_regime
+from trade_frequency import check_frequency_gate, record_strategy_filter, compute_tod_volume_ratio
 
 logger = logging.getLogger("quantg.runner")
 
 TICK_SECONDS = int(os.environ.get("STRATEGY_RUNNER_TICK_SECONDS", "15"))
+# Min confidence bonus applied to signals aligned with CRASH/MELTUP regime
+REGIME_ALIGNED_CONFIDENCE_BONUS = float(os.environ.get("REGIME_ALIGNED_CONFIDENCE_BONUS", "10.0"))
 LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -56,6 +60,19 @@ async def _sleep_or_stop(stop_event: asyncio.Event, seconds: int) -> None:
     while not stop_event.is_set() and slept < seconds:
         await asyncio.sleep(1)
         slept += 1
+
+
+def _enrich_tod_ratios(data: List[dict]) -> List[dict]:
+    """Pre-compute time-of-day normalized volume ratio for each candle.
+
+    Attaches 'tod_vol_ratio' to each candle dict so strategy code strings can
+    access float(data[i].get('tod_vol_ratio', 1.0)) without needing an import.
+    Shallow-copies each dict to avoid mutating cached candle objects.
+    """
+    for i in range(len(data)):
+        data[i] = dict(data[i])
+        data[i]['tod_vol_ratio'] = compute_tod_volume_ratio(data, i)
+    return data
 
 
 def _safe_run(code: str, data: List[dict]) -> List[dict]:
@@ -238,6 +255,85 @@ async def _release_lock(db) -> None:
         pass
 
 
+# Tracks the last known regime per underlying to detect mid-session flips
+_last_regime_per_index: Dict[str, str] = {}
+
+
+async def _tighten_positions_on_regime_flip(
+    db, new_regime: dict, all_user_ids: list
+) -> None:
+    """On CRASH or MELTUP flip, tighten against-regime open positions.
+
+    CRASH → LONG positions are against regime.
+    MELTUP → SHORT positions are against regime.
+
+    Rules:
+      - unrealized P&L >= 0.5 × initial_risk_abs → move SL to entry (breakeven lock)
+      - otherwise → halve the remaining time to deadline
+    """
+    r_name = new_regime.get("regime", "")
+    if r_name not in ("CRASH", "MELTUP"):
+        return
+
+    against_side = "LONG" if r_name == "CRASH" else "SHORT"
+    now = datetime.now(timezone.utc)
+
+    query: Dict[str, Any] = {"status": "OPEN", "position_side": against_side}
+    if all_user_ids:
+        query["user_id"] = {"$in": all_user_ids}
+
+    try:
+        positions = await db.strategy_positions.find(query).to_list(200)
+    except Exception as exc:
+        logger.warning("regime_flip tighten: DB query failed: %s", exc)
+        return
+
+    for pos in positions:
+        pos_id = pos.get("id")
+        entry = float(pos.get("average_buy_price") or pos.get("entry_price") or 0)
+        ltp = float(pos.get("last_ltp") or entry)
+        risk_abs = float(pos.get("r_initial_risk_amount") or 0)
+        if entry <= 0:
+            continue
+        qty = int(pos.get("open_quantity") or 1)
+        pnl = (ltp - entry) * qty if against_side == "LONG" else (entry - ltp) * qty
+
+        update: Dict[str, Any] = {
+            "updated_at": now.isoformat(),
+            "regime_flip_tightened": True,
+        }
+        if risk_abs > 0 and pnl >= 0.5 * risk_abs:
+            update["sl_price"] = entry
+            update["tp_sl_tsl_config.stoploss_price"] = entry
+            logger.info(
+                "regime_flip %s: pos %s breakeven lock at %.2f (pnl=%.2f, 0.5R=%.2f)",
+                r_name, pos_id, entry, pnl, 0.5 * risk_abs,
+            )
+        else:
+            deadline_str = pos.get("deadline_at")
+            if deadline_str:
+                try:
+                    deadline = datetime.fromisoformat(
+                        str(deadline_str).replace("Z", "+00:00")
+                    )
+                    remaining = (deadline - now).total_seconds()
+                    if remaining > 60:
+                        new_deadline = now + timedelta(seconds=remaining / 2)
+                        update["deadline_at"] = new_deadline.isoformat()
+                        logger.info(
+                            "regime_flip %s: pos %s deadline halved to %s",
+                            r_name, pos_id, new_deadline.isoformat(),
+                        )
+                except Exception:
+                    pass
+
+        if len(update) > 2:
+            try:
+                await db.strategy_positions.update_one({"id": pos_id}, {"$set": update})
+            except Exception as exc:
+                logger.warning("regime_flip tighten update failed for %s: %s", pos_id, exc)
+
+
 async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio.Event,
                       resolve_option_fn=None, close_strategy_fn=None):
     """Main loop. Dependencies injected to avoid circular imports.
@@ -345,6 +441,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
+                data = _enrich_tod_ratios(data)
                 signals = _safe_run(code, data)
                 signals_count = len(signals)
                 if not signals:
@@ -413,6 +510,135 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                          "$inc": inc_set},
                     )
                     continue
+                # ── Regime Gate ───────────────────────────────────────────────
+                # Update regime from latest candles (CRASH/MELTUP checked every
+                # tick; full bias refresh every 15 min inside update_regime).
+                _underlying = str(
+                    ((vc or {}).get("options") or {}).get("underlying") or symbol
+                ).upper()
+                try:
+                    _regime = await update_regime(db, _underlying, data)
+                except Exception:
+                    _regime = get_cached_regime(_underlying) or {}
+
+                # Detect mid-session regime flip and tighten against-regime positions
+                _prev_regime = _last_regime_per_index.get(_underlying)
+                _curr_regime = _regime.get("regime", "RANGE")
+                if _prev_regime and _prev_regime != _curr_regime:
+                    _all_uids = list({_s.get("user_id") for _s in strategies if _s.get("user_id")})
+                    asyncio.ensure_future(
+                        _tighten_positions_on_regime_flip(db, _regime, _all_uids)
+                    )
+                _last_regime_per_index[_underlying] = _curr_regime
+
+                _long_ok  = _regime.get("long_entries_allowed", True)
+                _short_ok = _regime.get("short_entries_allowed", True)
+                _is_entry = action in ("BUY", "SELL") and not any(
+                    kw in (last_sig.get("entry_reason") or "").lower()
+                    for kw in ("exit", "time exit", "squareoff", "close")
+                )
+                if _is_entry:
+                    # Determine option direction: v13 signals carry explicit "direction"
+                    # field ("CE"=bullish exposure, "PE"=bearish exposure).
+                    # Legacy signals use action as proxy (BUY=bullish, SELL=bearish).
+                    _sig_dir = (last_sig.get("direction") or "").upper()
+                    _is_ce_exposure = ("CE" in _sig_dir) or (action == "BUY" and not _sig_dir)
+                    _is_pe_exposure = ("PE" in _sig_dir) or (action == "SELL" and not _sig_dir)
+
+                    if _is_ce_exposure and not _long_ok:
+                        _reason = f"REGIME_GATE: {_regime.get('regime','?')} — CE/long exposure blocked"
+                        await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_GATE", _reason)
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": _reason},
+                             "$inc": inc_set},
+                        )
+                        continue
+                    if _is_pe_exposure and not _short_ok:
+                        _reason = f"REGIME_GATE: {_regime.get('regime','?')} — PE/short exposure blocked"
+                        await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_GATE", _reason)
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": _reason},
+                             "$inc": inc_set},
+                        )
+                        continue
+                    # Confidence bonus for regime-aligned entries
+                    _r_name = _regime.get("regime", "RANGE")
+                    if (_r_name in ("CRASH", "TREND_DOWN") and _is_pe_exposure) or \
+                       (_r_name in ("MELTUP", "TREND_UP") and _is_ce_exposure):
+                        last_sig = dict(last_sig)
+                        last_sig["confidence"] = min(100.0, float(last_sig.get("confidence") or 85.0) + REGIME_ALIGNED_CONFIDENCE_BONUS)
+
+                    # S5 strict gate: block entries in RANGE regime
+                    if last_sig.get("regime_gate_strict"):
+                        if _r_name == "RANGE":
+                            _reason = f"REGIME_STRICT_GATE: RANGE regime — strategy requires trend"
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_STRICT_GATE", _reason)
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set, "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _reason},
+                                 "$inc": inc_set},
+                            )
+                            continue
+
+                    # S2 overextended exemption: only allow in CRASH (PE) or MELTUP (CE)
+                    if last_sig.get("overextended_regime_exempt"):
+                        _exempt_ok = (
+                            (_r_name == "MELTUP" and action == "BUY") or
+                            (_r_name == "CRASH" and action == "SELL")
+                        )
+                        if not _exempt_ok:
+                            _reason = f"OVEREXT_GATE: overextended breakout blocked — regime={_r_name}, needs CRASH(PE)/MELTUP(CE)"
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "OVEREXT_GATE", _reason)
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set, "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _reason},
+                                 "$inc": inc_set},
+                            )
+                            continue
+
+                    # Apply hold_multiplier to max_hold_minutes
+                    _hm = float(_regime.get("hold_multiplier", 1.0))
+                    if _hm != 1.0 and last_sig.get("max_hold_minutes"):
+                        last_sig = dict(last_sig)
+                        last_sig["max_hold_minutes"] = max(5, int(last_sig["max_hold_minutes"] * _hm))
+
+                # ── Frequency Gate ────────────────────────────────────────────
+                if _is_entry:
+                    try:
+                        _freq_ok, _freq_reason = await check_frequency_gate(
+                            db,
+                            strategy_id=s["id"],
+                            strategy_name=str(s.get("name") or ""),
+                            user_id=s.get("user_id"),
+                            freq_multiplier=float(_regime.get("freq_multiplier", 1.0)),
+                        )
+                    except Exception:
+                        _freq_ok, _freq_reason = True, None
+                    if not _freq_ok:
+                        await record_strategy_filter(db, s["id"], s.get("user_id"), "FREQ_GATE", _freq_reason or "")
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": _freq_reason},
+                             "$inc": inc_set},
+                        )
+                        continue
+
+                # Attach regime snapshot to the signal for diagnostics
+                last_sig = dict(last_sig)
+                last_sig["regime_snapshot"] = _regime
+
                 # Determine if this strategy trades OPTIONS instead of equity
                 opt_cfg = (vc or {}).get("options") or {}
                 option_contract = None
@@ -588,6 +814,37 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         # un-closeable ghost positions were created.
                         continue
 
+                # ── Phase 4: Theta guard + ATR-based ExitPolicy ───────────────
+                # Only applies to option-buying entries (not exits/time-exits).
+                if option_buying_mode and _is_entry and option_contract:
+                    try:
+                        from exit_policy import attach_exit_policy_to_signal
+                        _opt_ltp = float(
+                            option_contract.get("ltp") or option_contract.get("price") or 0
+                        )
+                        if _opt_ltp > 0 and data:
+                            last_sig = attach_exit_policy_to_signal(last_sig, data, _opt_ltp)
+                            if last_sig.get("theta_guard_blocked"):
+                                _atr_val = last_sig.get("underlying_atr_pct", 0.0)
+                                _tg_reason = (
+                                    f"THETA_GUARD: atr%={_atr_val:.4f} below minimum threshold "
+                                    "— option-buying blocked (premium decay exceeds expected move)"
+                                )
+                                await record_strategy_filter(
+                                    db, s["id"], s.get("user_id"), "THETA_GUARD", _tg_reason
+                                )
+                                await db.strategies.update_one(
+                                    {"id": s["id"]},
+                                    {"$set": {**eval_set,
+                                              "last_signals_count": signals_count,
+                                              "last_signal_action": action,
+                                              "last_filter_reason": _tg_reason},
+                                     "$inc": inc_set},
+                                )
+                                continue
+                    except Exception as _ep_exc:
+                        logger.debug("exit_policy attach failed for %s: %s", s["id"], _ep_exc)
+
                 # Insert signal into db.signals collection instead of placing order directly
                 try:
                     target_symbol = option_contract["tradingsymbol"] if option_contract else symbol
@@ -633,6 +890,12 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "option_quality_score": (option_contract or {}).get("option_quality_score"),
                         "selected_strike_mode": (option_contract or {}).get("selected_strike_mode"),
                         "v2_selector_warnings": (option_contract or {}).get("v2_warnings"),
+                        # Regime snapshot at signal time
+                        "regime_snapshot": last_sig.get("regime_snapshot") or {},
+                        "regime": (last_sig.get("regime_snapshot") or {}).get("regime"),
+                        # Phase 4: ATR-based exit policy (overrides percentage defaults in position_guardian)
+                        "exit_policy": last_sig.get("exit_policy"),
+                        "underlying_atr_pct": last_sig.get("underlying_atr_pct"),
                     }
                     
                     await db.signals.insert_one(signal_doc)

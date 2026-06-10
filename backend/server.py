@@ -1733,7 +1733,6 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
     def avg(values):
         return sum(values) / max(1, len(values))
 
-    # Calculate VWAP
     weighted = 0.0
     total_vol = 0.0
     vwap = []
@@ -1742,12 +1741,10 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
         total_vol += v
         vwap.append(weighted / max(1.0, total_vol))
 
-    # Calculate EMAs
     ema8 = ema(closes, 8)
     ema21 = ema(closes, 21)
     ema34 = ema(closes, 34)
-    
-    # Calculate VWAP chop filter: count crosses in last 15 candles
+
     vwap_crosses = [0] * len(closes)
     for i in range(1, len(closes)):
         cross = (closes[i] > vwap[i] and closes[i-1] <= vwap[i-1]) or (closes[i] < vwap[i] and closes[i-1] >= vwap[i-1])
@@ -1755,6 +1752,10 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
 
     signals = []
     position = "NONE"
+    # Two-bar exit counters: require 2 consecutive closes beyond EMA8 to exit
+    bars_below_ema8 = 0
+    bars_above_ema8 = 0
+    TWO_BAR_EXIT = 2
 
     for i in range(34, len(data)):
         if closes[i] <= 0:
@@ -1777,9 +1778,11 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                     "regime_required": "trend",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
+                bars_below_ema8 = 0
+                bars_above_ema8 = 0
             continue
 
         recent_range = max(highs[i-12:i+1]) - min(lows[i-12:i+1])
@@ -1787,27 +1790,31 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
         momentum = closes[i] - closes[i-3]
         avg_vol = avg(vols[i-20:i])
         vol_ok = vols[i] >= avg_vol * 0.95
-        
-        # VWAP chop check
+
         recent_cross_count = vwap_crosses[i] - vwap_crosses[i-15]
         chop_free = recent_cross_count < 3
-        
-        # Trend / VWAP confirmation
+
         bullish_ema = ema8[i] > ema21[i] > ema34[i]
         bearish_ema = ema8[i] < ema21[i] < ema34[i]
-        
+
         bullish = bullish_ema and closes[i] > vwap[i] and chop_free and closes[i] > max(highs[i-4:i]) and momentum > max(recent_range * 0.16, candle_range * 0.55) and vol_ok
         bearish = bearish_ema and closes[i] < vwap[i] and chop_free and closes[i] < min(lows[i-4:i]) and momentum < -max(recent_range * 0.16, candle_range * 0.55) and vol_ok
 
         if position == "LONG":
-            if bearish or closes[i] < ema8[i]:
+            # Update two-bar counter
+            if closes[i] < ema8[i]:
+                bars_below_ema8 += 1
+            else:
+                bars_below_ema8 = 0
+            # Two consecutive closes below EMA8 OR bearish reversal signal triggers exit
+            if bearish or bars_below_ema8 >= TWO_BAR_EXIT:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "trend_momentum",
                     "confidence": 75.0,
-                    "entry_reason": "NIFTY momentum CE exit",
+                    "entry_reason": "NIFTY momentum CE exit (two-bar EMA8 break)" if bars_below_ema8 >= TWO_BAR_EXIT else "NIFTY momentum CE exit (bearish reversal)",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
@@ -1816,18 +1823,23 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                     "regime_required": "trend",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
+                bars_below_ema8 = 0
         elif position == "SHORT":
-            if bullish or closes[i] > ema8[i]:
+            if closes[i] > ema8[i]:
+                bars_above_ema8 += 1
+            else:
+                bars_above_ema8 = 0
+            if bullish or bars_above_ema8 >= TWO_BAR_EXIT:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "PE",
                     "setup_type": "trend_momentum",
                     "confidence": 75.0,
-                    "entry_reason": "NIFTY momentum PE exit",
+                    "entry_reason": "NIFTY momentum PE exit (two-bar EMA8 break)" if bars_above_ema8 >= TWO_BAR_EXIT else "NIFTY momentum PE exit (bullish reversal)",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
@@ -1836,25 +1848,26 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                     "regime_required": "trend",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
+                bars_above_ema8 = 0
         else:
+            bars_below_ema8 = 0
+            bars_above_ema8 = 0
             if bullish:
-                # Compute confidence based on criteria
                 conf = 60.0
                 if vols[i] >= avg_vol * 1.5: conf += 15.0
                 if (ema8[i] - ema34[i]) > candle_range: conf += 15.0
                 if momentum > recent_range * 0.25: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "trend_momentum",
                     "confidence": conf,
-                    "entry_reason": "NIFTY CE momentum with true EMA, volume and VWAP filter",
+                    "entry_reason": "NIFTY CE momentum — EMA8>21>34, VWAP, volume aligned",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
@@ -1863,7 +1876,7 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                     "regime_required": "trend",
                     "option_selection_preference": "ITM1" if conf > 85.0 else "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "LONG"
             elif bearish:
@@ -1872,14 +1885,13 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                 if (ema34[i] - ema8[i]) > candle_range: conf += 15.0
                 if momentum < -recent_range * 0.25: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "PE",
                     "setup_type": "trend_momentum",
                     "confidence": conf,
-                    "entry_reason": "NIFTY PE momentum with true EMA, volume and VWAP filter",
+                    "entry_reason": "NIFTY PE momentum — EMA8<21<34, VWAP, volume aligned",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
@@ -1888,7 +1900,7 @@ NIFTY_ATM_MOMENTUM_CODE = """def run(data):
                     "regime_required": "trend",
                     "option_selection_preference": "ITM1" if conf > 85.0 else "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "SHORT"
 
@@ -1947,23 +1959,26 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
         avg_range = max(0.01, avg([highs[j] - lows[j] for j in range(i-15, i)]))
         atr = max(0.01, avg([max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-14, i)]))
         avg_vol = avg(vols[i-20:i])
-        vol_ok = vols[i] >= avg_vol * 1.10
-        
+        vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.85
+
         # Volatility expansion
         range_expanded = avg_range > atr * 0.8
         
-        # Overextension check
+        # Overextension check — body < 2.5×ATR; exempt in CRASH/MELTUP via runner flag
         body_size = abs(closes[i] - data[i].get('open', closes[i]))
         not_overextended = body_size < 2.5 * atr
-        
-        # Safe cooldown & failure filter
+        # Strong overextension (2.5–5×ATR) with high volume: flag for regime exemption
+        strong_overextended = (2.5 * atr <= body_size < 5.0 * atr) and vols[i] >= avg_vol * 1.5
+
         allowed = cooldown == 0 and failed_breakout_count < 3
-        
+
         bullish = allowed and closes[i] > channel_high and (closes[i] - closes[i-1]) > avg_range * 0.45 and range_expanded and vol_ok and not_overextended
         bearish = allowed and closes[i] < channel_low and (closes[i-1] - closes[i]) > avg_range * 0.45 and range_expanded and vol_ok and not_overextended
+        # Overextended breakouts: same direction conditions but skip body filter; tagged for regime gate
+        bullish_oe = allowed and closes[i] > channel_high and (closes[i] - closes[i-1]) > avg_range * 0.45 and range_expanded and strong_overextended
+        bearish_oe = allowed and closes[i] < channel_low and (closes[i-1] - closes[i]) > avg_range * 0.45 and range_expanded and strong_overextended
 
         if position == "LONG":
-            # Exit long
             if bearish or closes[i] < channel_mid:
                 signals.append({
                     "date": data[i]["date"],
@@ -1980,14 +1995,13 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                     "regime_required": "breakout",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 if closes[i] < channel_mid:
                     failed_breakout_count += 1
                 position = "NONE"
                 cooldown = 10
         elif position == "SHORT":
-            # Exit short
             if bullish or closes[i] > channel_mid:
                 signals.append({
                     "date": data[i]["date"],
@@ -2004,7 +2018,7 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                     "regime_required": "breakout",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 if closes[i] > channel_mid:
                     failed_breakout_count += 1
@@ -2017,7 +2031,6 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                 if (closes[i] - channel_high) > atr * 0.5: conf += 10.0
                 if body_size > avg_range * 0.8: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
@@ -2033,7 +2046,7 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                     "regime_required": "breakout",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "LONG"
             elif bearish:
@@ -2042,7 +2055,6 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                 if (channel_low - closes[i]) > atr * 0.5: conf += 10.0
                 if body_size > avg_range * 0.8: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
@@ -2058,7 +2070,51 @@ BANKNIFTY_ATM_BREAKOUT_CODE = """def run(data):
                     "regime_required": "breakout",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
+                })
+                position = "SHORT"
+            elif bullish_oe and not bullish:
+                # Overextended CE breakout: allowed only in MELTUP regime (runner checks flag)
+                conf = 60.0
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "range_breakout_overextended",
+                    "confidence": conf,
+                    "entry_reason": "BANKNIFTY CE breakout overextended — MELTUP regime required",
+                    "target_R": 1.9,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.0,
+                    "max_hold_minutes": 25,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "breakout",
+                    "overextended_regime_exempt": True,
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "2.0"
+                })
+                position = "LONG"
+            elif bearish_oe and not bearish:
+                # Overextended PE breakdown: allowed only in CRASH regime (runner checks flag)
+                conf = 60.0
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "PE",
+                    "setup_type": "range_breakout_overextended",
+                    "confidence": conf,
+                    "entry_reason": "BANKNIFTY PE breakdown overextended — CRASH regime required",
+                    "target_R": 1.9,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.0,
+                    "max_hold_minutes": 25,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "breakout",
+                    "overextended_regime_exempt": True,
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "2.0"
                 })
                 position = "SHORT"
 
@@ -2288,35 +2344,56 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
 
 
 SENSEX_RSI_PULLBACK_CODE = """def run(data):
+    # S4 v2: VWAP+EMA trend filter, intraday-return gap-down guard (≤-2% blocks longs)
     if len(data) < 65:
         return []
     closes = [float(d.get('close') or 0) for d in data]
     highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
     lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
 
-    def sma(values, period):
-        out = []
-        for i in range(len(values)):
-            if i < period - 1:
-                out.append(values[i])
-            else:
-                out.append(sum(values[i-period+1:i+1]) / period)
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for v in values[1:]:
+            out.append(v * k + out[-1] * (1 - k))
         return out
 
     def rsi_at(i, period):
-        gains = 0.0
-        losses = 0.0
+        gains = losses = 0.0
         for j in range(i - period + 1, i + 1):
-            change = closes[j] - closes[j-1]
-            gains += max(change, 0)
-            losses += max(-change, 0)
+            chg = closes[j] - closes[j-1]
+            gains += max(chg, 0); losses += max(-chg, 0)
         rs = (gains / period) / max(0.0001, losses / period)
         return 100 - (100 / (1 + rs))
 
-    sma20 = sma(closes, 20)
-    sma50 = sma(closes, 50)
+    # Day-anchored VWAP
+    dates = [str(d.get('date', '')) for d in data]
+    today_str = dates[-1][:10] if dates else ''
+    w_sum = v_sum = 0.0
+    vwap = []
+    for i, (h, l, c, v, dt) in enumerate(zip(highs, lows, closes, vols, dates)):
+        if dt[:10] != today_str:
+            w_sum = v_sum = 0.0
+        w_sum += ((h + l + c) / 3.0) * v; v_sum += v
+        vwap.append(w_sum / max(1.0, v_sum))
+
+    ema12 = ema(closes, 12)  # 1-hr EMA proxy on 5-min bars
     rsi = [50.0 if i < 14 else rsi_at(i, 14) for i in range(len(closes))]
-    
+
+    # Intraday return: today's first open vs current close
+    today_open = None
+    for i, dt in enumerate(dates):
+        if dt[:10] == today_str:
+            today_open = float(data[i].get('open', closes[i]) or closes[i])
+            break
+    intraday_ret_pct = 0.0
+    if today_open and today_open > 0:
+        intraday_ret_pct = (closes[-1] - today_open) / today_open * 100.0
+
+    # Gap-down guard: block new longs when day is already down ≥2%
+    gap_down = intraday_ret_pct <= -2.0
+
     signals = []
     position = "NONE"
     cooldown = 0
@@ -2336,127 +2413,86 @@ SENSEX_RSI_PULLBACK_CODE = """def run(data):
                     "setup_type": "rsi_pullback",
                     "confidence": 50.0,
                     "entry_reason": "SENSEX RSI time exit",
-                    "target_R": 1.6,
-                    "initial_stop_R": 1.0,
-                    "trail_after_R": 0.9,
-                    "max_hold_minutes": 30,
-                    "invalidation_rule": "time_or_stop",
-                    "regime_required": "pullback",
-                    "option_selection_preference": "ATM",
-                    "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "target_R": 1.6, "initial_stop_R": 1.0, "trail_after_R": 0.9,
+                    "max_hold_minutes": 30, "invalidation_rule": "time_or_stop",
+                    "regime_required": "pullback", "option_selection_preference": "ATM",
+                    "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
             continue
 
-        trend_up = closes[i] >= sma50[i] and sma20[i] >= sma50[i] * 0.998
-        trend_down = closes[i] <= sma50[i] and sma20[i] <= sma50[i] * 1.002
-        
-        # Check broader trend slope to avoid extreme strength entries
-        slope_extreme = abs(sma50[i] - sma50[i-10]) > sma50[i] * 0.012
-        
-        # Bullish recovery from oversold
-        was_oversold = any(rsi[j] <= 35 for j in range(i-5, i))
-        bullish = trend_up and was_oversold and rsi[i-1] <= 37 and rsi[i] >= 39 and closes[i] > closes[i-1] and not slope_extreme and cooldown == 0
+        # VWAP + rising EMA12 trend filter (replaces SMA20/50)
+        trend_up   = closes[i] > vwap[i] and ema12[i] > ema12[i-3]
+        trend_down = closes[i] < vwap[i] and ema12[i] < ema12[i-3]
 
-        # Bearish recovery from overbought
-        was_overbought = any(rsi[j] >= 65 for j in range(i-5, i))
-        bearish = trend_down and was_overbought and rsi[i-1] >= 63 and rsi[i] <= 61 and closes[i] < closes[i-1] and not slope_extreme and cooldown == 0
+        slope_extreme = abs(vwap[i] - vwap[max(0, i-10)]) > vwap[i] * 0.012
+
+        was_oversold  = any(rsi[j] <= 35 for j in range(max(0, i-5), i))
+        was_overbought= any(rsi[j] >= 65 for j in range(max(0, i-5), i))
+
+        bullish = (trend_up and was_oversold and rsi[i-1] <= 37 and rsi[i] >= 39
+                   and closes[i] > closes[i-1] and not slope_extreme
+                   and cooldown == 0 and not gap_down)
+        bearish = (trend_down and was_overbought and rsi[i-1] >= 63 and rsi[i] <= 61
+                   and closes[i] < closes[i-1] and not slope_extreme and cooldown == 0)
 
         if position == "LONG":
-            if bearish or rsi[i] > 68 or closes[i] < sma20[i]:
+            if bearish or rsi[i] > 68 or closes[i] < vwap[i]:
                 signals.append({
-                    "date": data[i]["date"],
-                    "action": "SELL",
-                    "direction": "CE",
-                    "setup_type": "rsi_pullback",
-                    "confidence": 75.0,
+                    "date": data[i]["date"], "action": "SELL", "direction": "CE",
+                    "setup_type": "rsi_pullback", "confidence": 75.0,
                     "entry_reason": "SENSEX RSI CE exit",
-                    "target_R": 1.6,
-                    "initial_stop_R": 1.0,
-                    "trail_after_R": 0.9,
-                    "max_hold_minutes": 30,
-                    "invalidation_rule": "time_or_stop",
-                    "regime_required": "pullback",
-                    "option_selection_preference": "ATM",
-                    "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "target_R": 1.6, "initial_stop_R": 1.0, "trail_after_R": 0.9,
+                    "max_hold_minutes": 30, "invalidation_rule": "time_or_stop",
+                    "regime_required": "pullback", "option_selection_preference": "ATM",
+                    "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
-                position = "NONE"
-                cooldown = 8
+                position = "NONE"; cooldown = 8
         elif position == "SHORT":
-            if bullish or rsi[i] < 32 or closes[i] > sma20[i]:
+            if bullish or rsi[i] < 32 or closes[i] > vwap[i]:
                 signals.append({
-                    "date": data[i]["date"],
-                    "action": "BUY",
-                    "direction": "PE",
-                    "setup_type": "rsi_pullback",
-                    "confidence": 75.0,
+                    "date": data[i]["date"], "action": "BUY", "direction": "PE",
+                    "setup_type": "rsi_pullback", "confidence": 75.0,
                     "entry_reason": "SENSEX RSI PE exit",
-                    "target_R": 1.6,
-                    "initial_stop_R": 1.0,
-                    "trail_after_R": 0.9,
-                    "max_hold_minutes": 30,
-                    "invalidation_rule": "time_or_stop",
-                    "regime_required": "pullback",
-                    "option_selection_preference": "ATM",
-                    "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "target_R": 1.6, "initial_stop_R": 1.0, "trail_after_R": 0.9,
+                    "max_hold_minutes": 30, "invalidation_rule": "time_or_stop",
+                    "regime_required": "pullback", "option_selection_preference": "ATM",
+                    "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
-                position = "NONE"
-                cooldown = 8
+                position = "NONE"; cooldown = 8
         else:
             if bullish:
-                # Confidence factors
                 conf = 65.0
-                dist = abs(closes[i] - sma20[i]) / max(1.0, sma20[i])
-                if dist < 0.005: conf += 15.0 # close to MA is safer entry
-                if rsi[i-1] <= 30: conf += 10.0 # deeper pullback
+                dist = abs(closes[i] - vwap[i]) / max(1.0, vwap[i])
+                if dist < 0.005: conf += 15.0
+                if rsi[i-1] <= 30: conf += 10.0
                 if closes[i] > highs[i-1]: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
-                    "date": data[i]["date"],
-                    "action": "BUY",
-                    "direction": "CE",
-                    "setup_type": "rsi_pullback",
-                    "confidence": conf,
-                    "entry_reason": "SENSEX RSI pullback CE with trend filter",
-                    "target_R": 1.6,
-                    "initial_stop_R": 1.0,
-                    "trail_after_R": 0.9,
-                    "max_hold_minutes": 30,
-                    "invalidation_rule": "time_or_stop",
-                    "regime_required": "pullback",
-                    "option_selection_preference": "ATM",
-                    "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "date": data[i]["date"], "action": "BUY", "direction": "CE",
+                    "setup_type": "rsi_pullback", "confidence": conf,
+                    "entry_reason": "SENSEX RSI pullback CE VWAP+EMA trend",
+                    "target_R": 1.6, "initial_stop_R": 1.0, "trail_after_R": 0.9,
+                    "max_hold_minutes": 30, "invalidation_rule": "time_or_stop",
+                    "regime_required": "pullback", "option_selection_preference": "ATM",
+                    "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
                 position = "LONG"
             elif bearish:
                 conf = 65.0
-                dist = abs(closes[i] - sma20[i]) / max(1.0, sma20[i])
+                dist = abs(closes[i] - vwap[i]) / max(1.0, vwap[i])
                 if dist < 0.005: conf += 15.0
                 if rsi[i-1] >= 70: conf += 10.0
                 if closes[i] < lows[i-1]: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
-                    "date": data[i]["date"],
-                    "action": "SELL",
-                    "direction": "PE",
-                    "setup_type": "rsi_pullback",
-                    "confidence": conf,
-                    "entry_reason": "SENSEX RSI pullback PE with trend filter",
-                    "target_R": 1.6,
-                    "initial_stop_R": 1.0,
-                    "trail_after_R": 0.9,
-                    "max_hold_minutes": 30,
-                    "invalidation_rule": "time_or_stop",
-                    "regime_required": "pullback",
-                    "option_selection_preference": "ATM",
-                    "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "date": data[i]["date"], "action": "SELL", "direction": "PE",
+                    "setup_type": "rsi_pullback", "confidence": conf,
+                    "entry_reason": "SENSEX RSI pullback PE VWAP+EMA trend",
+                    "target_R": 1.6, "initial_stop_R": 1.0, "trail_after_R": 0.9,
+                    "max_hold_minutes": 30, "invalidation_rule": "time_or_stop",
+                    "regime_required": "pullback", "option_selection_preference": "ATM",
+                    "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
                 position = "SHORT"
 
@@ -2583,23 +2619,23 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
                 if closes[i] > ema20[i] * 1.003: conf += 15.0
                 if slope_up: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "slow_trend_follow",
                     "confidence": conf,
-                    "entry_reason": "NIFTY slow EMA trend continuation",
+                    "entry_reason": "NIFTY Micro-Lot trend continuation — EMA20>50, slope up, VWAP above",
                     "target_R": 1.8,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
                     "max_hold_minutes": 40,
                     "invalidation_rule": "time_or_stop",
                     "regime_required": "trend",
+                    "regime_gate_strict": True,
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "LONG"
             elif bearish:
@@ -2608,23 +2644,23 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
                 if closes[i] < ema20[i] * 0.997: conf += 15.0
                 if slope_down: conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "PE",
                     "setup_type": "slow_trend_follow",
                     "confidence": conf,
-                    "entry_reason": "NIFTY slow EMA trend breakdown",
+                    "entry_reason": "NIFTY Micro-Lot trend breakdown — EMA20<50, slope down, VWAP below",
                     "target_R": 1.8,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.0,
                     "max_hold_minutes": 40,
                     "invalidation_rule": "time_or_stop",
                     "regime_required": "trend",
+                    "regime_gate_strict": True,
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "SHORT"
 
@@ -2643,7 +2679,7 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
     def avg(values):
         return sum(values) / max(1, len(values))
 
-    # Calculate VWAP
+    # Calculate VWAP (day-anchored in runner; here cumulative is fine for signal quality)
     weighted = 0.0
     total_vol = 0.0
     vwap = []
@@ -2654,35 +2690,100 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
 
     signals = []
     position = "NONE"
-    
-    # State tracking: daily ORB boundaries
+
+    # Daily state
     current_day = ""
     orb_high = 0.0
     orb_low = 0.0
+    orb_5min_high = 0.0   # range from first bar only (09:15–09:20) for early trigger
+    orb_5min_low = 0.0
     entry_taken = False
-    
+
     for i in range(len(data)):
         if closes[i] <= 0:
             continue
         date_str = str(data[i].get('date', ''))
         day_str = date_str[:10]
         clock = date_str[11:16]
-        
-        # Detect new day to reset boundaries
+
         if day_str != current_day:
             current_day = day_str
             orb_high = 0.0
             orb_low = 0.0
+            orb_5min_high = 0.0
+            orb_5min_low = 0.0
             entry_taken = False
-            
-        # Parse opening range from 9:15 to 9:30 inclusive
+
+        # Accumulate opening range 09:15–09:30
         if clock and '09:15' <= clock <= '09:30':
             if orb_high == 0.0 or highs[i] > orb_high:
                 orb_high = highs[i]
             if orb_low == 0.0 or lows[i] < orb_low:
                 orb_low = lows[i]
-                
-        # Only trade during the window: 9:30 to 11:00
+
+        # First 5-min range (09:15 bar only) for early ORB trigger
+        if clock == '09:15':
+            orb_5min_high = highs[i]
+            orb_5min_low = lows[i]
+
+        avg_vol = avg(vols[max(0, i - 20):i]) if i > 0 else vols[i]
+
+        # ── Early ORB trigger at 09:25 ────────────────────────────────────────
+        # If the 09:15–09:20 range (first 5-min bar) is broken at 09:25 AND
+        # move continues (close > orb_5min_high with VWAP support), enter at
+        # 0.5x confidence penalty / 1.5x stop distance (wider SL for early fill).
+        if clock == '09:25' and not entry_taken and orb_5min_high > 0 and orb_5min_low > 0:
+            vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.75
+            early_bull = closes[i] > orb_5min_high and closes[i] > vwap[i] and vol_ok
+            early_bear = closes[i] < orb_5min_low and closes[i] < vwap[i] and vol_ok
+            if early_bull:
+                conf = 55.0
+                if vols[i] >= avg_vol * 1.5: conf += 10.0
+                conf = min(90.0, conf)
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "opening_range_breakout_early",
+                    "confidence": conf,
+                    "entry_reason": "NIFTY ORB Early Bull 09:25 — 5-min range broken",
+                    "target_R": 1.5,
+                    "initial_stop_R": 1.5,
+                    "trail_after_R": 0.9,
+                    "max_hold_minutes": 15,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "opening_expansion",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "2.0"
+                })
+                position = "LONG"
+                entry_taken = True
+            elif early_bear:
+                conf = 55.0
+                if vols[i] >= avg_vol * 1.5: conf += 10.0
+                conf = min(90.0, conf)
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "PE",
+                    "setup_type": "opening_range_breakout_early",
+                    "confidence": conf,
+                    "entry_reason": "NIFTY ORB Early Bear 09:25 — 5-min range broken",
+                    "target_R": 1.5,
+                    "initial_stop_R": 1.5,
+                    "trail_after_R": 0.9,
+                    "max_hold_minutes": 15,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "opening_expansion",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "2.0"
+                })
+                position = "SHORT"
+                entry_taken = True
+
+        # Only trade the main window: 9:30 to 11:00
         if not clock or clock < '09:30' or clock > '11:00':
             if position != "NONE" and clock and clock > '11:00':
                 signals.append({
@@ -2700,21 +2801,20 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                     "regime_required": "opening_expansion",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
             continue
-            
+
         if orb_high == 0.0 or orb_low == 0.0:
             continue
-            
-        avg_vol = avg(vols[max(0, i-20):i])
-        vol_ok = vols[i] >= avg_vol
+
+        vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.85
         body = abs(closes[i] - data[i].get('open', closes[i]))
-        
+
         bullish = not entry_taken and closes[i] > orb_high and closes[i] > vwap[i] and vol_ok
         bearish = not entry_taken and closes[i] < orb_low and closes[i] < vwap[i] and vol_ok
-        
+
         if position == "LONG":
             if closes[i] < orb_high or closes[i] < vwap[i]:
                 signals.append({
@@ -2732,7 +2832,7 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                     "regime_required": "opening_expansion",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
         elif position == "SHORT":
@@ -2752,18 +2852,16 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                     "regime_required": "opening_expansion",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "NONE"
         else:
             if bullish:
-                # Confidence factors
                 conf = 60.0
                 if vols[i] >= avg_vol * 1.5: conf += 15.0
                 if body >= (orb_high - orb_low) * 0.15: conf += 15.0
                 if clock <= '10:00': conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
@@ -2779,7 +2877,7 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                     "regime_required": "opening_expansion",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "LONG"
                 entry_taken = True
@@ -2789,7 +2887,6 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                 if body >= (orb_high - orb_low) * 0.15: conf += 15.0
                 if clock <= '10:00': conf += 10.0
                 conf = min(100.0, conf)
-                
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
@@ -2805,11 +2902,11 @@ NIFTY_QUICK_SCALPER_CODE = """def run(data):
                     "regime_required": "opening_expansion",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.0"
                 })
                 position = "SHORT"
                 entry_taken = True
-                
+
     return signals
 """
 
@@ -2874,8 +2971,8 @@ BANKNIFTY_STD_BAND_SCALPER_CODE = """def run(data):
         # Volume and body confirmation
         body = abs(closes[i] - data[i].get('open', closes[i]))
         avg_body = avg([abs(closes[j] - data[j].get('open', closes[j])) for j in range(i-10, i)])
-        vol_ok = vols[i] >= avg_vol * 1.05 and body > avg_body * 0.95
-        
+        vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.85 and body > avg_body * 0.95
+
         # Prevent extreme overextension entry
         not_overextended = body < 2.2 * atr_curr
         
@@ -3039,8 +3136,8 @@ NIFTY_QUICK_EMA_SCALPER_CODE = """def run(data):
         avg_vol = sum(vols[i-10:i]) / 10
         range_avg = max(0.01, sum(highs[j] - lows[j] for j in range(i-8, i)) / 8)
         body = abs(closes[i] - data[i].get('open', closes[i]))
-        vol_ok = vols[i] >= avg_vol * 1.05
-        
+        vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.85
+
         # Crossover checks
         bullish_cross = ema3[i] > ema9[i] and ema3[i-1] <= ema9[i-1]
         bearish_cross = ema3[i] < ema9[i] and ema3[i-1] >= ema9[i-1]
@@ -3215,8 +3312,8 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
         
         # Breakout indicators
         expanding = width > width_history[-1]
-        vol_surge = vols[i] >= avg_vol * 1.25 and body > atr * 0.75
-        
+        vol_surge = float(data[i].get('tod_vol_ratio', 1.0)) >= 1.0 and body > atr * 0.75
+
         bullish = compressed and closes[i] > upper and closes[i-1] <= upper and expanding and vol_surge and cooldown == 0
         bearish = compressed and closes[i] < lower and closes[i-1] >= lower and expanding and vol_surge and cooldown == 0
 
@@ -5638,6 +5735,11 @@ async def _reserve_strategy_position(
             if field in signal_doc:
                 r_meta[field] = signal_doc[field]
         r_meta["r_metadata_source"] = "v13_signal"
+        # Phase 4: if signal carries an ATR-based exit policy, merge it into
+        # tp_sl_tsl_config so position_guardian uses real prices from entry.
+        _ep = signal_doc.get("exit_policy")
+        if _ep and isinstance(_ep, dict):
+            risk = {**risk, **_ep}
     else:
         default_version = "v13-live-brain-r1"
         if row:
@@ -5866,6 +5968,21 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
         }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
     )
     await _release_strategy_position_locks(position)
+    # Phase 3: update loss-streak counters for frequency throttle
+    _sid = position.get("strategy_id")
+    _uid = position.get("user_id")
+    if _sid and _uid:
+        try:
+            from trade_frequency import record_sl_hit, reset_streak_on_profit
+            _reason_lower = (reason or "").lower()
+            _is_sl = any(k in _reason_lower for k in ("stop_loss", "stoploss", "sl_hit", "stop-loss"))
+            _is_tp = any(k in _reason_lower for k in ("take_profit", "target_hit", "tp_hit", "profit"))
+            if _is_sl or pnl < 0:
+                await record_sl_hit(db, _sid, _uid)
+            elif _is_tp or pnl > 0:
+                await reset_streak_on_profit(db, _sid, _uid)
+        except Exception:
+            pass
 
 
 async def _release_strategy_position_locks(position: Optional[Dict[str, Any]]) -> None:
@@ -6761,6 +6878,8 @@ async def _is_upstox_strategy_feed_stale(user_id: str) -> tuple[bool, str]:
     return False, "feed_live"
 
 
+STRATEGY_HEALTH_TICK_SECONDS = int(os.environ.get("STRATEGY_RUNNER_TICK_SECONDS", "30"))
+
 async def _strategy_health_loop(stop_event: asyncio.Event):
     logger.info("Strategy health monitor starting")
     while not stop_event.is_set():
@@ -6796,7 +6915,7 @@ async def _strategy_health_loop(stop_event: asyncio.Event):
         except Exception as e:
             logger.warning(f"strategy health loop error: {e}")
         slept = 0
-        while not stop_event.is_set() and slept < TICK_SECONDS:
+        while not stop_event.is_set() and slept < STRATEGY_HEALTH_TICK_SECONDS:
             await asyncio.sleep(1)
             slept += 1
     logger.info("Strategy health monitor stopped")
@@ -7734,24 +7853,70 @@ def get_trading_day_window_ist() -> tuple[str, str]:
     return ist_midnight_utc.isoformat(), ist_tomorrow_midnight_utc.isoformat()
 
 
+async def _get_todays_realised_pnl(user_id: str, mode: str) -> float:
+    """Sum today's realized P&L from trade_fills (primary) then orders (fallback)."""
+    start, end = get_trading_day_window_ist()
+    fills = await db.trade_fills.find({
+        "user_id": user_id, "mode": mode,
+        "created_at": {"$gte": start, "$lt": end},
+        "action": {"$in": ["CLOSE", "REDUCE"]},
+    }, {"_id": 0, "realized_pnl": 1}).to_list(1000)
+    realised = sum(float(f.get("realized_pnl") or 0) for f in fills)
+    if realised == 0.0:
+        orders = await db.orders.find({
+            "user_id": user_id, "mode": mode,
+            "created_at": {"$gte": start, "$lt": end},
+            "status": {"$in": [ORDER_FILLED, ORDER_CLOSED, "COMPLETE"]},
+        }, {"_id": 0, "net_pnl": 1, "realized_pnl": 1}).to_list(500)
+        realised = sum(float(o.get("net_pnl") or o.get("realized_pnl") or 0) for o in orders)
+    return realised
+
+
 async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "paper") -> None:
-    """Refuse new orders if today's realised loss already exceeds max_daily_loss.
-    Computed from db.orders (paper mode) — tracks realised_pnl on closing trades."""
+    """Refuse new orders if today's realised loss exceeds max_daily_loss.
+
+    P&L is read from db.trade_fills (primary source) via _get_todays_realised_pnl.
+
+    Config keys (read from risk_cfg then user settings, first non-zero wins):
+      daily_loss_limit_paper  — looser, for paper data-collection days
+      daily_loss_limit_live   — tighter, for real-money sessions
+      daily_loss_limit        — legacy fallback (both modes)
+
+    On trip: raises HTTP 400 to block the current order AND schedules an
+    async force-close of all open positions for this user+mode.
+    """
     if not max_loss or max_loss <= 0:
         return
-    start, end = get_trading_day_window_ist()
-    orders = await db.orders.find({
-        "user_id": user_id,
-        "mode": mode,
-        "created_at": {"$gte": start, "$lt": end},
-        "status": {"$in": [ORDER_FILLED, ORDER_CLOSED, "COMPLETE"]},
-    }, {"_id": 0}).to_list(500)
-    realised = sum(float(o.get("realised_pnl") or 0) for o in orders)
+    realised = await _get_todays_realised_pnl(user_id, mode)
     if realised <= -abs(max_loss):
+        # Force-close open positions in background (non-blocking for current request)
+        async def _force_close_all():
+            try:
+                open_positions = await db.strategy_positions.find(
+                    {"user_id": user_id, "mode": mode,
+                     "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
+                    {"strategy_id": 1, "_id": 0},
+                ).to_list(50)
+                sids = {p["strategy_id"] for p in open_positions if p.get("strategy_id")}
+                for sid in sids:
+                    try:
+                        await _close_strategy_positions(user_id, sid, reason="daily-loss-kill-switch")
+                    except Exception:
+                        pass
+                if sids:
+                    logger.error(
+                        "DAILY LOSS KILL SWITCH tripped user=%s mode=%s realised=%.0f "
+                        "limit=%.0f — force-closed %d strategies",
+                        user_id, mode, abs(realised), abs(max_loss), len(sids),
+                    )
+            except Exception as exc:
+                logger.error("force-close after kill-switch failed: %s", exc)
+
+        asyncio.create_task(_force_close_all())
         raise HTTPException(
             status_code=400,
             detail=f"Daily loss guard tripped: today's realised loss ₹{abs(realised):.0f} "
-                   f"≥ max ₹{max_loss:.0f}. New orders blocked until tomorrow.",
+                   f"≥ max ₹{max_loss:.0f}. New orders blocked; open positions force-closed.",
         )
 
 
@@ -8209,7 +8374,18 @@ async def _execution_preflight(
                 or risk_cfg.get("daily_loss_kill_switch_enabled")
             )
             if daily_loss_enabled:
-                await _check_daily_loss_guard(user_id, risk_cfg.get("daily_loss_limit") or settings.get("max_daily_loss", 0), mode="paper" if paper else "live")
+                # Mode-specific limit: daily_loss_limit_paper / daily_loss_limit_live
+                # fall back to legacy daily_loss_limit for backward-compat.
+                # Set these on the strategy's risk config or user settings.
+                _mode = "paper" if paper else "live"
+                _limit_key = f"daily_loss_limit_{_mode}"
+                _limit = (
+                    float(risk_cfg.get(_limit_key) or 0)
+                    or float(settings.get(_limit_key) or 0)
+                    or float(risk_cfg.get("daily_loss_limit") or 0)
+                    or float(settings.get("max_daily_loss") or 0)
+                )
+                await _check_daily_loss_guard(user_id, _limit, mode=_mode)
     except HTTPException as exc:
         return _preflight_response(
             ok=False,
@@ -15201,6 +15377,22 @@ async def gateway_check_all(user=Depends(get_current_user)):
     return {"results": results, "checked_at": datetime.now(timezone.utc).isoformat()}
 
 
+@api.get("/market/regime")
+async def market_regime_status(user=Depends(get_current_user)):
+    """Current MarketRegime per index — for the gateway monitor dashboard."""
+    from market_regime import get_all_regimes
+    try:
+        db_regimes = await db.market_regime_state.find({}, {"_id": 0}).to_list(10)
+        db_map = {r["index"]: r for r in db_regimes}
+    except Exception:
+        db_map = {}
+    mem = get_all_regimes()
+    result = {}
+    for idx in ("NIFTY", "BANKNIFTY", "SENSEX"):
+        result[idx] = mem.get(idx) or db_map.get(idx) or {"index": idx, "regime": "UNKNOWN"}
+    return {"regimes": result, "as_of": datetime.now(timezone.utc).isoformat()}
+
+
 @api.get("/gateway/status")
 async def gateway_status_all(user=Depends(get_current_user)):
     """FIX 5 + 7: Returns WS gateway status + token refresh info for ALL users."""
@@ -15741,6 +15933,18 @@ async def startup():
             get_settings_fn=get_user_settings,
         )
     )
+    from position_guardian import run_guardian_loop as _run_position_guardian
+    app.state.guardian_stop = asyncio.Event()
+    app.state.guardian_task = asyncio.create_task(
+        _run_position_guardian(
+            db,
+            app.state.guardian_stop,
+            close_fn=_close_strategy_positions,
+            quote_ltp_fn=_quote_upstox_instrument_key,
+            get_ltp_fn=_current_ltp_for_symbol,
+            get_settings_fn=get_user_settings,
+        )
+    )
     app.state.option_engine_stop = asyncio.Event()
     app.state.option_engine_task = asyncio.create_task(_option_engine_monitor_loop(app.state.option_engine_stop))
     app.state.broker_reconcile_stop = asyncio.Event()
@@ -15778,6 +15982,37 @@ async def startup():
             logger.warning("Startup option token subscription failed: %s", _sub_err)
 
     asyncio.create_task(_subscribe_open_position_tokens_on_startup())
+
+    # Phase 2 DB migration: update existing strategy python_code when
+    # strategy_logic_version is stale (< "2.0").
+    async def _migrate_strategy_code_versions():
+        """Silently update python_code for any user who still has v1 strategy code."""
+        await asyncio.sleep(5)
+        try:
+            updated = 0
+            for name, (code, _cat, _desc) in UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME.items():
+                result = await db.strategies.update_many(
+                    {
+                        "name": name,
+                        "$or": [
+                            {"strategy_logic_version": {"$exists": False}},
+                            {"strategy_logic_version": {"$lt": "2.0"}},
+                            {"strategy_logic_version": "1.0"},
+                        ],
+                    },
+                    {"$set": {
+                        "python_code": code,
+                        "strategy_logic_version": "2.0",
+                        "code_migrated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                updated += result.modified_count
+            if updated:
+                logger.info("DB migration: updated python_code for %d strategy documents to v2.0", updated)
+        except Exception as _mig_err:
+            logger.warning("Strategy code migration failed: %s", _mig_err)
+
+    asyncio.create_task(_migrate_strategy_code_versions())
     logger.info("QuantG API started")
 
 
@@ -15810,6 +16045,12 @@ async def shutdown():
         app.state.position_monitor_stop.set()
         if app.state.position_monitor_task:
             await asyncio.wait_for(app.state.position_monitor_task, timeout=3.0)
+    except Exception:
+        pass
+    try:
+        app.state.guardian_stop.set()
+        if app.state.guardian_task:
+            await asyncio.wait_for(app.state.guardian_task, timeout=3.0)
     except Exception:
         pass
     try:

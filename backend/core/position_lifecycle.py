@@ -147,6 +147,12 @@ def position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None) 
         elif side != "SHORT" and ltp >= entry * (1 + trigger_pct / 100):
             candidate = ltp * (1 - step_pct / 100)
             trailing_sl = max(float(trailing_sl or 0), candidate)
+    # Enforce breakeven floor: once trailing stop activates it must never fall below entry
+    if trailing_sl is not None and trailing_sl > 0:
+        if side != "SHORT":
+            trailing_sl = max(trailing_sl, entry)
+        else:
+            trailing_sl = min(trailing_sl, entry)
     effective_stop = trailing_sl or stop_price
     return {
         "stop_loss":  round(float(effective_stop), 2) if effective_stop not in (None, "") else None,
