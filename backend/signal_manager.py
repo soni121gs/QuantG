@@ -421,10 +421,15 @@ class SignalManager:
     """Sweeps PENDING signals, evaluates cooldown/max daily limits, and coordinates execution."""
 
     @staticmethod
-    async def validate_strategy_limits(db, strategy_id: str, user_id: str, visual_config: dict) -> Tuple[bool, Optional[str]]:
+    async def validate_strategy_limits(db, strategy_id: str, user_id: str, visual_config: dict) -> Tuple[bool, Optional[str], float]:
+        """Returns (ok, reason, allocation_multiplier).
+
+        allocation_multiplier is 1.0 normally, 0.25 when loss-streak throttle fires (streak 3–4).
+        ok=False when hard-blocked (streak >= 5, max trades, cooldown).
+        """
         strategy = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
         if not strategy:
-            return False, "strategy-not-found"
+            return False, "strategy-not-found", 1.0
 
         risk_cfg = (strategy.get("visual_config") or {}).get("risk") or {}
 
@@ -439,7 +444,7 @@ class SignalManager:
             count_today = int(strategy.get("order_count_today") or 0)
             if count_today >= max_trades:
                 logger.info(f"[LIMITS] strategy={strategy_id} blocked: max_trades_day={max_trades} reached (today={count_today})")
-                return False, "max-trades-reached"
+                return False, "max-trades-reached", 1.0
 
         # 2. Cooldown between trades
         cooldown_minutes = risk_cfg.get("cooldown_minutes")
@@ -460,11 +465,24 @@ class SignalManager:
                     if elapsed_minutes < cooldown_minutes:
                         remaining = round(cooldown_minutes - elapsed_minutes, 1)
                         logger.info(f"[LIMITS] strategy={strategy_id} blocked: cooldown active, {remaining}m remaining (cooldown={cooldown_minutes}m)")
-                        return False, "cooldown-active"
+                        return False, "cooldown-active", 1.0
                 except Exception:
                     pass
 
-        return True, None
+        # 3. Loss-streak throttling
+        streak_doc = await db.strategy_loss_streaks.find_one(
+            {"strategy_id": strategy_id, "user_id": user_id},
+            {"current_streak": 1, "_id": 0},
+        )
+        streak = int((streak_doc or {}).get("current_streak") or 0)
+        if streak >= 5:
+            logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= 5 (blocked until next day reset)", strategy_id, streak)
+            return False, "loss-streak-blocked", 1.0
+        if streak >= 3:
+            logger.info("[THROTTLE] strategy=%s THROTTLED: loss_streak=%d >= 3 — allocation_multiplier=0.25", strategy_id, streak)
+            return True, None, 0.25
+
+        return True, None, 1.0
 
 
 async def _acquire_lock(db) -> bool:
@@ -766,7 +784,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             )
                             continue
 
-                        ok, limit_reason = await SignalManager.validate_strategy_limits(
+                        ok, limit_reason, alloc_mult = await SignalManager.validate_strategy_limits(
                             db, sig["strategy_id"], user_id, visual_cfg
                         )
                         if not ok:
@@ -784,6 +802,14 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             sig["status"] = "FILTERED"
                             sig["rejection_reason"] = limit_reason
                         else:
+                            # Apply loss-streak allocation multiplier by scaling down lot count
+                            if alloc_mult < 1.0:
+                                vc = sig.get("visual_config") or {}
+                                opts = vc.get("options") or {}
+                                orig_lots = int(opts.get("lots") or 1)
+                                throttled_lots = max(1, int(orig_lots * alloc_mult))
+                                sig = {**sig, "visual_config": {**vc, "options": {**opts, "lots": throttled_lots}}}
+                                sig["_throttle_alloc_mult"] = alloc_mult
                             # Option quality gate — enforce minimum score and block on
                             # quality_readiness: BLOCK before any order is dispatched.
                             # Thresholds match option_selector_v2: live >= 70, paper >= 50.

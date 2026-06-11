@@ -378,7 +378,7 @@ Files changed: backend/routes/strategies.py (new), backend/server.py
 ---
 
 ### TASK-009 — Extract signal routes from server.py → routes/signals.py
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-008 done
@@ -668,7 +668,7 @@ Files changed: backend/core/models.py
 ---
 
 ### TASK-017 — Loss-streak throttling: wire strategy_loss_streaks into signal gate
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o)
 - **Session size**: ~1.5 hours
 - **Prerequisite**: TASK-001 (strategy limits), TASK-014 (allocator)
