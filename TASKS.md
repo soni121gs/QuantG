@@ -12,7 +12,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 ---
 
 ### TASK-001 — Fix strategy limits enforcement
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 37c25dc · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o / Codex)
 - **Session size**: ~1 hour
 - **Prerequisite**: None
@@ -732,10 +732,10 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 
 | Task | Description | Commit | Date |
 |---|---|---|---|
-| — | — | — | — |
+| TASK-001 | Fix strategy limits enforcement (cooldown + max_trades_day) | 37c25dc | 2026-06-11 |
 
 ---
 
 *Last updated: 2026-06-11*
 *Total tasks: 20 (17 active + 3 backlog)*
-*Open: 20 · In progress: 0 · Done: 0*
+*Open: 19 · In progress: 0 · Done: 1*
