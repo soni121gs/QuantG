@@ -31,6 +31,7 @@ from core.position_lifecycle import (
     normalize_strategy_risk,
     position_risk_prices,
 )
+from core.portfolio_ledger import get_strategy_pnl_today
 
 logger = logging.getLogger("quantg.position_monitor")
 
@@ -48,6 +49,10 @@ _POLL_INTERVAL_OUT_HOURS = 30
 
 # Force-close all positions at this IST minute-of-day (15:10 = 910 minutes)
 _SQUAREOFF_MINUTE_IST = 15 * 60 + 10
+
+# EOD aggregation fires once per day at 15:35 IST (market settled, squareoff done)
+_EOD_AGGREGATION_MINUTE_IST = 15 * 60 + 35
+_eod_aggregation_done_date: str | None = None  # tracks which calendar date was already run
 
 
 # ── IST helpers ────────────────────────────────────────────────────────────────
@@ -104,9 +109,117 @@ async def run_monitor_loop(
     logger.info("Position monitor stopped")
 
 
+async def _run_eod_aggregation(db) -> None:
+    """Aggregate today's P&L into daily_reports for every active user.
+
+    Called once at 15:35 IST on market days. Upserts one document per user.
+    """
+    global _eod_aggregation_done_date
+    ist = _ist_now()
+    today_str = ist.strftime("%Y-%m-%d")
+
+    if _eod_aggregation_done_date == today_str:
+        return  # already ran today
+    if ist.weekday() >= 5:
+        return  # skip weekends
+    if ist.hour * 60 + ist.minute < _EOD_AGGREGATION_MINUTE_IST:
+        return  # not yet 15:35
+
+    logger.info("EOD aggregation starting for %s", today_str)
+
+    try:
+        user_ids = await db.strategy_positions.distinct("user_id")
+        now_ist = ist.isoformat()
+
+        for user_id in user_ids:
+            try:
+                strategies = await db.strategies.find(
+                    {"user_id": user_id, "status": {"$in": ["live", "paused", "draft"]}},
+                    {"_id": 0, "id": 1, "name": 1},
+                ).to_list(200)
+
+                strategy_rows = []
+                total_realized = 0.0
+                total_unrealized = 0.0
+                total_trades = 0
+
+                for strat in strategies:
+                    sid = strat.get("id")
+                    sname = strat.get("name", sid)
+                    pnl_data = await get_strategy_pnl_today(db, sid, user_id)
+                    r = pnl_data.get("realized_pnl", 0.0)
+                    u = pnl_data.get("unrealized_pnl", 0.0)
+                    t = pnl_data.get("trade_count", 0)
+                    strategy_rows.append({
+                        "strategy_id": sid,
+                        "name": sname,
+                        "realized_pnl": r,
+                        "unrealized_pnl": u,
+                        "trade_count": t,
+                    })
+                    total_realized += r
+                    total_unrealized += u
+                    total_trades += t
+
+                # Signals stats for today
+                ist_start = ist.replace(hour=9, minute=15, second=0, microsecond=0)
+                ist_end   = ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                utc_start = (ist_start - timedelta(hours=5, minutes=30)).isoformat()
+                utc_end   = (ist_end   - timedelta(hours=5, minutes=30)).isoformat()
+                signals_fired = await db.signals.count_documents({
+                    "user_id": user_id,
+                    "created_at": {"$gte": utc_start, "$lt": utc_end},
+                })
+                signals_filtered = await db.signals.count_documents({
+                    "user_id": user_id,
+                    "status": "FILTERED",
+                    "created_at": {"$gte": utc_start, "$lt": utc_end},
+                })
+
+                profitable = [s for s in strategy_rows if s["realized_pnl"] > 0]
+                losing     = [s for s in strategy_rows if s["realized_pnl"] < 0]
+                best  = max(profitable, key=lambda s: s["realized_pnl"], default=None)
+                worst = min(losing,     key=lambda s: s["realized_pnl"], default=None)
+
+                doc = {
+                    "user_id": user_id,
+                    "date": today_str,
+                    "total_realized_pnl": round(total_realized, 2),
+                    "total_unrealized_pnl": round(total_unrealized, 2),
+                    "trades_taken": total_trades,
+                    "signals_fired": signals_fired,
+                    "signals_filtered": signals_filtered,
+                    "market_regime": None,
+                    "best_strategy": {"name": best["name"], "pnl": best["realized_pnl"]} if best else None,
+                    "worst_strategy": {"name": worst["name"], "pnl": worst["realized_pnl"]} if worst else None,
+                    "strategies": strategy_rows,
+                    "generated_at": now_ist,
+                }
+                await db.daily_reports.update_one(
+                    {"user_id": user_id, "date": today_str},
+                    {"$set": doc},
+                    upsert=True,
+                )
+                logger.info(
+                    "EOD aggregation user=%s date=%s realized=%.2f trades=%d",
+                    user_id, today_str, total_realized, total_trades,
+                )
+            except Exception as user_exc:
+                logger.error("EOD aggregation failed for user=%s: %s", user_id, user_exc)
+
+        _eod_aggregation_done_date = today_str
+        logger.info("EOD aggregation complete for %s", today_str)
+
+    except Exception as exc:
+        logger.error("EOD aggregation top-level error: %s", exc)
+
+
 async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn) -> None:
     in_hours = _in_market_hours()
     squareoff = _squareoff_due()
+
+    # ── EOD aggregation (15:35 IST, once per market day) ─────────────────────
+    await _run_eod_aggregation(db)
 
     # ── Revert positions stuck in EXITING > 5 minutes ─────────────────────────
     stale_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()

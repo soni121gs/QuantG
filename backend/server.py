@@ -15154,6 +15154,7 @@ from routes.strategies import router as strategies_router
 from routes.orders import router as orders_router
 from routes.positions import router as positions_router
 from routes.dashboard import router as dashboard_router
+from routes.reports import router as reports_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15163,6 +15164,7 @@ api.include_router(strategies_router)
 api.include_router(orders_router)
 api.include_router(positions_router)
 api.include_router(dashboard_router)
+api.include_router(reports_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)

@@ -451,7 +451,7 @@ Files changed: backend/routes/dashboard.py (new), backend/server.py
 ---
 
 ### TASK-012 — Backend: EOD aggregation job + daily_reports collection
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Tier**: 2 (Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-007 (canonical P&L must exist)
