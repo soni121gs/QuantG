@@ -71,8 +71,15 @@ class OPTION_QUALITY:
 
 class PAPER_TRADING:
     STARTING_BALANCE = int(os.getenv("PAPER_STARTING_BALANCE", "500000"))  # INR
-    SLIPPAGE_PCT = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.05"))          # 5 bps
-    # Fill is simulated at LTP ± slippage; no partial fill simulation yet (TASK-020)
+    SLIPPAGE_PCT = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.05"))          # 5 bps (0.05%)
+
+    # Partial fill: strikes with volume below this threshold get a partial fill
+    # (50–99% of requested qty). Set to 0 to disable partial fill simulation.
+    PARTIAL_FILL_VOLUME_THRESHOLD = int(os.getenv("PAPER_PARTIAL_FILL_VOLUME", "500"))
+
+    # Quote staleness: paper fills whose option_contract quote is older than this
+    # are rejected with STALE_QUOTE. Generous default (60s) vs live (30s).
+    QUOTE_STALE_SECONDS = int(os.getenv("PAPER_QUOTE_STALE_SEC", "60"))
 
 
 class STRATEGY_DEFAULTS:

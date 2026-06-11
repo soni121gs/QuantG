@@ -63,19 +63,82 @@ class PaperAdapter:
         - SELL: credit wallet by fill_price × qty
         - Slippage and brokerage are also deducted from the wallet.
         """
+        from config import PAPER_TRADING
+
         now = datetime.now(timezone.utc).isoformat()
         fill_price = float(intent["requested_price"])
         qty = int(intent["qty"])
         side = str(intent["side"]).upper()
+        option_contract = intent.get("option_contract") or {}
 
-        # Simulated Upstox-like slippage and charges. The main server order
-        # path uses broker charge APIs in live mode and the same accounting
-        # shape in paper mode; keep this optional core path consistent.
-        slippage = round(fill_price * 0.00035, 2)
+        # ── 1. Quote timestamp validation ─────────────────────────────────────
+        # Reject fills whose price quote is too old — prevents paper trades from
+        # executing against stale LTPs during connectivity gaps or market open.
+        quote_ts_raw = (
+            option_contract.get("quote_timestamp")
+            or option_contract.get("timestamp")
+            or option_contract.get("ltp_timestamp")
+        )
+        if quote_ts_raw and PAPER_TRADING.QUOTE_STALE_SECONDS > 0:
+            try:
+                from datetime import datetime as _dt
+                qt = _dt.fromisoformat(str(quote_ts_raw).replace("Z", "+00:00"))
+                age_seconds = (datetime.now(timezone.utc) - qt).total_seconds()
+                if age_seconds > PAPER_TRADING.QUOTE_STALE_SECONDS:
+                    logger.warning(
+                        "PaperAdapter: STALE_QUOTE for order=%s symbol=%s age=%.0fs > %ds — fill rejected",
+                        intent.get("id"), intent.get("target_symbol"), age_seconds, PAPER_TRADING.QUOTE_STALE_SECONDS,
+                    )
+                    return {
+                        "id": intent.get("id") or str(uuid.uuid4()),
+                        "status": "REJECTED",
+                        "execution_status": "REJECTED",
+                        "status_message": f"STALE_QUOTE: price is {age_seconds:.0f}s old (max {PAPER_TRADING.QUOTE_STALE_SECONDS}s)",
+                        "ok": False,
+                    }
+            except Exception:
+                pass  # unparseable timestamp — proceed with fill
+
+        # ── 2. Slippage from config (5 bps default, env-overridable) ─────────
+        slippage_frac = PAPER_TRADING.SLIPPAGE_PCT / 100.0
+        slippage = round(fill_price * slippage_frac, 2)
         final_price = round(
             fill_price + slippage if side == "BUY" else fill_price - slippage, 2
         )
-        gross = abs(final_price * qty)
+
+        # ── 3. Partial fill simulation for low-volume strikes ─────────────────
+        # If the contract volume is below the threshold, only a fraction of the
+        # requested qty is filled immediately. filled_qty is rounded to the lot.
+        volume = None
+        try:
+            v = option_contract.get("volume") or option_contract.get("vol")
+            if v is not None:
+                volume = int(v)
+        except (TypeError, ValueError):
+            pass
+
+        lot_size = max(1, int(
+            option_contract.get("lot_size")
+            or intent.get("lot_size")
+            or 1
+        ))
+        threshold = PAPER_TRADING.PARTIAL_FILL_VOLUME_THRESHOLD
+        filled_qty = qty
+        partial = False
+        if threshold > 0 and volume is not None and volume < threshold and side == "BUY":
+            fill_frac = max(0.5, volume / threshold)   # clamp: always fill ≥ 50%
+            filled_qty = max(lot_size, int(qty * fill_frac))
+            # Round down to nearest whole lot
+            filled_qty = (filled_qty // lot_size) * lot_size
+            filled_qty = max(lot_size, min(filled_qty, qty))
+            partial = filled_qty < qty
+            if partial:
+                logger.info(
+                    "PaperAdapter: partial fill symbol=%s volume=%d < %d — filling %d/%d",
+                    intent.get("target_symbol"), volume, threshold, filled_qty, qty,
+                )
+
+        gross = abs(final_price * filled_qty)
         brokerage = round(min(20.0, gross * 0.0003), 2)
         stt = round(gross * (0.000625 if side == "SELL" else 0.0), 2)
         exchange_txn = round(gross * 0.00053, 2)
@@ -85,7 +148,7 @@ class PaperAdapter:
         charges = round(brokerage + stt + exchange_txn + sebi + stamp + gst, 2)
 
         order_id = intent.get("id") or str(uuid.uuid4())
-        trade_value = round(final_price * qty, 2)
+        trade_value = round(final_price * filled_qty, 2)
 
         # ------------------------------------------------------------------
         # Paper wallet: BUY debits up-front (funds gate). SELL credits are
@@ -112,10 +175,10 @@ class PaperAdapter:
             "target_symbol": intent["target_symbol"],
             "side": side,
             "qty": qty,
-            "filled_qty": qty,
-            "pending_qty": 0,
-            "status": "FILLED",
-            "execution_status": "FILLED",
+            "filled_qty": filled_qty,
+            "pending_qty": qty - filled_qty,
+            "status": "PARTIAL_FILL" if partial else "FILLED",
+            "execution_status": "PARTIAL_FILL" if partial else "FILLED",
             "requested_price": fill_price,
             "price": final_price,
             "brokerage": brokerage,
@@ -166,7 +229,7 @@ class PaperAdapter:
             "symbol": intent["symbol"],
             "target_symbol": intent["target_symbol"],
             "side": side,
-            "qty": qty,
+            "qty": filled_qty,
             "price": final_price,
             "brokerage": brokerage,
             "charges": charges,

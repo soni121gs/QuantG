@@ -718,7 +718,7 @@ Extend `market_regime.py` to support SENSEX in addition to NIFTY/BANKNIFTY. Same
 ---
 
 ### TASK-020 — Paper fill realism: slippage + partial fill model
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 2
 - **Prerequisite**: None (independent)
 
