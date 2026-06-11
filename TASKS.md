@@ -339,7 +339,7 @@ Files changed: backend/core/portfolio_ledger.py, backend/server.py, backend/stra
 ---
 
 ### TASK-008 — Extract strategy routes from server.py → routes/strategies.py
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 4d1bf01 · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~3 hours
 - **Prerequisite**: TASK-006 (tests), TASK-007 (canonical P&L)
@@ -407,7 +407,7 @@ Files changed: backend/routes/signals.py (new), backend/server.py
 ---
 
 ### TASK-010 — Extract orders + positions routes → routes/orders.py + routes/positions.py
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 68033c8 · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~3 hours
 - **Prerequisite**: TASK-009 done
@@ -428,7 +428,7 @@ Files changed: backend/routes/orders.py (new), backend/routes/positions.py (new)
 ---
 
 ### TASK-011 — Extract dashboard/P&L routes → routes/dashboard.py
-- **Status**: `[ ]`
+- **Status**: `[x]` commit c6999de · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-007 (canonical P&L), TASK-010 done
