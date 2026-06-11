@@ -12,6 +12,7 @@ import re
 from core.market_domains import resolve_domain_by_underlying, DomainType
 from core.market_session_service import MarketSessionService
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
+from core.models import PositionDoc, OrderDoc, StrategyDoc
 
 logger = logging.getLogger("quantg.risk_manager")
 
@@ -43,7 +44,7 @@ class RiskManager:
         take_profit: Optional[float] = None,
         lot_size: int = 1,
         risk_style: str = "balanced"
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:  # returns {ok, status, reason, quantity}
         """Performs pre-trade risk and parameter evaluations for a potential order placement.
         
         Returns a dict: {"ok": bool, "status": str, "reason": str, "quantity": int}

@@ -21,6 +21,7 @@ This ensures strategies can trade paper and live without code changes—only the
 mode flag changes where the order goes.
 """
 from typing import Dict, Any, Callable, Awaitable, Optional
+from core.models import OrderDoc, PositionDoc
 from datetime import datetime, timezone
 import os
 import uuid
@@ -55,7 +56,7 @@ class PaperAdapter:
         self.ledger = ledger
         self.wallet = PaperWallet(db)
 
-    async def execute(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, user_id: str, intent: OrderDoc) -> Dict[str, Any]:
         """Simulates immediate fill using virtual paper wallet money.
 
         - BUY: debit wallet by fill_price × qty (rejected if balance < cost)
@@ -290,7 +291,7 @@ class UpstoxLiveAdapter:
         self._place_upstox_fn = place_upstox_fn
         self._resolve_upstox_token_fn = resolve_upstox_token_fn
 
-    async def execute(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, user_id: str, intent: OrderDoc) -> Dict[str, Any]:
         """Dispatches a live OrderIntent to Upstox via execution_bridge.submit_order()."""
         now = datetime.now(timezone.utc).isoformat()
 
@@ -451,7 +452,7 @@ class ExecutionRouter:
             resolve_upstox_token_fn=resolve_upstox_token_fn,
         )
 
-    async def route_intent(self, user_id: str, intent: Dict[str, Any]) -> Dict[str, Any]:
+    async def route_intent(self, user_id: str, intent: OrderDoc) -> Dict[str, Any]:
         mode = str(intent["mode"]).lower()
         if mode == "paper":
             return await self.paper_adapter.execute(user_id, intent)

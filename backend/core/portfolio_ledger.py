@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 import logging
 from pymongo.errors import DuplicateKeyError
+from core.models import PositionDoc, FillDoc, StrategyDoc
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
@@ -62,7 +63,7 @@ class PortfolioLedger:
     def __init__(self, db):
         self.db = db
 
-    async def _record_trade_fill(self, fill: Dict[str, Any], position_id: str,
+    async def _record_trade_fill(self, fill: FillDoc, position_id: str,
                                  action: str, realized_pnl: float = 0.0) -> None:
         """Immutable audit row for every fill the ledger ACCEPTED."""
         doc = {
@@ -158,7 +159,7 @@ class PortfolioLedger:
             logger.error("Ledger: trades insert failed for position %s: %s",
                          pos.get("id"), exc)
 
-    async def process_fill(self, fill: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_fill(self, fill: FillDoc) -> Dict[str, Any]:
         """Processes a trade fill, updating or closing corresponding strategy and portfolio positions.
 
         DB-level fill idempotency: inserts a record into processed_fill_ids with
