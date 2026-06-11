@@ -75,6 +75,42 @@ const KpiCard = ({ label, value, sub, icon: Icon, tone, testid }) => (
   </div>
 );
 
+const MarketPulseGraphic = ({ pnl = 0, marketOpen, label }) => {
+  const positive = Number(pnl || 0) >= 0;
+  const path = positive
+    ? "M6 96 C38 74 48 82 74 58 S124 24 160 38 S214 82 258 42 S314 18 354 30"
+    : "M6 34 C38 54 50 46 76 72 S126 112 162 96 S214 52 258 88 S314 116 354 102";
+
+  return (
+    <div className="qd-market-pulse" aria-hidden="true">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="qd-section-title">NIFTY Pulse</div>
+          <div className="mt-1 font-mono text-xs font-bold text-[var(--qd-text)]">{label || "SESSION"}</div>
+        </div>
+        <span className={`qd-pulse-status ${marketOpen ? "is-open" : "is-closed"}`}>{marketOpen ? "Live" : "Closed"}</span>
+      </div>
+      <svg viewBox="0 0 360 132" className="mt-4 h-28 w-full">
+        <defs>
+          <linearGradient id="pulseLine" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stopColor="var(--qd-accent)" />
+            <stop offset="55%" stopColor="var(--qd-cyan)" />
+            <stop offset="100%" stopColor={positive ? "var(--qd-profit)" : "var(--qd-loss)"} />
+          </linearGradient>
+        </defs>
+        <path d="M0 120 H360" stroke="var(--qd-border)" strokeWidth="1" />
+        <path d="M0 78 H360" stroke="var(--qd-border)" strokeWidth="1" opacity="0.7" />
+        <path d="M0 36 H360" stroke="var(--qd-border)" strokeWidth="1" opacity="0.45" />
+        <path d={`${path} L354 126 L6 126 Z`} fill="var(--qd-accent)" opacity="0.08" />
+        <path d={path} fill="none" stroke="url(#pulseLine)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="5" />
+        {[46, 118, 190, 262, 334].map((x, index) => (
+          <circle key={x} cx={x} cy={index % 2 ? 82 : 42} r="3.5" fill="var(--qd-accent)" opacity="0.75" />
+        ))}
+      </svg>
+    </div>
+  );
+};
+
 const QualityPill = ({ score, readiness }) => {
   const n = Number(score || 0);
   const tone = readiness === "PASS" || n >= 70
@@ -590,44 +626,45 @@ export default function Dashboard() {
     <div className="space-y-5" data-testid="dashboard-page">
       {/* Top Header Card */}
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_0.9fr]">
-        <div className="qd-card qd-hero-panel overflow-hidden">
+        <div className="qd-card qd-hero-panel qd-dashboard-hero overflow-hidden">
           <div className="border-b border-[var(--qd-border)] p-5">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-center">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="qd-chip">Control Room</span>
                   <span className="qd-chip">{marketStatusLabel}</span>
                   <span className="qd-chip">{openPositions} Active</span>
                 </div>
-                <h1 className="mt-4 font-head text-3xl font-extrabold tracking-tight text-white md:text-4xl">QuantG Dashboard</h1>
+                <h1 className="mt-4 font-head text-3xl font-extrabold tracking-tight text-[var(--qd-text)] md:text-4xl">QuantG Dashboard</h1>
                 <p className="mt-2 max-w-2xl text-sm text-[var(--qd-text-2)]">
                   Live portfolio state, NIFTY telemetry, and focused controls for strategy execution.
                 </p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/80 px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
+                    title="Refresh data"
+                  >
+                    <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh
+                  </button>
+                  <Link
+                    to="/ai-bot"
+                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/80 px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                  >
+                    <Bot size={15} /> AI Bot
+                  </Link>
+                  <Link
+                    to="/strategies"
+                    className="qd-force-white flex items-center gap-2 rounded-[var(--qd-radius-sm)] bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider hover:bg-[var(--qd-accent-hover)]"
+                    data-testid="new-strategy-btn"
+                  >
+                    <Zap size={15} /> Strategy
+                  </Link>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  disabled={refreshing}
-                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white disabled:opacity-50"
-                  title="Refresh data"
-                >
-                  <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh
-                </button>
-                <Link
-                  to="/ai-bot"
-                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white"
-                >
-                  <Bot size={15} /> AI Bot
-                </Link>
-                <Link
-                  to="/strategies"
-                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white hover:bg-[var(--qd-accent-hover)]"
-                  data-testid="new-strategy-btn"
-                >
-                  <Zap size={15} /> Strategy
-                </Link>
-              </div>
+              <MarketPulseGraphic pnl={pnl} marketOpen={marketOpen} label={marketStatusLabel} />
             </div>
           </div>
 

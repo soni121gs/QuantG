@@ -359,6 +359,23 @@ a:focus-visible {
   -webkit-backdrop-filter: blur(14px);
 }
 
+.qd-page-header,
+.qd-filter-bar {
+  border: 1px solid var(--qd-border);
+  border-radius: var(--qd-radius);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--qd-accent) 7%, transparent), transparent 48%),
+    rgba(255, 255, 255, 0.84);
+  box-shadow: var(--qd-shadow);
+  padding: 14px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.qd-page-header {
+  padding: 18px;
+}
+
 .qd-card,
 .qd-card-tight,
 .glass-card,
@@ -435,6 +452,49 @@ tbody tr:hover {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--qd-accent) 16%, transparent), transparent 54%),
     linear-gradient(180deg, var(--qd-surface), var(--qd-panel));
+}
+
+.qd-dashboard-hero {
+  min-height: 0;
+}
+
+.qd-market-pulse {
+  border: 1px solid var(--qd-border);
+  border-radius: var(--qd-radius);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.72)),
+    var(--qd-band);
+  padding: 14px;
+}
+
+.qd-pulse-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--qd-border);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.qd-pulse-status.is-open {
+  border-color: rgba(4, 120, 87, 0.28);
+  background: rgba(4, 120, 87, 0.1);
+  color: var(--qd-profit);
+}
+
+.qd-pulse-status.is-closed {
+  border-color: rgba(161, 98, 7, 0.28);
+  background: rgba(161, 98, 7, 0.1);
+  color: var(--qd-warn);
+}
+
+.qd-strategy-card {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.86)),
+    var(--qd-band);
 }
 
 .qd-artboard {

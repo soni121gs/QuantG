@@ -137,14 +137,14 @@ export default function Orders() {
         </div>
       )}
 
-      <div className="flex items-center justify-between flex-wrap gap-2">
+      <div className="qd-filter-bar flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1" data-testid="order-filter">
           {["ALL", "OPEN", "COMPLETE", "CANCELLED", "FAILED", "SKIPPED"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
               className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-sm ${
-                filter === f ? "bg-[var(--qd-accent)] text-white" : "border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:text-white"
+                filter === f ? "qd-force-white bg-[var(--qd-accent)]" : "border border-[var(--qd-border)] bg-white/70 text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
             >

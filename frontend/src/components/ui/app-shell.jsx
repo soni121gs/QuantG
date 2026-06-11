@@ -28,11 +28,11 @@ export function StatusBadge({ tone = "neutral", children, className, ...props })
 
 export function PageHeader({ eyebrow, title, subtitle, badge, actions, className }) {
   return (
-    <section className={cn("flex flex-col gap-4 border-b border-[var(--qd-border)] pb-4 md:flex-row md:items-end md:justify-between", className)}>
+    <section className={cn("qd-page-header flex flex-col gap-4 md:flex-row md:items-center md:justify-between", className)}>
       <div className="min-w-0">
         {eyebrow && <div className="qd-section-title">{eyebrow}</div>}
         <div className="mt-1 flex flex-wrap items-center gap-3">
-          <h1 className="font-head text-2xl font-extrabold text-white md:text-3xl">{title}</h1>
+          <h1 className="font-head text-2xl font-extrabold text-[var(--qd-text)] md:text-3xl">{title}</h1>
           {badge}
         </div>
         {subtitle && <p className="mt-1 max-w-3xl text-sm text-[var(--qd-text-2)]">{subtitle}</p>}
@@ -66,7 +66,7 @@ export function SectionPanel({ title, subtitle, actions, children, className, ..
       {(title || subtitle || actions) && (
         <div className="flex flex-col gap-3 border-b border-[var(--qd-border)] px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div>
-            {title && <h2 className="font-head text-base font-bold text-white">{title}</h2>}
+            {title && <h2 className="font-head text-base font-bold text-[var(--qd-text)]">{title}</h2>}
             {subtitle && <p className="mt-1 text-xs text-[var(--qd-text-2)]">{subtitle}</p>}
           </div>
           {actions && <ActionGroup>{actions}</ActionGroup>}
@@ -82,8 +82,8 @@ export function MetricCard({ label, value, sub, icon: Icon, tone = "neutral", cl
     success: "text-[var(--qd-profit)]",
     danger: "text-[var(--qd-loss)]",
     warning: "text-[var(--qd-warn)]",
-    neutral: "text-white",
-  }[tone] || "text-white";
+    neutral: "text-[var(--qd-text)]",
+  }[tone] || "text-[var(--qd-text)]";
 
   return (
     <div className={cn("qd-stat-panel p-4", className)} {...props}>
