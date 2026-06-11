@@ -193,7 +193,7 @@ Files changed: backend/config.py
 ---
 
 ### TASK-005 — Write AGENT_ROUTER.md — symptom-to-file decision tree
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6f61247 · 2026-06-11
 - **Tier**: 1 (Any model)
 - **Session size**: ~45 min
 - **Prerequisite**: TASK-004 (so config.py file path is accurate)
@@ -240,7 +240,7 @@ Files changed: AGENT_ROUTER.md
 ---
 
 ### TASK-006 — Add 20 broker-free unit tests for core logic
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6f61247 · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None (tests must run without broker or live DB)
@@ -294,7 +294,7 @@ Files changed: backend/tests/test_core_logic.py
 ---
 
 ### TASK-007 — Create canonical P&L source function
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6f61247 · 2026-06-11
 - **Tier**: 3 (Opus / Claude — cross-module)
 - **Session size**: ~3 hours
 - **Prerequisite**: TASK-006 (tests must exist to verify this)
@@ -736,9 +736,12 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 | TASK-002 | Block duplicate exit orders before order creation | 6fd78cc | 2026-06-11 |
 | TASK-003 | Enforce option quality gate in signal_manager dispatch | 6415dba | 2026-06-11 |
 | TASK-004 | Add backend/config.py centralising all tunable constants | 6415dba | 2026-06-11 |
+| TASK-005 | AGENT_ROUTER.md symptom-to-file decision tree | 6f61247 | 2026-06-11 |
+| TASK-006 | 23 broker-free unit tests in test_core_logic.py | 6f61247 | 2026-06-11 |
+| TASK-007 | Canonical get_strategy_pnl_today() in portfolio_ledger | 6f61247 | 2026-06-11 |
 
 ---
 
 *Last updated: 2026-06-11*
 *Total tasks: 20 (17 active + 3 backlog)*
-*Open: 16 · In progress: 0 · Done: 4*
+*Open: 13 · In progress: 0 · Done: 7*
