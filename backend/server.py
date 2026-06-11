@@ -6067,6 +6067,30 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         # (The old key included reason[:20] — a position whose exit reason changed
         # between monitor ticks could place a second exit order.)
         pos_exit_idem = f"exit:{pos['id']}"
+
+        # Pre-order duplicate guard: if a FILLED exit order already exists for this
+        # position key, the position is already closed. Reconcile it without placing
+        # a new order — prevents phantom order rows from being created before the
+        # ledger can reject them.
+        existing_filled_exit = await db.orders.find_one({
+            "user_id": user_id,
+            "idempotency_key": pos_exit_idem,
+            "status": {"$in": ["FILLED", "COMPLETE", "PAPER_FILLED"]},
+        })
+        if existing_filled_exit:
+            now_rec = datetime.now(timezone.utc).isoformat()
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id},
+                {"$set": {"status": "CLOSED", "closed_at": now_rec, "updated_at": now_rec,
+                          "exit_reason": "pre-order-duplicate-reconciled"}},
+            )
+            logger.warning(
+                "Pre-order duplicate guard: exit order already FILLED for pos=%s sym=%s — reconciling to CLOSED",
+                pos["id"], sym,
+            )
+            results.append({"symbol": sym, "qty": qty_net, "side": exit_side, "status": "reconciled-pre-order-duplicate"})
+            continue
+
         place_kwargs: Dict[str, Any] = {
             "user_id": user_id,
             "side": exit_side,
