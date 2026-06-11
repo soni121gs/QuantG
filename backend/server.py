@@ -6946,7 +6946,7 @@ async def _strategy_health_loop(stop_event: asyncio.Event):
     logger.info("Strategy health monitor stopped")
 
 
-@api.post("/strategies/{sid}/unwind")
+# moved to routes/strategies.py
 async def unwind_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
@@ -6955,7 +6955,7 @@ async def unwind_strategy(sid: str, user=Depends(get_current_user)):
     return {"ok": True, **result}
 
 
-@api.post("/strategies", response_model=StrategyOut)
+# moved to routes/strategies.py
 async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
     visual_config = req.visual_config or {}
     underlying = str((visual_config.get("options") or {}).get("underlying") or req.instrument_group or "").upper()
@@ -6996,13 +6996,13 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
 
 
 
-@api.get("/strategies", response_model=List[StrategyOut])
+# moved to routes/strategies.py
 async def list_strategies(user=Depends(get_current_user)):
     rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     return [_strategy_out(r) for r in rows]
 
 
-@api.post("/strategies/seed-defaults")
+# moved to routes/strategies.py
 async def seed_default_strategies(user=Depends(get_current_user)):
     inserted = await seed_default_strategies_for_user(user["id"])
     migrated = await migrate_user_to_v12_upstox(user["id"])
@@ -7035,7 +7035,7 @@ async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
     }
 
 
-@api.get("/strategies/leaderboard")
+# moved to routes/strategies.py
 async def strategy_leaderboard(user=Depends(get_current_user)):
     user_id = user["id"]
     strategies = await db.strategies.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
@@ -7067,7 +7067,7 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
     return result
 
 
-@api.get("/strategies/live-backtest-comparison")
+# moved to routes/strategies.py
 async def live_backtest_comparison(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
     out = []
@@ -7120,7 +7120,7 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
     return {"items": out}
 
 
-@api.get("/strategies/{sid}", response_model=StrategyOut)
+# moved to routes/strategies.py
 async def get_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0, "user_id": 0})
     if not row:
@@ -7129,7 +7129,7 @@ async def get_strategy(sid: str, user=Depends(get_current_user)):
     return _strategy_out(row)
 
 
-@api.get("/strategies/{sid}/daily-report")
+# moved to routes/strategies.py
 async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
     if not row:
@@ -7164,7 +7164,7 @@ async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
     return report
 
 
-@api.put("/strategies/{sid}", response_model=StrategyOut)
+# moved to routes/strategies.py
 async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
     
@@ -7200,7 +7200,7 @@ async def update_strategy(sid: str, req: StrategyReq, user=Depends(get_current_u
     return _strategy_out(row)
 
 
-@api.post("/strategies/{sid}/ai-modify")
+# moved to routes/strategies.py
 async def ai_modify_strategy(sid: str, req: StrategyAIModifyReq, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
     if not row:
@@ -7274,13 +7274,13 @@ async def ai_modify_strategy(sid: str, req: StrategyAIModifyReq, user=Depends(ge
     return response
 
 
-@api.delete("/strategies/{sid}")
+# moved to routes/strategies.py
 async def delete_strategy(sid: str, user=Depends(get_current_user)):
     res = await db.strategies.delete_one({"id": sid, "user_id": user["id"]})
     return {"deleted": res.deleted_count}
 
 
-@api.post("/strategies/{sid}/toggle")
+# moved to routes/strategies.py
 async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
@@ -7309,7 +7309,7 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     return {"status": new_status}
 
 
-@api.put("/strategies/{sid}/runtime-settings")
+# moved to routes/strategies.py
 async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSettingsReq, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
     if not row:
@@ -7375,7 +7375,7 @@ class ManualOrderReq(BaseModel):
     action: str  # BUY or SELL
 
 
-@api.post("/strategies/{sid}/manual-order")
+# moved to routes/strategies.py
 async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_current_user)):
     """Manually fire a BUY or SELL using this strategy's configured symbol & defaults.
     Bypasses the python signal logic — useful for discretionary overrides.
@@ -7426,7 +7426,7 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
     return {"ok": True, "order": result}
 
 
-@api.post("/strategies/{sid}/exit-all")
+# moved to routes/strategies.py
 async def exit_strategy_positions(sid: str, user=Depends(get_current_user)):
     """Square off every stored open Position Manager row for this strategy."""
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
@@ -7435,7 +7435,7 @@ async def exit_strategy_positions(sid: str, user=Depends(get_current_user)):
     return await _close_strategy_positions(user["id"], sid, reason="exit")
 
 
-@api.post("/strategies/{sid}/test-run")
+# moved to routes/strategies.py
 async def test_run_strategy(sid: str, user=Depends(get_current_user)):
     """Force-evaluate a strategy NOW. Bypasses dedup. Returns diagnostics so the
     user can see exactly what their `run(data)` function sees and emits.
@@ -7636,7 +7636,7 @@ async def options_preview(
     }
 
 
-@api.post("/strategies/backtest")
+# moved to routes/strategies.py
 async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     code = req.python_code
     opt_cfg = req.options or {}
@@ -15151,11 +15151,13 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
 from routes.auth import router as auth_router
 from routes.ai import agent_router, router as ai_router
 from routes.ops import router as ops_router
+from routes.strategies import router as strategies_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
 api.include_router(agent_router)
 api.include_router(ops_router)
+api.include_router(strategies_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
