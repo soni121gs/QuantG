@@ -527,6 +527,23 @@ class PortfolioLedger:
             {"id": strategy_id, "user_id": user_id},
             scorecard_update,
         )
+        # Loss-streak tracking — update strategy_loss_streaks on every full close
+        if is_full_close:
+            now_str_streak = datetime.now(timezone.utc).isoformat()
+            if net_pnl < 0:
+                await self.db.strategy_loss_streaks.update_one(
+                    {"strategy_id": strategy_id, "user_id": user_id},
+                    {"$inc": {"current_streak": 1}, "$set": {"updated_at": now_str_streak}},
+                    upsert=True,
+                )
+            else:
+                # Win or breakeven resets the streak
+                await self.db.strategy_loss_streaks.update_one(
+                    {"strategy_id": strategy_id, "user_id": user_id},
+                    {"$set": {"current_streak": 0, "updated_at": now_str_streak}},
+                    upsert=True,
+                )
+
         logger.info(
             "Portfolio ledger %s position %s. qty_closed=%s realized P&L: %.2f",
             "closed" if is_full_close else "reduced", pos["id"], exit_qty, net_pnl,
