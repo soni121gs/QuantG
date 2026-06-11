@@ -96,8 +96,9 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     stop = _positive(inputs.stop_loss_price)
     unit_loss = abs(entry - stop) if stop > 0 else max(entry * 0.06, 1.0)
     risk_fraction = RISK_FRACTION_BY_STYLE.get(style, RISK_FRACTION_BY_STYLE["balanced"])
-    base_risk_budget = equity * risk_fraction
-    risk_budget = min(base_risk_budget, daily_loss_limit) if daily_loss_limit > 0 else base_risk_budget
+    # daily_loss_limit is a per-day P&L kill switch (checked upstream in risk_manager).
+    # Do NOT use it as a per-trade risk budget cap — that would block 1-lot entries.
+    risk_budget = equity * risk_fraction
 
     qty_risk = floor(risk_budget / unit_loss) if unit_loss > 0 else 0
     qty_margin = floor((free_margin * float(inputs.margin_buffer or 0.85)) / entry) if free_margin > 0 else requested
