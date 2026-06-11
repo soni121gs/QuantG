@@ -190,7 +190,7 @@ export default function OpsConsole() {
   return (
     <div className="space-y-6 max-w-7xl pb-10" data-testid="ops-console">
       {/* HEADER CONTROL BAR */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 border border-[var(--qd-border)] bg-[rgba(16,19,22,0.65)] backdrop-blur-md rounded-lg shadow-2xl">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 border border-[var(--qd-border)] bg-[var(--qd-elevated)] backdrop-blur-md rounded-lg shadow-2xl">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-gradient-to-br from-red-500/20 to-orange-500/10 border border-red-500/30 rounded-lg text-[var(--qd-loss)] shadow-inner">
             <ShieldAlert size={26} className="animate-pulse" />
@@ -225,7 +225,7 @@ export default function OpsConsole() {
       {user?.role === "owner" && pendingUsers.length > 0 && (
         <div className="qd-card p-6 border-[var(--qd-cyan)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-cyan)]/5 rounded-full blur-[100px] pointer-events-none" />
-          <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
+          <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3 relative z-10">
             <div className="flex items-center gap-2">
               <Shield className="text-[var(--qd-cyan)] animate-pulse" size={20} />
               <h2 className="text-lg font-head font-extrabold text-white">Owner's Registration Desk</h2>
@@ -241,7 +241,7 @@ export default function OpsConsole() {
           <div className="qd-table-wrap relative z-10">
             <table className="w-full text-left text-xs font-mono border-collapse">
               <thead>
-                <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                <tr className="border-b border-[var(--qd-border)] text-[var(--qd-text-3)]">
                   <th className="py-2.5">TRADER NAME</th>
                   <th className="py-2.5">EMAIL ADDRESS</th>
                   <th className="py-2.5">REQUEST DATE</th>
@@ -251,7 +251,7 @@ export default function OpsConsole() {
               </thead>
               <tbody>
                 {pendingUsers.map((p) => (
-                  <tr key={p.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                  <tr key={p.id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)] transition-colors">
                     <td className="py-3 text-white font-semibold flex items-center gap-1.5">
                       <User size={12} className="text-[var(--qd-text-3)]" />
                       {p.name}
@@ -289,7 +289,7 @@ export default function OpsConsole() {
       {reconciliationNeedsAttention && (
         <div className="qd-card p-6 border-[var(--qd-loss)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden" data-testid="needs-review-panel">
           <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-loss)]/5 rounded-full blur-[100px] pointer-events-none" />
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-white/10 pb-3 relative z-10">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[var(--qd-border)] pb-3 relative z-10">
             <div className="flex items-center gap-2">
               <AlertTriangle className="text-[var(--qd-loss)] animate-bounce" size={20} />
               <h2 className="text-lg font-head font-extrabold text-white">Manual Reconciliation Required</h2>
@@ -301,14 +301,14 @@ export default function OpsConsole() {
               <button
                 onClick={() => run("reconcile", "/ops/orders/sync")}
                 disabled={busy === "reconcile"}
-                className="border border-[var(--qd-border)] hover:border-white hover:bg-white/5 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-white flex items-center gap-1.5"
+                className="border border-[var(--qd-border)] hover:border-white hover:bg-[var(--qd-surface-2)] px-3 py-1.5 rounded text-[11px] font-mono uppercase text-white flex items-center gap-1.5"
               >
                 <RefreshCw size={13} className={busy === "reconcile" ? "animate-spin" : ""} /> Sync Broker
               </button>
               <button
                 onClick={resolveReconciliation}
                 disabled={busy === "resolve-reconciliation" || !reconciliationBreaks?.can_resolve_position_reconciliation}
-                className="border border-emerald-500/40 disabled:border-white/10 disabled:text-[var(--qd-text-3)] disabled:opacity-50 hover:border-emerald-400 hover:bg-emerald-500/10 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-emerald-300 flex items-center gap-1.5"
+                className="border border-emerald-500/40 disabled:border-[var(--qd-border)] disabled:text-[var(--qd-text-3)] disabled:opacity-50 hover:border-emerald-400 hover:bg-emerald-500/10 px-3 py-1.5 rounded text-[11px] font-mono uppercase text-emerald-300 flex items-center gap-1.5"
               >
                 <CheckCircle2 size={13} /> Clear Checked Block
               </button>
@@ -333,7 +333,7 @@ export default function OpsConsole() {
           {needsReviewOrders.length > 0 && <div className="qd-table-wrap relative z-10">
             <table className="w-full text-left text-xs font-mono border-collapse">
               <thead>
-                <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                <tr className="border-b border-[var(--qd-border)] text-[var(--qd-text-3)]">
                   <th className="py-2.5">SYMBOL</th>
                   <th className="py-2.5">ORDER ID</th>
                   <th className="py-2.5">MODE</th>
@@ -345,7 +345,7 @@ export default function OpsConsole() {
               </thead>
               <tbody>
                 {needsReviewOrders.map((o) => (
-                  <tr key={o.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                  <tr key={o.id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)] transition-colors">
                     <td className="py-3 text-white font-semibold">{o.symbol || o.tradingsymbol}</td>
                     <td className="py-3 text-[var(--qd-text-2)]">{o.broker_order_id || o.id}</td>
                     <td className="py-3">
@@ -371,7 +371,7 @@ export default function OpsConsole() {
             <div className="qd-table-wrap relative z-10">
               <table className="w-full text-left text-xs font-mono border-collapse">
                 <thead>
-                  <tr className="border-b border-white/5 text-[var(--qd-text-3)]">
+                  <tr className="border-b border-[var(--qd-border)] text-[var(--qd-text-3)]">
                     <th className="py-2.5">SYMBOL</th>
                     <th className="py-2.5">ORDER ID</th>
                     <th className="py-2.5">RESERVED VALUE</th>
@@ -381,7 +381,7 @@ export default function OpsConsole() {
                 </thead>
                 <tbody>
                   {reconciliationBreaks.reservations_needing_review.map((r) => (
-                    <tr key={r.id || r.order_id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <tr key={r.id || r.order_id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)] transition-colors">
                       <td className="py-3 text-white font-semibold">{r.symbol || r.instrument_key}</td>
                       <td className="py-3 text-[var(--qd-text-2)]">{r.order_id || r.id}</td>
                       <td className="py-3 text-[var(--qd-warn)]">{Number(r.reserved_value || 0).toLocaleString("en-IN", { style: "currency", currency: "INR" })}</td>
@@ -418,11 +418,11 @@ export default function OpsConsole() {
         <div className="lg:col-span-8 space-y-5">
           
           {/* UPSTOX HFT & PERFORMANCE COCKPIT */}
-          <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
+          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
             {/* Top decorative gradient glow */}
             <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-600"></div>
             
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[rgba(255,255,255,0.06)] pb-4 mb-4 gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--qd-border)] pb-4 mb-4 gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-md">
                   <Zap size={18} className="animate-pulse" />
@@ -441,7 +441,7 @@ export default function OpsConsole() {
                   <button 
                     onClick={handleUpstoxLogin}
                     disabled={busy === "upstox-login"}
-                    className="px-3 py-1.5 bg-[var(--qd-surface-3)] hover:bg-white/10 text-white rounded border border-[var(--qd-border)] text-xs font-mono transition-all"
+                    className="px-3 py-1.5 bg-[var(--qd-surface-3)] hover:bg-[var(--qd-surface-2)] text-white rounded border border-[var(--qd-border)] text-xs font-mono transition-all"
                   >
                     Re-Auth
                   </button>
@@ -450,7 +450,7 @@ export default function OpsConsole() {
                 <button 
                   onClick={handleUpstoxLogin}
                   disabled={busy === "upstox-login"}
-                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold font-mono uppercase tracking-wider rounded-md border border-blue-400/20 transition-all flex items-center gap-2 active:scale-95 shadow-md shadow-blue-500/10"
+                  className="px-4 py-2 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-[var(--qd-accent-contrast)] text-xs font-bold font-mono uppercase tracking-wider rounded-md border border-[var(--qd-border-strong)] transition-all flex items-center gap-2 active:scale-95"
                 >
                   <Key size={14} /> Authorize Upstox
                 </button>
@@ -486,8 +486,8 @@ export default function OpsConsole() {
             </div>
 
             {/* Performance Telemetry Detail */}
-            <div className="mt-5 p-3.5 bg-black/40 border border-[var(--qd-border)] rounded-md space-y-2.5 font-mono text-xs">
-              <div className="flex justify-between items-center text-[var(--qd-text-3)] border-b border-white/5 pb-1">
+            <div className="mt-5 p-3.5 bg-[var(--qd-elevated)] border border-[var(--qd-border)] rounded-md space-y-2.5 font-mono text-xs">
+              <div className="flex justify-between items-center text-[var(--qd-text-3)] border-b border-[var(--qd-border)] pb-1">
                 <span>Telemetry Parameter</span>
                 <span>Registry State</span>
               </div>
@@ -511,10 +511,10 @@ export default function OpsConsole() {
           </div>
 
           {/* MARGIN DESK COCKPIT */}
-          <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
+          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
             <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-emerald-500 to-green-400"></div>
 
-            <div className="flex items-center justify-between border-b border-[rgba(255,255,255,0.06)] pb-4 mb-5">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-4 mb-5">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-md">
                   <CircleDollarSign size={18} />
@@ -525,7 +525,7 @@ export default function OpsConsole() {
                 </div>
               </div>
               
-              <span className="font-mono text-xs font-semibold px-2 py-1 bg-white/5 border border-white/10 text-white rounded">
+              <span className="font-mono text-xs font-semibold px-2 py-1 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-white rounded">
                 Active Source: {fundsData?.source?.toUpperCase() || "PAPER"}
               </span>
             </div>
@@ -536,7 +536,7 @@ export default function OpsConsole() {
                 <span className="text-[var(--qd-text-2)] font-semibold flex items-center gap-1"><ArrowUpRight size={14} className="text-emerald-400" /> Cash Used Utilization</span>
                 <span className="text-white font-bold">{utilPercent}% Used / {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })} Avail</span>
               </div>
-              <div className="w-full bg-white/5 border border-white/10 rounded-full h-3 overflow-hidden p-[1px]">
+              <div className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-full h-3 overflow-hidden p-[1px]">
                 <div 
                   className={`h-full rounded-full transition-all duration-700 ${getUtilColor(utilPercent)}`}
                   style={{ width: `${Math.min(utilPercent || 1, 100)}%` }}
@@ -545,7 +545,7 @@ export default function OpsConsole() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-black/25 border border-[var(--qd-border)] rounded p-3">
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
                 <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
                 <div className="text-lg font-bold text-white font-mono mt-1">
                   {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
@@ -553,7 +553,7 @@ export default function OpsConsole() {
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Execution limit</div>
               </div>
 
-              <div className="bg-black/25 border border-[var(--qd-border)] rounded p-3">
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
                 <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
                 <div className="text-lg font-bold text-[var(--qd-loss)] font-mono mt-1">
                   {usedMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
@@ -561,7 +561,7 @@ export default function OpsConsole() {
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Current block</div>
               </div>
 
-              <div className="bg-black/25 border border-[var(--qd-border)] rounded p-3">
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
                 <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
                 <div className="text-lg font-bold text-[var(--qd-warn)] font-mono mt-1">
                   {spanMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
@@ -569,7 +569,7 @@ export default function OpsConsole() {
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Underlying hedge margin</div>
               </div>
 
-              <div className="bg-black/25 border border-[var(--qd-border)] rounded p-3">
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
                 <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
                 <div className="text-lg font-bold text-blue-400 font-mono mt-1">
                   {fundsData?.source === "paper" ? "5.0x MIS" : "1.0x NRML"}
@@ -585,8 +585,8 @@ export default function OpsConsole() {
         <div className="lg:col-span-4 space-y-5">
           
           {/* SYSTEMS CONFIGURATION CHECKLIST */}
-          <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg p-5 shadow-xl">
-            <h2 className="font-head text-sm font-bold text-white flex items-center gap-2 border-b border-[rgba(255,255,255,0.06)] pb-3 mb-4">
+          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 shadow-xl">
+            <h2 className="font-head text-sm font-bold text-white flex items-center gap-2 border-b border-[var(--qd-border)] pb-3 mb-4">
               <Shield size={16} className="text-indigo-400" /> Connection Checklist
             </h2>
             
@@ -604,7 +604,7 @@ export default function OpsConsole() {
               )}
             </div>
 
-            <div className="mt-5 pt-3.5 border-t border-[rgba(255,255,255,0.06)] space-y-2">
+            <div className="mt-5 pt-3.5 border-t border-[var(--qd-border)] space-y-2">
               <div className="flex justify-between items-center text-[10px] uppercase font-mono text-[var(--qd-text-3)]">
                 <span>Active Data Broker</span>
                 <span className="text-white font-bold">{prefs.data_broker || "-"}</span>
@@ -617,8 +617,8 @@ export default function OpsConsole() {
           </div>
 
           {/* DIAGNOSTICS COUNTS */}
-          <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg p-5 shadow-xl space-y-4">
-            <h2 className="font-head text-sm font-bold text-white flex items-center gap-2 border-b border-[rgba(255,255,255,0.06)] pb-3">
+          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 shadow-xl space-y-4">
+            <h2 className="font-head text-sm font-bold text-white flex items-center gap-2 border-b border-[var(--qd-border)] pb-3">
               <Activity size={16} className="text-red-400 animate-pulse" /> Diagnostics Summary
             </h2>
             
@@ -642,8 +642,8 @@ export default function OpsConsole() {
       </div>
 
       {/* QUICK AUTOMATION CONTROL PANEL */}
-      <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg p-5 shadow-xl">
-        <h2 className="font-head text-base font-bold text-white flex items-center gap-2 border-b border-[rgba(255,255,255,0.06)] pb-4 mb-4">
+      <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 shadow-xl">
+        <h2 className="font-head text-base font-bold text-white flex items-center gap-2 border-b border-[var(--qd-border)] pb-4 mb-4">
           <Power size={18} className="text-orange-400" /> Direct Control Panel Actions
         </h2>
 
@@ -710,8 +710,8 @@ export default function OpsConsole() {
       </div>
 
       {/* SYSTEMS RECOVERY ENGINE */}
-      <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
-        <div className="border-b border-[rgba(255,255,255,0.06)] px-5 py-4 flex items-center justify-between bg-black/20">
+      <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
+        <div className="border-b border-[var(--qd-border)] px-5 py-4 flex items-center justify-between bg-[var(--qd-surface)]">
           <div>
             <h2 className="font-head text-base font-bold text-white">Advanced Recovery Engine</h2>
             <p className="text-xs text-[var(--qd-text-3)] font-mono">Automated incident resolution and compliance metrics</p>
@@ -738,7 +738,7 @@ export default function OpsConsole() {
                     ? "text-[var(--qd-loss)] bg-red-500/10 border border-red-500/20" 
                     : item.severity === "warning" 
                       ? "text-[var(--qd-warn)] bg-orange-500/10 border border-orange-500/20" 
-                      : "text-[var(--qd-text-3)] bg-white/5 border border-white/10"
+                      : "text-[var(--qd-text-3)] bg-[var(--qd-surface-2)] border border-[var(--qd-border)]"
                 }`}>
                   {item.severity}
                 </span>
@@ -765,8 +765,8 @@ export default function OpsConsole() {
       </div>
 
       {/* BLOCKED/ERRORED STRATEGIES */}
-      <div className="border border-[var(--qd-border)] bg-[rgba(16,19,22,0.45)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
-        <div className="border-b border-[rgba(255,255,255,0.06)] px-5 py-4 bg-black/20 flex justify-between items-center">
+      <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
+        <div className="border-b border-[var(--qd-border)] px-5 py-4 bg-[var(--qd-surface)] flex justify-between items-center">
           <div>
             <h2 className="font-head text-base font-bold text-white">Halted Strategies (Blocking Errors)</h2>
             <p className="text-xs text-[var(--qd-text-3)] font-mono">Strategies currently suspended by the Options Risk engine</p>
@@ -788,7 +788,7 @@ export default function OpsConsole() {
           <div className="qd-table-wrap">
             <table className="w-full text-sm font-mono">
               <thead>
-                <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] border-b border-[rgba(255,255,255,0.06)] bg-black/10">
+                <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] border-b border-[var(--qd-border)] bg-[var(--qd-surface)]">
                   <th className="px-5 py-3">Strategy ID / Name</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Telemetry Segment</th>
@@ -797,7 +797,7 @@ export default function OpsConsole() {
               </thead>
               <tbody className="divide-y divide-[rgba(255,255,255,0.05)]">
                 {data.errored_strategies.map((s) => (
-                  <tr key={s.id} className="hover:bg-white/[0.01]">
+                  <tr key={s.id} className="hover:bg-transparent">
                     <td className="px-5 py-3 text-white font-semibold">{s.name} <span className="text-[10px] text-[var(--qd-text-3)]">({s.id})</span></td>
                     <td className="px-5 py-3 text-[var(--qd-loss)]">{s.status?.toUpperCase()}</td>
                     <td className="px-5 py-3 text-[var(--qd-text-2)]">{s.last_data_source || "-"}</td>
@@ -830,7 +830,7 @@ function actionMessage(key, data) {
 
 // Sleek Metric Card
 const MetricCard = ({ label, value, tone, isPulse }) => (
-  <div className="border border-[var(--qd-border)] bg-[rgba(23,27,32,0.5)] backdrop-blur-md rounded-md p-3 hover:border-[var(--qd-border-strong)] transition-all">
+  <div className="border border-[var(--qd-border)] bg-[var(--qd-surface-2)] backdrop-blur-md rounded-md p-3 hover:border-[var(--qd-border-strong)] transition-all">
     <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className="flex items-center gap-1.5 mt-1">
       {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
@@ -864,7 +864,7 @@ const TelemetryMetric = ({ label, value, desc, status, isPulse }) => {
   };
   
   return (
-    <div className="bg-black/20 border border-[rgba(255,255,255,0.04)] rounded-md p-3">
+    <div className="bg-[var(--qd-surface)] border border-[rgba(255,255,255,0.04)] rounded-md p-3">
       <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">{label}</div>
       <div className="flex items-center gap-1.5 mt-1">
         {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
@@ -901,7 +901,7 @@ const ActionCard = ({ icon: Icon, title, text, onClick, busy, danger }) => (
         : "border-[var(--qd-border)] bg-[rgba(25,30,36,0.3)] text-white hover:border-white hover:bg-white/[0.03] hover:shadow-lg hover:shadow-black/20"
     }`}
   >
-    <div className={`p-2 rounded-lg flex-shrink-0 ${danger ? "bg-red-500/10 text-[var(--qd-loss)]" : "bg-white/5 text-[var(--qd-text-2)]"}`}>
+    <div className={`p-2 rounded-lg flex-shrink-0 ${danger ? "bg-red-500/10 text-[var(--qd-loss)]" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]"}`}>
       <Icon size={18} />
     </div>
     <span className="flex-1 min-w-0">

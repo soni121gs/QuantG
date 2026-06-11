@@ -579,7 +579,7 @@ export default function Layout({ children }) {
                       className={({ isActive }) =>
                         `flex items-center gap-3 px-3 py-2.5 text-sm font-semibold rounded-[var(--qd-radius-sm)] ${
                           isActive
-                            ? "bg-[var(--qd-surface-3)] text-white border border-[var(--qd-border-strong)]"
+                            ? "bg-[var(--qd-surface-3)] text-[var(--qd-text)] border border-[var(--qd-border-strong)]"
                             : "text-[var(--qd-text-2)] border border-transparent hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)]"
                         }`
                       }

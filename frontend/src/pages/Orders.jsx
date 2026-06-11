@@ -144,7 +144,7 @@ export default function Orders() {
               key={f}
               onClick={() => setFilter(f)}
               className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-sm ${
-                filter === f ? "qd-force-white bg-[var(--qd-accent)]" : "border border-[var(--qd-border)] bg-white/70 text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                filter === f ? "qd-force-white bg-[var(--qd-accent)]" : "border border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
             >

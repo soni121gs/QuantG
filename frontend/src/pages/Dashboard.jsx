@@ -744,7 +744,7 @@ export default function Dashboard() {
             className={`px-4 py-2.5 font-head font-semibold text-xs transition-all border-b-2 border-transparent uppercase tracking-widest whitespace-nowrap ${
               activeTab === t.id
                 ? "text-white border-[var(--qd-cyan)] qd-tab-active"
-                : "text-[var(--qd-text-3)] hover:text-white"
+                : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
           >
             {t.label}
@@ -1010,7 +1010,7 @@ export default function Dashboard() {
                   <div className="qd-section-title">// Runtime ledger states</div>
                   <h2 className="mt-1 font-head text-xl font-semibold text-white">Strategy Position Ledger</h2>
                 </div>
-                <Link to="/strategies" className="font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:text-white">
+                <Link to="/strategies" className="font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:text-[var(--qd-text)]">
                   Manage strategies
                 </Link>
               </div>

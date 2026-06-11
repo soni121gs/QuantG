@@ -246,7 +246,7 @@ const Stat = ({ label, value, mono, tone }) => (
 );
 
 const PrefToggle = ({ label, description, checked, onChange }) => (
-  <label className="flex cursor-pointer items-start gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+  <label className="flex cursor-pointer items-start gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
     <input
       type="checkbox"
       checked={checked}
