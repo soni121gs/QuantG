@@ -234,3 +234,35 @@ def get_cached_regime(index: str) -> Optional[Dict[str, Any]]:
 
 def get_all_regimes() -> Dict[str, Any]:
     return {k: v["regime"] for k, v in _state.items()}
+
+
+# ── Regime → capital weight multiplier (TASK-015) ─────────────────────────────
+# Converts the binary ALLOW/BLOCK gate into a graduated capital weight.
+# The hard BLOCK for CRASH/MELTUP entry direction is preserved in strategy_runner.py.
+# This table applies an additional capital weight BEFORE the block check so that
+# aligned strategies get more capital and misaligned ones get less without a hard stop.
+
+_REGIME_MULTIPLIER_TABLE: Dict[str, Dict[str, float]] = {
+    # regime            trend   range  breakout  neutral
+    "TREND_UP":   {"trend": 1.3, "range": 0.5, "breakout": 1.0, "neutral": 1.0},
+    "TREND_DOWN": {"trend": 1.3, "range": 0.5, "breakout": 1.0, "neutral": 1.0},
+    "MELTUP":     {"trend": 1.3, "range": 0.5, "breakout": 1.2, "neutral": 1.0},
+    "CRASH":      {"trend": 1.3, "range": 0.5, "breakout": 1.2, "neutral": 1.0},
+    "RANGE":      {"trend": 0.5, "range": 1.3, "breakout": 0.7, "neutral": 1.0},
+    "VOLATILE":   {"trend": 0.8, "range": 0.6, "breakout": 1.5, "neutral": 1.0},
+}
+
+
+def get_regime_multiplier(strategy_type: str, current_regime: str) -> float:
+    """Return capital weight multiplier for a strategy type in the current regime.
+
+    strategy_type: 'trend' | 'range' | 'breakout' | 'neutral'
+    current_regime: one of TREND_UP / TREND_DOWN / MELTUP / CRASH / RANGE / VOLATILE
+
+    Returns a float in [0.5, 1.5]. The caller clamps into [0.25, 2.0] after
+    combining with the performance multiplier.
+    """
+    row = _REGIME_MULTIPLIER_TABLE.get(current_regime.upper())
+    if row is None:
+        return 1.0
+    return row.get(str(strategy_type).lower(), 1.0)
