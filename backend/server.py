@@ -86,6 +86,7 @@ from core.strategy_leaderboard import build_strategy_leaderboard
 from core.instrument_resolver import InstrumentResolver
 from core.models import InstrumentSource
 from core.quote_service import QuoteService
+from core.portfolio_ledger import get_strategy_pnl_today
 from upstox_analytics import UpstoxAnalyticsClient
 from upstox_trading_quality import (
     apply_broker_truth_event,
@@ -7158,6 +7159,8 @@ async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
         market_trend_analysis={"trend": trend, "rsi": 50, "atr": atr, "reversal_risk": 0.35},
     )
     report["data_source"] = market.get("source")
+    # Canonical P&L from trade_fills — single source of truth
+    report["pnl_today"] = await get_strategy_pnl_today(db, sid, user["id"])
     return report
 
 

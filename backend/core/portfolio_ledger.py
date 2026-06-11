@@ -28,6 +28,17 @@ import uuid
 import logging
 from pymongo.errors import DuplicateKeyError
 
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _trading_day_window_utc() -> tuple:
+    """Return (start_iso, end_iso) for today's IST trading day expressed in UTC."""
+    now_utc = datetime.now(timezone.utc)
+    ist_now = now_utc + IST_OFFSET
+    ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ist_midnight_utc = ist_midnight - IST_OFFSET
+    return ist_midnight_utc.isoformat(), (ist_midnight_utc + timedelta(days=1)).isoformat()
+
 from core.position_lifecycle import (
     normalize_strategy_risk,
     position_risk_prices,
@@ -521,3 +532,66 @@ class PortfolioLedger:
             "closed" if is_full_close else "reduced", pos["id"], exit_qty, net_pnl,
         )
         return _result(True, action, pos["id"], qty_closed=exit_qty, realized_pnl=net_pnl)
+
+
+async def get_strategy_pnl_today(db, strategy_id: str, user_id: str) -> Dict[str, Any]:
+    """Canonical P&L source for one strategy today.
+
+    Source of truth: db.trade_fills (immutable audit rows written by process_fill).
+    All callers — dashboard, calendar, capital allocator, kill switch — must read
+    from this function, not from strategy.today_pnl or inline queries.
+
+    Returns:
+        {
+            realized_pnl:   float  — sum of closed trade P&L today
+            unrealized_pnl: float  — sum of open position unrealized P&L
+            total_pnl:      float  — realized + unrealized
+            trade_count:    int    — number of full closes today
+            win_count:      int    — profitable full closes
+            loss_count:     int    — losing full closes
+            last_updated:   str    — ISO timestamp
+        }
+    """
+    start, end = _trading_day_window_utc()
+
+    fills = await db.trade_fills.find(
+        {
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "action": {"$in": ["CLOSE", "REDUCE"]},
+            "created_at": {"$gte": start, "$lt": end},
+        },
+        {"_id": 0, "realized_pnl": 1},
+    ).to_list(500)
+
+    realized_pnl = round(sum(float(f.get("realized_pnl") or 0) for f in fills), 2)
+    trade_count = len([f for f in fills if float(f.get("realized_pnl") or 0) != 0])
+    win_count = len([f for f in fills if float(f.get("realized_pnl") or 0) > 0])
+    loss_count = len([f for f in fills if float(f.get("realized_pnl") or 0) < 0])
+
+    open_positions = await db.strategy_positions.find(
+        {
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER"]},
+        },
+        {"_id": 0, "unrealized_pnl": 1, "unrealised_pnl": 1},
+    ).to_list(50)
+
+    unrealized_pnl = round(
+        sum(
+            float(p.get("unrealized_pnl") or p.get("unrealised_pnl") or 0)
+            for p in open_positions
+        ),
+        2,
+    )
+
+    return {
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "total_pnl": round(realized_pnl + unrealized_pnl, 2),
+        "trade_count": trade_count,
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
