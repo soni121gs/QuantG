@@ -46,7 +46,7 @@ export function CommandBar({ children, className, ...props }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 overflow-x-auto border-b border-[var(--qd-border)] bg-[rgba(10,13,19,0.86)] px-3 py-2 backdrop-blur-xl md:px-4",
+        "flex items-center gap-2 overflow-x-auto border-b border-[var(--qd-border)] bg-white/80 px-3 py-2 backdrop-blur-xl md:px-4",
         className
       )}
       {...props}

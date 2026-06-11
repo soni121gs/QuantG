@@ -20,14 +20,17 @@ import {
   RefreshCw,
   Plus,
   ShieldCheck,
-  Palette,
-  Sparkles,
+  Bell,
+  Settings,
+  ChevronDown,
+  Gauge,
+  PanelRight,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { Button } from "./ui/button";
-import { CommandBar, StatusBadge } from "./ui/app-shell";
+import { StatusBadge } from "./ui/app-shell";
 
 const NAV_GROUPS = [
   {
@@ -46,7 +49,6 @@ const NAV_GROUPS = [
       { to: "/calendar", icon: Calendar, label: "Calendar", id: "nav-calendar" },
       { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
       { to: "/ai-bot", icon: Bot, label: "Ask Agent", id: "nav-aibot" },
-      { to: "/design-canvas", icon: Palette, label: "Design", id: "nav-design" },
     ],
   },
   {
@@ -81,6 +83,77 @@ const MOBILE_NAV = [
   { to: "/ops", icon: ShieldAlert, label: "Risk", id: "mnav-ops" },
 ];
 
+const Sparkline = ({ positive = true }) => (
+  <svg viewBox="0 0 92 30" className="h-8 w-24" aria-hidden="true">
+    <path
+      d={positive ? "M2 22 L16 18 L28 20 L42 12 L56 15 L70 7 L90 10" : "M2 8 L16 12 L28 10 L42 18 L56 15 L70 24 L90 20"}
+      fill="none"
+      stroke={positive ? "var(--qd-profit)" : "var(--qd-loss)"}
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
+  const cash = portfolio?.net_liquidation ?? portfolio?.total_value ?? portfolio?.available_cash ?? 0;
+  const usedMargin = Number(portfolio?.used_margin ?? portfolio?.margin_used ?? 0);
+  const marginPct = cash ? Math.min(100, Math.max(0, (usedMargin / Math.max(1, Number(cash))) * 100)) : 0;
+  const activePositions = portfolio?.open_positions ?? portfolio?.positions_count ?? 0;
+  const pnlPositive = Number(pnl || 0) >= 0;
+
+  return (
+    <aside className="qd-mini-blotter" data-testid="mini-blotter">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="qd-section-title">Mini Blotter</div>
+          <div className="mt-1 text-xs text-[var(--qd-text-2)]">Always-on account context</div>
+        </div>
+        <PanelRight size={17} className="text-[var(--qd-accent)]" />
+      </div>
+      <div className="mt-4 grid gap-3">
+        <div className="qd-blotter-metric">
+          <span>Net Liq.</span>
+          <strong>INR {formatINR(cash)}</strong>
+        </div>
+        <div className="qd-blotter-metric">
+          <span>Open P&L</span>
+          <strong className={pnlPositive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>INR {formatINR(pnl ?? 0)}</strong>
+        </div>
+        <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
+            <div className="font-mono text-xs text-[var(--qd-text-2)]">{pnlPositive ? "Positive" : "Negative"} session</div>
+          </div>
+          <Sparkline positive={pnlPositive} />
+        </div>
+        <div>
+          <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">
+            <span>Margin Usage</span>
+            <span className="font-mono">{marginPct.toFixed(0)}%</span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-[var(--qd-accent)]" style={{ width: `${marginPct}%` }} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Positions</div>
+            <div className="mt-1 font-mono text-lg font-bold text-[var(--qd-text)]">{activePositions}</div>
+          </div>
+          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Mode</div>
+            <div className={`mt-1 font-mono text-lg font-bold ${profile?.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"}`}>
+              {profile?.paper_mode ? "PAPER" : "LIVE"}
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+};
+
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -90,9 +163,11 @@ export default function Layout({ children }) {
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [disclosureOpen, setDisclosureOpen] = useState(false);
   const [theme, setTheme] = useState(() => {
-    if (typeof window === "undefined") return "slate";
-    return window.localStorage.getItem("quantg-theme") || "slate";
+    if (typeof window === "undefined") return "daylight";
+    return window.localStorage.getItem("quantg-theme-v2") || "daylight";
   });
 
   useEffect(() => {
@@ -102,7 +177,7 @@ export default function Layout({ children }) {
 
   useEffect(() => {
     document.documentElement.dataset.quantgTheme = theme;
-    window.localStorage.setItem("quantg-theme", theme);
+    window.localStorage.setItem("quantg-theme-v2", theme);
   }, [theme]);
 
   useEffect(() => {
@@ -153,14 +228,12 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen flex flex-col qd-shell">
-      {/* Top Bar */}
       <header className="sticky top-0 z-50 qd-topbar" data-testid="top-bar">
-        <div className="flex items-center justify-between px-3 md:px-4 h-14 gap-3">
+        <div className="flex h-16 items-center justify-between gap-3 px-3 md:px-4">
           <div className="flex items-center gap-3 md:gap-6 min-w-0">
-            {/* Mobile hamburger */}
             <button
               type="button"
-              className="lg:hidden text-white p-1"
+              className="lg:hidden text-[var(--qd-text)] p-1"
               onClick={() => setDrawerOpen(true)}
               data-testid="open-drawer"
               aria-label="Open menu"
@@ -168,23 +241,21 @@ export default function Layout({ children }) {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-[var(--qd-accent)] flex items-center justify-center rounded-[var(--qd-radius-sm)] shadow-sm">
+              <div className="w-9 h-9 bg-[var(--qd-accent)] flex items-center justify-center rounded-[var(--qd-radius-sm)] shadow-sm">
                 <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
               </div>
-              <span className="font-head font-extrabold text-white text-base">
-                QUANT<span className="text-[var(--qd-accent)]">G</span>
-              </span>
-              <span
-                className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
-                data-testid="version-badge"
-                title="QuantG Terminal Version"
-              >
-                {APP_VERSION_LABEL}
-              </span>
+              <div className="leading-none">
+                <span className="font-head font-extrabold text-[var(--qd-text)] text-base">
+                  Quant<span className="text-[var(--qd-accent)]">G</span>
+                </span>
+                <div className="mt-1 hidden text-[9px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)] sm:block">
+                  Trading Cockpit {APP_VERSION_LABEL}
+                </div>
+              </div>
             </div>
-            <div className="hidden md:flex items-center gap-2 text-xs">
+            <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-white/70 px-3 py-1.5 text-xs">
               <span className="qd-live-dot" />
-              <span className="font-mono uppercase tracking-wider text-[var(--qd-text-2)]">
+              <span className="font-head text-[11px] font-bold uppercase tracking-wide text-[var(--qd-text-2)]">
                 {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
               </span>
             </div>
@@ -198,17 +269,17 @@ export default function Layout({ children }) {
               </StatusBadge>
             )}
           </div>
-          <div className="flex items-center gap-3 md:gap-6">
-            <div className="flex items-center gap-1.5 md:gap-2">
-              <Wallet size={14} className="text-[var(--qd-text-2)] hidden md:block" />
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="hidden items-center gap-3 rounded-full border border-[var(--qd-border)] bg-white/70 px-3 py-1.5 md:flex">
               <span
-                className="font-mono text-[10px] md:text-xs text-[var(--qd-text-2)] uppercase tracking-wider"
+                className="font-head text-[10px] font-bold uppercase tracking-wide text-[var(--qd-text-3)]"
                 title={`${portfolio?.open_positions ?? 0} open positions`}
               >
                 P&L
               </span>
+              <Sparkline positive={(pnl ?? 0) >= 0} />
               <span
-                className={`font-mono text-xs md:text-sm font-semibold ${
+                className={`font-mono text-xs md:text-sm font-bold ${
                   (pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
                 }`}
                 data-testid="top-pnl"
@@ -219,7 +290,68 @@ export default function Layout({ children }) {
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
               {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
             </span>
-            <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={refreshShell} data-testid="cmd-refresh" aria-label="Refresh">
+              <RefreshCw size={15} />
+            </Button>
+            <Button variant="ghost" size="icon" data-testid="notification-bell" aria-label="Notifications">
+              <Bell size={16} />
+            </Button>
+            <div className="relative">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setSettingsOpen((v) => !v)}
+                data-testid="shell-settings"
+              >
+                <Settings size={14} /> Settings <ChevronDown size={13} />
+              </Button>
+              {settingsOpen && (
+                <div className="absolute right-0 mt-2 w-72 rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-white/90 p-3 shadow-lg backdrop-blur-md">
+                  <div className="qd-section-title px-1">Quick Actions</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Button variant="secondary" size="sm" onClick={syncBroker} disabled={commandBusy}>
+                      <ShieldCheck size={14} /> Sync
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => navigate("/strategies")}>
+                      <Plus size={14} /> Strategy
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => navigate("/ai-bot")}>
+                      <Bot size={14} /> Agent
+                    </Button>
+                    <Button variant="danger" size="sm" onClick={() => navigate("/ops")}>
+                      <ShieldAlert size={14} /> Risk
+                    </Button>
+                  </div>
+                  <div className="mt-4 qd-section-title px-1">Theme</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {THEMES.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setTheme(item.id)}
+                        className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 text-left font-head text-[11px] font-bold ${
+                          theme === item.id
+                            ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
+                            : "border-[var(--qd-border)] bg-white text-[var(--qd-text-2)]"
+                        }`}
+                        title={item.detail}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/design-canvas")}
+                    className="mt-3 w-full rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white px-3 py-2 text-left text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                  >
+                    Open design canvas
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
               <div className="hidden lg:flex flex-col items-end leading-none font-mono">
                 <span className="text-[10px] text-[var(--qd-text-2)]">{user?.email}</span>
                 {user?.role && (
@@ -248,63 +380,12 @@ export default function Layout({ children }) {
             </div>
           </div>
         </div>
-        <CommandBar data-testid="global-command-bar" className="hidden lg:flex">
-          <span className="mr-1 whitespace-nowrap qd-section-title">Command Center</span>
-          <Button variant="outline" size="sm" onClick={refreshShell} data-testid="cmd-refresh">
-            <RefreshCw size={14} /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={syncBroker} disabled={commandBusy} data-testid="cmd-broker-sync">
-            <ShieldCheck size={14} /> Broker Sync
-          </Button>
-          <Button variant="primary" size="sm" onClick={() => navigate("/strategies")} data-testid="cmd-new-strategy">
-            <Plus size={14} /> New Strategy
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate("/ai-bot")} data-testid="cmd-ask-ai">
-            <Bot size={14} /> Ask AI
-          </Button>
-          <Button variant="danger" size="sm" onClick={() => navigate("/ops")} data-testid="cmd-risk-ops">
-            <ShieldAlert size={14} /> Risk Ops
-          </Button>
-          <div className="ml-auto flex items-center gap-1 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface)] p-1">
-            <Sparkles size={13} className="ml-2 text-[var(--qd-accent)]" />
-            {THEMES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setTheme(item.id)}
-                className={`rounded-full px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider ${
-                  theme === item.id
-                    ? "bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)] shadow-[var(--qd-glow)]"
-                    : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
-                }`}
-                title={item.detail}
-                aria-pressed={theme === item.id}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </CommandBar>
-        <CommandBar data-testid="mobile-command-row" className="lg:hidden">
-          <Button variant="outline" size="sm" onClick={refreshShell} data-testid="mcmd-refresh">
-            <RefreshCw size={14} /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={syncBroker} disabled={commandBusy} data-testid="mcmd-broker-sync">
-            <ShieldCheck size={14} /> Sync
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate("/ai-bot")} data-testid="mcmd-ask-ai">
-            <Bot size={14} /> AI
-          </Button>
-          <Button variant="danger" size="sm" onClick={() => navigate("/ops")} data-testid="mcmd-risk-ops">
-            <ShieldAlert size={14} /> Risk
-          </Button>
-        </CommandBar>
       </header>
 
       <div className="flex flex-1 min-h-0">
         {/* Desktop Sidebar */}
         <aside
-          className="hidden lg:flex lg:flex-col w-64 qd-sidebar sticky top-[98px] self-start h-[calc(100vh-98px)] overflow-y-auto"
+          className="hidden lg:flex lg:flex-col w-64 qd-sidebar sticky top-16 self-start h-[calc(100vh-64px)] overflow-y-auto"
           data-testid="sidebar"
         >
           <nav className="flex flex-col p-3 gap-4">
@@ -424,11 +505,24 @@ export default function Layout({ children }) {
         )}
 
         {/* Main */}
-        <main className="flex-1 min-w-0 p-3 md:p-6 pb-24 lg:pb-6 qd-grid-bg">
-          {children}
+        <main className="flex-1 min-w-0 qd-grid-bg">
+          <div className="grid gap-4 p-3 pb-24 md:p-5 lg:grid-cols-[minmax(0,1fr)_240px] lg:pb-5 xl:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="min-w-0">
+              {children}
+              <button
+                type="button"
+                onClick={() => setDisclosureOpen(true)}
+                className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-white/75 px-3 py-2 text-xs font-semibold text-[var(--qd-text-2)] shadow-sm hover:text-[var(--qd-text)]"
+                data-testid="sebi-disclosure-link"
+              >
+                <ShieldAlert size={13} /> F&O Risk Disclosure
+              </button>
+            </div>
+            <MiniBlotterDock portfolio={portfolio} pnl={pnl} profile={profile} />
+          </div>
 
           {/* SEBI Compliance F&O Risk Disclosure */}
-          <div className="mt-8 p-4 qd-card bg-[rgba(255,159,10,0.03)] border-l-2 border-[var(--qd-warn)] text-xs text-[var(--qd-text-2)] leading-relaxed rounded-sm" data-testid="sebi-disclosure">
+          <div className="hidden" data-testid="sebi-disclosure">
             <h4 className="font-mono font-bold text-[var(--qd-warn)] uppercase tracking-wider mb-2 flex items-center gap-1.5">
               <ShieldAlert size={14} /> SEBI Mandated Derivative Risk Disclosure
             </h4>
@@ -445,9 +539,38 @@ export default function Layout({ children }) {
         </main>
       </div>
 
+      {disclosureOpen && (
+        <div className="fixed inset-0 z-[70] bg-slate-950/30 backdrop-blur-sm" onClick={() => setDisclosureOpen(false)}>
+          <aside
+            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-white p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="sebi-disclosure-drawer"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="qd-section-title text-[var(--qd-warn)]">Compliance</div>
+                <h3 className="mt-2 font-head text-xl font-bold text-[var(--qd-text)]">SEBI F&O Risk Disclosure</h3>
+              </div>
+              <button type="button" onClick={() => setDisclosureOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-slate-100" aria-label="Close disclosure">
+                <X size={18} />
+              </button>
+            </div>
+            <ul className="mt-5 list-disc space-y-3 pl-5 text-sm leading-relaxed text-[var(--qd-text-2)]">
+              <li>9 out of 10 individual traders in equity Futures and Options segment incurred net losses.</li>
+              <li>On average, loss makers registered a net trading loss close to INR 50,000.</li>
+              <li>Loss makers expended an additional 28% of net trading losses as transaction costs.</li>
+              <li>Those making net profits incurred transaction costs of 15% to 50% of net profits.</li>
+            </ul>
+            <p className="mt-5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-slate-50 p-3 text-xs text-[var(--qd-text-3)]">
+              Source: SEBI study dated January 25, 2023 on analysis of profit and loss of individual traders dealing in equity Futures and Options segment.
+            </p>
+          </aside>
+        </div>
+      )}
+
       {/* Mobile bottom nav */}
       <nav
-        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-[rgba(8,10,13,0.95)] backdrop-blur-xl border-t border-[var(--qd-border)]"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-white/90 backdrop-blur-xl border-t border-[var(--qd-border)] shadow-[0_-12px_30px_rgba(15,23,42,0.08)]"
         data-testid="mobile-bottom-nav"
       >
         {MOBILE_NAV.map((n) => (

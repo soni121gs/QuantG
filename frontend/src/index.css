@@ -1,38 +1,38 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --qd-bg: #07111f;
-  --qd-bg-2: #0b1626;
-  --qd-surface: rgba(18, 30, 48, 0.78);
-  --qd-surface-2: rgba(27, 42, 64, 0.82);
-  --qd-surface-3: rgba(40, 59, 86, 0.88);
-  --qd-elevated: rgba(13, 24, 39, 0.92);
-  --qd-panel: rgba(11, 22, 37, 0.9);
-  --qd-border: rgba(156, 178, 211, 0.18);
-  --qd-border-strong: rgba(170, 196, 232, 0.36);
-  --qd-text: #f7fbff;
-  --qd-text-2: #bfd0e5;
-  --qd-text-3: #7e93ad;
-  --qd-accent: #54a3ff;
-  --qd-accent-hover: #2f86f6;
-  --qd-accent-contrast: #04111f;
-  --qd-cyan: #37d5e8;
-  --qd-cyan-hover: #12a8c0;
-  --qd-profit: #35d07f;
-  --qd-loss: #ff5277;
-  --qd-warn: #f7b955;
-  --qd-focus: rgba(84, 163, 255, 0.32);
+  --qd-bg: #f8fafc;
+  --qd-bg-2: #eef4fb;
+  --qd-surface: rgba(255, 255, 255, 0.86);
+  --qd-surface-2: rgba(241, 245, 249, 0.92);
+  --qd-surface-3: rgba(226, 232, 240, 0.96);
+  --qd-elevated: rgba(255, 255, 255, 0.96);
+  --qd-panel: rgba(255, 255, 255, 0.92);
+  --qd-border: rgba(15, 23, 42, 0.1);
+  --qd-border-strong: rgba(37, 99, 235, 0.28);
+  --qd-text: #111827;
+  --qd-text-2: #475569;
+  --qd-text-3: #7b8797;
+  --qd-accent: #2563eb;
+  --qd-accent-hover: #1d4ed8;
+  --qd-accent-contrast: #ffffff;
+  --qd-cyan: #0891b2;
+  --qd-cyan-hover: #0e7490;
+  --qd-profit: #15803d;
+  --qd-loss: #dc2626;
+  --qd-warn: #b7791f;
+  --qd-focus: rgba(37, 99, 235, 0.2);
   --qd-radius: 8px;
   --qd-radius-sm: 6px;
-  --qd-shadow: 0 18px 54px rgba(0, 0, 0, 0.28);
-  --qd-glow: 0 10px 28px rgba(84, 163, 255, 0.2);
-  --qd-noise: radial-gradient(circle at 8% 0%, rgba(84, 163, 255, 0.12), transparent 25%),
-    radial-gradient(circle at 82% 7%, rgba(55, 213, 232, 0.08), transparent 28%);
-  --qd-band: linear-gradient(135deg, rgba(84, 163, 255, 0.12), rgba(55, 213, 232, 0.04));
+  --qd-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  --qd-glow: 0 12px 30px rgba(37, 99, 235, 0.12);
+  --qd-noise: radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.08), transparent 24%),
+    radial-gradient(circle at 88% 4%, rgba(8, 145, 178, 0.06), transparent 30%);
+  --qd-band: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(8, 145, 178, 0.03));
 }
 
 [data-quantg-theme="slate"] {
@@ -154,7 +154,7 @@ body,
   min-height: 100%;
   background: var(--qd-bg);
   color: var(--qd-text);
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -171,10 +171,11 @@ body {
 
 .font-mono {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .font-head {
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Sora', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   letter-spacing: 0;
 }
 
@@ -195,23 +196,23 @@ a[class*="bg-[var(--qd-loss)]"] {
 @layer base {
   :root {
     --background: 224 39% 5%;
-    --foreground: 210 40% 98%;
-    --card: 222 29% 9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 29% 9%;
-    --popover-foreground: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
     --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 25% 14%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 220 22% 13%;
-    --muted-foreground: 218 16% 58%;
+    --secondary: 214 32% 91%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 91%;
+    --muted-foreground: 215 16% 47%;
     --accent: 188 86% 50%;
     --accent-foreground: 222 47% 8%;
     --destructive: 348 89% 60%;
     --destructive-foreground: 210 40% 98%;
-    --border: 218 18% 18%;
-    --input: 218 18% 18%;
+    --border: 214 32% 86%;
+    --input: 214 32% 86%;
     --ring: 217 91% 60%;
     --radius: 0.625rem;
   }
@@ -266,7 +267,7 @@ input,
 select,
 textarea {
   border-radius: var(--qd-radius-sm);
-  background-color: rgba(7, 9, 15, 0.72);
+  background-color: rgba(255, 255, 255, 0.86);
   border: 1px solid var(--qd-border);
   color: var(--qd-text);
 }
@@ -302,14 +303,14 @@ a:focus-visible {
 }
 
 .qd-topbar {
-  background: color-mix(in srgb, var(--qd-bg-2) 88%, transparent);
+  background: rgba(255, 255, 255, 0.86);
   border-bottom: 1px solid var(--qd-border);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
 
 .qd-sidebar {
-  background: color-mix(in srgb, var(--qd-bg-2) 82%, transparent);
+  background: rgba(255, 255, 255, 0.78);
   border-right: 1px solid var(--qd-border);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -320,7 +321,7 @@ a:focus-visible {
 .glass-card,
 .qd-stat-panel {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--qd-surface) 94%, white 2%), var(--qd-panel)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), var(--qd-panel)),
     var(--qd-band);
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
@@ -340,8 +341,8 @@ a:focus-visible {
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--qd-text) 9%, transparent), transparent 36%);
-  opacity: 0.5;
+  background: linear-gradient(135deg, rgba(255,255,255,0.34), transparent 38%);
+  opacity: 0.45;
 }
 
 .qd-card:hover,
@@ -410,11 +411,52 @@ tbody tr:hover {
   background: color-mix(in srgb, var(--qd-surface-2) 72%, transparent);
   color: var(--qd-text-2);
   padding: 6px 10px;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.qd-mini-blotter {
+  position: sticky;
+  top: 84px;
+  align-self: start;
+  display: none;
+  border: 1px solid var(--qd-border);
+  border-radius: var(--qd-radius);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--qd-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 14px;
+}
+
+.qd-blotter-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--qd-border);
+  border-radius: var(--qd-radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px;
+}
+
+.qd-blotter-metric span {
+  color: var(--qd-text-3);
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.qd-blotter-metric strong {
+  color: var(--qd-text);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
 }
 
 .qd-card > *,
@@ -430,7 +472,7 @@ tbody tr:hover {
   height: 8px;
   border-radius: 999px;
   background: var(--qd-profit);
-  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
+  box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.12);
   animation: qd-pulse 1.8s ease-in-out infinite;
 }
 
@@ -485,7 +527,7 @@ tbody tr:hover {
 }
 
 .qd-tab-active {
-  color: #ffffff;
+  color: var(--qd-text);
   border-bottom: 2px solid var(--qd-accent) !important;
 }
 
@@ -570,5 +612,11 @@ tbody tr:hover {
 
   .qd-table-wrap table {
     min-width: 760px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .qd-mini-blotter {
+    display: block;
   }
 }
