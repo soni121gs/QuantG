@@ -784,7 +784,39 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             sig["status"] = "FILTERED"
                             sig["rejection_reason"] = limit_reason
                         else:
-                            pre_validated.append(sig)
+                            # Option quality gate — enforce minimum score and block on
+                            # quality_readiness: BLOCK before any order is dispatched.
+                            # Thresholds match option_selector_v2: live >= 70, paper >= 50.
+                            sig_mode = sig.get("mode") or "paper"
+                            min_score = 70 if sig_mode == "live" else 50
+                            quality_score = sig.get("option_quality_score")
+                            contract = sig.get("option_contract") or {}
+                            quality_readiness = contract.get("quality_readiness") or contract.get("trade_quality_score", {}).get("readiness", "")
+
+                            quality_block_reason = None
+                            if quality_readiness == "BLOCK":
+                                quality_block_reason = "option-quality-readiness-block"
+                            elif quality_score is not None and float(quality_score) < min_score:
+                                quality_block_reason = f"option-quality-score-low:{quality_score:.0f}<{min_score}"
+
+                            if quality_block_reason:
+                                logger.info(
+                                    "[QUALITY] strategy=%s sig=%s filtered: %s",
+                                    sig["strategy_id"], sig["id"], quality_block_reason,
+                                )
+                                await db.signals.update_one(
+                                    {"id": sig["id"]},
+                                    {"$set": {
+                                        "status": "FILTERED",
+                                        "rejection_reason": "OPTION_QUALITY_LOW",
+                                        "rejection_detail": {"reason": quality_block_reason, "score": quality_score, "readiness": quality_readiness, "min_score": min_score},
+                                        "processed_at": datetime.now(timezone.utc).isoformat(),
+                                    }}
+                                )
+                                sig["status"] = "FILTERED"
+                                sig["rejection_reason"] = "OPTION_QUALITY_LOW"
+                            else:
+                                pre_validated.append(sig)
 
                     # Coordinate conflicts across pre-validated signals
                     if pre_validated:
