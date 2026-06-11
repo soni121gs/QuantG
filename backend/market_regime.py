@@ -32,6 +32,14 @@ REGIME_REFRESH_MINUTES = int(os.environ.get("REGIME_REFRESH_MIN",  "15"))
 
 VALID_INDICES = {"NIFTY", "BANKNIFTY", "SENSEX"}
 
+# Upstox instrument keys for index spot data (used by strategy_runner candle fetch).
+# SENSEX lives on BSE_INDEX, not NSE_INDEX — this is the key difference from NIFTY/BANKNIFTY.
+INDEX_INSTRUMENT_KEYS: Dict[str, str] = {
+    "NIFTY":     "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "SENSEX":    "BSE_INDEX|SENSEX",
+}
+
 # ── In-memory state ───────────────────────────────────────────────────────────
 # {index: {"regime": RegimeState, "last_full_compute": monotonic, "last_return_check": float}}
 _state: Dict[str, Dict[str, Any]] = {}

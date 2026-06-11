@@ -114,13 +114,26 @@ async def get_strategy_allocation_multiplier(
 
         strategy = await db.strategies.find_one(
             {"id": strategy_id, "user_id": user_id},
-            {"_id": 0, "kind": 1, "signal_type": 1, "strategy_type": 1, "name": 1},
+            {"_id": 0, "kind": 1, "signal_type": 1, "strategy_type": 1, "name": 1, "visual_config": 1},
         ) or {}
 
         perf_mult = await _performance_multiplier(db, strategy_id, user_id)
 
-        # Use NIFTY regime as the primary market signal; fall back gracefully
-        regime_doc = get_cached_regime("NIFTY") or get_cached_regime("BANKNIFTY")
+        # Pick regime for the strategy's own underlying — SENSEX strategies use
+        # SENSEX regime, NIFTY/BANKNIFTY strategies use their own index.
+        # Falls back through NIFTY → BANKNIFTY → SENSEX if the primary is uncached.
+        vc = strategy.get("visual_config") or {}
+        underlying = str(
+            (vc.get("options") or {}).get("underlying")
+            or vc.get("underlying")
+            or "NIFTY"
+        ).upper()
+        regime_doc = (
+            get_cached_regime(underlying)
+            or get_cached_regime("NIFTY")
+            or get_cached_regime("BANKNIFTY")
+            or get_cached_regime("SENSEX")
+        )
         current_regime = (regime_doc or {}).get("regime", "RANGE")
         strategy_type = _infer_strategy_type(strategy)
         regime_mult = get_regime_multiplier(strategy_type, current_regime)
