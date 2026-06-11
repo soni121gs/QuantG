@@ -8,6 +8,7 @@ import {
   Bot,
   ListOrdered,
   PieChart,
+  Calendar,
   LogOut,
   Wallet,
   Menu,
@@ -40,6 +41,7 @@ const NAV_GROUPS = [
     label: "Monitor",
     items: [
       { to: "/market-hub", icon: HeartPulse, label: "Markets", id: "nav-market-hub" },
+      { to: "/calendar", icon: Calendar, label: "Calendar", id: "nav-calendar" },
       { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
       { to: "/ai-bot", icon: Bot, label: "Ask Agent", id: "nav-aibot" },
     ],

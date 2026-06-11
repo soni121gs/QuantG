@@ -21,6 +21,7 @@ const Positions = React.lazy(() => import("./pages/Positions"));
 const Profile = React.lazy(() => import("./pages/Profile"));
 const OpsConsole = React.lazy(() => import("./pages/OpsConsole"));
 const MarketHub = React.lazy(() => import("./pages/MarketHub"));
+const Calendar = React.lazy(() => import("./pages/Calendar"));
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -64,6 +65,7 @@ export default function App() {
             <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
             <Route path="/profile" element={<Protected><Profile /></Protected>} />
             <Route path="/ops" element={<Protected><OpsConsole /></Protected>} />
+            <Route path="/calendar" element={<Protected><Calendar /></Protected>} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </Suspense>

@@ -505,7 +505,7 @@ Files changed: backend/routes/reports.py (new), backend/position_monitor.py
 ---
 
 ### TASK-013 — Frontend: Calendar page with daily P&L heatmap
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Tier**: 2 (Sonnet / GPT-4o — frontend)
 - **Session size**: ~3 hours
 - **Prerequisite**: TASK-012 (backend reports API must exist)
