@@ -59,6 +59,7 @@ def _ledger_db_mock():
     db.trade_fills.insert_one = AsyncMock()
     db.trades.insert_one = AsyncMock()
     db.strategies.update_one = AsyncMock()
+    db.strategy_loss_streaks.update_one = AsyncMock()
     return db
 
 

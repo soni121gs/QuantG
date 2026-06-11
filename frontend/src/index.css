@@ -275,7 +275,7 @@ a[class*="bg-[var(--qd-loss)]"] {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(7, 9, 15, 0.9);
+  background: var(--qd-surface-2);
 }
 
 ::-webkit-scrollbar-thumb {
@@ -310,7 +310,7 @@ input,
 select,
 textarea {
   border-radius: var(--qd-radius-sm);
-  background-color: rgba(255, 255, 255, 0.86);
+  background-color: var(--qd-elevated);
   border: 1px solid var(--qd-border);
   color: var(--qd-text);
 }
@@ -346,14 +346,14 @@ a:focus-visible {
 }
 
 .qd-topbar {
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--qd-surface);
   border-bottom: 1px solid var(--qd-border);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
 
 .qd-sidebar {
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--qd-surface);
   border-right: 1px solid var(--qd-border);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -365,7 +365,7 @@ a:focus-visible {
   border-radius: var(--qd-radius);
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--qd-accent) 7%, transparent), transparent 48%),
-    rgba(255, 255, 255, 0.84);
+    var(--qd-panel);
   box-shadow: var(--qd-shadow);
   padding: 14px;
   backdrop-filter: blur(14px);
@@ -381,7 +381,7 @@ a:focus-visible {
 .glass-card,
 .qd-stat-panel {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), var(--qd-panel)),
+    linear-gradient(180deg, var(--qd-elevated), var(--qd-panel)),
     var(--qd-band);
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
@@ -401,8 +401,8 @@ a:focus-visible {
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: linear-gradient(135deg, rgba(255,255,255,0.34), transparent 38%);
-  opacity: 0.45;
+  background: var(--qd-band);
+  opacity: 0.55;
 }
 
 .qd-card:hover,
@@ -462,7 +462,7 @@ tbody tr:hover {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.72)),
+    linear-gradient(180deg, var(--qd-elevated), var(--qd-surface)),
     var(--qd-band);
   padding: 14px;
 }
@@ -500,7 +500,7 @@ tbody tr:hover {
 .qd-dashboard-details {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background: rgba(255,255,255,0.72);
+  background: var(--qd-surface);
   box-shadow: var(--qd-shadow);
   padding: 14px;
 }
@@ -557,7 +557,7 @@ tbody tr:hover {
   display: none;
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--qd-surface);
   box-shadow: var(--qd-shadow);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -571,7 +571,7 @@ tbody tr:hover {
   gap: 12px;
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius-sm);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--qd-surface-2);
   padding: 12px;
 }
 
@@ -603,7 +603,7 @@ tbody tr:hover {
 .qd-card [class*="bg-white/["],
 .qd-stat-panel [class*="bg-black/"],
 .qd-stat-panel [class*="bg-white/["] {
-  background: rgba(255, 255, 255, 0.68) !important;
+  background: var(--qd-surface-2) !important;
 }
 
 .qd-card [class*="border-white/"],
@@ -617,7 +617,7 @@ tbody tr:hover {
 .qd-card-tight input,
 .qd-card-tight select,
 .qd-card-tight textarea {
-  background: rgba(255, 255, 255, 0.88) !important;
+  background: var(--qd-elevated) !important;
   color: var(--qd-text) !important;
 }
 
@@ -752,7 +752,7 @@ tbody tr:hover {
 .badge-size,
 .badge-normal {
   border: 1px solid var(--qd-border);
-  background: rgba(25, 31, 42, 0.72);
+  background: var(--qd-surface-2);
 }
 
 .badge-kill {
@@ -789,19 +789,29 @@ tbody tr:hover {
 }
 
 @media (max-width: 768px) {
-  button,
-  a,
+  /* Only tap-target elements need 44px — not inline filter chips */
   input,
-  select {
+  select,
+  textarea {
     min-height: 44px;
   }
 
   input[type="number"] {
-    font-size: 16px;
+    font-size: 16px; /* prevents iOS auto-zoom */
   }
 
   .qd-table-wrap table {
     min-width: 760px;
+  }
+
+  /* Bottom nav safe area for iPhone home indicator */
+  [data-testid="mobile-bottom-nav"] {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Give main content breathing room above bottom nav + safe area */
+  main {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   }
 }
 

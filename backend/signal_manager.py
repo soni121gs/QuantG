@@ -431,10 +431,14 @@ class SignalManager:
         if not strategy:
             return False, "strategy-not-found", 1.0
 
-        risk_cfg = (strategy.get("visual_config") or {}).get("risk") or {}
+        risk_cfg = (
+            (strategy.get("visual_config") or {}).get("risk")
+            or (visual_config or {}).get("risk")
+            or {}
+        )
 
         # 1. Max trades per day
-        max_trades = risk_cfg.get("max_trades_day")
+        max_trades = risk_cfg.get("max_trades_day", risk_cfg.get("max_trades_per_day"))
         if max_trades:
             try:
                 max_trades = int(max_trades)

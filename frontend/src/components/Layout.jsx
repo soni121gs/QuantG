@@ -106,28 +106,28 @@ const getSeverityTone = (severity) => {
       return {
         icon: AlertTriangle,
         label: "Critical",
-        className: "border-l-[var(--qd-loss)] bg-rose-50/90",
+        className: "border-l-[var(--qd-loss)] bg-[color-mix(in_srgb,var(--qd-loss)_8%,var(--qd-surface))]",
         text: "text-[var(--qd-loss)]",
       };
     case "warning":
       return {
         icon: ShieldAlert,
         label: "Warning",
-        className: "border-l-[var(--qd-warn)] bg-amber-50/90",
+        className: "border-l-[var(--qd-warn)] bg-[color-mix(in_srgb,var(--qd-warn)_8%,var(--qd-surface))]",
         text: "text-[var(--qd-warn)]",
       };
     case "success":
       return {
         icon: Check,
         label: "Done",
-        className: "border-l-[var(--qd-profit)] bg-emerald-50/90",
+        className: "border-l-[var(--qd-profit)] bg-[color-mix(in_srgb,var(--qd-profit)_8%,var(--qd-surface))]",
         text: "text-[var(--qd-profit)]",
       };
     default:
       return {
         icon: Bell,
         label: "Info",
-        className: "border-l-[var(--qd-accent)] bg-sky-50/90",
+        className: "border-l-[var(--qd-accent)] bg-[color-mix(in_srgb,var(--qd-accent)_8%,var(--qd-surface))]",
         text: "text-[var(--qd-accent)]",
       };
   }
@@ -171,7 +171,7 @@ const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
           <span>Open P&L</span>
           <strong className={pnlPositive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>INR {formatINR(pnl ?? 0)}</strong>
         </div>
-        <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+        <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
             <div className="font-mono text-xs text-[var(--qd-text-2)]">{pnlPositive ? "Positive" : "Negative"} session</div>
@@ -183,16 +183,16 @@ const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
             <span>Margin Usage</span>
             <span className="font-mono">{marginPct.toFixed(0)}%</span>
           </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--qd-surface-3)]">
             <div className="h-full rounded-full bg-[var(--qd-accent)]" style={{ width: `${marginPct}%` }} />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Positions</div>
             <div className="mt-1 font-mono text-lg font-bold text-[var(--qd-text)]">{activePositions}</div>
           </div>
-          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Mode</div>
             <div className={`mt-1 font-mono text-lg font-bold ${profile?.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"}`}>
               {profile?.paper_mode ? "PAPER" : "LIVE"}
@@ -413,7 +413,7 @@ export default function Layout({ children }) {
                 </div>
               </div>
             </div>
-            <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-white/70 px-3 py-1.5 text-xs">
+            <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 text-xs">
               <span className="qd-live-dot" />
               <span className="font-head text-[11px] font-bold uppercase tracking-wide text-[var(--qd-text-2)]">
                 {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
@@ -430,7 +430,7 @@ export default function Layout({ children }) {
             )}
           </div>
           <div className="flex items-center gap-2 md:gap-3">
-            <div className="hidden items-center gap-3 rounded-full border border-[var(--qd-border)] bg-white/70 px-3 py-1.5 md:flex">
+            <div className="hidden items-center gap-3 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 md:flex">
               <span
                 className="font-head text-[10px] font-bold uppercase tracking-wide text-[var(--qd-text-3)]"
                 title={`${portfolio?.open_positions ?? 0} open positions`}
@@ -483,7 +483,7 @@ export default function Layout({ children }) {
                 <Settings size={14} /> Settings <ChevronDown size={13} />
               </Button>
               {settingsOpen && (
-                <div className="absolute right-0 mt-2 w-72 rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-white/90 p-3 shadow-lg backdrop-blur-md">
+                <div className="absolute right-0 mt-2 w-72 rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-elevated)] p-3 shadow-lg backdrop-blur-md">
                   <div className="qd-section-title px-1">Quick Actions</div>
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     <Button variant="secondary" size="sm" onClick={syncBroker} disabled={commandBusy}>
@@ -509,7 +509,7 @@ export default function Layout({ children }) {
                         className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 text-left font-head text-[11px] font-bold ${
                           theme === item.id
                             ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
-                            : "border-[var(--qd-border)] bg-white text-[var(--qd-text-2)]"
+                            : "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]"
                         }`}
                         title={item.detail}
                       >
@@ -520,7 +520,7 @@ export default function Layout({ children }) {
                   <button
                     type="button"
                     onClick={() => navigate("/design-canvas")}
-                    className="mt-3 w-full rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white px-3 py-2 text-left text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                    className="mt-3 w-full rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 text-left text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
                   >
                     Open design canvas
                   </button>
@@ -688,7 +688,7 @@ export default function Layout({ children }) {
               <button
                 type="button"
                 onClick={() => setDisclosureOpen(true)}
-                className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-white/75 px-3 py-2 text-xs font-semibold text-[var(--qd-text-2)] shadow-sm hover:text-[var(--qd-text)]"
+                className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2 text-xs font-semibold text-[var(--qd-text-2)] shadow-sm hover:text-[var(--qd-text)]"
                 data-testid="sebi-disclosure-link"
               >
                 <ShieldAlert size={13} /> F&O Risk Disclosure
@@ -718,7 +718,7 @@ export default function Layout({ children }) {
       {disclosureOpen && (
         <div className="fixed inset-0 z-[70] bg-slate-950/30 backdrop-blur-sm" onClick={() => setDisclosureOpen(false)}>
           <aside
-            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-white p-5 shadow-2xl"
+            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-[var(--qd-elevated)] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
             data-testid="sebi-disclosure-drawer"
           >
@@ -727,7 +727,7 @@ export default function Layout({ children }) {
                 <div className="qd-section-title text-[var(--qd-warn)]">Compliance</div>
                 <h3 className="mt-2 font-head text-xl font-bold text-[var(--qd-text)]">SEBI F&O Risk Disclosure</h3>
               </div>
-              <button type="button" onClick={() => setDisclosureOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-slate-100" aria-label="Close disclosure">
+              <button type="button" onClick={() => setDisclosureOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-[var(--qd-surface-2)]" aria-label="Close disclosure">
                 <X size={18} />
               </button>
             </div>
@@ -737,7 +737,7 @@ export default function Layout({ children }) {
               <li>Loss makers expended an additional 28% of net trading losses as transaction costs.</li>
               <li>Those making net profits incurred transaction costs of 15% to 50% of net profits.</li>
             </ul>
-            <p className="mt-5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-slate-50 p-3 text-xs text-[var(--qd-text-3)]">
+            <p className="mt-5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 text-xs text-[var(--qd-text-3)]">
               Source: SEBI study dated January 25, 2023 on analysis of profit and loss of individual traders dealing in equity Futures and Options segment.
             </p>
           </aside>
@@ -747,7 +747,7 @@ export default function Layout({ children }) {
       {notificationOpen && (
         <div className="fixed inset-0 z-[75] bg-slate-950/30 backdrop-blur-sm" onClick={() => setNotificationOpen(false)}>
           <aside
-            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-white p-4 shadow-2xl"
+            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-[var(--qd-elevated)] p-4 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
             data-testid="notification-drawer"
           >
@@ -756,7 +756,7 @@ export default function Layout({ children }) {
                 <div className="qd-section-title">Notifications</div>
                 <h3 className="mt-2 font-head text-xl font-extrabold text-[var(--qd-text)]">Trading alerts</h3>
               </div>
-              <button type="button" onClick={() => setNotificationOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-slate-100" aria-label="Close notifications">
+              <button type="button" onClick={() => setNotificationOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-[var(--qd-surface-2)]" aria-label="Close notifications">
                 <X size={18} />
               </button>
             </div>
@@ -774,7 +774,7 @@ export default function Layout({ children }) {
                   className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 font-head text-xs font-bold ${
                     notificationTab === item.id
                       ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
-                      : "border-[var(--qd-border)] bg-slate-50 text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                      : "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
                   }`}
                 >
                   {item.label}
@@ -791,14 +791,14 @@ export default function Layout({ children }) {
               </Button>
             </div>
             {notificationPrefs.critical_only && notificationTab === "all" && (
-              <div className="mt-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-slate-50 px-3 py-2 text-xs text-[var(--qd-text-2)]">
+              <div className="mt-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
                 Profile preference is showing critical notifications only.
               </div>
             )}
 
             <div className="mt-4 space-y-3">
               {visibleNotifications.length === 0 && (
-                <div className="rounded-[var(--qd-radius)] border border-dashed border-[var(--qd-border)] bg-slate-50 p-6 text-center">
+                <div className="rounded-[var(--qd-radius)] border border-dashed border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-6 text-center">
                   <Bell size={20} className="mx-auto text-[var(--qd-accent)]" />
                   <p className="mt-3 font-head text-sm font-bold text-[var(--qd-text)]">Nothing needs attention</p>
                   <p className="mt-1 text-xs text-[var(--qd-text-2)]">Order, strategy, and risk alerts will appear here.</p>
@@ -814,7 +814,7 @@ export default function Layout({ children }) {
                     className={`border border-l-4 border-[var(--qd-border)] ${tone.className} rounded-[var(--qd-radius)] p-3 shadow-sm`}
                   >
                     <div className="flex items-start gap-3">
-                      <div className={`mt-0.5 rounded-full bg-white p-2 ${tone.text}`}>
+                      <div className={`mt-0.5 rounded-full bg-[var(--qd-surface-3)] p-2 ${tone.text}`}>
                         <Icon size={16} />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -836,7 +836,7 @@ export default function Layout({ children }) {
                                   navigate(item.action_url);
                                   setNotificationOpen(false);
                                 }}
-                                className="inline-flex items-center gap-1 rounded-full border border-[var(--qd-border)] bg-white px-2.5 py-1 text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                                className="inline-flex items-center gap-1 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2.5 py-1 text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
                               >
                                 Open <ExternalLink size={12} />
                               </button>
@@ -845,7 +845,7 @@ export default function Layout({ children }) {
                               <button
                                 type="button"
                                 onClick={() => markNotificationRead(item.id)}
-                                className="qd-force-white inline-flex items-center gap-1 rounded-full bg-[var(--qd-text)] px-2.5 py-1 text-xs font-semibold"
+                                className="qd-force-white inline-flex items-center gap-1 rounded-full bg-[var(--qd-accent)] px-2.5 py-1 text-xs font-semibold"
                               >
                                 <Check size={12} /> Read
                               </button>
@@ -864,7 +864,7 @@ export default function Layout({ children }) {
 
       {/* Mobile bottom nav */}
       <nav
-        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-white/90 backdrop-blur-xl border-t border-[var(--qd-border)] shadow-[0_-12px_30px_rgba(15,23,42,0.08)]"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-50 grid grid-cols-5 bg-[var(--qd-surface)] backdrop-blur-xl border-t border-[var(--qd-border)] shadow-[0_-12px_30px_rgba(15,23,42,0.08)]"
         data-testid="mobile-bottom-nav"
       >
         {MOBILE_NAV.map((n) => (

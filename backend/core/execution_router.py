@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 import os
 import uuid
 import logging
+import inspect
 
 from core.portfolio_ledger import PortfolioLedger
 from core.paper_broker import PaperWallet
@@ -261,6 +262,10 @@ class PaperAdapter:
         # ------------------------------------------------------------------
         try:
             ledger_result = await self.ledger.process_fill(fill_doc)
+            if inspect.isawaitable(ledger_result):
+                ledger_result = await ledger_result
+            if not isinstance(ledger_result, dict):
+                ledger_result = {}
         except Exception:
             # Ledger rejected the fill outright (e.g. option fill missing
             # critical fields). Undo the BUY debit so funds aren't stranded,

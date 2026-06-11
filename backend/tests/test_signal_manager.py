@@ -215,7 +215,7 @@ def test_conflict_resolver_blocks_duplicate_active_option_contract():
 
 
 @pytest.mark.anyio
-async def test_signal_manager_cooldown_active_is_not_a_hard_blocker():
+async def test_signal_manager_cooldown_active_is_blocked():
     db = MagicMock()
     
     # Configure mock strategy under active cooldown (last signal was 5 minutes ago, cooldown is 15 minutes)
@@ -223,7 +223,14 @@ async def test_signal_manager_cooldown_active_is_not_a_hard_blocker():
         "id": "strat-1",
         "user_id": "user-1",
         "last_signal_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 15,
+                "max_trades_day": 0,
+            }
+        },
     })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
 
     vc = {
         "risk": {
@@ -232,9 +239,10 @@ async def test_signal_manager_cooldown_active_is_not_a_hard_blocker():
         }
     }
 
-    ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
-    assert ok
-    assert reason is None
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
+    assert not ok
+    assert reason == "cooldown-active"
+    assert alloc_mult == 1.0
 
 
 @pytest.mark.anyio
@@ -246,7 +254,14 @@ async def test_signal_manager_cooldown_expired_is_approved():
         "id": "strat-1",
         "user_id": "user-1",
         "last_signal_at": (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 15,
+                "max_trades_day": 0,
+            }
+        },
     })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
 
     vc = {
         "risk": {
@@ -255,20 +270,29 @@ async def test_signal_manager_cooldown_expired_is_approved():
         }
     }
 
-    ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
     assert ok
     assert reason is None
+    assert alloc_mult == 1.0
 
 
 @pytest.mark.anyio
-async def test_signal_manager_max_trades_is_not_a_hard_blocker():
+async def test_signal_manager_max_trades_is_blocked():
     db = MagicMock()
     
     db.strategies.find_one = AsyncMock(return_value={
         "id": "strat-1",
         "user_id": "user-1",
         "last_signal_at": None,
+        "order_count_today": 5,
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 0,
+                "max_trades_day": 5,
+            }
+        },
     })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
 
     # Mock count_documents to return 5 processed signals today, with a limit of 5
     db.signals.count_documents = AsyncMock(return_value=5)
@@ -280,9 +304,10 @@ async def test_signal_manager_max_trades_is_not_a_hard_blocker():
         }
     }
 
-    ok, reason = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
-    assert ok
-    assert reason is None
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", vc)
+    assert not ok
+    assert reason == "max-trades-reached"
+    assert alloc_mult == 1.0
 
 
 def test_conflict_resolver_strategy_specific_override():
