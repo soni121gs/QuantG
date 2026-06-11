@@ -55,7 +55,7 @@ Files changed: backend/signal_manager.py
 ---
 
 ### TASK-002 — Block duplicate exit orders before order creation
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6fd78cc · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o / Codex)
 - **Session size**: ~45 min
 - **Prerequisite**: None
@@ -733,9 +733,10 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 | Task | Description | Commit | Date |
 |---|---|---|---|
 | TASK-001 | Fix strategy limits enforcement (cooldown + max_trades_day) | 37c25dc | 2026-06-11 |
+| TASK-002 | Block duplicate exit orders before order creation | 6fd78cc | 2026-06-11 |
 
 ---
 
 *Last updated: 2026-06-11*
 *Total tasks: 20 (17 active + 3 backlog)*
-*Open: 19 · In progress: 0 · Done: 1*
+*Open: 18 · In progress: 0 · Done: 2*
