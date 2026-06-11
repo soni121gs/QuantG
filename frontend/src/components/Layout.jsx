@@ -219,6 +219,14 @@ export default function Layout({ children }) {
   const [notificationTab, setNotificationTab] = useState("all");
   const [notifications, setNotifications] = useState([]);
   const [notificationCounts, setNotificationCounts] = useState({ unread: 0, critical: 0 });
+  const [notificationPrefs, setNotificationPrefs] = useState(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(window.localStorage.getItem("quantg-notification-prefs") || "{}");
+    } catch {
+      return {};
+    }
+  });
   const [browserAlertsEnabled, setBrowserAlertsEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("quantg-browser-alerts") === "true";
@@ -302,6 +310,15 @@ export default function Layout({ children }) {
   }, [loadNotifications]);
 
   useEffect(() => {
+    if (!notificationOpen || typeof window === "undefined") return;
+    try {
+      setNotificationPrefs(JSON.parse(window.localStorage.getItem("quantg-notification-prefs") || "{}"));
+    } catch {
+      setNotificationPrefs({});
+    }
+  }, [notificationOpen]);
+
+  useEffect(() => {
     if (
       !browserAlertsEnabled ||
       typeof window === "undefined" ||
@@ -355,6 +372,7 @@ export default function Layout({ children }) {
   const visibleNotifications = notifications.filter((item) => {
     if (notificationTab === "unread") return !item.read;
     if (notificationTab === "critical") return item.severity === "critical";
+    if (notificationPrefs.critical_only) return item.severity === "critical";
     return true;
   });
 
@@ -772,6 +790,11 @@ export default function Layout({ children }) {
                 <CheckCheck size={14} /> Mark read
               </Button>
             </div>
+            {notificationPrefs.critical_only && notificationTab === "all" && (
+              <div className="mt-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-slate-50 px-3 py-2 text-xs text-[var(--qd-text-2)]">
+                Profile preference is showing critical notifications only.
+              </div>
+            )}
 
             <div className="mt-4 space-y-3">
               {visibleNotifications.length === 0 && (

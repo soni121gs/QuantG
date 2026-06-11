@@ -3,6 +3,7 @@ import { Activity, BookOpen, HeartPulse, RefreshCw, ShieldCheck, SquareArrowOutU
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const BROKER_LABELS = { upstox: "Upstox" };
 
@@ -79,20 +80,22 @@ export default function MarketHub() {
 
   return (
     <div className="space-y-4 max-w-7xl" data-testid="market-hub-page">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
-        <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// {APP_VERSION_LABEL} CONTROL ROOM</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1">Market Hub</h1>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="border border-[var(--qd-border)] hover:border-white text-white px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
-            <RefreshCw size={14} /> Refresh
-          </button>
-          <button onClick={squareOff} disabled={busy} className="border border-[var(--qd-loss)] text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2 disabled:opacity-60">
-            <SquareArrowOutUpRight size={14} /> Square Off All
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow={`${APP_VERSION_LABEL} Control Room`}
+        title="Market Hub"
+        subtitle="Broker health, ticker quality, option-chain context, and daily risk in one market workspace."
+        badge={<StatusBadge tone={(marketSession?.global_status === "OPEN" || risk?.market_open) ? "healthy" : "warning"}>{marketSession?.global_status || "Market"}</StatusBadge>}
+        actions={
+          <>
+            <button onClick={load} className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
+              <RefreshCw size={14} /> Refresh
+            </button>
+            <button onClick={squareOff} disabled={busy} className="border border-[var(--qd-loss)] text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2 disabled:opacity-60">
+              <SquareArrowOutUpRight size={14} /> Square Off All
+            </button>
+          </>
+        }
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Metric label="Mode" value={risk?.mode || "-"} tone={risk?.mode === "LIVE" ? "loss" : "warn"} />
@@ -126,7 +129,7 @@ export default function MarketHub() {
         <section className="qd-card p-4 xl:col-span-2">
           <div className="flex items-start justify-between gap-3 mb-3">
             <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Ticker Quality</h2>
-            <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
+            <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
               Auto-pick
             </button>
           </div>
@@ -134,7 +137,7 @@ export default function MarketHub() {
             <FeedCard name="Upstox" data={feed?.upstox} />
           </div>
           <div className="mt-3 text-xs font-mono text-[var(--qd-text-2)]">
-            Recommended: <span className="text-white">{BROKER_LABELS[feed?.recommended_data_broker] || feed?.recommended_data_broker || "-"}</span>
+            Recommended: <span className="text-[var(--qd-text)]">{BROKER_LABELS[feed?.recommended_data_broker] || feed?.recommended_data_broker || "-"}</span>
             <span className="text-[var(--qd-text-3)]"> · {feed?.reason || "Waiting for live ticks."}</span>
           </div>
         </section>

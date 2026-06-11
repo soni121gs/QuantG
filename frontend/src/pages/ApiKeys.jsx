@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail } from "../lib/api";
 import { KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy } from "lucide-react";
 import { toast } from "sonner";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 export default function ApiKeys() {
   const [keys, setKeys] = useState([]);
@@ -90,11 +91,12 @@ export default function ApiKeys() {
 
   return (
     <div className="space-y-4 max-w-4xl" data-testid="api-keys-page">
-      <div>
-        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// UPSTOX CREDENTIALS</div>
-        <h1 className="font-head text-3xl font-bold text-white mt-1">Broker Keys</h1>
-        <p className="text-sm text-[var(--qd-text-2)] mt-1">Connect Upstox API v2 for live market data, order sync, and controlled algo execution.</p>
-      </div>
+      <PageHeader
+        eyebrow="Upstox Credentials"
+        title="Broker Keys"
+        subtitle="Connect Upstox API v2 for live market data, order sync, and controlled algo execution."
+        badge={<StatusBadge tone={upstoxStatus.connected ? "healthy" : "warning"}>{upstoxStatus.connected ? "Connected" : "Setup Required"}</StatusBadge>}
+      />
 
       <form onSubmit={save} className="qd-card p-5 space-y-3" data-testid="keys-form">
         <h2 className="font-head text-lg text-white flex items-center gap-2"><KeyRound size={16} /> Save Upstox API credentials</h2>
@@ -109,9 +111,9 @@ export default function ApiKeys() {
             onChange={(e) => setForm({ ...form, is_sandbox: e.target.checked })}
             className="accent-[var(--qd-cyan)] w-4 h-4 cursor-pointer"
           />
-          <span className="text-sm font-mono text-white select-none">Use Upstox Sandbox Mode (Mock Trading)</span>
+          <span className="text-sm font-mono text-[var(--qd-text)] select-none">Use Upstox Sandbox Mode (Mock Trading)</span>
         </label>
-        <button disabled={saving} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
+        <button disabled={saving} className="qd-force-white bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
           <Save size={14} /> Save Keys
         </button>
       </form>
@@ -128,7 +130,7 @@ export default function ApiKeys() {
             <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono text-[var(--qd-text-3)]">
               <div>Login: <span className={upstoxStatus.logged_in ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.logged_in ? "logged in" : "not logged in"}</span></div>
               <div>Token: <span className={upstoxStatus.token_valid ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.token_state || (upstoxStatus.token_present ? "present" : "missing")}</span></div>
-              <div>Last auth: <span className="text-white">{upstoxStatus.last_auth_time ? new Date(upstoxStatus.last_auth_time).toLocaleString() : "-"}</span></div>
+              <div>Last auth: <span className="text-[var(--qd-text)]">{upstoxStatus.last_auth_time ? new Date(upstoxStatus.last_auth_time).toLocaleString() : "-"}</span></div>
               <div>Feed: <span className={upstoxStatus.feed_running ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}>{upstoxStatus.feed_running ? "running" : "stopped"}</span></div>
             </div>
             {upstoxStatus.reconnect_required && (
@@ -144,7 +146,7 @@ export default function ApiKeys() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => { navigator.clipboard.writeText(upstoxRedirectUrl); toast.success("Copied"); }} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
+            <button onClick={() => { navigator.clipboard.writeText(upstoxRedirectUrl); toast.success("Copied"); }} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm">
               <Copy size={14} />
             </button>
             <button onClick={connectUpstox} disabled={!upstoxStatus.keys_saved} className="bg-[var(--qd-profit)] disabled:opacity-40 text-black hover:opacity-85 px-5 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2">
@@ -168,7 +170,7 @@ export default function ApiKeys() {
             <tbody className="font-mono">
               {keys.map((k) => (
                 <tr key={k.id} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
-                  <td className="px-4 py-2.5 text-white flex items-center gap-2"><ShieldCheck size={14} className="text-[var(--qd-profit)]" />{k.broker.toUpperCase()}</td>
+                  <td className="px-4 py-2.5 text-[var(--qd-text)] flex items-center gap-2"><ShieldCheck size={14} className="text-[var(--qd-profit)]" />{k.broker.toUpperCase()}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{k.api_key_masked}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{k.user_id_at_broker || "-"}</td>
                   <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{new Date(k.created_at).toLocaleDateString()}</td>
@@ -193,7 +195,7 @@ const Input = ({ label, value, onChange, type = "text", testid }) => (
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-sm text-white font-mono rounded-sm"
+      className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-sm text-[var(--qd-text)] font-mono rounded-sm"
     />
   </div>
 );

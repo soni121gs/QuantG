@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, X, TrendingUp, TrendingDown, Minus, Calendar as CalIcon } from "lucide-react";
 import { api, formatINR } from "../lib/api";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -94,15 +95,14 @@ export default function Calendar() {
 
   return (
     <div className="qd-page-root">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <CalIcon size={18} className="text-[var(--qd-accent)]" />
-          <h1 className="qd-page-title">Trading Calendar</h1>
-        </div>
-        {loading && (
-          <span className="text-[10px] font-mono text-[var(--qd-text-3)] animate-pulse">Loading…</span>
-        )}
-      </div>
+      <PageHeader
+        eyebrow="Reports"
+        title="Trading Calendar"
+        subtitle="Daily P&L, trade count, and report details for quick review."
+        badge={<StatusBadge tone={loading ? "warning" : "neutral"}>{loading ? "Loading" : `${MONTH_NAMES[month]} ${year}`}</StatusBadge>}
+        actions={<CalIcon size={20} className="text-[var(--qd-accent)]" />}
+        className="mb-4"
+      />
 
       <div className="flex gap-4 flex-col lg:flex-row">
         {/* Calendar grid */}
@@ -111,17 +111,17 @@ export default function Calendar() {
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={prevMonth}
-              className="p-1.5 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-white transition-colors"
+              className="p-1.5 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)] transition-colors"
               aria-label="Previous month"
             >
               <ChevronLeft size={16} />
             </button>
-            <span className="font-head font-bold text-white text-sm tracking-wide">
+            <span className="font-head font-bold text-[var(--qd-text)] text-sm tracking-wide">
               {MONTH_NAMES[month]} {year}
             </span>
             <button
               onClick={nextMonth}
-              className="p-1.5 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-white transition-colors"
+              className="p-1.5 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)] transition-colors"
               aria-label="Next month"
             >
               <ChevronRight size={16} />
@@ -229,11 +229,11 @@ export default function Calendar() {
                 <div className="text-[10px] font-mono text-[var(--qd-text-3)] uppercase tracking-widest mb-0.5">
                   {selected}
                 </div>
-                <div className="font-head font-bold text-white text-sm">Day Summary</div>
+                <div className="font-head font-bold text-[var(--qd-text)] text-sm">Day Summary</div>
               </div>
               <button
                 onClick={() => setSelected(null)}
-                className="p-1 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-white"
+                className="p-1 rounded hover:bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
               >
                 <X size={14} />
               </button>
@@ -344,7 +344,7 @@ function PanelStat({ label, value, tone }) {
       ? "text-[var(--qd-profit)]"
       : tone === "loss"
       ? "text-[var(--qd-loss)]"
-      : "text-white";
+      : "text-[var(--qd-text)]";
 
   return (
     <div className="flex flex-col gap-0.5 p-2 rounded bg-[var(--qd-surface)] border border-[var(--qd-border)]">

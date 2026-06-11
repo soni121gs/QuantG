@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { User, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, Zap } from "lucide-react";
+import { User, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, Zap, Bell } from "lucide-react";
 import { toast } from "sonner";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 export default function Profile() {
   const [p, setP] = useState(null);
@@ -9,6 +10,23 @@ export default function Profile() {
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [busy, setBusy] = useState(false);
   const [showReadiness, setShowReadiness] = useState(false);
+  const [notificationPrefs, setNotificationPrefs] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("quantg-notification-prefs") || "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  const updateNotificationPref = (key, value) => {
+    const next = { ...notificationPrefs, [key]: value };
+    setNotificationPrefs(next);
+    localStorage.setItem("quantg-notification-prefs", JSON.stringify(next));
+    if (key === "browser_alerts") {
+      localStorage.setItem("quantg-browser-alerts", value ? "true" : "false");
+    }
+    toast.success("Notification preference saved");
+  };
 
   const load = () =>
     api.get("/profile").then((r) => {
@@ -82,16 +100,18 @@ export default function Profile() {
 
   return (
     <div className="space-y-4 max-w-5xl" data-testid="profile-page">
-      <div>
-        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// ACCOUNT</div>
-        <h1 className="font-head text-3xl font-bold text-white mt-1">Profile</h1>
-      </div>
+      <PageHeader
+        eyebrow="Account"
+        title="Profile"
+        subtitle="Personal account, trading safety limits, and notification preferences."
+        badge={<StatusBadge tone={form.paper_mode ? "paper" : "live"}>{form.paper_mode ? "Paper Mode" : "Live Mode"}</StatusBadge>}
+      />
 
       <div className="qd-card p-5 flex flex-col md:flex-row md:items-center justify-between gap-3" data-testid="paper-live-switch">
         <div className="flex items-start gap-3">
           <AlertTriangle size={22} className={form.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"} />
           <div>
-            <div className="font-head text-lg text-white">Trading Mode</div>
+            <div className="font-head text-lg text-[var(--qd-text)]">Trading Mode</div>
             <div className="text-sm text-[var(--qd-text-2)]">
               {form.paper_mode
                 ? "PAPER - orders are simulated locally. Safe to test strategies."
@@ -102,7 +122,7 @@ export default function Profile() {
         <button
           onClick={() => setShowReadiness(true)}
           className={`px-5 py-2.5 font-mono text-sm uppercase tracking-wider rounded-sm ${
-            form.paper_mode ? "border border-[var(--qd-border)] text-white hover:border-white" : "qd-btn-sell"
+            form.paper_mode ? "border border-[var(--qd-border)] text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" : "qd-btn-sell"
           }`}
           data-testid="toggle-mode-btn"
         >
@@ -142,9 +162,33 @@ export default function Profile() {
           <SelectIn label="Execution Broker" value="upstox" onChange={() => {}} options={["upstox"]} testid="input-execution-broker" />
           <SelectIn label="Fallback Broker" value="none" onChange={() => {}} options={["none"]} testid="input-fallback-broker" />
         </div>
-        <button onClick={save} disabled={busy} className="mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="save-profile-btn">
+        <button onClick={save} disabled={busy} className="qd-force-white mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="save-profile-btn">
           Save Preferences
         </button>
+      </div>
+
+      <div className="qd-card p-5" data-testid="notification-prefs-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Bell size={16} /> Notification Preferences</h2>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <PrefToggle
+            label="Browser Alerts"
+            description="Show desktop alerts for critical trading events after permission."
+            checked={!!notificationPrefs.browser_alerts}
+            onChange={(v) => updateNotificationPref("browser_alerts", v)}
+          />
+          <PrefToggle
+            label="Critical Only"
+            description="Keep the drawer focused on rejected orders and risk mismatches."
+            checked={notificationPrefs.critical_only !== false}
+            onChange={(v) => updateNotificationPref("critical_only", v)}
+          />
+          <PrefToggle
+            label="Sound Off"
+            description="Keep QuantG quiet while still showing visual alerts."
+            checked={notificationPrefs.sound_off !== false}
+            onChange={(v) => updateNotificationPref("sound_off", v)}
+          />
+        </div>
       </div>
 
       <form onSubmit={changePassword} className="qd-card p-5 space-y-3" data-testid="password-card">
@@ -178,7 +222,7 @@ const Input = ({ label, value, onChange, type = "text", testid, disabled }) => (
       value={value ?? ""}
       onChange={(e) => onChange && onChange(e.target.value)}
       disabled={disabled}
-      className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-sm text-white font-mono rounded-sm disabled:opacity-50"
+      className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] outline-none px-3 py-2 text-sm text-[var(--qd-text)] font-mono rounded-sm disabled:opacity-50"
     />
   </div>
 );
@@ -186,7 +230,7 @@ const Input = ({ label, value, onChange, type = "text", testid, disabled }) => (
 const SelectIn = ({ label, value, onChange, options, testid }) => (
   <div>
     <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
-    <select data-testid={testid} value={value} onChange={(e) => onChange(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm">
+    <select data-testid={testid} value={value} onChange={(e) => onChange(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-[var(--qd-text)] font-mono rounded-sm">
       {options.map((o) => <option key={o} value={o}>{o}</option>)}
     </select>
   </div>
@@ -196,9 +240,24 @@ const Stat = ({ label, value, mono, tone }) => (
   <div>
     <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className={`mt-1 text-sm ${mono ? "font-mono" : ""} ${
-      tone === "warn" ? "text-[var(--qd-warn)]" : tone === "loss" ? "text-[var(--qd-loss)]" : "text-white"
+      tone === "warn" ? "text-[var(--qd-warn)]" : tone === "loss" ? "text-[var(--qd-loss)]" : "text-[var(--qd-text)]"
     }`}>{value}</div>
   </div>
+);
+
+const PrefToggle = ({ label, description, checked, onChange }) => (
+  <label className="flex cursor-pointer items-start gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/70 p-3">
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      className="mt-1 h-4 w-4 accent-[var(--qd-accent)]"
+    />
+    <span>
+      <span className="block font-head text-sm font-bold text-[var(--qd-text)]">{label}</span>
+      <span className="mt-1 block text-xs leading-relaxed text-[var(--qd-text-2)]">{description}</span>
+    </span>
+  </label>
 );
 
 function ReadinessModal({ isPaper, onClose, onConfirm }) {

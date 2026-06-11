@@ -854,8 +854,16 @@ export default function Dashboard() {
             />
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
-            <div className="qd-card overflow-hidden">
+          <details className="qd-dashboard-details">
+            <summary>
+              <span>
+                <span className="qd-section-title">Review Desk</span>
+                <strong>Strategy analytics and historical performance</strong>
+              </span>
+              <span className="font-mono text-xs text-[var(--qd-accent)]">Open</span>
+            </summary>
+            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
+              <div className="qd-card overflow-hidden">
               <div className="flex items-center justify-between border-b border-[var(--qd-border)] p-5">
                 <div>
                   <div className="qd-section-title">// Closed trade performance</div>
@@ -873,8 +881,8 @@ export default function Dashboard() {
               ) : null}
             </div>
 
-            <div className="grid grid-cols-1 gap-4">
-              <div className="qd-card p-5">
+              <div className="grid grid-cols-1 gap-4">
+                <div className="qd-card p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div>
                     <div className="qd-section-title">// Score 0-100</div>
@@ -885,7 +893,7 @@ export default function Dashboard() {
                 <HealthScoreList rows={strategyAnalytics?.health_scores || []} />
               </div>
 
-              <div className="qd-card p-5">
+                <div className="qd-card p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div>
                     <div className="qd-section-title">// Recommendation only</div>
@@ -895,10 +903,10 @@ export default function Dashboard() {
                 </div>
                 <AllocationList rows={strategyAnalytics?.capital_allocation || []} />
               </div>
-            </div>
-          </section>
+              </div>
+            </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
             <div className="qd-card p-5">
               <div className="qd-section-title">// Winners</div>
               <h2 className="mt-1 font-head text-lg font-semibold text-white">Top Performers</h2>
@@ -926,7 +934,8 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
-          </section>
+            </section>
+          </details>
 
           {/* Position Integrity Status */}
           <div className="qd-card p-5">

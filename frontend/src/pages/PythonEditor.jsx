@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { Play, Save, Code2, TrendingUp, SlidersHorizontal } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const STARTER = `# QuantG Python Strategy
 # Define a run(data) function. data = list of {date, close}.
@@ -186,18 +187,20 @@ export default function PythonEditor() {
 
   return (
     <div className="space-y-4" data-testid="python-page">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// PY :: STRATEGY</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Code2 size={24} className="text-[var(--qd-accent)]" /> Python Editor</h1>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={save} className="border border-[var(--qd-border)] hover:border-white text-white text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="save-strategy-btn"><Save size={14} /> Save</button>
-          <button onClick={run} disabled={busy} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="run-backtest-btn">
-            <Play size={14} /> {busy ? "Running..." : "Run Backtest"}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="PY Strategy"
+        title="Python Editor"
+        subtitle="Build, translate, and backtest custom strategy code with option-mode controls."
+        badge={<StatusBadge tone={options.enabled ? "warning" : "neutral"}>{options.enabled ? "Options" : "Equity"}</StatusBadge>}
+        actions={
+          <>
+            <button onClick={save} className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-[var(--qd-text)] text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="save-strategy-btn"><Save size={14} /> Save</button>
+            <button onClick={run} disabled={busy} className="qd-force-white bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="run-backtest-btn">
+              <Play size={14} /> {busy ? "Running..." : "Run Backtest"}
+            </button>
+          </>
+        }
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <input

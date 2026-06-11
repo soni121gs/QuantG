@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { Plus, X, Save, Blocks, ArrowRight, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
+import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
 const INDICATORS = [
   "Price",
@@ -89,13 +90,15 @@ export default function VisualBuilder() {
 
   return (
     <div className="space-y-4 max-w-5xl" data-testid="visual-page">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// NO-CODE</div>
-          <h1 className="font-head text-3xl font-bold text-white mt-1 flex items-center gap-3"><Blocks size={24} className="text-[var(--qd-accent)]" /> Visual Builder</h1>
-        </div>
-        <button onClick={save} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="save-visual-btn"><Save size={14} /> Save Strategy</button>
-      </div>
+      <PageHeader
+        eyebrow="No-code"
+        title="Visual Builder"
+        subtitle="Assemble option or equity strategy logic with readable blocks and live contract preview."
+        badge={<StatusBadge tone={options.enabled ? "warning" : "neutral"}>{options.enabled ? "Options" : "Equity"}</StatusBadge>}
+        actions={
+          <button onClick={save} className="qd-force-white bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-xs font-mono uppercase px-4 py-2 rounded-sm flex items-center gap-2" data-testid="save-visual-btn"><Save size={14} /> Save Strategy</button>
+        }
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Field label="Strategy Name" value={name} onChange={setName} testid="visual-name" />
@@ -136,8 +139,8 @@ export default function VisualBuilder() {
                     onClick={() => setOptions({ ...options, underlying: u })}
                     className={`px-4 py-2 font-mono text-xs uppercase rounded-sm border ${
                       options.underlying === u
-                        ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-white"
-                        : "border-[var(--qd-border)] text-[var(--qd-text-2)] hover:border-white hover:text-white"
+                        ? "qd-force-white border-[var(--qd-accent)] bg-[var(--qd-accent)]"
+                        : "border-[var(--qd-border)] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-[var(--qd-text)]"
                     }`}
                     data-testid={`underlying-${u}`}
                   >
@@ -157,7 +160,7 @@ export default function VisualBuilder() {
                     className={`block p-3 border rounded-sm cursor-pointer ${
                       options.strike_mode === m.id
                         ? "border-[var(--qd-accent)] bg-[rgba(0,122,255,0.06)]"
-                        : "border-[var(--qd-border)] hover:border-white"
+                        : "border-[var(--qd-border)] hover:border-[var(--qd-border-strong)]"
                     }`}
                     data-testid={`strike-mode-${m.id}`}
                   >
@@ -168,7 +171,7 @@ export default function VisualBuilder() {
                       onChange={() => setOptions({ ...options, strike_mode: m.id })}
                       className="mr-2 accent-[var(--qd-accent)]"
                     />
-                    <span className="font-mono text-sm text-white">{m.label}</span>
+                    <span className="font-mono text-sm text-[var(--qd-text)]">{m.label}</span>
                     <span className="block ml-6 text-xs text-[var(--qd-text-2)] mt-0.5">{m.desc}</span>
                   </label>
                 ))}

@@ -128,7 +128,7 @@ export default function AIBot() {
               key={item.id}
               type="button"
               onClick={() => setMode(item.id)}
-              className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "bg-[var(--qd-accent)] text-white" : "text-[var(--qd-text-2)] hover:text-white"}`}
+              className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "qd-force-white bg-[var(--qd-accent)]" : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"}`}
             >
               {item.label}
             </button>
@@ -168,7 +168,7 @@ export default function AIBot() {
                   setMode("agent");
                   send(prompt);
                 }}
-                className="rounded border border-[var(--qd-border)] p-3.5 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-white transition-all bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50"
+                className="rounded border border-[var(--qd-border)] p-3.5 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] transition-all bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50"
               >
                 {prompt}
               </button>
@@ -189,7 +189,7 @@ export default function AIBot() {
                 <p className="font-mono text-sm text-[var(--qd-text-2)] mb-8">How can I protect or configure your trading setup today?</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-xl mx-auto">
                   {SUGGESTIONS.map((s) => (
-                    <button key={s} onClick={() => send(s)} className="text-left text-xs font-mono text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-white p-4 transition-all rounded bg-[var(--qd-surface-2)]/10 hover:bg-[var(--qd-surface-2)]/40 hover:-translate-y-0.5">
+                    <button key={s} onClick={() => send(s)} className="text-left text-xs font-mono text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] p-4 transition-all rounded bg-[var(--qd-surface-2)]/10 hover:bg-[var(--qd-surface-2)]/40 hover:-translate-y-0.5">
                       {s}
                     </button>
                   ))}
@@ -215,7 +215,7 @@ export default function AIBot() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
               placeholder="Configure drawdown controls, toggle emergency kill, or update settings..."
-              className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-white font-mono rounded"
+              className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-[var(--qd-text)] font-mono rounded"
               data-testid="ai-input"
             />
             <Button onClick={() => send()} disabled={busy || !text.trim()} variant="primary" size="lg" data-testid="ai-send-btn" aria-label="Send message">
@@ -233,7 +233,7 @@ export default function AIBot() {
               <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-400" /> System Governance</h2>
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${profile?.paper_mode ? "bg-rose-500 glow-pulse-red" : "bg-emerald-500 glow-pulse-green"}`} />
-                <span className="font-mono text-[10px] font-bold text-white uppercase">{profile?.paper_mode ? "Sandbox Paper" : "Production Live"}</span>
+                <span className="font-mono text-[10px] font-bold text-[var(--qd-text)] uppercase">{profile?.paper_mode ? "Sandbox Paper" : "Production Live"}</span>
               </div>
             </div>
 
@@ -241,7 +241,7 @@ export default function AIBot() {
               <div className="space-y-4">
                 {/* Active Mode Banner */}
                 <div className={`p-3.5 rounded border text-center font-mono text-xs font-bold ${profile.paper_mode ? "bg-rose-950/20 border-rose-500/30 text-rose-400" : "bg-emerald-950/20 border-emerald-500/30 text-emerald-400"}`}>
-                  {profile.paper_mode ? "🚨 EMERGENCY PAUSE / PAPER ACTIVE" : "🟢 TERMINAL ACTIVELY ROUTING LIVE ORDERS"}
+                  {profile.paper_mode ? "PAPER / EMERGENCY PAUSE ACTIVE" : "TERMINAL ROUTING LIVE ORDERS"}
                 </div>
 
                 {/* Grid metrics */}
@@ -329,7 +329,7 @@ const Message = ({ m, onApprove, onReject }) => {
   const getActionDescription = (actionName, params) => {
     const list = [];
     if (params?.paper_mode !== undefined) {
-      list.push(`Set Trading Mode to: ${params.paper_mode ? "🚨 PAPER / EMERGENCY PAUSE" : "🟢 LIVE TRADING"}`);
+      list.push(`Set Trading Mode to: ${params.paper_mode ? "PAPER / EMERGENCY PAUSE" : "LIVE TRADING"}`);
     }
     if (params?.max_daily_loss !== undefined) {
       list.push(`Change Daily Loss Limit to: ${Number(params.max_daily_loss).toLocaleString()} INR`);
@@ -346,7 +346,7 @@ const Message = ({ m, onApprove, onReject }) => {
     if (params?.max_trades_per_day !== undefined) {
       list.push(`Adjust Max Trades Per Day: ${params.max_trades_per_day}`);
     }
-    return list.map((item, index) => <div key={index} className="font-mono text-xs text-white py-1">{item}</div>);
+    return list.map((item, index) => <div key={index} className="font-mono text-xs text-[var(--qd-text)] py-1">{item}</div>);
   };
 
   return (
@@ -356,7 +356,7 @@ const Message = ({ m, onApprove, onReject }) => {
           <Bot size={16} className="text-white" />
         </div>
       )}
-      <div className={`max-w-[85%] px-4 py-3 rounded-lg shadow-sm border ${isUser ? "bg-[var(--qd-accent)] border-[var(--qd-accent)] text-white" : "bg-[var(--qd-surface-2)]/65 border-[var(--qd-border)] text-white"}`}>
+      <div className={`max-w-[85%] px-4 py-3 rounded-lg shadow-sm border ${isUser ? "qd-force-white bg-[var(--qd-accent)] border-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)]/65 border-[var(--qd-border)] text-[var(--qd-text)]"}`}>
         <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed font-sans">{m.content}</pre>
 
         {hasAction && (
