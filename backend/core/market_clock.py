@@ -8,8 +8,12 @@ from typing import Dict, Any, Optional
 from core.market_domains import DomainType
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
-NSE_OPEN_MINUTE = 9 * 60 + 15
-NSE_CLOSE_MINUTE = 15 * 60 + 30
+NSE_OPEN_MINUTE = 9 * 60 + 15   # 9:15 AM — actual NSE market open
+NSE_CLOSE_MINUTE = 15 * 60 + 30  # 3:30 PM — actual NSE market close
+
+# Strategy runner window — broader than market hours to cover pre-market setup
+RUNNER_OPEN_MINUTE = 9 * 60        # 9:00 AM IST — runner activates strategies
+RUNNER_CLOSE_MINUTE = 15 * 60 + 35 # 3:35 PM IST — runner pauses strategies
 
 MARKET_HOLIDAYS_IST = {
     item.strip()
@@ -97,6 +101,16 @@ def get_segment_status(domain: DomainType, now_utc: Optional[datetime] = None) -
         "next_open": get_next_open(domain, utc) if not open_now else None,
         "next_close": _ist_iso_for_minute(day, close_minute) if open_now else None,
     }
+
+def is_trading_session_active(now_utc: Optional[datetime] = None) -> bool:
+    """Return True if within the strategy runner window (9:00 AM – 3:35 PM IST, Mon–Fri, non-holiday)."""
+    ist_now = get_ist_now(now_utc)
+    day = ist_now.date()
+    if day.weekday() >= 5 or is_holiday(day.isoformat()):
+        return False
+    minutes = ist_now.hour * 60 + ist_now.minute
+    return RUNNER_OPEN_MINUTE <= minutes <= RUNNER_CLOSE_MINUTE
+
 
 def get_market_clock_snapshot(now_utc: Optional[datetime] = None) -> Dict[str, Any]:
     utc = now_utc or datetime.now(timezone.utc)
