@@ -157,10 +157,13 @@ class TestAuditFixes(unittest.TestCase):
         """Verify _check_daily_loss_guard passes when loss is within limit."""
         async def run_test():
             mock_db = MagicMock()
+            mock_fills_cursor = MagicMock()
+            mock_fills_cursor.to_list = AsyncMock(return_value=[])
+            mock_db.trade_fills.find = MagicMock(return_value=mock_fills_cursor)
             mock_find_cursor = MagicMock()
             mock_find_cursor.to_list = AsyncMock(return_value=[
-                {"realised_pnl": -50.0},
-                {"realised_pnl": 10.0},
+                {"realized_pnl": -50.0},
+                {"realized_pnl": 10.0},
             ])
             mock_db.orders.find = MagicMock(return_value=mock_find_cursor)
 
@@ -175,10 +178,13 @@ class TestAuditFixes(unittest.TestCase):
         async def run_test():
             from fastapi import HTTPException
             mock_db = MagicMock()
+            mock_fills_cursor = MagicMock()
+            mock_fills_cursor.to_list = AsyncMock(return_value=[])
+            mock_db.trade_fills.find = MagicMock(return_value=mock_fills_cursor)
             mock_find_cursor = MagicMock()
             mock_find_cursor.to_list = AsyncMock(return_value=[
-                {"realised_pnl": -1000.0},
-                {"realised_pnl": -200.0},
+                {"realized_pnl": -1000.0},
+                {"realized_pnl": -200.0},
             ])
             mock_db.orders.find = MagicMock(return_value=mock_find_cursor)
 

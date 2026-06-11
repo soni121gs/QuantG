@@ -15635,11 +15635,24 @@ async def startup():
         ("risk_reservation_locks", "expires_at", {"expireAfterSeconds": 0}),
         ("option_trade_journal", [("strategy_id", 1), ("exit_time", -1)], {}),
         ("option_market_ticks", [("symbol", 1), ("tick_time", -1)], {}),
+        ("strategy_loss_streaks", [("strategy_id", 1), ("user_id", 1)], {"unique": True}),
+        ("daily_reports", [("user_id", 1), ("date", 1)], {"unique": True}),
+        ("market_regime_state", [("index", 1)], {"unique": True}),
     ]:
         try:
             await db[coll].create_index(key, **opts)
         except Exception as e:
             logger.warning(f"index create on {coll} skipped: {e}")
+
+    # TTL index: option_market_ticks auto-expire after 7 days
+    try:
+        await db.option_market_ticks.create_index(
+            [("tick_time", 1)],
+            expireAfterSeconds=604800,
+            name="ttl_tick_time_7d",
+        )
+    except Exception as e:
+        logger.warning(f"option_market_ticks TTL index skipped: {e}")
 
     try:
         recovered_fills = await _recover_pending_paper_fills()

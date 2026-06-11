@@ -99,5 +99,8 @@ credentials.json
 *.key
 .credentials
 
-# Local scratch scripts
+# Local scratch scripts and temp files
 backend/scratch/
+backend/get_user_hash.py
+backend/scratch_query.py
+SYSTEM_GAP_ANALYSIS_*.md
