@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -21,9 +21,13 @@ import {
   Plus,
   ShieldCheck,
   Bell,
+  BellRing,
+  Check,
+  CheckCheck,
   Settings,
   ChevronDown,
-  Gauge,
+  ExternalLink,
+  AlertTriangle,
   PanelRight,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
@@ -68,11 +72,11 @@ const NAV_GROUPS = [
 ];
 
 const THEMES = [
-  { id: "slate", label: "Slate", detail: "Institutional blue" },
-  { id: "graphite", label: "Graphite", detail: "Warm gold" },
-  { id: "daylight", label: "Daylight", detail: "Light desk" },
-  { id: "aurora", label: "Aurora", detail: "Indigo color" },
+  { id: "daylight", label: "Daylight", detail: "Bright, readable workspace" },
+  { id: "focus", label: "Focus", detail: "Stronger contrast with soft color" },
 ];
+
+const VALID_THEME_IDS = new Set(THEMES.map((theme) => theme.id));
 
 // Bottom-bar items for mobile (5 most-used)
 const MOBILE_NAV = [
@@ -95,6 +99,52 @@ const Sparkline = ({ positive = true }) => (
     />
   </svg>
 );
+
+const getSeverityTone = (severity) => {
+  switch (severity) {
+    case "critical":
+      return {
+        icon: AlertTriangle,
+        label: "Critical",
+        className: "border-l-[var(--qd-loss)] bg-rose-50/90",
+        text: "text-[var(--qd-loss)]",
+      };
+    case "warning":
+      return {
+        icon: ShieldAlert,
+        label: "Warning",
+        className: "border-l-[var(--qd-warn)] bg-amber-50/90",
+        text: "text-[var(--qd-warn)]",
+      };
+    case "success":
+      return {
+        icon: Check,
+        label: "Done",
+        className: "border-l-[var(--qd-profit)] bg-emerald-50/90",
+        text: "text-[var(--qd-profit)]",
+      };
+    default:
+      return {
+        icon: Bell,
+        label: "Info",
+        className: "border-l-[var(--qd-accent)] bg-sky-50/90",
+        text: "text-[var(--qd-accent)]",
+      };
+  }
+};
+
+const formatNotificationTime = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 
 const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
   const cash = portfolio?.net_liquidation ?? portfolio?.total_value ?? portfolio?.available_cash ?? 0;
@@ -165,9 +215,26 @@ export default function Layout({ children }) {
   const [commandBusy, setCommandBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationTab, setNotificationTab] = useState("all");
+  const [notifications, setNotifications] = useState([]);
+  const [notificationCounts, setNotificationCounts] = useState({ unread: 0, critical: 0 });
+  const [browserAlertsEnabled, setBrowserAlertsEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("quantg-browser-alerts") === "true";
+  });
+  const [alertedNotificationIds, setAlertedNotificationIds] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(window.localStorage.getItem("quantg-alerted-notifications") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "daylight";
-    return window.localStorage.getItem("quantg-theme-v2") || "daylight";
+    const saved = window.localStorage.getItem("quantg-theme-v2") || "daylight";
+    return VALID_THEME_IDS.has(saved) ? saved : "daylight";
   });
 
   useEffect(() => {
@@ -216,6 +283,81 @@ export default function Layout({ children }) {
     api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
   };
 
+  const loadNotifications = useCallback(() => {
+    api.get("/notifications", { params: { limit: 60 } })
+      .then((r) => setNotifications(r.data.notifications || []))
+      .catch(() => {});
+    api.get("/notifications/unread-count")
+      .then((r) => setNotificationCounts({
+        unread: r.data.unread || 0,
+        critical: r.data.critical || 0,
+      }))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+    const t = setInterval(loadNotifications, 30000);
+    return () => clearInterval(t);
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    if (
+      !browserAlertsEnabled ||
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      Notification.permission !== "granted"
+    ) {
+      return;
+    }
+
+    const fresh = notifications.filter((item) =>
+      item.browser_alert &&
+      !item.read &&
+      !alertedNotificationIds.includes(item.id)
+    );
+    if (!fresh.length) return;
+
+    fresh.slice(0, 3).forEach((item) => {
+      const note = new Notification(item.title || "QuantG notification", {
+        body: item.message || "Open QuantG for details.",
+        tag: item.id,
+      });
+      note.onclick = () => {
+        window.focus();
+        if (item.action_url) navigate(item.action_url);
+      };
+    });
+
+    const next = [...fresh.map((item) => item.id), ...alertedNotificationIds].slice(0, 120);
+    setAlertedNotificationIds(next);
+    window.localStorage.setItem("quantg-alerted-notifications", JSON.stringify(next));
+  }, [alertedNotificationIds, browserAlertsEnabled, navigate, notifications]);
+
+  const enableBrowserAlerts = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    const permission = await Notification.requestPermission();
+    const enabled = permission === "granted";
+    setBrowserAlertsEnabled(enabled);
+    window.localStorage.setItem("quantg-browser-alerts", enabled ? "true" : "false");
+  };
+
+  const markNotificationRead = async (id) => {
+    await api.post(`/notifications/${id}/read`);
+    loadNotifications();
+  };
+
+  const markAllNotificationsRead = async () => {
+    await api.post("/notifications/read-all");
+    loadNotifications();
+  };
+
+  const visibleNotifications = notifications.filter((item) => {
+    if (notificationTab === "unread") return !item.read;
+    if (notificationTab === "critical") return item.severity === "critical";
+    return true;
+  });
+
   const syncBroker = async () => {
     setCommandBusy(true);
     try {
@@ -242,7 +384,7 @@ export default function Layout({ children }) {
             </button>
             <div className="flex items-center gap-2">
               <div className="w-9 h-9 bg-[var(--qd-accent)] flex items-center justify-center rounded-[var(--qd-radius-sm)] shadow-sm">
-                <TrendingUp size={14} className="text-white" strokeWidth={2.5} />
+                <TrendingUp size={14} className="qd-force-white" strokeWidth={2.5} />
               </div>
               <div className="leading-none">
                 <span className="font-head font-extrabold text-[var(--qd-text)] text-base">
@@ -293,8 +435,24 @@ export default function Layout({ children }) {
             <Button variant="ghost" size="icon" onClick={refreshShell} data-testid="cmd-refresh" aria-label="Refresh">
               <RefreshCw size={15} />
             </Button>
-            <Button variant="ghost" size="icon" data-testid="notification-bell" aria-label="Notifications">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setNotificationOpen(true)}
+              data-testid="notification-bell"
+              aria-label="Notifications"
+              className="relative"
+            >
               <Bell size={16} />
+              {notificationCounts.unread > 0 && (
+                <span
+                  className={`qd-force-white absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[10px] font-bold ${
+                    notificationCounts.critical > 0 ? "bg-[var(--qd-loss)]" : "bg-[var(--qd-accent)]"
+                  }`}
+                >
+                  {notificationCounts.unread > 9 ? "9+" : notificationCounts.unread}
+                </span>
+              )}
             </Button>
             <div className="relative">
               <Button
@@ -564,6 +722,119 @@ export default function Layout({ children }) {
             <p className="mt-5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-slate-50 p-3 text-xs text-[var(--qd-text-3)]">
               Source: SEBI study dated January 25, 2023 on analysis of profit and loss of individual traders dealing in equity Futures and Options segment.
             </p>
+          </aside>
+        </div>
+      )}
+
+      {notificationOpen && (
+        <div className="fixed inset-0 z-[75] bg-slate-950/30 backdrop-blur-sm" onClick={() => setNotificationOpen(false)}>
+          <aside
+            className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-[var(--qd-border)] bg-white p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="notification-drawer"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="qd-section-title">Notifications</div>
+                <h3 className="mt-2 font-head text-xl font-extrabold text-[var(--qd-text)]">Trading alerts</h3>
+              </div>
+              <button type="button" onClick={() => setNotificationOpen(false)} className="rounded-full p-2 text-[var(--qd-text-2)] hover:bg-slate-100" aria-label="Close notifications">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              {[
+                { id: "all", label: "All" },
+                { id: "unread", label: "Unread" },
+                { id: "critical", label: "Critical" },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setNotificationTab(item.id)}
+                  className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 font-head text-xs font-bold ${
+                    notificationTab === item.id
+                      ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
+                      : "border-[var(--qd-border)] bg-slate-50 text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="secondary" size="sm" onClick={enableBrowserAlerts}>
+                <BellRing size={14} /> {browserAlertsEnabled ? "Alerts on" : "Browser alerts"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={markAllNotificationsRead} disabled={!notificationCounts.unread}>
+                <CheckCheck size={14} /> Mark read
+              </Button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {visibleNotifications.length === 0 && (
+                <div className="rounded-[var(--qd-radius)] border border-dashed border-[var(--qd-border)] bg-slate-50 p-6 text-center">
+                  <Bell size={20} className="mx-auto text-[var(--qd-accent)]" />
+                  <p className="mt-3 font-head text-sm font-bold text-[var(--qd-text)]">Nothing needs attention</p>
+                  <p className="mt-1 text-xs text-[var(--qd-text-2)]">Order, strategy, and risk alerts will appear here.</p>
+                </div>
+              )}
+
+              {visibleNotifications.map((item) => {
+                const tone = getSeverityTone(item.severity);
+                const Icon = tone.icon;
+                return (
+                  <article
+                    key={item.id}
+                    className={`border border-l-4 border-[var(--qd-border)] ${tone.className} rounded-[var(--qd-radius)] p-3 shadow-sm`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-0.5 rounded-full bg-white p-2 ${tone.text}`}>
+                        <Icon size={16} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className={`font-mono text-[10px] font-bold uppercase tracking-wide ${tone.text}`}>{tone.label}</div>
+                            <h4 className="mt-1 font-head text-sm font-extrabold text-[var(--qd-text)]">{item.title}</h4>
+                          </div>
+                          {!item.read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[var(--qd-accent)]" />}
+                        </div>
+                        <p className="mt-2 text-sm leading-relaxed text-[var(--qd-text-2)]">{item.message}</p>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-mono text-[10px] text-[var(--qd-text-3)]">{formatNotificationTime(item.created_at)}</span>
+                          <div className="flex items-center gap-2">
+                            {item.action_url && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigate(item.action_url);
+                                  setNotificationOpen(false);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-full border border-[var(--qd-border)] bg-white px-2.5 py-1 text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                              >
+                                Open <ExternalLink size={12} />
+                              </button>
+                            )}
+                            {!item.read && (
+                              <button
+                                type="button"
+                                onClick={() => markNotificationRead(item.id)}
+                                className="qd-force-white inline-flex items-center gap-1 rounded-full bg-[var(--qd-text)] px-2.5 py-1 text-xs font-semibold"
+                              >
+                                <Check size={12} /> Read
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </aside>
         </div>
       )}
