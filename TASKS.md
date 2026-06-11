@@ -550,7 +550,7 @@ Files changed: frontend/src/pages/Calendar.jsx (new), frontend/src/App.js, front
 ---
 
 ### TASK-014 — Adaptive capital allocator across strategies
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~4 hours
 - **Prerequisite**: TASK-007 (canonical P&L), TASK-001 (strategy limits enforced)
@@ -594,7 +594,7 @@ Files changed: backend/core/capital_allocator.py (new), backend/signal_manager.p
 ---
 
 ### TASK-015 — Regime → capital weighting (not only blocking)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 3 (Opus / Claude)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-014 (allocator must exist)

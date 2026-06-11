@@ -174,6 +174,30 @@ class RiskManager:
                 "quantity": 0
             }
 
+        # 6b. Adaptive capital allocation — scale quantity by performance + regime
+        if mode != "backtest" and side.upper() == "BUY":
+            try:
+                from core.capital_allocator import get_strategy_allocation_multiplier
+                from risk_controls import SizeResult as _SizeResult
+                alloc_mult = await get_strategy_allocation_multiplier(self.db, strategy_id, user_id)
+                if alloc_mult != 1.0:
+                    raw_qty = size_res.quantity
+                    scaled = max(lot_size, int(raw_qty * alloc_mult))
+                    if lot_size > 1:
+                        scaled = (scaled // lot_size) * lot_size
+                        scaled = max(lot_size, scaled)
+                    size_res = _SizeResult(
+                        allowed=size_res.allowed,
+                        quantity=scaled,
+                        reason=size_res.reason,
+                        risk_budget=size_res.risk_budget,
+                        unit_loss_at_stop=size_res.unit_loss_at_stop,
+                        order_value=size_res.order_value,
+                        caps=size_res.caps,
+                    )
+            except Exception as alloc_exc:
+                logger.warning("[ALLOC] multiplier error for %s: %s — using unscaled qty", strategy_id, alloc_exc)
+
         # 7. Options Greeks exposure check (applies when trading options)
         sym_upper = (target_symbol or "").upper()
         if _option_type_of(sym_upper):
