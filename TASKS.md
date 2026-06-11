@@ -90,7 +90,7 @@ Files changed: backend/core/execution_router.py, backend/tests/test_audit_fixes.
 ---
 
 ### TASK-003 — Unify option quality gate into single entry check
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6415dba · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o / Codex)
 - **Session size**: ~1.5 hours
 - **Prerequisite**: None
@@ -130,7 +130,7 @@ Files changed: backend/core/option_selector_v2.py, backend/signal_manager.py
 ---
 
 ### TASK-004 — Create backend/config.py with all tunable constants
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6415dba · 2026-06-11
 - **Tier**: 1 (Any model — Haiku, Codex, GPT-4o mini)
 - **Session size**: ~1 hour
 - **Prerequisite**: None
@@ -734,9 +734,11 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 |---|---|---|---|
 | TASK-001 | Fix strategy limits enforcement (cooldown + max_trades_day) | 37c25dc | 2026-06-11 |
 | TASK-002 | Block duplicate exit orders before order creation | 6fd78cc | 2026-06-11 |
+| TASK-003 | Enforce option quality gate in signal_manager dispatch | 6415dba | 2026-06-11 |
+| TASK-004 | Add backend/config.py centralising all tunable constants | 6415dba | 2026-06-11 |
 
 ---
 
 *Last updated: 2026-06-11*
 *Total tasks: 20 (17 active + 3 backlog)*
-*Open: 18 · In progress: 0 · Done: 2*
+*Open: 16 · In progress: 0 · Done: 4*
