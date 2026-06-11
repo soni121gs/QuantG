@@ -580,7 +580,7 @@ export default function Layout({ children }) {
                         `flex items-center gap-3 px-3 py-2.5 text-sm font-semibold rounded-[var(--qd-radius-sm)] ${
                           isActive
                             ? "bg-[var(--qd-surface-3)] text-white border border-[var(--qd-border-strong)]"
-                            : "text-[var(--qd-text-2)] border border-transparent hover:text-white hover:bg-[var(--qd-surface-2)]"
+                            : "text-[var(--qd-text-2)] border border-transparent hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)]"
                         }`
                       }
                     >
@@ -624,8 +624,8 @@ export default function Layout({ children }) {
               data-testid="mobile-drawer"
             >
               <div className="flex items-center justify-between mb-4 px-1">
-                <span className="font-head font-bold text-white">QuantG {APP_VERSION_LABEL}</span>
-                <button onClick={() => setDrawerOpen(false)} data-testid="close-drawer" className="text-white">
+                <span className="font-head font-bold text-[var(--qd-text)]">QuantG {APP_VERSION_LABEL}</span>
+                <button onClick={() => setDrawerOpen(false)} data-testid="close-drawer" className="text-[var(--qd-text)]">
                   <X size={20} />
                 </button>
               </div>
@@ -643,8 +643,8 @@ export default function Layout({ children }) {
                           className={({ isActive }) =>
                             `flex items-center gap-3 px-3 py-2.5 text-sm rounded-[var(--qd-radius-sm)] ${
                               isActive
-                                ? "bg-[var(--qd-surface-2)] text-white border border-[var(--qd-border-strong)]"
-                                : "text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface)]"
+                                ? "bg-[var(--qd-surface-2)] text-[var(--qd-text)] border border-[var(--qd-border-strong)]"
+                                : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface)]"
                             }`
                           }
                         >

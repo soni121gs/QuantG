@@ -49,7 +49,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Toaster theme="light" position="top-right" />
+        <Toaster theme="system" position="top-right" />
         <Suspense fallback={<LazySpinner />}>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />

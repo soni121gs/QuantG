@@ -22,13 +22,13 @@ const buttonVariants = cva(
         warning:
           "border-[var(--qd-warn)] bg-[var(--qd-warn)] text-black hover:bg-amber-400",
         outline:
-          "border-[var(--qd-border)] bg-transparent text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-2)] hover:text-white",
+          "border-[var(--qd-border)] bg-transparent text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-2)] hover:text-[var(--qd-text)]",
         secondary:
-          "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-white hover:bg-[var(--qd-surface-3)]",
-        ghost: "border-transparent bg-transparent text-[var(--qd-text-2)] hover:bg-[var(--qd-surface-2)] hover:text-white",
+          "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text)] hover:bg-[var(--qd-surface-3)]",
+        ghost: "border-transparent bg-transparent text-[var(--qd-text-2)] hover:bg-[var(--qd-surface-2)] hover:text-[var(--qd-text)]",
         link: "text-primary underline-offset-4 hover:underline",
         icon:
-          "border-[var(--qd-border)] bg-[var(--qd-surface)] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-white",
+          "border-[var(--qd-border)] bg-[var(--qd-surface)] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-[var(--qd-text)]",
       },
       size: {
         default: "h-9 px-4 py-2",

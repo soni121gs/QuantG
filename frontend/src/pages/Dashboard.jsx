@@ -644,14 +644,14 @@ export default function Dashboard() {
                     type="button"
                     onClick={handleRefresh}
                     disabled={refreshing}
-                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/80 px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
+                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
                     title="Refresh data"
                   >
                     <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh
                   </button>
                   <Link
                     to="/ai-bot"
-                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-white/80 px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
                   >
                     <Bot size={15} /> AI Bot
                   </Link>

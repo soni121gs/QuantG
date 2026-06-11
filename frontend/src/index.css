@@ -493,7 +493,7 @@ tbody tr:hover {
 
 .qd-strategy-card {
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.86)),
+    linear-gradient(180deg, var(--qd-elevated), var(--qd-panel)),
     var(--qd-band);
 }
 
