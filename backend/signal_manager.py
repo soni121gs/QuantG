@@ -426,6 +426,44 @@ class SignalManager:
         if not strategy:
             return False, "strategy-not-found"
 
+        risk_cfg = (strategy.get("visual_config") or {}).get("risk") or {}
+
+        # 1. Max trades per day
+        max_trades = risk_cfg.get("max_trades_day")
+        if max_trades:
+            try:
+                max_trades = int(max_trades)
+            except (TypeError, ValueError):
+                max_trades = None
+        if max_trades and max_trades > 0:
+            count_today = int(strategy.get("order_count_today") or 0)
+            if count_today >= max_trades:
+                logger.info(f"[LIMITS] strategy={strategy_id} blocked: max_trades_day={max_trades} reached (today={count_today})")
+                return False, "max-trades-reached"
+
+        # 2. Cooldown between trades
+        cooldown_minutes = risk_cfg.get("cooldown_minutes")
+        if cooldown_minutes:
+            try:
+                cooldown_minutes = int(cooldown_minutes)
+            except (TypeError, ValueError):
+                cooldown_minutes = None
+        if cooldown_minutes and cooldown_minutes > 0:
+            last_signal_at = strategy.get("last_signal_at")
+            if last_signal_at:
+                try:
+                    if isinstance(last_signal_at, str):
+                        last_dt = datetime.fromisoformat(last_signal_at.replace("Z", "+00:00"))
+                    else:
+                        last_dt = last_signal_at
+                    elapsed_minutes = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60.0
+                    if elapsed_minutes < cooldown_minutes:
+                        remaining = round(cooldown_minutes - elapsed_minutes, 1)
+                        logger.info(f"[LIMITS] strategy={strategy_id} blocked: cooldown active, {remaining}m remaining (cooldown={cooldown_minutes}m)")
+                        return False, "cooldown-active"
+                except Exception:
+                    pass
+
         return True, None
 
 
