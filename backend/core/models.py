@@ -8,9 +8,10 @@ Defines the core data structures for unified paper and live trading:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 from datetime import date
 from enum import Enum
+from typing import TypedDict
 
 
 class InstrumentSource(Enum):
@@ -136,3 +137,130 @@ class Position:
     status: str
     exit_price: Optional[float] = None
     exit_time: Optional[str] = None
+
+
+# ── TypedDict contracts for MongoDB document shapes ───────────────────────────
+# Use total=False so callers only declare fields they guarantee. Agents reading
+# these types can know which fields are present without tracing all callers.
+
+
+class PositionDoc(TypedDict, total=False):
+    """Maps to db.strategy_positions.
+
+    Lifecycle: RESERVED → PENDING_OPEN → PENDING_BROKER → OPEN → FILLED → EXITING → CLOSED
+    """
+    id: str                    # UUID string — primary key
+    user_id: str
+    strategy_id: str
+    symbol: str                # underlying, e.g. "NIFTY"
+    target_symbol: str         # traded instrument, e.g. "NIFTY 23200 CE 09 JUN 26"
+    trading_symbol: str
+    instrument_key: str        # Upstox key, e.g. "NSE_FO|42285"
+    instrument_token: str
+    exchange: str
+    segment: str
+    mode: str                  # "paper" | "live"
+    position_side: str         # "LONG" | "SHORT"
+    quantity: int
+    open_quantity: int
+    average_buy_price: float
+    average_price: float
+    last_ltp: float
+    ltp_source: str
+    unrealized_pnl: float
+    realized_pnl: float
+    status: str
+    tp_sl_tsl_config: dict
+    exit_reason: str
+    created_at: str            # ISO UTC
+    updated_at: str
+    closed_at: str
+
+
+class OrderDoc(TypedDict, total=False):
+    """Maps to db.orders."""
+    id: str
+    user_id: str
+    strategy_id: str
+    signal_id: str
+    symbol: str
+    target_symbol: str
+    side: str                  # "BUY" | "SELL"
+    qty: int
+    price: float
+    order_type: str            # "MARKET" | "LIMIT"
+    status: str
+    mode: str
+    exchange: str
+    idempotency_key: str
+    broker_order_id: str
+    created_at: str
+    updated_at: str
+
+
+class FillDoc(TypedDict, total=False):
+    """Maps to db.trade_fills — immutable audit row per accepted fill."""
+    id: str
+    fill_id: str               # broker fill ID (unique index on this field)
+    user_id: str
+    strategy_id: str
+    order_id: str
+    position_id: str
+    symbol: str
+    target_symbol: str
+    side: str
+    quantity: int
+    price: float
+    mode: str
+    action: str                # "OPEN" | "ADD" | "REDUCE" | "CLOSE"
+    realized_pnl: float
+    exit_reason: str
+    created_at: str
+
+
+class StrategyDoc(TypedDict, total=False):
+    """Maps to db.strategies."""
+    id: str
+    user_id: str
+    name: str
+    status: str                # "live" | "paused" | "draft"
+    mode: str                  # "paper" | "live"
+    kind: str                  # strategy classification: "trend" | "range" | "breakout"
+    signal_type: str
+    visual_config: dict        # full strategy config blob
+    today_pnl: float
+    total_pnl: float
+    total_trades: int
+    wins: int
+    losses: int
+    order_count_today: int
+    last_signal_at: str
+    created_at: str
+    updated_at: str
+
+
+class SignalEvent(TypedDict, total=False):
+    """Normalized signal envelope passed through signal_manager → execution pipeline.
+
+    Maps to db.signals while PENDING; mutated in-place as it moves through the gate.
+    """
+    id: str
+    user_id: str
+    strategy_id: str
+    action: str                # "BUY" | "SELL"
+    symbol: str                # underlying
+    target_symbol: str
+    mode: str
+    status: str                # "PENDING" | "PROCESSED" | "FILTERED" | "SKIPPED_SIGNAL"
+    confidence: float
+    option_quality_score: float
+    option_contract: dict
+    visual_config: dict
+    idempotency_key: str
+    price: float
+    ltp: float
+    stop_loss: float
+    take_profit: float
+    rejection_reason: str
+    created_at: str
+    processed_at: str

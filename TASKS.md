@@ -631,7 +631,7 @@ Files changed: backend/market_regime.py, backend/core/capital_allocator.py
 ---
 
 ### TASK-016 — Add TypedDict contracts for position and order data shapes
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 2 (Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-010 (route extraction) should be done first
@@ -700,7 +700,7 @@ Files changed: backend/signal_manager.py, backend/core/portfolio_ledger.py
 ---
 
 ### TASK-018 — Typed contracts rollout across core/ modules
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 2
 - **Prerequisite**: TASK-016
 
@@ -709,7 +709,7 @@ Replace `dict` parameter types with TypedDict references in `risk_manager.py`, `
 ---
 
 ### TASK-019 — SENSEX regime detection
-- **Status**: `[ ]`
+- **Status**: `[x]` commit this session · 2026-06-11
 - **Tier**: 2
 - **Prerequisite**: TASK-015
 
