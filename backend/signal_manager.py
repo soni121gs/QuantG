@@ -658,6 +658,7 @@ async def _dispatch_signal_via_unified_engine(
             return existing
         return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block", "reason_code": "DUPLICATE_SIGNAL"}
 
+    risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
     risk_res = await RiskManager(db).evaluate_order(
         user_id=user_id,
         strategy_id=sig["strategy_id"],
@@ -670,6 +671,7 @@ async def _dispatch_signal_via_unified_engine(
         stop_loss=stop_loss,
         take_profit=take_profit,
         lot_size=lot_size,
+        risk_style=risk_style,
     )
     if not risk_res.get("ok"):
         await CoreEventStore(db).log_event(
@@ -692,7 +694,7 @@ async def _dispatch_signal_via_unified_engine(
             user_id=user_id,
             symbol=symbol,
             side=side,
-            qty=max(1, lots) if option_contract else int(sig.get("qty") or sig.get("quantity") or requested_qty),
+            qty=requested_qty if option_contract else int(sig.get("qty") or sig.get("quantity") or requested_qty),
             order_type=str(sig.get("order_type") or "MARKET").upper(),
             product=sig.get("product"),
             source=f"signal:strategy:{sig['strategy_id']}",

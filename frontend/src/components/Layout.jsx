@@ -74,6 +74,8 @@ const NAV_GROUPS = [
 const THEMES = [
   { id: "daylight", label: "Daylight", detail: "Bright, readable workspace" },
   { id: "focus", label: "Focus", detail: "Stronger contrast with soft color" },
+  { id: "slate", label: "Slate Dark", detail: "Dark navy — easy on eyes at night" },
+  { id: "graphite", label: "Graphite", detail: "Dark with warm amber accents" },
 ];
 
 const VALID_THEME_IDS = new Set(THEMES.map((theme) => theme.id));
