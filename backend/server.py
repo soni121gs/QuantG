@@ -12806,7 +12806,7 @@ async def portfolio(user=Depends(get_current_user)):
     }
 
 
-@api.get("/risk/dashboard")
+# moved to routes/dashboard.py
 async def risk_dashboard(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     mode = "paper" if settings.get("paper_mode", True) else "live"
@@ -12866,7 +12866,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
     }
 
 
-@api.get("/trade-journal")
+# moved to routes/dashboard.py
 async def trade_journal(user=Depends(get_current_user)):
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
     skipped = await db.skipped_signals.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
@@ -13378,8 +13378,7 @@ async def upstox_exit_all(
     }
 
 
-@api.get("/v1/dashboard/telemetry")
-
+# moved to routes/dashboard.py
 async def dashboard_telemetry(user=Depends(get_current_user)):
     """Per-strategy dashboard payload backed by the SQLite runtime ledger."""
     rows = await db.strategies.find(
@@ -13460,7 +13459,7 @@ async def dashboard_telemetry(user=Depends(get_current_user)):
     }
 
 
-@api.post("/risk/kill-switch")
+# moved to routes/dashboard.py
 async def risk_kill_switch(user=Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "id": 1}).to_list(500)
@@ -15154,6 +15153,7 @@ from routes.ops import router as ops_router
 from routes.strategies import router as strategies_router
 from routes.orders import router as orders_router
 from routes.positions import router as positions_router
+from routes.dashboard import router as dashboard_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15162,6 +15162,7 @@ api.include_router(ops_router)
 api.include_router(strategies_router)
 api.include_router(orders_router)
 api.include_router(positions_router)
+api.include_router(dashboard_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
