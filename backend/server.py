@@ -15880,7 +15880,7 @@ async def startup():
             "tick_size": instrument.tick_size,
             "expiry": instrument.expiry,
             "underlying": instrument.underlying,
-            "transaction_type": action_u,
+            "transaction_type": "BUY",  # buyer strategies always BUY the option; action_u selects CE vs PE above
             "source": instrument.source.value,
             "simulated": instrument.source == InstrumentSource.PAPER_SIMULATED,
             "ltp": float(quote.ltp),
