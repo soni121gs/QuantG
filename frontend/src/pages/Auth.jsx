@@ -137,7 +137,7 @@ export default function Auth({ mode: initialMode = "login" }) {
         {/* Dynamic Corporate Pitch */}
         <div className="my-12 lg:my-auto max-w-lg space-y-8">
           <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-xs font-mono text-[var(--qd-cyan)] uppercase tracking-wider">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-full text-xs font-mono text-[var(--qd-cyan)] uppercase tracking-wider">
               <Sparkles size={12} className="text-[var(--qd-cyan)] animate-spin" />
               Next-Gen Algorithmic Suite
             </div>
@@ -178,30 +178,30 @@ export default function Auth({ mode: initialMode = "login" }) {
         {/* Footer info */}
         <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
           <span>&copy; 2026 QUANTG GROUP</span>
-          <span className="hidden sm:inline border-l border-white/10 h-3" />
+          <span className="hidden sm:inline border-l border-[var(--qd-border)] h-3" />
           <span>SECURED BY AES-256 GCM</span>
         </div>
       </div>
 
       {/* Right Column: Sliding Auth Glass Panel */}
-      <div className="flex items-center justify-center p-6 md:p-8 relative z-10 lg:border-l lg:border-white/5 bg-[var(--qd-bg-2)]/60 backdrop-blur-xl">
+      <div className="flex items-center justify-center p-6 md:p-8 relative z-10 lg:border-l lg:border-[var(--qd-border)] bg-[var(--qd-bg-2)]/60 backdrop-blur-xl">
         <div className="w-full max-w-md space-y-6">
           
           {/* Card Wrapper */}
-          <div className="qd-card p-6 md:p-8 border border-white/10 shadow-2xl relative bg-[var(--qd-surface)]/90 backdrop-blur-xl">
+          <div className="qd-card p-6 md:p-8 border border-[var(--qd-border)] shadow-2xl relative bg-[var(--qd-surface)]/90 backdrop-blur-xl">
             {/* Sliding Form Header Tabs */}
-            <div className="flex border-b border-white/15 mb-6 text-sm font-mono tracking-wider">
+            <div className="flex border-b border-[var(--qd-border)] mb-6 text-sm font-mono tracking-wider">
               <button
                 type="button"
                 onClick={() => { setIsLogin(true); setErr(""); }}
-                className={`flex-1 pb-3 text-center transition-all ${isLogin ? "qd-tab-active font-bold text-white" : "text-[var(--qd-text-3)] hover:text-white"}`}
+                className={`flex-1 pb-3 text-center transition-all ${isLogin ? "qd-tab-active font-bold text-white" : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"}`}
               >
                 // GATEWAY_LOGIN
               </button>
               <button
                 type="button"
                 onClick={() => { setIsLogin(false); setErr(""); }}
-                className={`flex-1 pb-3 text-center transition-all ${!isLogin ? "qd-tab-active font-bold text-white" : "text-[var(--qd-text-3)] hover:text-white"}`}
+                className={`flex-1 pb-3 text-center transition-all ${!isLogin ? "qd-tab-active font-bold text-white" : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"}`}
               >
                 // REGISTER_TRADER
               </button>
@@ -265,7 +265,7 @@ export default function Auth({ mode: initialMode = "login" }) {
           </div>
 
           {/* Quick Info Box below auth container */}
-          <div className="qd-card-tight p-4 bg-[#0a0f1d]/40 border border-white/5 flex gap-3 text-xs text-[var(--qd-text-3)] leading-relaxed">
+          <div className="qd-card-tight p-4 bg-[var(--qd-surface)] border border-[var(--qd-border)] flex gap-3 text-xs text-[var(--qd-text-3)] leading-relaxed">
             <Cpu size={24} className="text-[var(--qd-cyan)] flex-shrink-0 mt-0.5 animate-pulse" />
             <div className="font-mono">
               <span className="text-white font-semibold block">Security Notice:</span>
@@ -280,7 +280,7 @@ export default function Auth({ mode: initialMode = "login" }) {
 }
 
 const Field = ({ icon, placeholder, value, onChange, type = "text", testid }) => (
-  <div className="flex items-center bg-[var(--qd-surface-2)] border border-white/10 focus-within:border-[var(--qd-cyan)] focus-within:ring-1 focus-within:ring-[var(--qd-cyan)]/25 rounded-md min-h-[44px] transition-all">
+  <div className="flex items-center bg-[var(--qd-surface-2)] border border-[var(--qd-border)] focus-within:border-[var(--qd-cyan)] focus-within:ring-1 focus-within:ring-[var(--qd-cyan)]/25 rounded-md min-h-[44px] transition-all">
     <span className="px-3 text-[var(--qd-text-3)]">{icon}</span>
     <input
       data-testid={testid}

@@ -287,7 +287,7 @@ export default function Orders() {
                 {symbolResults.length > 0 && (
                   <div className="mt-2 max-h-28 overflow-y-auto border border-[var(--qd-border)] rounded-sm">
                     {symbolResults.map((r) => (
-                      <button key={`${r.symbol}-${r.token || ""}`} type="button" onClick={() => setForm({ ...form, symbol: r.symbol })} className="w-full text-left px-3 py-1.5 text-xs font-mono text-[var(--qd-text-2)] hover:text-white hover:bg-[var(--qd-surface-2)]">
+                      <button key={`${r.symbol}-${r.token || ""}`} type="button" onClick={() => setForm({ ...form, symbol: r.symbol })} className="w-full text-left px-3 py-1.5 text-xs font-mono text-[var(--qd-text-2)] hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)]">
                         {r.symbol}{r.token ? ` - ${r.token}` : ""}
                       </button>
                     ))}
@@ -328,7 +328,7 @@ export default function Orders() {
               </div>
             </div>
             <div className="flex gap-2 pt-2">
-              <button type="button" onClick={() => setOpen(false)} className="flex-1 border border-[var(--qd-border)] hover:border-white text-white py-2 text-xs font-mono uppercase rounded-sm">Cancel</button>
+              <button type="button" onClick={() => setOpen(false)} className="flex-1 border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-white py-2 text-xs font-mono uppercase rounded-sm">Cancel</button>
               <button type="submit" className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">
                 Confirm {form.side}
               </button>

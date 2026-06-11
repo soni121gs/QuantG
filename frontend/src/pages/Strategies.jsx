@@ -663,7 +663,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 border-t border-white/5 pt-2.5">
+            <div className="grid grid-cols-2 gap-2 border-t border-[var(--qd-border)] pt-2.5">
               <div>
                 <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Time Exit (Min)</label>
                 <input 
@@ -689,7 +689,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             </div>
 
             {/* Broker & Mode deployment configuration overrides */}
-            <div className="grid grid-cols-2 gap-2 border-t border-white/5 pt-2.5">
+            <div className="grid grid-cols-2 gap-2 border-t border-[var(--qd-border)] pt-2.5">
               <div>
                 <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
                 <select 
@@ -829,7 +829,7 @@ function TestResultModal({ testResult, onClose }) {
             <div className="qd-section-title">Test Run Results</div>
             <h2 className="mt-1 font-head text-xl text-white">{testResult.symbol || "Strategy"}</h2>
           </div>
-          <button onClick={onClose} className="text-[var(--qd-text-2)] hover:text-white" data-testid="close-test-modal" aria-label="Close test result">
+          <button onClick={onClose} className="text-[var(--qd-text-2)] hover:text-[var(--qd-text)]" data-testid="close-test-modal" aria-label="Close test result">
             <X size={18} />
           </button>
         </div>

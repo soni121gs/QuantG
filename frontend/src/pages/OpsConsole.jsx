@@ -214,7 +214,7 @@ export default function OpsConsole() {
           <button 
             onClick={() => load()} 
             disabled={busy === "load"}
-            className="border border-[var(--qd-border)] hover:border-white hover:bg-[var(--qd-surface-3)] text-white px-3.5 py-2 text-xs font-mono uppercase rounded-md flex items-center gap-2 transition-all active:scale-95 shadow-md"
+            className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-3)] text-white px-3.5 py-2 text-xs font-mono uppercase rounded-md flex items-center gap-2 transition-all active:scale-95 shadow-md"
           >
             <RefreshCw size={14} className={busy === "load" ? "animate-spin" : ""} /> Refresh Systems
           </button>
@@ -301,7 +301,7 @@ export default function OpsConsole() {
               <button
                 onClick={() => run("reconcile", "/ops/orders/sync")}
                 disabled={busy === "reconcile"}
-                className="border border-[var(--qd-border)] hover:border-white hover:bg-[var(--qd-surface-2)] px-3 py-1.5 rounded text-[11px] font-mono uppercase text-white flex items-center gap-1.5"
+                className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-2)] px-3 py-1.5 rounded text-[11px] font-mono uppercase text-white flex items-center gap-1.5"
               >
                 <RefreshCw size={13} className={busy === "reconcile" ? "animate-spin" : ""} /> Sync Broker
               </button>
@@ -898,7 +898,7 @@ const ActionCard = ({ icon: Icon, title, text, onClick, busy, danger }) => (
     className={`w-full text-left border rounded-md p-4 flex gap-3.5 transition-all duration-200 hover:-translate-y-[1px] disabled:opacity-60 disabled:pointer-events-none ${
       danger
         ? "border-[rgba(255,59,48,0.3)] bg-red-950/10 text-[var(--qd-loss)] hover:bg-red-500/10 hover:border-red-500 hover:shadow-lg hover:shadow-red-500/5"
-        : "border-[var(--qd-border)] bg-[rgba(25,30,36,0.3)] text-white hover:border-white hover:bg-white/[0.03] hover:shadow-lg hover:shadow-black/20"
+        : "border-[var(--qd-border)] bg-[var(--qd-surface)] text-white hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-2)] hover:shadow-lg hover:shadow-black/20"
     }`}
   >
     <div className={`p-2 rounded-lg flex-shrink-0 ${danger ? "bg-red-500/10 text-[var(--qd-loss)]" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]"}`}>

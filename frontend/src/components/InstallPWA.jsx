@@ -66,7 +66,7 @@ export default function InstallPWA() {
       >
         Install
       </button>
-      <button onClick={dismiss} className="text-[var(--qd-text-3)] hover:text-white p-1" aria-label="Dismiss" data-testid="install-pwa-dismiss">
+      <button onClick={dismiss} className="text-[var(--qd-text-3)] hover:text-[var(--qd-text)] p-1" aria-label="Dismiss" data-testid="install-pwa-dismiss">
         <X size={14} />
       </button>
     </div>
