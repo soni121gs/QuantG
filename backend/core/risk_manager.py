@@ -148,13 +148,9 @@ class RiskManager:
         visual = strategy.get("visual_config") or {}
         visual_risk = visual.get("risk") or {}
         visual_options = visual.get("options") or {}
-        configured_capital = max(
-            float(settings.get("per_strategy_capital") or 0),
-            float(strategy.get("required_capital") or 0),
-            float(visual_risk.get("required_capital") or 0),
-            float(visual_options.get("required_capital") or 0),
-        )
-        equity = configured_capital or free_margin
+        # required_capital is reference-only metadata (display/planning); sizing always
+        # uses the actual wallet balance so a low required_capital never blocks orders.
+        equity = free_margin
         max_pos_value = float(settings.get("max_position_size") or 0) or max(equity, requested_qty * price)
         
         size_inputs = SizeInputs(
