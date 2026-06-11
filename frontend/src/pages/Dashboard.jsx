@@ -590,14 +590,18 @@ export default function Dashboard() {
     <div className="space-y-5" data-testid="dashboard-page">
       {/* Top Header Card */}
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_0.9fr]">
-        <div className="qd-card overflow-hidden">
+        <div className="qd-card qd-hero-panel overflow-hidden">
           <div className="border-b border-[var(--qd-border)] p-5">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
-                <div className="qd-section-title">// Control Room</div>
-                <h1 className="mt-2 font-head text-3xl font-bold tracking-tight text-white">Dashboard</h1>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="qd-chip">Control Room</span>
+                  <span className="qd-chip">{marketStatusLabel}</span>
+                  <span className="qd-chip">{openPositions} Active</span>
+                </div>
+                <h1 className="mt-4 font-head text-3xl font-extrabold tracking-tight text-white md:text-4xl">QuantG Dashboard</h1>
                 <p className="mt-2 max-w-2xl text-sm text-[var(--qd-text-2)]">
-                  Live portfolio state, market telemetry, and custom-tailored multi-asset controls.
+                  Live portfolio state, NIFTY telemetry, and focused controls for strategy execution.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -605,20 +609,20 @@ export default function Dashboard() {
                   type="button"
                   onClick={handleRefresh}
                   disabled={refreshing}
-                  className="flex items-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white disabled:opacity-50"
                   title="Refresh data"
                 >
                   <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh
                 </button>
                 <Link
                   to="/ai-bot"
-                  className="flex items-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white"
+                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-white"
                 >
                   <Bot size={15} /> AI Bot
                 </Link>
                 <Link
                   to="/strategies"
-                  className="flex items-center gap-2 rounded bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white hover:bg-[var(--qd-accent-hover)]"
+                  className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white hover:bg-[var(--qd-accent-hover)]"
                   data-testid="new-strategy-btn"
                 >
                   <Zap size={15} /> Strategy

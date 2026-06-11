@@ -20,6 +20,8 @@ import {
   RefreshCw,
   Plus,
   ShieldCheck,
+  Palette,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -44,6 +46,7 @@ const NAV_GROUPS = [
       { to: "/calendar", icon: Calendar, label: "Calendar", id: "nav-calendar" },
       { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
       { to: "/ai-bot", icon: Bot, label: "Ask Agent", id: "nav-aibot" },
+      { to: "/design-canvas", icon: Palette, label: "Design", id: "nav-design" },
     ],
   },
   {
@@ -60,6 +63,13 @@ const NAV_GROUPS = [
       { to: "/profile", icon: UserCircle, label: "Profile", id: "nav-profile" },
     ],
   },
+];
+
+const THEMES = [
+  { id: "slate", label: "Slate", detail: "Institutional blue" },
+  { id: "graphite", label: "Graphite", detail: "Warm gold" },
+  { id: "daylight", label: "Daylight", detail: "Light desk" },
+  { id: "aurora", label: "Aurora", detail: "Indigo color" },
 ];
 
 // Bottom-bar items for mobile (5 most-used)
@@ -80,11 +90,20 @@ export default function Layout({ children }) {
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") return "slate";
+    return window.localStorage.getItem("quantg-theme") || "slate";
+  });
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.quantgTheme = theme;
+    window.localStorage.setItem("quantg-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     const fetch = () => {
@@ -246,6 +265,25 @@ export default function Layout({ children }) {
           <Button variant="danger" size="sm" onClick={() => navigate("/ops")} data-testid="cmd-risk-ops">
             <ShieldAlert size={14} /> Risk Ops
           </Button>
+          <div className="ml-auto flex items-center gap-1 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface)] p-1">
+            <Sparkles size={13} className="ml-2 text-[var(--qd-accent)]" />
+            {THEMES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTheme(item.id)}
+                className={`rounded-full px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider ${
+                  theme === item.id
+                    ? "bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)] shadow-[var(--qd-glow)]"
+                    : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
+                }`}
+                title={item.detail}
+                aria-pressed={theme === item.id}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         </CommandBar>
         <CommandBar data-testid="mobile-command-row" className="lg:hidden">
           <Button variant="outline" size="sm" onClick={refreshShell} data-testid="mcmd-refresh">
@@ -358,6 +396,25 @@ export default function Layout({ children }) {
                     </div>
                   </div>
                 ))}
+                <div>
+                  <div className="qd-section-title px-3 pb-2">Theme</div>
+                  <div className="grid grid-cols-2 gap-2 px-3">
+                    {THEMES.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setTheme(item.id)}
+                        className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 text-left font-mono text-[10px] font-bold uppercase tracking-wider ${
+                          theme === item.id
+                            ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
+                            : "border-[var(--qd-border)] bg-[var(--qd-surface)] text-[var(--qd-text-2)]"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </nav>
               <div className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
                 Advanced Trading Platform {APP_VERSION_LABEL}

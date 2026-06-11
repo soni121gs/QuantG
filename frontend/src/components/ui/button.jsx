@@ -10,9 +10,9 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-white hover:bg-[var(--qd-accent-hover)]",
+          "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)] hover:bg-[var(--qd-accent-hover)]",
         primary:
-          "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-white hover:bg-[var(--qd-accent-hover)]",
+          "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)] hover:bg-[var(--qd-accent-hover)]",
         destructive:
           "border-[var(--qd-loss)] bg-[var(--qd-loss)] text-white hover:bg-rose-600",
         danger:
