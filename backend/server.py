@@ -11402,7 +11402,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         raise
 
 
-@api.post("/orders")
+# moved to routes/orders.py
 async def place_order(req: OrderReq, user=Depends(get_current_user)):
     return await _place_order_core(
         user_id=user["id"], symbol=req.symbol, side=req.side, qty=req.qty,
@@ -11414,7 +11414,7 @@ async def place_order(req: OrderReq, user=Depends(get_current_user)):
     )
 
 
-@api.post("/positions/{symbol}/exit")
+# moved to routes/positions.py
 async def exit_position(symbol: str, user=Depends(get_current_user)):
     """Close an open position with one click — places an opposite-side MARKET order."""
     symbol = symbol.upper()
@@ -12424,7 +12424,7 @@ async def _assert_broker_has_position_quantity(user_id: str, kite, exchange: str
         )
 
 
-@api.get("/orders")
+# moved to routes/orders.py
 async def list_orders(include_stale: bool = False, user=Depends(get_current_user)):
     """Local order log reconciled with Upstox so users see every app-tracked status."""
     await _sync_upstox_order_statuses(user["id"])
@@ -12505,13 +12505,13 @@ async def _fetch_broker_positions_for_user(user: dict, settings: dict) -> List[D
     return out
 
 
-@api.get("/positions")
+# moved to routes/positions.py
 async def list_positions(user=Depends(get_current_user)):
     settings = await get_user_settings(user["id"])
     return await _fetch_broker_positions_for_user(user, settings)
 
 
-@api.get("/execution/snapshot")
+# moved to routes/positions.py
 async def execution_snapshot(sync: bool = False, user=Depends(get_current_user)):
     """Unified execution state for UI polling: positions, orders, SL/TP, broker sync meta."""
     snapshot = await execution_state_manager.build_snapshot(user, sync=sync)
@@ -15152,12 +15152,16 @@ from routes.auth import router as auth_router
 from routes.ai import agent_router, router as ai_router
 from routes.ops import router as ops_router
 from routes.strategies import router as strategies_router
+from routes.orders import router as orders_router
+from routes.positions import router as positions_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
 api.include_router(agent_router)
 api.include_router(ops_router)
 api.include_router(strategies_router)
+api.include_router(orders_router)
+api.include_router(positions_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
