@@ -479,12 +479,15 @@ class SignalManager:
             {"current_streak": 1, "_id": 0},
         )
         streak = int((streak_doc or {}).get("current_streak") or 0)
-        if streak >= 5:
-            logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= 5 (blocked until next day reset)", strategy_id, streak)
+        if streak >= 6:
+            logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= 6 (blocked until next day reset)", strategy_id, streak)
             return False, "loss-streak-blocked", 1.0
-        if streak >= 3:
-            logger.info("[THROTTLE] strategy=%s THROTTLED: loss_streak=%d >= 3 — allocation_multiplier=0.25", strategy_id, streak)
+        if streak >= 5:
+            logger.info("[THROTTLE] strategy=%s THROTTLED: loss_streak=%d >= 5 — allocation_multiplier=0.25", strategy_id, streak)
             return True, None, 0.25
+        if streak >= 4:
+            logger.info("[THROTTLE] strategy=%s THROTTLED: loss_streak=%d >= 4 — allocation_multiplier=0.50", strategy_id, streak)
+            return True, None, 0.50
 
         return True, None, 1.0
 
@@ -841,7 +844,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     {"$set": {
                                         "status": "FILTERED",
                                         "rejection_reason": "OPTION_QUALITY_LOW",
-                                        "rejection_detail": {"reason": quality_block_reason, "score": quality_score, "readiness": quality_readiness, "min_score": min_score},
+                                        "rejection_detail": {"reason": quality_block_reason, "score": quality_score, "readiness": quality_readiness, "min_score": min_score, "score_components": (contract.get("trade_quality_score") or {}).get("components") or contract.get("quality_components")},
                                         "processed_at": datetime.now(timezone.utc).isoformat(),
                                     }}
                                 )

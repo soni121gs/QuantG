@@ -59,7 +59,7 @@ BLOCKED_UNDERLYINGS: frozenset[str] = frozenset({
 
 LIVE_STALE_SEC: float = float(os.environ.get("QUANTG_OPTION_STALE_SEC", "30"))
 LIVE_MIN_SCORE: int = 70
-PAPER_MIN_SCORE: int = 50
+PAPER_MIN_SCORE: int = 35
 
 VALID_PREFERENCES: frozenset[str] = frozenset({"ATM", "ITM1", "OTM1", "AUTO"})
 VALID_DIRECTIONS: frozenset[str] = frozenset({"CE", "PE"})
@@ -202,7 +202,7 @@ def _quality_score(
 
     # 3. Quote freshness (0-20)
     if age is None:
-        freshness_score = 0 if is_live else 10
+        freshness_score = 0 if is_live else 15
         if is_live:
             warnings.append("QUOTE_AGE_UNKNOWN")
     elif age <= 5:
