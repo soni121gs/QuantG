@@ -217,17 +217,16 @@ class PortfolioLedger:
         }
 
         # ── Find the live position for this strategy+symbol+mode ──────────────
-        # CRITICAL: include EXITING. The exit handler marks a position EXITING
-        # *before* placing the exit order, so the exit fill arrives while the
-        # position is EXITING — matching only OPEN made every legitimate exit
-        # fill look like an orphan, which is exactly how positions got stuck
-        # and wallets got over-credited by duplicate exits.
+        # CRITICAL: include EXITING and PENDING_BROKER. The exit handler marks a
+        # position EXITING *before* placing the exit order. In live trading, entry
+        # orders place positions in PENDING_BROKER status, which must match the
+        # entry fill.
         pos = await self.db.strategy_positions.find_one({
             "user_id": user_id,
             "strategy_id": strategy_id,
             "target_symbol": target_symbol,
             "mode": mode,
-            "status": {"$in": ["OPEN", "EXITING"]},
+            "status": {"$in": ["OPEN", "EXITING", "PENDING_BROKER"]},
         })
 
         if not pos:
@@ -393,6 +392,54 @@ class PortfolioLedger:
             return _result(True, "OPEN", pos_id)
 
         # ── Position exists: adding or exiting? ────────────────────────────────
+        if pos.get("status") == "PENDING_BROKER":
+            # Activate the pending live position
+            await self.db.strategy_positions.update_one(
+                {"id": pos["id"]},
+                {
+                    "$set": {
+                        "status": "OPEN",
+                        "average_buy_price": price,
+                        "average_price": price,
+                        "avg_price": price,
+                        "entry_price": price,
+                        "quantity": qty,
+                        "open_quantity": qty,
+                        "updated_at": now_str,
+                    },
+                    "$inc": {
+                        "brokerage": float(fill.get("brokerage", 0.0)),
+                        "entry_charges": fill_charges,
+                    }
+                }
+            )
+            await self.db.positions.update_one(
+                {"user_id": user_id, "symbol": target_symbol, "mode": mode, "strategy_id": strategy_id},
+                {
+                    "$set": {
+                        "user_id": user_id,
+                        "strategy_id": strategy_id,
+                        "symbol": target_symbol,
+                        "target_symbol": target_symbol,
+                        "underlying": fill["symbol"],
+                        "mode": mode,
+                        "quantity": qty,
+                        "open_quantity": qty,
+                        "qty": qty,
+                        "average_buy_price": price,
+                        "avg_price": price,
+                        "stop_loss": stop_loss or pos.get("tp_sl_tsl_config", {}).get("stop_loss"),
+                        "take_profit": take_profit or pos.get("tp_sl_tsl_config", {}).get("take_profit"),
+                        "tp_sl_tsl_config": pos.get("tp_sl_tsl_config"),
+                        "updated_at": now_str
+                    }
+                },
+                upsert=True
+            )
+            await self._record_trade_fill(fill, pos["id"], "OPEN")
+            logger.info(f"Portfolio ledger activated PENDING_BROKER position {pos['id']} for strategy {strategy_id} symbol {target_symbol}")
+            return _result(True, "OPEN", pos["id"])
+
         pos_side = pos["position_side"]
         is_entry = (pos_side == "LONG" and side == "BUY") or (pos_side == "SHORT" and side == "SELL")
 
@@ -535,16 +582,41 @@ class PortfolioLedger:
         if is_full_close:
             now_str_streak = datetime.now(timezone.utc).isoformat()
             if net_pnl < 0:
+                try:
+                    from trade_frequency import LOSS_STREAK_TRIGGER, LOSS_STREAK_PAUSE_MIN
+                except ImportError:
+                    LOSS_STREAK_TRIGGER = 3
+                    LOSS_STREAK_PAUSE_MIN = 30
+
+                streak_doc = await self.db.strategy_loss_streaks.find_one(
+                    {"strategy_id": strategy_id, "user_id": user_id},
+                    {"current_streak": 1, "_id": 0}
+                )
+                streak = int((streak_doc or {}).get("current_streak") or 0) + 1
+                update_fields = {
+                    "current_streak": streak,
+                    "updated_at": now_str_streak,
+                    "last_sl_at": now_str_streak,
+                }
+                if streak >= LOSS_STREAK_TRIGGER:
+                    now = datetime.now(timezone.utc)
+                    pause_end = now + timedelta(minutes=LOSS_STREAK_PAUSE_MIN)
+                    update_fields["paused_until"] = pause_end.isoformat()
+
                 await self.db.strategy_loss_streaks.update_one(
                     {"strategy_id": strategy_id, "user_id": user_id},
-                    {"$inc": {"current_streak": 1}, "$set": {"updated_at": now_str_streak}},
+                    {"$set": update_fields},
                     upsert=True,
                 )
             else:
                 # Win or breakeven resets the streak
                 await self.db.strategy_loss_streaks.update_one(
                     {"strategy_id": strategy_id, "user_id": user_id},
-                    {"$set": {"current_streak": 0, "updated_at": now_str_streak}},
+                    {"$set": {
+                        "current_streak": 0,
+                        "paused_until": None,
+                        "updated_at": now_str_streak
+                    }},
                     upsert=True,
                 )
 

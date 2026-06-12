@@ -126,7 +126,7 @@ async def check_frequency_gate(
         streak_doc = None
 
     if streak_doc:
-        streak = int(streak_doc.get("consecutive_sl_count") or 0)
+        streak = int(streak_doc.get("current_streak") or 0)
         paused_until_str = streak_doc.get("paused_until")
         if streak >= LOSS_STREAK_TRIGGER and paused_until_str:
             try:
@@ -155,9 +155,9 @@ async def record_sl_hit(db, strategy_id: str, user_id: str) -> None:
         doc = await db.strategy_loss_streaks.find_one(
             {"strategy_id": strategy_id, "user_id": user_id}, {"_id": 0}
         )
-        streak = int((doc or {}).get("consecutive_sl_count") or 0) + 1
+        streak = int((doc or {}).get("current_streak") or 0) + 1
         update: Dict[str, Any] = {
-            "consecutive_sl_count": streak,
+            "current_streak": streak,
             "last_sl_at": now.isoformat(),
         }
         if streak >= LOSS_STREAK_TRIGGER:
@@ -183,7 +183,7 @@ async def reset_streak_on_profit(db, strategy_id: str, user_id: str) -> None:
     try:
         await db.strategy_loss_streaks.update_one(
             {"strategy_id": strategy_id, "user_id": user_id},
-            {"$set": {"consecutive_sl_count": 0, "paused_until": None}},
+            {"$set": {"current_streak": 0, "paused_until": None}},
             upsert=True,
         )
     except Exception:

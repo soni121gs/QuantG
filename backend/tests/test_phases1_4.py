@@ -280,7 +280,7 @@ def test_07_loss_streak_throttle():
             async def count_documents(self, *a, **kw): return 1
         class _StreakDoc:
             async def find_one(self, *a, **kw):
-                return {"consecutive_sl_count": 3, "paused_until": future_pause}
+                return {"current_streak": 3, "paused_until": future_pause}
 
         ok, reason = await check_frequency_gate(
             _StreamDB(), "s1", "NIFTY HFT Quick Scalper", "u1", freq_multiplier=1.0

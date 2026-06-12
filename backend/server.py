@@ -5969,21 +5969,6 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
         }, "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}},
     )
     await _release_strategy_position_locks(position)
-    # Phase 3: update loss-streak counters for frequency throttle
-    _sid = position.get("strategy_id")
-    _uid = position.get("user_id")
-    if _sid and _uid:
-        try:
-            from trade_frequency import record_sl_hit, reset_streak_on_profit
-            _reason_lower = (reason or "").lower()
-            _is_sl = any(k in _reason_lower for k in ("stop_loss", "stoploss", "sl_hit", "stop-loss"))
-            _is_tp = any(k in _reason_lower for k in ("take_profit", "target_hit", "tp_hit", "profit"))
-            if _is_sl or pnl < 0:
-                await record_sl_hit(db, _sid, _uid)
-            elif _is_tp or pnl > 0:
-                await reset_streak_on_profit(db, _sid, _uid)
-        except Exception:
-            pass
 
 
 async def _release_strategy_position_locks(position: Optional[Dict[str, Any]]) -> None:
@@ -10107,9 +10092,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "updated_at": now,
         }, "$unset": {
             "paper_fill_apply_owner": "",
-            "paper_fill_apply_lock_until": "",
-            "paper_fill_apply_started_at": "",
-        }},
+}},
         projection={"_id": 0},
         return_document=ReturnDocument.AFTER,
     )
@@ -10153,111 +10136,78 @@ async def _book_live_fill_from_order(
         return None
 
     intent_doc = order_doc.get("order_intent") or {}
-    intent_name = str(intent_doc.get("intent") or "").upper()
     side = str(order_doc.get("side") or "").upper()
     symbol = order_doc.get("symbol") or ((intent_doc.get("instrument") or {}).get("tradingsymbol"))
-    brokerage = float(order_doc.get("brokerage") or 0.0)
+    target_symbol = intent_doc.get("target_symbol") or order_doc.get("target_symbol") or symbol
+    brokerage = float(order_doc.get("brokerage") or 0)
     expected = float(order_doc.get("expected_price") or order_doc.get("requested_price") or price or 0)
     slippage = round(abs(price - expected) * qty, 2) if expected > 0 else 0.0
     now = datetime.now(timezone.utc).isoformat()
 
-    gross_realised = 0.0
-    net_realised = 0.0
-    position_before_qty = None
-    position_after_qty = None
-    avg_price_before = None
-    avg_price_after = None
-    if intent_name in {"CLOSE_LONG", "CLOSE_SHORT"}:
-        pos = None
-        if order_doc.get("strategy_id"):
-            pos = await db.strategy_positions.find_one(
-                {
-                    "user_id": user_id,
-                    "strategy_id": order_doc.get("strategy_id"),
-                    "status": {"$in": ["EXITING", "OPEN", "FILLED"]},
-                },
-                {"_id": 0},
-            )
-        if pos:
-            position_before_qty = int(pos.get("open_quantity") or pos.get("quantity") or 0)
-            avg_price_before = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
-            closed_qty = min(position_before_qty, qty) if position_before_qty > 0 else qty
-            pos_side = str(pos.get("position_side") or "LONG").upper()
-            gross_realised = round((avg_price_before - price) * closed_qty, 2) if pos_side == "SHORT" else round((price - avg_price_before) * closed_qty, 2)
-            net_realised = round(gross_realised - brokerage, 2)
-            position_after_qty = max(0, position_before_qty - closed_qty)
-            avg_price_after = avg_price_before if position_after_qty else 0.0
-
+    # Construct fill doc for PortfolioLedger
     fill_doc = {
-        "id": str(uuid.uuid4()),
+        "id": f"tf_live_{order_id}",  # unique fill ID constructed from order_id to be deterministic
         "order_id": order_id,
-        "broker_order_id": order_doc.get("broker_order_id"),
         "user_id": user_id,
         "strategy_id": order_doc.get("strategy_id"),
-        "symbol": symbol,
+        "symbol": order_doc.get("symbol") or intent_doc.get("symbol") or symbol,
+        "target_symbol": target_symbol,
         "side": side,
         "qty": qty,
-        "fill_price": price,
         "price": price,
+        "charges": brokerage,
         "brokerage": brokerage,
-        "slippage": slippage,
-        "gross_realised_pnl": gross_realised,
-        "realised_pnl": net_realised,
-        "position_before_qty": position_before_qty,
-        "position_after_qty": position_after_qty,
-        "avg_price_before": avg_price_before,
-        "avg_price_after": avg_price_after,
-        "filled_at": now,
         "mode": "live",
-        "broker": order_doc.get("broker") or "upstox",
-        "raw_execution_report": raw_report or {},
+        "instrument_key": intent_doc.get("instrument_key") or order_doc.get("instrument_key"),
+        "instrument_token": intent_doc.get("instrument_token") or order_doc.get("instrument_token"),
+        "option_contract": intent_doc.get("option_contract"),
+        "asset_type": intent_doc.get("asset_type") or "option",
+        "asset_class": intent_doc.get("asset_class"),
+        "product": intent_doc.get("product") or "MIS",
+        "expiry": intent_doc.get("expiry"),
+        "underlying": intent_doc.get("underlying") or order_doc.get("symbol") or symbol,
+        "exit_reason": intent_doc.get("exit_reason") or order_doc.get("exit_reason") or "broker-filled",
+        "stop_loss": intent_doc.get("stop_loss"),
+        "take_profit": intent_doc.get("take_profit"),
     }
-    try:
-        await db.trade_fills.insert_one(fill_doc)
-    except DuplicateKeyError:
-        return await db.trade_fills.find_one({"order_id": order_id, "user_id": user_id}, {"_id": 0})
 
-    await db.orders.update_one(
-        {"id": order_id, "user_id": user_id},
-        {"$set": {
-            "live_fill_booked": True,
-            "live_fill_id": fill_doc["id"],
-            "gross_realised_pnl": gross_realised,
-            "realised_pnl": net_realised,
-            "brokerage": brokerage,
-            "slippage": slippage,
-            "updated_at": now,
-        }},
-    )
-    await _append_order_event(order_id, user_id, "LIVE_FILL_BOOKED", {
-        "fill_id": fill_doc["id"],
-        "broker_order_id": order_doc.get("broker_order_id"),
-        "qty": qty,
-        "fill_price": price,
-        "gross_realised_pnl": gross_realised,
-        "realised_pnl": net_realised,
-    })
-    if intent_name in {"CLOSE_LONG", "CLOSE_SHORT"} and net_realised:
-        try:
-            await db.trades.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "strategy_id": order_doc.get("strategy_id"),
-                "entry_symbol": symbol,
-                "exit_order_id": order_id,
-                "broker_order_id": order_doc.get("broker_order_id"),
-                "qty": qty,
-                "exit_price": price,
+    try:
+        from core.portfolio_ledger import PortfolioLedger
+        ledger = PortfolioLedger(db)
+        ledger_result = await ledger.process_fill(fill_doc)
+    except Exception as exc:
+        logger.error("Live ledger routing failed for order %s: %s", order_id, exc)
+        return None
+
+    if ledger_result.get("accepted"):
+        net_realised = ledger_result.get("realized_pnl") or 0.0
+        gross_realised = ledger_result.get("gross_pnl") or 0.0
+
+        await db.orders.update_one(
+            {"id": order_id, "user_id": user_id},
+            {"$set": {
+                "live_fill_booked": True,
+                "live_fill_id": fill_doc["id"],
                 "gross_realised_pnl": gross_realised,
                 "realised_pnl": net_realised,
                 "brokerage": brokerage,
                 "slippage": slippage,
-                "closed_at": now,
-                "mode": "live",
-            })
-        except DuplicateKeyError:
-            pass
-    return fill_doc
+                "updated_at": now,
+            }},
+        )
+        await _append_order_event(order_id, user_id, "LIVE_FILL_BOOKED", {
+            "fill_id": fill_doc["id"],
+            "broker_order_id": order_doc.get("broker_order_id"),
+            "qty": qty,
+            "fill_price": price,
+            "gross_realised_pnl": gross_realised,
+            "realised_pnl": net_realised,
+        })
+        fill_doc["gross_realised_pnl"] = gross_realised
+        fill_doc["realised_pnl"] = net_realised
+        return fill_doc
+
+    return None
 
 
 async def _fill_ledger_summary(
@@ -11645,7 +11595,7 @@ async def _advance_pending_order_from_broker(
             await _close_order_exposure_reservation(order["id"], user_id, status="SETTLED", reason="broker-filled")
             if strategy_id and is_entry:
                 pos_set = {
-                    "status": "FILLED",
+                    "status": "OPEN",
                     "average_buy_price": float(avg_price or order.get("price") or 0),
                     "updated_at": now,
                 }
@@ -11709,7 +11659,7 @@ async def _advance_pending_order_from_broker(
                     changed_positions += res.modified_count
             if strategy_id and is_exit:
                 exit_positions = await db.strategy_positions.find(
-                    {"user_id": user_id, "exit_broker_order_id": str(broker_order_id), "status": "EXITING"},
+                    {"user_id": user_id, "exit_broker_order_id": str(broker_order_id), "status": {"$in": ["EXITING", "CLOSED"]}},
                     {"_id": 0},
                 ).to_list(20)
                 for pos in exit_positions:
@@ -14901,7 +14851,7 @@ async def get_paper_wallet(user=Depends(get_current_user)):
     wallet = await pw.get_or_initialize(user["id"])
     summary = pw.summary(wallet)
     # Attach recent paper fills for context
-    recent_fills = await db.fills.find(
+    recent_fills = await db.trade_fills.find(
         {"user_id": user["id"], "mode": "paper"},
         {"_id": 0, "id": 1, "side": 1, "symbol": 1, "target_symbol": 1,
          "qty": 1, "price": 1, "trade_value": 1, "brokerage": 1, "created_at": 1}

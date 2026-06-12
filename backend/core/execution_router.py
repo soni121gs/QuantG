@@ -255,7 +255,6 @@ class PaperAdapter:
             "underlying": (intent.get("option_contract") or {}).get("underlying") or intent.get("symbol"),
             "exit_reason": intent.get("exit_reason"),
         }
-        await self.db.fills.insert_one(fill_doc)
 
         # ------------------------------------------------------------------
         # Update Portfolio Ledger FIRST (Hard Rule: No fill = no position).

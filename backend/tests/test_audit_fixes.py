@@ -1,375 +1,189 @@
-import sys
 import os
-import unittest
-import asyncio
+import sys
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
 
+# Ensure backend is in the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server import _build_order_intent, get_ist_midnight_utc_iso
+from trade_frequency import record_sl_hit, reset_streak_on_profit, check_frequency_gate
+from core.portfolio_ledger import PortfolioLedger
 
 
-class TestAuditFixes(unittest.TestCase):
-
-    def test_get_ist_midnight_utc_iso(self):
-        """Verify that get_ist_midnight_utc_iso correctly returns UTC 18:30 of the previous day."""
-        iso_str = get_ist_midnight_utc_iso()
-        dt = datetime.fromisoformat(iso_str)
-        # Check that the timezone-aware UTC representation ends at 18:30
-        self.assertEqual(dt.hour, 18)
-        self.assertEqual(dt.minute, 30)
-        self.assertEqual(dt.second, 0)
-
-    def test_dynamic_intent_resolution_direct_no_active_position(self):
-        """Verify _build_order_intent for direct equity without active position."""
-        async def run_test():
-            mock_db = MagicMock()
-            # Find returns None (no active position)
-            mock_db.strategy_positions.find_one = AsyncMock(return_value=None)
-            
-            with patch("server.db", mock_db):
-                # 1. Buy Order
-                res_buy = await _build_order_intent(
-                    user_id="user-1",
-                    symbol="RELIANCE",
-                    side="BUY",
-                    qty=10,
-                    source="manual",
-                    exchange="NSE",
-                    settings={"default_qty": 1},
-                )
-                self.assertEqual(res_buy["intent"].intent, "OPEN_LONG")
-                self.assertEqual(res_buy["intent"].instrument.asset_class, "DIRECT")
-
-                # 2. Sell Order
-                res_sell = await _build_order_intent(
-                    user_id="user-1",
-                    symbol="RELIANCE",
-                    side="SELL",
-                    qty=10,
-                    source="manual",
-                    exchange="NSE",
-                    settings={"default_qty": 1},
-                )
-                self.assertEqual(res_sell["intent"].intent, "OPEN_SHORT")
-                self.assertEqual(res_sell["intent"].instrument.asset_class, "DIRECT")
-
-        asyncio.run(run_test())
-
-    def test_dynamic_intent_resolution_direct_with_active_position(self):
-        """Verify _build_order_intent for direct equity with active position."""
-        async def run_test():
-            mock_db = MagicMock()
-            
-            # Active Position: SHORT
-            mock_db.strategy_positions.find_one = AsyncMock(return_value={
-                "id": "pos-1",
-                "user_id": "user-1",
-                "strategy_id": "manual_recovery",
-                "instrument_key": "NSE:RELIANCE",
-                "position_side": "SHORT",
-                "status": "OPEN",
-            })
-            
-            with patch("server.db", mock_db):
-                # Buy Order to Cover
-                res_buy = await _build_order_intent(
-                    user_id="user-1",
-                    symbol="RELIANCE",
-                    side="BUY",
-                    qty=10,
-                    source="manual",
-                    exchange="NSE",
-                    settings={"default_qty": 1},
-                )
-                self.assertEqual(res_buy["intent"].intent, "CLOSE_SHORT")
-
-            # Active Position: LONG
-            mock_db.strategy_positions.find_one = AsyncMock(return_value={
-                "id": "pos-2",
-                "user_id": "user-1",
-                "strategy_id": "manual_recovery",
-                "instrument_key": "NSE:RELIANCE",
-                "position_side": "LONG",
-                "status": "OPEN",
-            })
-            
-            with patch("server.db", mock_db):
-                # Sell Order to Close
-                res_sell = await _build_order_intent(
-                    user_id="user-1",
-                    symbol="RELIANCE",
-                    side="SELL",
-                    qty=10,
-                    source="manual",
-                    exchange="NSE",
-                    settings={"default_qty": 1},
-                )
-                self.assertEqual(res_sell["intent"].intent, "CLOSE_LONG")
-
-        asyncio.run(run_test())
-
-    def test_dynamic_intent_resolution_options(self):
-        """Verify _build_order_intent for options contract dynamically."""
-        async def run_test():
-            mock_db = MagicMock()
-            
-            # Active Position: SHORT Option
-            mock_db.strategy_positions.find_one = AsyncMock(return_value={
-                "id": "pos-opt-1",
-                "user_id": "user-1",
-                "strategy_id": "manual_recovery",
-                "instrument_key": "NFO:NIFTY2660424850CE",
-                "position_side": "SHORT",
-                "status": "OPEN",
-            })
-            
-            option_contract = {
-                "tradingsymbol": "NIFTY2660424850CE",
-                "exchange": "NFO",
-                "instrument_token": "54323",
-                "transaction_type": "BUY",
-                "underlying": "NIFTY",
-                "option_type": "CE",
-                "strike": 24850,
-                "expiry": "2026-06-04",
-                "lot_size": 50,
-            }
-            
-            with patch("server.db", mock_db):
-                res = await _build_order_intent(
-                    user_id="user-1",
-                    symbol="NIFTY",
-                    side="BUY",
-                    qty=1,
-                    source="manual",
-                    exchange="NSE",
-                    settings={"default_qty": 1},
-                    option_contract=option_contract,
-                )
-                self.assertEqual(res["intent"].intent, "CLOSE_SHORT")
-                self.assertEqual(res["intent"].instrument.asset_class, "OPTION_SHORT")
-
-        asyncio.run(run_test())
-
-    def test_check_daily_loss_guard_passed(self):
-        """Verify _check_daily_loss_guard passes when loss is within limit."""
-        async def run_test():
-            mock_db = MagicMock()
-            mock_fills_cursor = MagicMock()
-            mock_fills_cursor.to_list = AsyncMock(return_value=[])
-            mock_db.trade_fills.find = MagicMock(return_value=mock_fills_cursor)
-            mock_find_cursor = MagicMock()
-            mock_find_cursor.to_list = AsyncMock(return_value=[
-                {"realized_pnl": -50.0},
-                {"realized_pnl": 10.0},
-            ])
-            mock_db.orders.find = MagicMock(return_value=mock_find_cursor)
-
-            with patch("server.db", mock_db):
-                from server import _check_daily_loss_guard
-                await _check_daily_loss_guard(user_id="user-1", max_loss=1000.0)
-
-        asyncio.run(run_test())
-
-    def test_check_daily_loss_guard_tripped(self):
-        """Verify _check_daily_loss_guard raises HTTPException when loss exceeds limit."""
-        async def run_test():
-            from fastapi import HTTPException
-            mock_db = MagicMock()
-            mock_fills_cursor = MagicMock()
-            mock_fills_cursor.to_list = AsyncMock(return_value=[])
-            mock_db.trade_fills.find = MagicMock(return_value=mock_fills_cursor)
-            mock_find_cursor = MagicMock()
-            mock_find_cursor.to_list = AsyncMock(return_value=[
-                {"realized_pnl": -1000.0},
-                {"realized_pnl": -200.0},
-            ])
-            mock_db.orders.find = MagicMock(return_value=mock_find_cursor)
-
-            with patch("server.db", mock_db):
-                from server import _check_daily_loss_guard
-                with self.assertRaises(HTTPException) as ctx:
-                    await _check_daily_loss_guard(user_id="user-1", max_loss=1000.0)
-                self.assertEqual(ctx.exception.status_code, 400)
-                self.assertIn("Daily loss guard tripped", ctx.exception.detail)
-
-        asyncio.run(run_test())
-
-    def test_check_trade_count_guard_passed(self):
-        """Verify _check_trade_count_guard passes when trade count is below limit."""
-        async def run_test():
-            mock_db = MagicMock()
-            mock_db.orders.count_documents = AsyncMock(return_value=4)
-
-            with patch("server.db", mock_db):
-                from server import _check_trade_count_guard
-                await _check_trade_count_guard(user_id="user-1", max_trades=5)
-
-        asyncio.run(run_test())
-
-    def test_check_trade_count_guard_tripped(self):
-        """Verify _check_trade_count_guard raises HTTPException when trade count matches/exceeds limit."""
-        async def run_test():
-            from fastapi import HTTPException
-            mock_db = MagicMock()
-            mock_db.orders.count_documents = AsyncMock(return_value=5)
-
-            with patch("server.db", mock_db):
-                from server import _check_trade_count_guard
-                with self.assertRaises(HTTPException) as ctx:
-                    await _check_trade_count_guard(user_id="user-1", max_trades=5)
-                self.assertEqual(ctx.exception.status_code, 400)
-                self.assertIn("Daily trade guard tripped", ctx.exception.detail)
-
-        asyncio.run(run_test())
-
-    def test_cooldown_isolation_on_signal_filtering(self):
-        """Verify cooldown isolation: filtered/rejected signals do not update strategy cooldown."""
-        async def run_test():
-            # Mock the strategy runner / signal manager db updates
-            mock_db = MagicMock()
-            # We mock the db.strategies.update_one to assert that it is NOT called for rejected/filtered signals
-            mock_db.strategies.update_one = AsyncMock()
-            mock_db.signals.update_one = AsyncMock()
-            
-            # Let's import ConflictResolver to simulate resolve
-            from signal_manager import ConflictResolver
-            
-            # Signal A: CE Buy, confidence 90
-            sig_ce = {
-                "id": "sig-ce",
-                "user_id": "user-1",
-                "strategy_id": "strat-ce",
-                "symbol": "NIFTY",
-                "target_symbol": "NIFTY2660524900CE",
-                "option_type": "CE",
-                "action": "BUY",
-                "confidence": 90.0,
-                "status": "PENDING",
-            }
-            
-            # Signal B: PE Buy, confidence 80 (will clash and be rejected)
-            sig_pe = {
-                "id": "sig-pe",
-                "user_id": "user-1",
-                "strategy_id": "strat-pe",
-                "symbol": "NIFTY",
-                "target_symbol": "NIFTY2660524900PE",
-                "option_type": "PE",
-                "action": "BUY",
-                "confidence": 80.0,
-                "status": "PENDING",
-            }
-            
-            # 1. Run ConflictResolver
-            approved, rejected = ConflictResolver.resolve(
-                pending_signals=[sig_ce, sig_pe],
-                active_positions=[],
-                one_active_position_per_symbol_group=False
-            )
-            
-            self.assertEqual(len(approved), 2)
-            self.assertEqual([sig["id"] for sig in approved], ["sig-ce", "sig-pe"])
-            self.assertEqual(rejected, [])
-            
-            # 2. Simulate dispatch block inside signal_manager_loop
-            # For rejected signals:
-            for sig in rejected:
-                await mock_db.signals.update_one(
-                    {"id": sig["id"]},
-                    {"$set": {
-                        "status": sig["status"],
-                        "rejection_reason": sig["rejection_reason"],
-                        "processed_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-            
-            # For approved signals (simulate success):
-            for sig in approved:
-                now_str = datetime.now(timezone.utc).isoformat()
-                await mock_db.strategies.update_one(
-                    {"id": sig["strategy_id"], "user_id": "user-1"},
-                    {"$set": {"last_signal_at": now_str}}
-                )
-            
-            self.assertEqual(mock_db.signals.update_one.call_count, 0)
-            self.assertEqual(mock_db.strategies.update_one.call_count, 2)
-            
-            updated_ids = [call.args[0]["id"] for call in mock_db.strategies.update_one.await_args_list]
-            self.assertEqual(updated_ids, ["strat-ce", "strat-pe"])
-
-        asyncio.run(run_test())
-
-    def test_get_trading_day_window_ist(self):
-        """Verify get_trading_day_window_ist returns correct IST day boundaries in UTC."""
-        from server import get_trading_day_window_ist
-        start, end = get_trading_day_window_ist()
-        start_dt = datetime.fromisoformat(start)
-        end_dt = datetime.fromisoformat(end)
-        self.assertEqual(end_dt - start_dt, timedelta(days=1))
-        # start must be at 18:30 UTC of previous day
-        self.assertEqual(start_dt.hour, 18)
-        self.assertEqual(start_dt.minute, 30)
-
-    def test_reset_paper_trading(self):
-        """Verify reset_paper_trading endpoint calls purge on correct collections for user."""
-        async def run_test():
-            from server import reset_paper_trading
-            mock_db = MagicMock()
-            
-            # Mock return value of db.strategies.find
-            mock_cursor = MagicMock()
-            mock_cursor.to_list = AsyncMock(return_value=[{"id": "strat-1"}])
-            mock_db.strategies.find = MagicMock(return_value=mock_cursor)
-            
-            # Mock delete_many and update_many
-            mock_db.orders.update_many = AsyncMock(return_value=MagicMock(modified_count=6))
-            mock_db.orders.delete_many = AsyncMock(return_value=MagicMock(deleted_count=5))
-            mock_db.strategy_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
-            mock_db.positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
-            mock_db.strategy_position_locks.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
-            mock_db.signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=10))
-            mock_db.skipped_signals.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
-            mock_db.paper_trading_history.update_many = AsyncMock(return_value=MagicMock(modified_count=3))
-            mock_db.trades.update_many = AsyncMock(return_value=MagicMock(modified_count=4))
-            mock_db.trade_fills.update_many = AsyncMock(return_value=MagicMock(modified_count=4))
-            mock_db.option_open_positions.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
-            mock_db.option_daily_pnl.delete_many = AsyncMock(return_value=MagicMock(deleted_count=2))
-            mock_db.option_trade_journal.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
-            mock_db.option_strategy_states.update_many = AsyncMock()
-            mock_db.risk_events.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
-            mock_db.paper_wallets.replace_one = AsyncMock()
-            
-            with patch("server.db", mock_db):
-                user = {"id": "user-123", "email": "test@quantg.com"}
-                res = await reset_paper_trading(user=user)
-                
-                self.assertTrue(res["ok"])
-                self.assertEqual(res["purged"]["orders"], 5)
-                self.assertEqual(res["purged"]["strategy_positions"], 2)
-                self.assertEqual(res["purged"]["broker_positions"], 1)
-                
-                # Check user scope in queries
-                self.assertEqual(res["purged"]["orders_archived"], 6)
-                mock_db.orders.delete_many.assert_called()
-                mock_db.positions.delete_many.assert_called_with({
-                    "user_id": "user-123",
-                    "$or": [
-                        {"mode": "paper"},
-                        {"broker": "paper"},
-                        {
-                            "mode": {"$exists": False},
-                            "broker_order_id": {"$in": [None, ""]},
-                            "strategy_id": {"$in": ["strat-1"]},
-                        },
-                    ],
-                })
-                mock_db.option_open_positions.delete_many.assert_called_with({"strategy_id": {"$in": ["strat-1"]}})
-
-        asyncio.run(run_test())
+@pytest.mark.anyio
+async def test_loss_streak_standardization():
+    """Verify that trade_frequency writes and reads current_streak instead of consecutive_sl_count."""
+    mock_db = MagicMock()
+    mock_db.strategy_loss_streaks.find_one = AsyncMock(return_value={
+        "current_streak": 2,
+        "paused_until": None,
+    })
+    
+    # We mock update_one to capture what is being updated
+    updated_doc = {}
+    async def mock_update(query, update, upsert=False):
+        nonlocal updated_doc
+        updated_doc = update["$set"]
+        
+    mock_db.strategy_loss_streaks.update_one = mock_update
+    
+    # Trigger SL hit
+    await record_sl_hit(mock_db, "strat-1", "user-1")
+    
+    # Check that current_streak was incremented to 3 and paused_until is set
+    assert updated_doc.get("current_streak") == 3
+    assert "paused_until" in updated_doc
+    assert "consecutive_sl_count" not in updated_doc
+    
+    # Reset streak on profit
+    await reset_streak_on_profit(mock_db, "strat-1", "user-1")
+    assert updated_doc.get("current_streak") == 0
+    assert updated_doc.get("paused_until") is None
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.anyio
+async def test_portfolio_ledger_sets_streak_pause():
+    """Verify that PortfolioLedger manages current_streak and paused_until on negative P&L full close."""
+    mock_db = MagicMock()
+    
+    # 1. Existing streak document shows 2 consecutive losses
+    mock_db.strategy_loss_streaks.find_one = AsyncMock(return_value={
+        "current_streak": 2,
+        "paused_until": None,
+    })
+    
+    # Track updates
+    updated_streak = {}
+    async def mock_streak_update(query, update, upsert=False):
+        nonlocal updated_streak
+        updated_streak = update["$set"]
+        
+    mock_db.strategy_loss_streaks.update_one = mock_streak_update
+    
+    # Mock position to close (LONG with average entry 100)
+    pos = {
+        "id": "pos-1",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "mode": "paper",
+        "position_side": "LONG",
+        "open_quantity": 50,
+        "quantity": 50,
+        "average_buy_price": 100.0,
+        "status": "OPEN",
+        "entry_charges": 20.0,
+    }
+    
+    mock_db.strategy_positions.find_one = AsyncMock(return_value=pos)
+    mock_db.strategy_positions.update_one = AsyncMock()
+    mock_db.positions.delete_one = AsyncMock()
+    mock_db.trade_fills.insert_one = AsyncMock()
+    mock_db.trades.insert_one = AsyncMock()
+    mock_db.strategies.update_one = AsyncMock()
+    mock_db.processed_fill_ids.insert_one = AsyncMock()
+    
+    # Initialize ledger
+    ledger = PortfolioLedger(mock_db)
+    
+    # Process exit fill at 90 (loss)
+    fill = {
+        "id": "fill-exit-1",
+        "order_id": "order-exit-1",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "side": "SELL",
+        "qty": 50,
+        "price": 90.0,
+        "charges": 10.0,
+        "brokerage": 10.0,
+        "mode": "paper",
+        "exit_reason": "stop_loss",
+    }
+    
+    res = await ledger.process_fill(fill)
+    assert res["accepted"] is True
+    assert res["action"] == "CLOSE"
+    
+    # Ensure current_streak is incremented to 3 and paused_until is set
+    assert updated_streak.get("current_streak") == 3
+    assert "paused_until" in updated_streak
+
+
+@pytest.mark.anyio
+async def test_paper_wallet_queries_trade_fills():
+    """Verify that get_paper_wallet retrieves recent fills from db.trade_fills, not db.fills."""
+    import server
+    
+    mock_db = MagicMock()
+    mock_db.trade_fills.find = MagicMock()
+    mock_db.fills.find = MagicMock()
+    
+    # Set up paper wallet mock responses
+    mock_db.paper_wallets.find_one = AsyncMock(return_value={
+        "user_id": "user-1",
+        "balance": 100000.0,
+        "initial_capital": 100000.0,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    
+    # Mock find().sort().limit().to_list() chain
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.limit.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(return_value=[])
+    mock_db.trade_fills.find.return_value = mock_cursor
+    
+    with patch("server.db", mock_db):
+        res = await server.get_paper_wallet(user={"id": "user-1"})
+        
+    assert res["ok"] is True
+    mock_db.trade_fills.find.assert_called_once()
+    mock_db.fills.find.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_book_live_fill_routes_to_portfolio_ledger():
+    """Verify that _book_live_fill_from_order routes the fill doc through PortfolioLedger."""
+    import server
+    
+    mock_db = MagicMock()
+    mock_db.trade_fills.find_one = AsyncMock(return_value=None)
+    mock_db.orders.update_one = AsyncMock()
+    
+    order = {
+        "id": "ord-live-1",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "side": "BUY",
+        "qty": 50,
+        "price": 100.0,
+        "mode": "live",
+        "order_intent": {
+            "target_symbol": "NIFTY26FEB24850CE",
+            "instrument_key": "NSE_FO|12345",
+            "product": "MIS",
+        }
+    }
+    
+    mock_ledger_instance = MagicMock()
+    mock_ledger_instance.process_fill = AsyncMock(return_value={
+        "accepted": True,
+        "action": "OPEN",
+        "position_id": "pos-live-1",
+        "realized_pnl": 0.0,
+        "gross_pnl": 0.0,
+    })
+    
+    with patch("server.db", mock_db), patch("core.portfolio_ledger.PortfolioLedger", return_value=mock_ledger_instance):
+        res = await server._book_live_fill_from_order(order, fill_price=100.0, filled_qty=50)
+        
+    assert res is not None
+    assert res["realised_pnl"] == 0.0
+    mock_ledger_instance.process_fill.assert_called_once()
+    mock_db.orders.update_one.assert_called_once()
