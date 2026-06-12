@@ -85,7 +85,11 @@ def backfill_from_trades(db, *, apply: bool, limit: int = 0) -> BackfillStats:
         stats.trade_candidates += 1
         gross = _float_or_none(trade.get("gross_pnl"))
         exit_fill_id = trade.get("exit_fill_id")
+        # Legacy fills live in db.fills (keyed by `id`); fills booked after the
+        # db.fills deprecation live in db.trade_fills (original id under `fill_id`).
         fill = db.fills.find_one({"id": exit_fill_id}, {"order_id": 1, "id": 1})
+        if not fill:
+            fill = db.trade_fills.find_one({"fill_id": exit_fill_id}, {"order_id": 1})
         if not fill:
             stats.skipped_no_fill += 1
             continue
