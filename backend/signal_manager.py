@@ -939,6 +939,16 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 }
                                 if final_signal_status == "SKIPPED_SIGNAL":
                                     signal_update["rejection_reason"] = order_res.get("reason_code") or order_res.get("skip_reason") or "preflight skipped"
+                                    # Persist full rejection detail so EVERY dispatch-boundary skip
+                                    # (sizing, greeks, daily-loss, preflight, duplicate, group
+                                    # exposure) is diagnosable from the record — not just its code.
+                                    # Prefer a structured detail from the rejecter; else fall back
+                                    # to the reason/code/status the boundary returned.
+                                    signal_update["rejection_detail"] = order_res.get("detail") or {
+                                        "reason_code": order_res.get("reason_code"),
+                                        "human_reason": order_res.get("reason") or order_res.get("skip_reason"),
+                                        "status": order_res.get("status"),
+                                    }
                                 await db.signals.update_one(
                                     {"id": sig["id"]},
                                     {"$set": signal_update}
@@ -955,6 +965,10 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     {"$set": {
                                         "status": "SKIPPED_SIGNAL",
                                         "rejection_reason": f"EXECUTION_SKIPPED: {str(exec_err)[:200]}",
+                                        "rejection_detail": {
+                                            "reason_code": "EXECUTION_SKIPPED",
+                                            "human_reason": str(exec_err)[:500],
+                                        },
                                         "processed_at": datetime.now(timezone.utc).isoformat()
                                     }}
                                 )

@@ -134,7 +134,13 @@ class RiskManager:
                 "ok": False,
                 "status": "REJECTED_DAILY_LOSS_LIMIT",
                 "reason": f"Strategy daily loss limit breached: {daily_loss} < -{daily_loss_limit}",
-                "quantity": 0
+                "quantity": 0,
+                "detail": {
+                    "reason_code": "REJECTED_DAILY_LOSS_LIMIT",
+                    "human_reason": f"today_pnl {daily_loss} below -{daily_loss_limit}",
+                    "today_pnl": daily_loss,
+                    "daily_loss_limit": daily_loss_limit,
+                },
             }
 
         # 6. Sizing computation
@@ -180,7 +186,20 @@ class RiskManager:
                 "ok": False,
                 "status": "REJECTED_RISK_SIZING",
                 "reason": f"Position sizing failed: {size_res.reason}",
-                "quantity": 0
+                "quantity": 0,
+                # Structured detail so a sizing rejection is diagnosable from the
+                # signal record: which cap bound (caps), and the inputs that drove it.
+                "detail": {
+                    "reason_code": "REJECTED_RISK_SIZING",
+                    "human_reason": size_res.reason,
+                    "caps": size_res.caps,
+                    "lot_size": lot_size,
+                    "entry_price": price,
+                    "equity": round(equity, 2),
+                    "free_margin": round(free_margin, 2),
+                    "risk_budget": round(size_res.risk_budget, 2),
+                    "unit_loss_at_stop": round(size_res.unit_loss_at_stop, 4),
+                },
             }
 
         # 6b. Adaptive capital allocation — scale quantity by performance + regime
@@ -244,7 +263,12 @@ class RiskManager:
                     "ok": False,
                     "status": "REJECTED_GREEKS_LIMIT",
                     "reason": greeks_result["reason"],
-                    "quantity": 0
+                    "quantity": 0,
+                    "detail": {
+                        "reason_code": "REJECTED_GREEKS_LIMIT",
+                        "human_reason": greeks_result.get("reason"),
+                        **{k: v for k, v in greeks_result.items() if k not in ("ok", "reason")},
+                    },
                 }
 
         return {
