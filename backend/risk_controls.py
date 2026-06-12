@@ -23,6 +23,7 @@ class SizeInputs:
     daily_loss_limit: float
     risk_style: str = "balanced"
     margin_buffer: float = 0.85
+    max_lot: int = 0  # hard ceiling in lots (0 = unset). Sizing never exceeds this.
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,11 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
         "margin": _round_to_lot(qty_margin, lot_size),
         "position_value": _round_to_lot(qty_value, lot_size),
     }
+    # max_lot is a hard user-configured ceiling. Equity/risk caps may size below
+    # it, but sizing must never exceed the configured lot count.
+    max_lot = max(0, int(inputs.max_lot or 0))
+    if max_lot > 0:
+        caps["max_lot"] = max_lot * lot_size
     quantity = min(caps.values()) if caps else 0
     order_value = round(quantity * entry, 2)
 

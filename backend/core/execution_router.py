@@ -176,6 +176,8 @@ class PaperAdapter:
             "target_symbol": intent["target_symbol"],
             "side": side,
             "qty": qty,
+            "lot_size": lot_size,
+            "lots": max(1, qty // lot_size),
             "filled_qty": filled_qty,
             "pending_qty": qty - filled_qty,
             "status": "PARTIAL_FILL" if partial else "FILLED",
@@ -320,12 +322,17 @@ class PaperAdapter:
 
         order_doc["ledger_action"] = (ledger_result or {}).get("action")
         realized_pnl = float((ledger_result or {}).get("realized_pnl") or 0.0)
+        # gross_pnl is the round-trip P&L before charges (net + exit + entry charges
+        # share), computed by the ledger. Persist it so the dashboard's Gross P&L is
+        # correct and stays consistent (gross = net + charges) instead of always 0.
+        gross_pnl = float((ledger_result or {}).get("gross_pnl") or 0.0)
         order_doc["realized_pnl"] = realized_pnl
         order_doc["net_pnl"] = realized_pnl
-        if realized_pnl:
+        order_doc["gross_pnl"] = gross_pnl
+        if realized_pnl or gross_pnl:
             await self.db.orders.update_one(
                 {"id": order_id},
-                {"$set": {"net_pnl": realized_pnl, "realized_pnl": realized_pnl}},
+                {"$set": {"net_pnl": realized_pnl, "realized_pnl": realized_pnl, "gross_pnl": gross_pnl}},
             )
         return order_doc
 

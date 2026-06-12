@@ -11,7 +11,7 @@ import re
 
 from core.market_domains import resolve_domain_by_underlying, DomainType
 from core.market_session_service import MarketSessionService
-from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality
+from risk_controls import SizeInputs, SizeResult, compute_position_size, evaluate_market_data_quality
 from core.models import PositionDoc, OrderDoc, StrategyDoc
 
 logger = logging.getLogger("quantg.risk_manager")
@@ -153,7 +153,14 @@ class RiskManager:
         # uses the actual wallet balance so a low required_capital never blocks orders.
         equity = free_margin
         max_pos_value = float(settings.get("max_position_size") or 0) or max(equity, requested_qty * price)
-        
+
+        # Hard lot ceiling: explicit max_lot if set, else the configured base lots.
+        # Neither equity-based sizing nor the adaptive allocator may exceed this —
+        # it is the user's intended per-trade size, independent of wallet balance.
+        configured_lots = int(float(visual_options.get("lots") or 1) or 1)
+        max_lot = int(float(visual_risk.get("max_lot") or 0) or 0)
+        ceiling_lots = max_lot if max_lot > 0 else max(1, configured_lots)
+
         size_inputs = SizeInputs(
             equity=equity,
             free_margin=free_margin,
@@ -163,7 +170,8 @@ class RiskManager:
             stop_loss_price=stop_loss,
             max_position_value=max_pos_value,
             daily_loss_limit=daily_loss_limit,
-            risk_style=risk_style
+            risk_style=risk_style,
+            max_lot=ceiling_lots,
         )
         
         size_res = compute_position_size(size_inputs)
@@ -198,6 +206,24 @@ class RiskManager:
                     )
             except Exception as alloc_exc:
                 logger.warning("[ALLOC] multiplier error for %s: %s — using unscaled qty", strategy_id, alloc_exc)
+
+        # 6c. Authoritative max-lot ceiling — final guard so neither equity-based
+        # sizing nor the adaptive allocator can place more than the configured lots.
+        ceiling_qty = max(lot_size, ceiling_lots * lot_size)
+        if size_res.quantity > ceiling_qty:
+            logger.info(
+                "[SIZING] strategy=%s qty capped %d -> %d (max_lot=%d, lot_size=%d)",
+                strategy_id, size_res.quantity, ceiling_qty, ceiling_lots, lot_size,
+            )
+            size_res = SizeResult(
+                allowed=size_res.allowed,
+                quantity=ceiling_qty,
+                reason=f"{size_res.reason}; capped to max_lot={ceiling_lots}",
+                risk_budget=size_res.risk_budget,
+                unit_loss_at_stop=size_res.unit_loss_at_stop,
+                order_value=round(ceiling_qty * price, 2),
+                caps=size_res.caps,
+            )
 
         # 7. Options Greeks exposure check (applies when trading options)
         sym_upper = (target_symbol or "").upper()

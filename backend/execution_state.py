@@ -467,9 +467,9 @@ class ExecutionStateManager:
                 "failed_orders": len(failed_orders),
                 "skipped_signals": sum(int(row.get("count") or 1) for row in skipped_signals),
                 "total_unrealized_pnl": round(sum(float(p.get("pnl") or 0) for p in positions), 2),
-                "gross_pnl": round(sum(float((o.get("gross_pnl") if o.get("gross_pnl") is not None else o.get("realised_pnl") or o.get("pnl") or 0)) for o in orders), 2),
+                "gross_pnl": round(sum(float((o.get("gross_pnl") if o.get("gross_pnl") is not None else o.get("realized_pnl") or o.get("realised_pnl") or o.get("pnl") or 0)) for o in orders), 2),
                 "charges": round(sum(float(o.get("charges") or o.get("brokerage") or 0) for o in orders), 2),
-                "net_pnl": round(sum(float((o.get("net_pnl") if o.get("net_pnl") is not None else o.get("realised_pnl") or o.get("pnl") or 0)) for o in orders), 2),
+                "net_pnl": round(sum(float((o.get("net_pnl") if o.get("net_pnl") is not None else o.get("realized_pnl") or o.get("realised_pnl") or o.get("pnl") or 0)) for o in orders), 2),
                 "position_integrity": {
                     "orphans": orphan_positions_count,
                     "missing_sl": missing_sl_count,

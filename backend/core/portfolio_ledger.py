@@ -49,13 +49,15 @@ logger = logging.getLogger("quantg.portfolio_ledger")
 
 
 def _result(accepted: bool, action: str, position_id: Optional[str] = None,
-            qty_closed: int = 0, realized_pnl: float = 0.0) -> Dict[str, Any]:
+            qty_closed: int = 0, realized_pnl: float = 0.0,
+            gross_pnl: float = 0.0) -> Dict[str, Any]:
     return {
         "accepted": accepted,
         "action": action,
         "position_id": position_id,
         "qty_closed": qty_closed,
         "realized_pnl": realized_pnl,
+        "gross_pnl": gross_pnl,
     }
 
 
@@ -325,6 +327,7 @@ class PortfolioLedger:
                 "asset_class": fill.get("asset_class") or ("OPTION_LONG" if is_option and side == "BUY" else ("OPTION_SHORT" if is_option and side == "SELL" else None)),
                 "product": fill.get("product") or opt.get("product") or "MIS",
                 "lot_size": int(opt.get("lot_size") or fill.get("lot_size") or 1),
+                "lots": max(1, int(qty) // max(1, int(opt.get("lot_size") or fill.get("lot_size") or 1))),
                 "strike": opt.get("strike"),
                 "expiry": opt.get("expiry"),
                 "option_type": opt.get("option_type"),
@@ -549,7 +552,7 @@ class PortfolioLedger:
             "Portfolio ledger %s position %s. qty_closed=%s realized P&L: %.2f",
             "closed" if is_full_close else "reduced", pos["id"], exit_qty, net_pnl,
         )
-        return _result(True, action, pos["id"], qty_closed=exit_qty, realized_pnl=net_pnl)
+        return _result(True, action, pos["id"], qty_closed=exit_qty, realized_pnl=net_pnl, gross_pnl=gross_pnl)
 
 
 async def get_strategy_pnl_today(db, strategy_id: str, user_id: str) -> Dict[str, Any]:

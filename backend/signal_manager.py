@@ -724,6 +724,11 @@ async def _dispatch_signal_via_unified_engine(
         take_profit=take_profit,
         idempotency_key=idem_key,
     )
+    # Carry lot sizing onto the intent so the fill path can round to whole lots
+    # and the order doc records how many lots were actually placed (auditability).
+    final_qty = int(risk_res["quantity"])
+    intent_doc["lot_size"] = lot_size
+    intent_doc["lots"] = max(1, final_qty // max(1, lot_size))
     if option_contract:
         intent_doc["instrument_token"] = (
             option_contract.get("instrument_key")
