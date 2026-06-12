@@ -7,6 +7,7 @@ import {
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
+import { useExecutionState } from "../hooks/useExecutionState";
 
 const fmt = (value) => {
   if (!value) return "-";
@@ -27,8 +28,11 @@ const fmtUTC = (value) => {
   }
 };
 
+const money = (value) => Number(value || 0).toLocaleString("en-IN", { style: "currency", currency: "INR" });
+
 export default function OpsConsole() {
   const { user } = useAuth();
+  const { summary: executionSummary } = useExecutionState({ pollMs: 15000 });
   const [data, setData] = useState(null);
   const [fundsData, setFundsData] = useState(null);
   const [busy, setBusy] = useState("");
@@ -177,6 +181,8 @@ export default function OpsConsole() {
   const usedMargin = fundsData?.used_margin || 0;
   const spanMargin = fundsData?.span || 0;
   const payinAmount = fundsData?.intraday_payin || 0;
+  const sessionPnl = executionSummary?.net_pnl ?? 0;
+  const openPositions = executionSummary?.open_positions ?? 0;
   const totalLimit = availCash + usedMargin;
   const utilPercent = totalLimit > 0 ? Math.round((usedMargin / totalLimit) * 100) : 0;
   
@@ -397,9 +403,11 @@ export default function OpsConsole() {
       )}
 
       {/* SYSTEM STATUS RIBBON */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-3">
         <MetricCard label="Mode" value={data?.mode || "PAPER"} tone={data?.mode === "LIVE" ? "loss" : "warn"} isPulse={data?.mode === "LIVE"} />
         <MetricCard label="Market" value={data?.market?.status || "CLOSED"} tone={data?.market?.open ? "profit" : "warn"} />
+        <MetricCard label="Session P&L" value={money(sessionPnl)} tone={sessionPnl >= 0 ? "profit" : "loss"} />
+        <MetricCard label="Open Pos" value={openPositions} tone={openPositions ? "warn" : "normal"} />
         <MetricCard 
           label="Upstox API" 
           value={!isUpstoxActive ? "Inactive" : (upstox.connected ? "Connected" : "Reconnect")} 

@@ -33,6 +33,7 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
+import { useExecutionState } from "../hooks/useExecutionState";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/app-shell";
 
@@ -148,11 +149,12 @@ const formatNotificationTime = (value) => {
   });
 };
 
-const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
-  const cash = portfolio?.net_liquidation ?? portfolio?.total_value ?? portfolio?.available_cash ?? 0;
-  const usedMargin = Number(portfolio?.used_margin ?? portfolio?.margin_used ?? 0);
+const MiniBlotterDock = ({ funds, wallet, summary, profile }) => {
+  const pnl = summary?.net_pnl ?? 0;
+  const cash = funds?.available_cash ?? wallet?.balance ?? 0;
+  const usedMargin = Number(funds?.used_margin ?? 0);
   const marginPct = cash ? Math.min(100, Math.max(0, (usedMargin / Math.max(1, Number(cash))) * 100)) : 0;
-  const activePositions = portfolio?.open_positions ?? portfolio?.positions_count ?? 0;
+  const activePositions = summary?.open_positions ?? 0;
   const pnlPositive = Number(pnl || 0) >= 0;
 
   return (
@@ -170,7 +172,7 @@ const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
           <strong>INR {formatINR(cash)}</strong>
         </div>
         <div className="qd-blotter-metric">
-          <span>Open P&L</span>
+          <span>Session P&L</span>
           <strong className={pnlPositive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>INR {formatINR(pnl ?? 0)}</strong>
         </div>
         <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
@@ -209,9 +211,13 @@ const MiniBlotterDock = ({ portfolio, pnl, profile }) => {
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const {
+    summary: executionSummary,
+    wallet: executionWallet,
+    refresh: refreshExecution,
+  } = useExecutionState({ pollMs: 15000 });
   const [now, setNow] = useState(new Date());
-  const [pnl, setPnl] = useState(null);
-  const [portfolio, setPortfolio] = useState(null);
+  const [funds, setFunds] = useState(null);
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
@@ -259,10 +265,7 @@ export default function Layout({ children }) {
 
   useEffect(() => {
     const fetch = () => {
-      api.get("/portfolio").then((r) => {
-        setPnl(r.data.total_pnl);
-        setPortfolio(r.data);
-      }).catch(() => {});
+      api.get("/funds").then((r) => setFunds(r.data)).catch(() => {});
       api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
     };
     fetch();
@@ -286,10 +289,8 @@ export default function Layout({ children }) {
   })();
 
   const refreshShell = () => {
-    api.get("/portfolio").then((r) => {
-      setPnl(r.data.total_pnl);
-      setPortfolio(r.data);
-    }).catch(() => {});
+    refreshExecution();
+    api.get("/funds").then((r) => setFunds(r.data)).catch(() => {});
     api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
   };
 
@@ -435,18 +436,18 @@ export default function Layout({ children }) {
             <div className="hidden items-center gap-3 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 md:flex">
               <span
                 className="font-head text-[10px] font-bold uppercase tracking-wide text-[var(--qd-text-3)]"
-                title={`${portfolio?.open_positions ?? 0} open positions`}
+                title={`${executionSummary?.open_positions ?? 0} open positions`}
               >
                 P&L
               </span>
-              <Sparkline positive={(pnl ?? 0) >= 0} />
+              <Sparkline positive={(executionSummary?.net_pnl ?? 0) >= 0} />
               <span
                 className={`font-mono text-xs md:text-sm font-bold ${
-                  (pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
+                  (executionSummary?.net_pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
                 }`}
                 data-testid="top-pnl"
               >
-                INR {formatINR(pnl ?? 0)}
+                INR {formatINR(executionSummary?.net_pnl ?? 0)}
               </span>
             </div>
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
@@ -696,7 +697,7 @@ export default function Layout({ children }) {
                 <ShieldAlert size={13} /> F&O Risk Disclosure
               </button>
             </div>
-            <MiniBlotterDock portfolio={portfolio} pnl={pnl} profile={profile} />
+            <MiniBlotterDock funds={funds} wallet={executionWallet} summary={executionSummary} profile={profile} />
           </div>
 
           {/* SEBI Compliance F&O Risk Disclosure */}

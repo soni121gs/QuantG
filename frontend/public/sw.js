@@ -1,6 +1,6 @@
-/* QuantG Service Worker v12 — offline shell + installable PWA */
+/* QuantG Service Worker v12 dashboard metrics — offline shell + installable PWA */
 /* Bump CACHE name on every release to force old bundle eviction */
-const CACHE = "quantg-v12";
+const CACHE = "quantg-v12-dashboard-metrics";
 const SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (e) => {

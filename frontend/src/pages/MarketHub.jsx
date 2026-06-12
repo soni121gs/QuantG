@@ -4,10 +4,12 @@ import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
+import { useExecutionState } from "../hooks/useExecutionState";
 
 const BROKER_LABELS = { upstox: "Upstox" };
 
 export default function MarketHub() {
+  const { summary: executionSummary, refresh: refreshExecution } = useExecutionState({ pollMs: 15000 });
   const [health, setHealth] = useState(null);
   const [risk, setRisk] = useState(null);
   const [journal, setJournal] = useState(null);
@@ -77,6 +79,7 @@ export default function MarketHub() {
   const brokers = health?.brokers || {
     upstox: health?.upstox,
   };
+  const sessionPnl = executionSummary?.net_pnl ?? 0;
 
   return (
     <div className="space-y-4 max-w-7xl" data-testid="market-hub-page">
@@ -87,7 +90,7 @@ export default function MarketHub() {
         badge={<StatusBadge tone={(marketSession?.global_status === "OPEN" || risk?.market_open) ? "healthy" : "warning"}>{marketSession?.global_status || "Market"}</StatusBadge>}
         actions={
           <>
-            <button onClick={load} className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
+            <button onClick={() => { load(); refreshExecution(); }} className="border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2">
               <RefreshCw size={14} /> Refresh
             </button>
             <button onClick={squareOff} disabled={busy} className="border border-[var(--qd-loss)] text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2 disabled:opacity-60">
@@ -100,7 +103,7 @@ export default function MarketHub() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Metric label="Mode" value={risk?.mode || "-"} tone={risk?.mode === "LIVE" ? "loss" : "warn"} />
         <Metric label="Market" value={marketSession?.global_status || (risk?.market_open ? "OPEN" : "CLOSED")} tone={(marketSession?.global_status === "OPEN" || risk?.market_open) ? "profit" : "warn"} />
-        <Metric label="P&L Today" value={`₹${formatINR(risk?.total_pnl || 0)}`} tone={(risk?.total_pnl || 0) >= 0 ? "profit" : "loss"} />
+        <Metric label="P&L Today" value={`INR ${formatINR(sessionPnl)}`} tone={sessionPnl >= 0 ? "profit" : "loss"} />
         <Metric label="Trades" value={`${risk?.trades_used ?? 0}/${risk?.max_trades_per_day ?? "-"}`} />
         <Metric label="Risk Left" value={risk?.loss_remaining == null ? "-" : `₹${formatINR(risk.loss_remaining)}`} tone="warn" />
       </div>

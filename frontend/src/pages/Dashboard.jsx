@@ -458,7 +458,6 @@ export default function Dashboard() {
     brokerReconciliation,
     refresh: refreshExecution,
   } = useExecutionState({ pollMs: 15000 });
-  const [pf, setPf] = useState(null);
   const [watch, setWatch] = useState([]);
   const positions = execPositions;
   const orders = execOrders;
@@ -473,8 +472,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [p, w, f, t, c, s, leaderboard] = await Promise.all([
-        api.get("/portfolio"),
+      const [w, f, t, c, s, leaderboard] = await Promise.all([
         api.get("/market/watchlist"),
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
@@ -483,7 +481,6 @@ export default function Dashboard() {
         api.get("/upstox/option-chain", { params: { underlying: "NIFTY" } }).catch(() => ({ data: null })),
       ]);
       await refreshExecution();
-      setPf(p.data);
       setWatch(w.data);
       setFunds(f.data);
       setTelemetry(t.data);
@@ -502,11 +499,13 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const pnl = executionSummary.net_pnl || pf?.net_pnl || pf?.total_pnl || 0;
-  const grossPnl = executionSummary.gross_pnl || pf?.gross_pnl || pnl;
-  const charges = executionSummary.charges || pf?.charges || 0;
-  const openPositions = executionSummary.open_positions ?? pf?.open_positions ?? positions.length;
+  const pnl = executionSummary.net_pnl ?? 0;
+  const grossPnl = executionSummary.gross_pnl ?? pnl;
+  const charges = executionSummary.charges ?? 0;
+  const openPositions = executionSummary.open_positions ?? positions.length;
   const strategies = useMemo(() => telemetry?.strategies_page_data || [], [telemetry?.strategies_page_data]);
+  const liveStrategies = useMemo(() => strategies.filter((s) => s.status === "live").length, [strategies]);
+  const strategyCount = strategies.length;
   const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;
   const marketStatusLabel = marketSession?.global_status || (marketOpen ? "OPEN" : "CLOSED");
   const firstRisk = strategies[0]?.risk_settings || {};
@@ -673,10 +672,10 @@ export default function Dashboard() {
               <Field label="Market Status" value={marketStatusLabel} tone={marketOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
             </div>
             <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Net Unrealized P&L" value={money(pnl)} tone={toneClass(pnl)} />
+              <Field label="Session Net P&L" value={money(pnl)} tone={toneClass(pnl)} />
             </div>
             <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Active Automations" value={`${pf?.live_strategies ?? 0}/${pf?.strategies ?? 0} systems`} />
+              <Field label="Active Automations" value={`${liveStrategies}/${strategyCount} systems`} />
             </div>
             <div className="bg-[var(--qd-surface)] p-4">
               <Field label="Total Positions" value={`${openPositions} active`} />
