@@ -133,7 +133,17 @@ export default function Orders() {
 
       <div className="qd-card">
         {filtered.length === 0 ? (
-          <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No orders match this filter.</div>
+          <div className="p-10 text-center space-y-3">
+            <p className="font-mono text-sm text-[var(--qd-text-2)]">No orders match this filter.</p>
+            {filter !== "ALL" && (
+              <button
+                onClick={() => setFilter("ALL")}
+                className="inline-flex items-center gap-2 rounded border border-[var(--qd-border)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-accent)] transition-colors"
+              >
+                Clear filter
+              </button>
+            )}
+          </div>
         ) : (
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>

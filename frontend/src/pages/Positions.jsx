@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, formatINR } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { LogOut, Loader2, AlertTriangle } from "lucide-react";
@@ -61,7 +62,15 @@ export default function Positions() {
         {loading && active.length === 0 ? (
           <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">Loading execution state…</div>
         ) : active.length === 0 ? (
-          <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No open positions.</div>
+          <div className="p-10 text-center space-y-3">
+            <p className="font-mono text-sm text-[var(--qd-text-2)]">No open positions.</p>
+            <Link
+              to="/strategies"
+              className="inline-flex items-center gap-2 rounded border border-[var(--qd-border)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-accent)] transition-colors"
+            >
+              Go to Strategies
+            </Link>
+          </div>
         ) : (
           <div className="qd-table-wrap">
             <table className="w-full text-sm">
