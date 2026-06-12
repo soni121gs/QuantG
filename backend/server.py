@@ -13116,6 +13116,15 @@ async def _resolve_option_for_strategy(
         ltp_reason = "Using fabricated instrument key for paper trading (Cause 5)."
     else:
         try:
+            # Ensure this candidate is on the WS feed in FULL mode so subsequent
+            # candles carry live bid/ask depth (not just ltpc). Subscription is
+            # idempotent — already-subscribed keys are deduped by the gateway.
+            # Targeted (per-candidate) on purpose: full mode has a per-connection
+            # instrument cap, so we never mass-subscribe the whole option universe.
+            try:
+                await asyncio.to_thread(upstox_gw.start_market_data_ws, [instrument_token], "full")
+            except Exception as _sub_exc:
+                logger.debug("full-mode subscribe failed for %s: %s", instrument_token, _sub_exc)
             # Try latest tick cache first
             tick = upstox_gw.latest_tick(instrument_token)
             if tick and tick.get("ltp"):
@@ -13188,6 +13197,24 @@ async def _resolve_option_for_strategy(
             underlying, opt_type, strike, cause_message
         )
         print(f"!!! Option LTP is NULL for candidate !!!\nDetermined Cause: {cause_message}\n", flush=True)
+
+    # Propagate top-of-book + freshness onto the resolved contract. The
+    # OptionSelector v2 quality gate reads bid/ask/received_at OFF THE CONTRACT
+    # (see option_selector_v2._spread_pct / _quote_age_sec), but historically
+    # those values only lived on quality_quote/chain_match and were handed to the
+    # legacy scorer alone — so v2 always saw an unknown spread (score 0) and
+    # filtered ~most signals. Mirror the legacy extraction here. (audit: WS-full / gate-plumbing)
+    _qq = quality_quote or {}
+    _cm = chain_match or {}
+    _bid = _qq.get("bid") or _qq.get("bid_price") or _qq.get("best_bid_price") or _cm.get("bid_price")
+    _ask = _qq.get("ask") or _qq.get("ask_price") or _qq.get("best_ask_price") or _cm.get("ask_price")
+    if _bid is not None:
+        resolved_contract["bid"] = _bid
+    if _ask is not None:
+        resolved_contract["ask"] = _ask
+    _qts = _qq.get("timestamp") or _qq.get("received_at") or _qq.get("ltt")
+    if _qts is not None:
+        resolved_contract["received_at"] = _qts
 
     resolved_contract["trade_quality_score"] = option_entry_quality_score(
         resolved_contract,
