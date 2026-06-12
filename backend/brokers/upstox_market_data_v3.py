@@ -568,7 +568,7 @@ class UpstoxMarketDataFeedV3:
 
     def _handle_binary_frame(self, raw_bytes: bytes) -> None:
         raw_len = len(raw_bytes)
-        logger.info("Upstox V3 binary frame received, length=%s", raw_len)
+        logger.debug("Upstox V3 binary frame received, length=%s", raw_len)
         try:
             decoded = decode_feed_response(raw_bytes)
             frame_type = decoded.get("type")
@@ -581,7 +581,7 @@ class UpstoxMarketDataFeedV3:
                 return
 
             feed_count = len(decoded.get("feeds") or {})
-            logger.info("Upstox V3 frame decode success, feeds=%s", feed_count)
+            logger.debug("Upstox V3 frame decode success, feeds=%s", feed_count)
             self.apply_decoded_message(decoded)
         except Exception as exc:
             with self._lock:
@@ -621,7 +621,7 @@ class UpstoxMarketDataFeedV3:
                     self._last_tick_time = tick["received_at"]
                     self._snapshot_received = True
                     updated += 1
-                    logger.info(
+                    logger.debug(
                         "Upstox V3 tick accepted key=%s ltp=%s cache_size=%s",
                         instrument_key,
                         tick.get("ltp"),

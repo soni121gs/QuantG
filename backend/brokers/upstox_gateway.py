@@ -549,7 +549,7 @@ class UpstoxGateway:
                             "volume": int(c[5] or 0) if len(c) > 5 else 0,
                         })
                 if daily_bars:
-                    logger.info(
+                    logger.debug(
                         "Upstox index daily candles ok key=%s count=%s",
                         instrument_key, len(daily_bars),
                     )
@@ -568,7 +568,7 @@ class UpstoxGateway:
             )
             if v3_bars and len(v3_bars) >= 1:
                 intraday_bars = v3_bars
-                logger.info(
+                logger.debug(
                     "Upstox index V3 intraday ok key=%s bars=%d interval=%dmin",
                     instrument_key, len(v3_bars), v3_interval,
                 )
