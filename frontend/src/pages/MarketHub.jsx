@@ -94,7 +94,8 @@ export default function MarketHub() {
               <RefreshCw size={14} /> Refresh
             </button>
             <button onClick={squareOff} disabled={busy} className="border border-[var(--qd-loss)] text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2 disabled:opacity-60">
-              <SquareArrowOutUpRight size={14} /> Square Off All
+              {busy ? <RefreshCw size={14} className="animate-spin" /> : <SquareArrowOutUpRight size={14} />}
+              {busy ? "Working..." : "Square Off All"}
             </button>
           </>
         }
@@ -132,7 +133,8 @@ export default function MarketHub() {
         <section className="qd-card p-4 xl:col-span-2">
           <div className="flex items-start justify-between gap-3 mb-3">
             <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Ticker Quality</h2>
-            <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60">
+            <button onClick={autoPickFeed} disabled={busy} className="border border-[var(--qd-border)] hover:border-[var(--qd-profit)] text-[var(--qd-text)] px-3 py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-60 flex items-center gap-2">
+              {busy && <RefreshCw size={13} className="animate-spin" />}
               Auto-pick
             </button>
           </div>

@@ -468,6 +468,7 @@ export default function Dashboard() {
   const [optionChain, setOptionChain] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [busyStrategy, setBusyStrategy] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
 
   const load = useCallback(async () => {
@@ -611,14 +612,24 @@ export default function Dashboard() {
   };
 
   const toggleStrategy = async (id) => {
-    await api.post(`/strategies/${id}/toggle`);
-    await load();
+    setBusyStrategy(id);
+    try {
+      await api.post(`/strategies/${id}/toggle`);
+      await load();
+    } finally {
+      setBusyStrategy(null);
+    }
   };
 
   const exitStrategy = async (id) => {
     if (!window.confirm("Emergency Square Off: exit all open positions for this strategy?")) return;
-    await api.post(`/strategies/${id}/exit-all`);
-    await load();
+    setBusyStrategy(id);
+    try {
+      await api.post(`/strategies/${id}/exit-all`);
+      await load();
+    } finally {
+      setBusyStrategy(null);
+    }
   };
 
   return (
@@ -1065,21 +1076,23 @@ export default function Dashboard() {
                           {/* Live Running controls */}
                           <button
                             onClick={() => toggleStrategy(row.strategy_id)}
-                            className={`flex items-center justify-center p-1.5 rounded border transition-all ${
-                              live 
-                                ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]" 
+                            disabled={busyStrategy === row.strategy_id}
+                            className={`flex items-center justify-center p-1.5 rounded border transition-all disabled:opacity-40 ${
+                              live
+                                ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
                                 : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
                             }`}
                             title={live ? "Pause Strategy" : "Go Live / Resume Strategy"}
                             data-testid={`dashboard-toggle-${row.strategy_id}`}
                           >
-                            {live ? <Pause size={12} /> : <Play size={12} />}
+                            {busyStrategy === row.strategy_id ? <RefreshCw size={12} className="animate-spin" /> : live ? <Pause size={12} /> : <Play size={12} />}
                           </button>
 
                           {/* Emergency Square Off */}
                           <button
                             onClick={() => exitStrategy(row.strategy_id)}
-                            className="flex items-center justify-center p-1.5 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black transition-all"
+                            disabled={busyStrategy === row.strategy_id}
+                            className="flex items-center justify-center p-1.5 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black transition-all disabled:opacity-40"
                             title="Square Off Strategy Positions"
                             data-testid={`dashboard-exit-${row.strategy_id}`}
                           >

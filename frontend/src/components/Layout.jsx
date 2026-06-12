@@ -288,10 +288,18 @@ export default function Layout({ children }) {
     return nseOpen;
   })();
 
-  const refreshShell = () => {
-    refreshExecution();
-    api.get("/funds").then((r) => setFunds(r.data)).catch(() => {});
-    api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
+  const [shellRefreshing, setShellRefreshing] = useState(false);
+  const refreshShell = async () => {
+    setShellRefreshing(true);
+    try {
+      await Promise.all([
+        refreshExecution(),
+        api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
+        api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
+      ]);
+    } finally {
+      setShellRefreshing(false);
+    }
   };
 
   const loadNotifications = useCallback(() => {
@@ -453,8 +461,8 @@ export default function Layout({ children }) {
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
               {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
             </span>
-            <Button variant="ghost" size="icon" onClick={refreshShell} data-testid="cmd-refresh" aria-label="Refresh">
-              <RefreshCw size={15} />
+            <Button variant="ghost" size="icon" onClick={refreshShell} disabled={shellRefreshing} data-testid="cmd-refresh" aria-label="Refresh">
+              <RefreshCw size={15} className={shellRefreshing ? "animate-spin" : ""} />
             </Button>
             <Button
               variant="ghost"

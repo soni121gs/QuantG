@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, formatINR, formatApiErrorDetail } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
-import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
@@ -26,6 +26,7 @@ export default function Orders() {
     stop_loss: "",
     take_profit: "",
   });
+  const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -57,6 +58,7 @@ export default function Orders() {
 
   const submit = async (e) => {
     e.preventDefault();
+    setSubmitting(true);
     try {
       await api.post("/orders", {
         ...form,
@@ -70,6 +72,8 @@ export default function Orders() {
       toast.success("Order submitted");
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Order failed");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -291,8 +295,8 @@ export default function Orders() {
             </div>
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setOpen(false)} className="flex-1 border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-white py-2 text-xs font-mono uppercase rounded-sm">Cancel</button>
-              <button type="submit" className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">
-                Confirm {form.side}
+              <button type="submit" disabled={submitting} className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm flex items-center justify-center gap-2 disabled:opacity-60 ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">
+                {submitting ? <><Loader2 size={14} className="animate-spin" /> Placing...</> : `Confirm ${form.side}`}
               </button>
             </div>
           </form>

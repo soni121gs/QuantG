@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail } from "../lib/api";
-import { KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy } from "lucide-react";
+import { KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
@@ -114,7 +114,8 @@ export default function ApiKeys() {
           <span className="text-sm font-mono text-[var(--qd-text)] select-none">Use Upstox Sandbox Mode (Mock Trading)</span>
         </label>
         <button disabled={saving} className="qd-force-white bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-broker-keys-btn">
-          <Save size={14} /> Save Keys
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          {saving ? "Saving..." : "Save Keys"}
         </button>
       </form>
 

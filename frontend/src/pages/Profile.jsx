@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { User, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, Zap, Bell } from "lucide-react";
+import { User, Settings2, Lock, Activity, AlertTriangle, CheckCircle2, XCircle, Zap, Bell, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
@@ -162,8 +162,9 @@ export default function Profile() {
           <SelectIn label="Execution Broker" value="upstox" onChange={() => {}} options={["upstox"]} testid="input-execution-broker" />
           <SelectIn label="Fallback Broker" value="none" onChange={() => {}} options={["none"]} testid="input-fallback-broker" />
         </div>
-        <button onClick={save} disabled={busy} className="qd-force-white mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="save-profile-btn">
-          Save Preferences
+        <button onClick={save} disabled={busy} className="qd-force-white mt-4 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="save-profile-btn">
+          {busy ? <Loader2 size={13} className="animate-spin" /> : null}
+          {busy ? "Saving..." : "Save Preferences"}
         </button>
       </div>
 
@@ -195,8 +196,9 @@ export default function Profile() {
         <h2 className="font-head text-lg text-white flex items-center gap-2"><Lock size={16} /> Change Password</h2>
         <Input label="Current Password" type="password" value={pw.current_password} onChange={(v) => setPw({ ...pw, current_password: v })} testid="input-current-pw" />
         <Input label="New Password" type="password" value={pw.new_password} onChange={(v) => setPw({ ...pw, new_password: v })} testid="input-new-pw" />
-        <button type="submit" disabled={busy || !pw.current_password || !pw.new_password} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm" data-testid="change-pw-btn">
-          Change Password
+        <button type="submit" disabled={busy || !pw.current_password || !pw.new_password} className="bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] disabled:opacity-50 text-white px-4 py-2 font-mono text-xs uppercase tracking-wider rounded-sm flex items-center gap-2" data-testid="change-pw-btn">
+          {busy ? <Loader2 size={13} className="animate-spin" /> : null}
+          {busy ? "Saving..." : "Change Password"}
         </button>
       </form>
 
