@@ -97,8 +97,10 @@ class PaperAdapter:
                         "status_message": f"STALE_QUOTE: price is {age_seconds:.0f}s old (max {PAPER_TRADING.QUOTE_STALE_SECONDS}s)",
                         "ok": False,
                     }
-            except Exception:
-                pass  # unparseable timestamp — proceed with fill
+            except Exception as exc:
+                # unparseable timestamp — proceed with fill, but make it visible
+                logger.debug("PaperAdapter: quote timestamp unparseable for order=%s symbol=%s: %s",
+                             intent.get("id"), intent.get("target_symbol"), exc)
 
         # ── 2. Slippage from config (5 bps default, env-overridable) ─────────
         slippage_frac = PAPER_TRADING.SLIPPAGE_PCT / 100.0
@@ -267,10 +269,12 @@ class PaperAdapter:
                 ledger_result = await ledger_result
             if not isinstance(ledger_result, dict):
                 ledger_result = {}
-        except Exception:
+        except Exception as exc:
             # Ledger rejected the fill outright (e.g. option fill missing
             # critical fields). Undo the BUY debit so funds aren't stranded,
             # mark the order rejected, then propagate.
+            logger.error("PaperAdapter: ledger.process_fill raised for order=%s side=%s: %s",
+                         order_id, side, exc)
             if side == "BUY":
                 await self.wallet.credit(
                     user_id, round(trade_value + charges, 2), f"{order_id}:refund"

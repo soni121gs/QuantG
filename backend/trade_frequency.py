@@ -95,8 +95,8 @@ async def check_frequency_gate(
         if today_pnl > 0:
             profit_boost = min(PROFIT_CAP_BOOST_MAX, 1 + int(today_pnl >= 1000))
             effective_cap += profit_boost
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("frequency_gate: today_pnl boost lookup failed strategy=%s: %s", strategy_id, exc)
 
     # Count today's true ENTRY orders for this strategy. Option-buying exits are
     # SELL orders with exit idempotency keys, so counting both sides prematurely
@@ -113,7 +113,8 @@ async def check_frequency_gate(
                 {"idempotency_key": {"$not": {"$regex": "^exit:"}}},
             ],
         })
-    except Exception:
+    except Exception as exc:
+        logger.warning("frequency_gate: entry-count query failed strategy=%s user=%s: %s", strategy_id, user_id, exc)
         today_entries = 0
 
     # Loss-streak throttle
@@ -122,7 +123,8 @@ async def check_frequency_gate(
             {"strategy_id": strategy_id, "user_id": user_id},
             {"_id": 0},
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("frequency_gate: loss-streak query failed strategy=%s user=%s: %s", strategy_id, user_id, exc)
         streak_doc = None
 
     if streak_doc:
@@ -133,8 +135,8 @@ async def check_frequency_gate(
                 paused_until = datetime.fromisoformat(str(paused_until_str).replace("Z", "+00:00"))
                 if datetime.now(timezone.utc) < paused_until:
                     return False, f"LOSS_STREAK_THROTTLE: {streak} consecutive SL hits — paused until {paused_until.strftime('%H:%M')} IST"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("frequency_gate: paused_until parse failed strategy=%s value=%r: %s", strategy_id, paused_until_str, exc)
         # Half-cap after streak (even after pause ends)
         if LOSS_STREAK_HALF_CAP and streak >= LOSS_STREAK_TRIGGER:
             effective_cap = max(1, effective_cap // 2)
@@ -186,8 +188,8 @@ async def reset_streak_on_profit(db, strategy_id: str, user_id: str) -> None:
             {"$set": {"current_streak": 0, "paused_until": None}},
             upsert=True,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("reset_streak_on_profit failed strategy=%s user=%s: %s", strategy_id, user_id, exc)
 
 
 async def record_strategy_filter(
