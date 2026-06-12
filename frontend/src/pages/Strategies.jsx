@@ -775,10 +775,10 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
           <button onClick={() => toggle(s.id)} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`toggle-${s.id}`}>
             {live ? <><Pause size={13} /> Pause</> : <><Play size={13} /> {paused ? "Resume" : "Live"}</>}
           </button>
-          <Link to={editPath} className="rounded border border-[var(--qd-border)] px-3 py-2 text-center font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
+          <Link to={editPath} className="rounded border border-[var(--qd-border)] px-3 py-3 text-center font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
             Edit
           </Link>
-          <button onClick={() => del(s.id)} className="rounded border border-[var(--qd-border)] px-3 py-2 text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy">
+          <button onClick={() => del(s.id)} className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-border)] text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy">
             <Trash2 size={14} />
           </button>
         </div>

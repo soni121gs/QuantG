@@ -296,7 +296,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
       <div className="flex items-center justify-end gap-2">
         <button
           onClick={() => onToggle(row.strategy_id)}
-          className={`flex h-8 w-8 items-center justify-center rounded border transition-all ${
+          className={`flex h-11 w-11 items-center justify-center rounded border transition-all ${
             live
               ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
               : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
@@ -309,7 +309,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
         <button
           onClick={() => onExit(row.strategy_id)}
           disabled={!positionOpen}
-          className="flex h-8 w-8 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+          className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
           title={positionOpen ? "Square Off Strategy Positions" : "No open position for this strategy"}
           data-testid={`dashboard-exit-${row.strategy_id}`}
         >

@@ -862,7 +862,7 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 py-3 text-[10px] font-mono uppercase tracking-wider transition-colors ${
                 isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }
