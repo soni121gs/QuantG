@@ -5976,7 +5976,7 @@ async def _close_strategy_position_record(position: Optional[Dict[str, Any]], *,
             "status": "CLOSED",
             "open_quantity": 0,
             "exit_price": float(exit_price or 0),
-            "realised_pnl": pnl,
+            "realized_pnl": pnl,
             "exit_reason": reason,
             "closed_at": now,
             "updated_at": now,
@@ -7045,11 +7045,11 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
         {
             **row,
             "closed_at": row.get("filled_at"),
-            "pnl": row.get("realised_pnl"),
+            "pnl": row.get("realized_pnl"),
             "source": "trade_fills",
         }
         for row in fill_summary["fills"]
-        if float(row.get("realised_pnl") or 0) != 0
+        if float(row.get("realized_pnl") or 0) != 0
     ]
     closed_trades = [*closed_trades, *fill_trades]
     option_trades = await db.option_trade_journal.find(
@@ -7061,7 +7061,7 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
         "source": "trade_fills",
         "fill_count": fill_summary["fill_count"],
         "closed_trade_count": fill_summary["closed_trade_count"],
-        "realised_pnl": fill_summary["realised_pnl"],
+        "realized_pnl": fill_summary["realized_pnl"],
     }
     return result
 
@@ -7082,7 +7082,7 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
         ).sort("created_at", -1).to_list(200)
         fill_summary = await _fill_ledger_summary(user["id"], mode="live", strategy_id=s["id"])
         completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
-        live_pnl = fill_summary["realised_pnl"]
+        live_pnl = fill_summary["realized_pnl"]
         live_win_rate = fill_summary["win_rate"]
         backtest_pnl = float((latest_backtest or {}).get("pnl") or 0)
         drift = round(live_pnl - backtest_pnl, 2) if latest_backtest else None
@@ -7098,8 +7098,8 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
                 "orders": len(live_orders),
                 "completed": len(completed),
                 "fills": fill_summary["fill_count"],
-                "realised_pnl": live_pnl,
-                "realised_pnl_source": fill_summary["source"],
+                "realized_pnl": live_pnl,
+                "realized_pnl_source": fill_summary["source"],
                 "win_rate": live_win_rate,
             },
             "backtest": {
@@ -7880,7 +7880,7 @@ def get_trading_day_window_ist() -> tuple[str, str]:
     return ist_midnight_utc.isoformat(), ist_tomorrow_midnight_utc.isoformat()
 
 
-async def _get_todays_realised_pnl(user_id: str, mode: str) -> float:
+async def _get_todays_realized_pnl(user_id: str, mode: str) -> float:
     """Sum today's realized P&L from trade_fills (primary) then orders (fallback)."""
     start, end = get_trading_day_window_ist()
     fills = await db.trade_fills.find({
@@ -7888,21 +7888,21 @@ async def _get_todays_realised_pnl(user_id: str, mode: str) -> float:
         "created_at": {"$gte": start, "$lt": end},
         "action": {"$in": ["CLOSE", "REDUCE"]},
     }, {"_id": 0, "realized_pnl": 1}).to_list(1000)
-    realised = sum(float(f.get("realized_pnl") or 0) for f in fills)
-    if realised == 0.0:
+    realized = sum(float(f.get("realized_pnl") or 0) for f in fills)
+    if realized == 0.0:
         orders = await db.orders.find({
             "user_id": user_id, "mode": mode,
             "created_at": {"$gte": start, "$lt": end},
             "status": {"$in": [ORDER_FILLED, ORDER_CLOSED, "COMPLETE"]},
         }, {"_id": 0, "net_pnl": 1, "realized_pnl": 1}).to_list(500)
-        realised = sum(float(o.get("net_pnl") or o.get("realized_pnl") or 0) for o in orders)
-    return realised
+        realized = sum(float(o.get("net_pnl") or o.get("realized_pnl") or 0) for o in orders)
+    return realized
 
 
 async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "paper") -> None:
-    """Refuse new orders if today's realised loss exceeds max_daily_loss.
+    """Refuse new orders if today's realized loss exceeds max_daily_loss.
 
-    P&L is read from db.trade_fills (primary source) via _get_todays_realised_pnl.
+    P&L is read from db.trade_fills (primary source) via _get_todays_realized_pnl.
 
     Config keys (read from risk_cfg then user settings, first non-zero wins):
       daily_loss_limit_paper  — looser, for paper data-collection days
@@ -7914,8 +7914,8 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "pa
     """
     if not max_loss or max_loss <= 0:
         return
-    realised = await _get_todays_realised_pnl(user_id, mode)
-    if realised <= -abs(max_loss):
+    realized = await _get_todays_realized_pnl(user_id, mode)
+    if realized <= -abs(max_loss):
         # Force-close open positions in background (non-blocking for current request)
         async def _force_close_all():
             try:
@@ -7932,9 +7932,9 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "pa
                         pass
                 if sids:
                     logger.error(
-                        "DAILY LOSS KILL SWITCH tripped user=%s mode=%s realised=%.0f "
+                        "DAILY LOSS KILL SWITCH tripped user=%s mode=%s realized=%.0f "
                         "limit=%.0f — force-closed %d strategies",
-                        user_id, mode, abs(realised), abs(max_loss), len(sids),
+                        user_id, mode, abs(realized), abs(max_loss), len(sids),
                     )
             except Exception as exc:
                 logger.error("force-close after kill-switch failed: %s", exc)
@@ -7942,7 +7942,7 @@ async def _check_daily_loss_guard(user_id: str, max_loss: float, mode: str = "pa
         asyncio.create_task(_force_close_all())
         raise HTTPException(
             status_code=400,
-            detail=f"Daily loss guard tripped: today's realised loss ₹{abs(realised):.0f} "
+            detail=f"Daily loss guard tripped: today's realized loss ₹{abs(realized):.0f} "
                    f"≥ max ₹{max_loss:.0f}. New orders blocked; open positions force-closed.",
         )
 
@@ -9972,7 +9972,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     before_avg = float((pos or {}).get("avg_price") or 0)
     after_qty = before_qty + delta
     qty_closed = 0
-    gross_realised = 0.0
+    gross_realized = 0.0
     after_avg = float(fill_price or 0)
 
     if before_qty == 0 or before_qty * delta > 0:
@@ -9980,7 +9980,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         after_avg = round(((abs(before_qty) * before_avg) + (abs(delta) * fill_price)) / total_qty, 2) if total_qty else fill_price
     else:
         qty_closed = min(abs(before_qty), abs(delta))
-        gross_realised = round((fill_price - before_avg) * qty_closed, 2) if before_qty > 0 else round((before_avg - fill_price) * qty_closed, 2)
+        gross_realized = round((fill_price - before_avg) * qty_closed, 2) if before_qty > 0 else round((before_avg - fill_price) * qty_closed, 2)
         if after_qty == 0:
             after_avg = 0.0
         elif abs(delta) > abs(before_qty):
@@ -9988,7 +9988,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         else:
             after_avg = before_avg
 
-    net_realised = round(gross_realised - charges, 2) if qty_closed else 0.0
+    net_realized = round(gross_realized - charges, 2) if qty_closed else 0.0
 
     if after_qty == 0:
         await db.positions.delete_one(paper_position_query)
@@ -10040,10 +10040,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         "brokerage": brokerage,
         "charges": charges,
         "slippage": slippage,
-        "gross_realised_pnl": gross_realised,
-        "gross_pnl": gross_realised,
-        "realised_pnl": net_realised,
-        "net_pnl": net_realised,
+        "gross_realized_pnl": gross_realized,
+        "gross_pnl": gross_realized,
+        "realized_pnl": net_realized,
+        "net_pnl": net_realized,
         "position_before_qty": before_qty,
         "position_after_qty": after_qty,
         "avg_price_before": before_avg,
@@ -10052,8 +10052,8 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         "mode": "paper",
     }
     logger.info(
-        "Trade Fill (Accounting Ledger): user_id=%s strategy_id=%s symbol=%s side=%s qty=%d price=%.2f realised_pnl=%.2f before_qty=%d after_qty=%d",
-        user_id, locked.get("strategy_id"), symbol, locked.get("side"), qty, float(fill_price or 0), net_realised, before_qty, after_qty
+        "Trade Fill (Accounting Ledger): user_id=%s strategy_id=%s symbol=%s side=%s qty=%d price=%.2f realized_pnl=%.2f before_qty=%d after_qty=%d",
+        user_id, locked.get("strategy_id"), symbol, locked.get("side"), qty, float(fill_price or 0), net_realized, before_qty, after_qty
     )
     try:
         await db.trade_fills.insert_one(fill_doc)
@@ -10069,10 +10069,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
                 "exit_order_id": order_id,
                 "qty": qty_closed,
                 "exit_price": float(fill_price or 0),
-                "gross_realised_pnl": gross_realised,
-                "gross_pnl": gross_realised,
-                "realised_pnl": net_realised,
-                "net_pnl": net_realised,
+                "gross_realized_pnl": gross_realized,
+                "gross_pnl": gross_realized,
+                "realized_pnl": net_realized,
+                "net_pnl": net_realized,
                 "brokerage": brokerage,
                 "charges": charges,
                 "slippage": slippage,
@@ -10092,10 +10092,10 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "filled_qty": qty,
             "pending_qty": 0,
             "price": float(fill_price or 0),
-            "gross_realised_pnl": gross_realised,
-            "gross_pnl": gross_realised,
-            "realised_pnl": net_realised,
-            "net_pnl": net_realised,
+            "gross_realized_pnl": gross_realized,
+            "gross_pnl": gross_realized,
+            "realized_pnl": net_realized,
+            "net_pnl": net_realized,
             "brokerage": brokerage,
             "charges": charges,
             "slippage": slippage,
@@ -10114,7 +10114,7 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
     await _append_order_event(order_id, user_id, "PAPER_FILL_APPLIED", {
         "fill_price": float(fill_price or 0),
         "qty": qty,
-        "realised_pnl": net_realised,
+        "realized_pnl": net_realized,
         "position_before_qty": before_qty,
         "position_after_qty": after_qty,
     })
@@ -10195,16 +10195,16 @@ async def _book_live_fill_from_order(
         return None
 
     if ledger_result.get("accepted"):
-        net_realised = ledger_result.get("realized_pnl") or 0.0
-        gross_realised = ledger_result.get("gross_pnl") or 0.0
+        net_realized = ledger_result.get("realized_pnl") or 0.0
+        gross_realized = ledger_result.get("gross_pnl") or 0.0
 
         await db.orders.update_one(
             {"id": order_id, "user_id": user_id},
             {"$set": {
                 "live_fill_booked": True,
                 "live_fill_id": fill_doc["id"],
-                "gross_realised_pnl": gross_realised,
-                "realised_pnl": net_realised,
+                "gross_realized_pnl": gross_realized,
+                "realized_pnl": net_realized,
                 "brokerage": brokerage,
                 "slippage": slippage,
                 "updated_at": now,
@@ -10215,11 +10215,11 @@ async def _book_live_fill_from_order(
             "broker_order_id": order_doc.get("broker_order_id"),
             "qty": qty,
             "fill_price": price,
-            "gross_realised_pnl": gross_realised,
-            "realised_pnl": net_realised,
+            "gross_realized_pnl": gross_realized,
+            "realized_pnl": net_realized,
         })
-        fill_doc["gross_realised_pnl"] = gross_realised
-        fill_doc["realised_pnl"] = net_realised
+        fill_doc["gross_realized_pnl"] = gross_realized
+        fill_doc["realized_pnl"] = net_realized
         return fill_doc
 
     return None
@@ -10246,21 +10246,21 @@ async def _fill_ledger_summary(
             window["$lt"] = end
         query["created_at"] = window
     fills = await db.trade_fills.find(query, {"_id": 0}).to_list(10000)
-    realised_fills = [row for row in fills if float(row.get("realised_pnl") or 0) != 0]
-    wins = len([row for row in realised_fills if float(row.get("realised_pnl") or 0) > 0])
-    losses = len([row for row in realised_fills if float(row.get("realised_pnl") or 0) < 0])
+    realized_fills = [row for row in fills if float(row.get("realized_pnl") or 0) != 0]
+    wins = len([row for row in realized_fills if float(row.get("realized_pnl") or 0) > 0])
+    losses = len([row for row in realized_fills if float(row.get("realized_pnl") or 0) < 0])
     gross_turnover = round(sum(abs(float(row.get("fill_price") or row.get("price") or 0) * int(row.get("qty") or 0)) for row in fills), 2)
     brokerage = round(sum(float(row.get("brokerage") or 0) for row in fills), 2)
     slippage = round(sum(float(row.get("slippage") or 0) for row in fills), 2)
-    realised = round(sum(float(row.get("realised_pnl") or 0) for row in fills), 2)
+    realized = round(sum(float(row.get("realized_pnl") or 0) for row in fills), 2)
     return {
         "fills": fills,
         "fill_count": len(fills),
-        "closed_trade_count": len(realised_fills),
+        "closed_trade_count": len(realized_fills),
         "wins": wins,
         "losses": losses,
         "win_rate": round(wins / max(1, wins + losses) * 100, 2),
-        "realised_pnl": realised,
+        "realized_pnl": realized,
         "gross_turnover": gross_turnover,
         "brokerage": brokerage,
         "slippage": slippage,
@@ -11084,8 +11084,8 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             "filled_qty": 0,
             "pending_qty": int(intent.quantity),
             "status_message": "Paper order created; waiting for simulated fill" if paper else "Order intent persisted before broker submission",
-            "gross_realised_pnl": 0.0,
-            "realised_pnl": 0.0,
+            "gross_realized_pnl": 0.0,
+            "realized_pnl": 0.0,
             "order_type": order_type,
             "requested_price": float(price or 0),
             "expected_price": float(fill_price_hint or price or 0),
@@ -12725,8 +12725,8 @@ async def portfolio(user=Depends(get_current_user)):
     open_pnl = round(sum(p["pnl"] for p in positions), 2)
     fill_summary = await _fill_ledger_summary(user["id"], mode=mode)
     charges = round(float(fill_summary.get("brokerage") or 0) + float(fill_summary.get("slippage") or 0), 2)
-    gross_pnl = round(fill_summary["realised_pnl"] + charges + open_pnl, 2)
-    total_pnl = round(fill_summary["realised_pnl"] + open_pnl, 2)
+    gross_pnl = round(fill_summary["realized_pnl"] + charges + open_pnl, 2)
+    total_pnl = round(fill_summary["realized_pnl"] + open_pnl, 2)
     deployed = round(sum(abs(p["qty"]) * p["avg_price"] for p in positions), 2)
     from core.paper_broker import PaperWallet as _PW
     _wallet_balance = await _PW(db).get_balance(user["id"])
@@ -12754,10 +12754,10 @@ async def portfolio(user=Depends(get_current_user)):
         "gross_pnl": gross_pnl,
         "charges": charges,
         "net_pnl": total_pnl,
-        "realised_pnl": fill_summary["realised_pnl"],
+        "realized_pnl": fill_summary["realized_pnl"],
         "open_pnl": open_pnl,
-        "pnl_type": "realised_plus_open",
-        "realised_pnl_source": fill_summary["source"],
+        "pnl_type": "realized_plus_open",
+        "realized_pnl_source": fill_summary["source"],
         "pnl_source": "none" if not position_modes else position_modes[0] if len(position_modes) == 1 else "mixed",
         "open_positions": len(positions),
         "deployed": deployed,
@@ -12786,7 +12786,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
     ).to_list(1000)
     positions = await list_positions(user)
     fill_summary = await _fill_ledger_summary(user["id"], mode=mode, start=start, end=end)
-    realised = fill_summary["realised_pnl"]
+    realized = fill_summary["realized_pnl"]
     open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
     loss_limit = float(settings.get("max_daily_loss") or 0)
     gross_order_value = round(sum(abs(float(o.get("price") or 0) * int(o.get("qty") or 0)) for o in orders), 2)
@@ -12813,13 +12813,13 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "date": datetime.now(timezone.utc).date().isoformat(),
         "mode": mode.upper(),
         "daily_loss_limit": loss_limit,
-        "realised_pnl": realised,
-        "realised_pnl_source": fill_summary["source"],
+        "realized_pnl": realized,
+        "realized_pnl_source": fill_summary["source"],
         "fill_count": fill_summary["fill_count"],
         "closed_trade_count": fill_summary["closed_trade_count"],
         "open_pnl": open_pnl,
-        "total_pnl": round(realised + open_pnl, 2),
-        "loss_remaining": round(max(0.0, loss_limit + realised), 2) if loss_limit else None,
+        "total_pnl": round(realized + open_pnl, 2),
+        "loss_remaining": round(max(0.0, loss_limit + realized), 2) if loss_limit else None,
         "trades_used": trades_used,
         "max_trades_per_day": max_trades,
         "trades_remaining": max(0, max_trades - trades_used) if max_trades else None,
@@ -12840,7 +12840,7 @@ async def trade_journal(user=Depends(get_current_user)):
     failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
     wins = fill_summary["wins"]
     losses = fill_summary["losses"]
-    total_pnl = fill_summary["realised_pnl"]
+    total_pnl = fill_summary["realized_pnl"]
     return {
         "summary": {
             "orders": len(rows),
@@ -12851,8 +12851,8 @@ async def trade_journal(user=Depends(get_current_user)):
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / max(1, wins + losses) * 100, 2),
-            "realised_pnl": total_pnl,
-            "realised_pnl_source": fill_summary["source"],
+            "realized_pnl": total_pnl,
+            "realized_pnl_source": fill_summary["source"],
         },
         "orders": rows,
         "filled_trades": fill_summary["fills"],
@@ -14062,8 +14062,8 @@ async def funds(user=Depends(get_current_user)):
                         "opening_balance": opening,
                         "intraday_payin": payin,
                         "used_margin": used,
-                        "m2m_realised": 0.0,
-                        "m2m_unrealised": 0.0,
+                        "m2m_realized": 0.0,
+                        "m2m_unrealized": 0.0,
                         "span": round(float(equity.get("span_margin") or 0) + float(commodity.get("span_margin") or 0), 2),
                         "delivery_margin": 0.0,
                         "raw_segments": {"equity": bool(equity), "commodity": bool(commodity)},
@@ -14082,10 +14082,10 @@ async def funds(user=Depends(get_current_user)):
     # Sum unrealized P&L from strategy_positions (updated every 30s by position monitor)
     open_sp = await db.strategy_positions.find(
         {"user_id": user["id"], "status": {"$in": ["OPEN", "FILLED"]}, "mode": "paper"},
-        {"unrealized_pnl": 1, "unrealised_pnl": 1, "_id": 0},
+        {"unrealized_pnl": 1, "unrealized_pnl": 1, "_id": 0},
     ).to_list(200)
-    m2m_unrealised = round(sum(
-        float(p.get("unrealized_pnl") or p.get("unrealised_pnl") or 0) for p in open_sp
+    m2m_unrealized = round(sum(
+        float(p.get("unrealized_pnl") or p.get("unrealized_pnl") or 0) for p in open_sp
     ), 2)
     return {
         "source": "paper",
@@ -14093,8 +14093,8 @@ async def funds(user=Depends(get_current_user)):
         "opening_balance": initial_balance,
         "intraday_payin": 0.0,
         "used_margin": deployed,
-        "m2m_realised": round(paper_capital - initial_balance, 2),
-        "m2m_unrealised": m2m_unrealised,
+        "m2m_realized": round(paper_capital - initial_balance, 2),
+        "m2m_unrealized": m2m_unrealized,
         "span": 0.0,
         "delivery_margin": 0.0,
         "note": "Paper-mode. Balance reflects actual fills from db.paper_wallets.",
@@ -14282,7 +14282,7 @@ async def upstox_test_order(req: UpstoxTestOrderReq, user=Depends(get_current_us
         "filled_qty": None,
         "pending_qty": None,
         "status_message": None,
-        "realised_pnl": 0.0,
+        "realized_pnl": 0.0,
         "order_type": order_type,
         "price": float(req.price or 0),
         "brokerage": 0.0,

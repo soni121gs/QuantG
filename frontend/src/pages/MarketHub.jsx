@@ -150,7 +150,7 @@ export default function MarketHub() {
           <div className="space-y-2">
             <Row k="Daily loss limit" v={`₹${formatINR(risk?.daily_loss_limit || 0)}`} />
             <Row k="Open P&L" v={`₹${formatINR(risk?.open_pnl || 0)}`} />
-            <Row k="Realised P&L" v={`₹${formatINR(risk?.realised_pnl || 0)}`} />
+            <Row k="Realised P&L" v={`₹${formatINR(risk?.realized_pnl || 0)}`} />
             <Row k="Per-strategy capital" v={`₹${formatINR(risk?.per_strategy_capital || 0)}`} />
             <Row k="Max position size" v={`₹${formatINR(risk?.max_position_size || 0)}`} />
           </div>
@@ -209,7 +209,7 @@ export default function MarketHub() {
               {(comparison?.items || []).slice(0, 12).map((row) => (
                 <tr key={row.strategy_id} className="border-t border-[var(--qd-border)]">
                   <td className="px-4 py-2 text-white">{row.name}</td>
-                  <td className={`px-4 py-2 ${(row.live?.realised_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>₹{formatINR(row.live?.realised_pnl || 0)}</td>
+                  <td className={`px-4 py-2 ${(row.live?.realized_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>₹{formatINR(row.live?.realized_pnl || 0)}</td>
                   <td className={`px-4 py-2 ${(row.backtest?.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{row.backtest?.available ? `₹${formatINR(row.backtest.pnl || 0)}` : "-"}</td>
                   <td className={`px-4 py-2 ${(row.drift || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{row.drift == null ? "-" : `₹${formatINR(row.drift)}`}</td>
                   <td className="px-4 py-2 text-[var(--qd-text-2)]">{row.last_signal_validation?.confidence != null ? `${row.last_signal_validation.confidence}%` : row.last_filter_reason ? "filtered" : "-"}</td>

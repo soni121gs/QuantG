@@ -142,7 +142,6 @@ class PortfolioLedger:
             "net_pnl": round(net_pnl, 2),
             "pnl": round(net_pnl, 2),
             "realized_pnl": round(net_pnl, 2),
-            "realised_pnl": round(net_pnl, 2),
             "is_win": net_pnl > 0,
             "exit_reason": fill.get("exit_reason") or "exit-fill",
             "entry_time": entry_time,
@@ -310,9 +309,8 @@ class PortfolioLedger:
                 "entry_price": price,
                 "position_side": "LONG" if side == "BUY" else "SHORT",
                 "status": "OPEN",
-                "realised_pnl": 0.0,
                 "realized_pnl": 0.0,
-                "unrealised_pnl": 0.0,
+                "unrealized_pnl": 0.0,
                 "pnl": 0.0,
                 "brokerage": float(fill.get("brokerage", 0.0)),
                 "entry_charges": fill_charges,
@@ -521,7 +519,7 @@ class PortfolioLedger:
             update_fields["status"] = "CLOSED"
             update_fields["closed_at"] = now_str
             update_fields["exit_reason"] = fill.get("exit_reason") or pos.get("exit_reason") or "exit-fill"
-            update_fields["unrealised_pnl"] = 0.0
+            update_fields["unrealized_pnl"] = 0.0
             update_fields["unrealized_pnl"] = 0.0
 
         await self.db.strategy_positions.update_one(
@@ -529,7 +527,6 @@ class PortfolioLedger:
             {
                 "$set": update_fields,
                 "$inc": {
-                    "realised_pnl": net_pnl,
                     "realized_pnl": net_pnl,
                     "pnl": net_pnl,
                     "brokerage": float(fill.get("brokerage", 0.0)),
@@ -668,12 +665,12 @@ async def get_strategy_pnl_today(db, strategy_id: str, user_id: str) -> Dict[str
             "strategy_id": strategy_id,
             "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER"]},
         },
-        {"_id": 0, "unrealized_pnl": 1, "unrealised_pnl": 1},
+        {"_id": 0, "unrealized_pnl": 1, "unrealized_pnl": 1},
     ).to_list(50)
 
     unrealized_pnl = round(
         sum(
-            float(p.get("unrealized_pnl") or p.get("unrealised_pnl") or 0)
+            float(p.get("unrealized_pnl") or p.get("unrealized_pnl") or 0)
             for p in open_positions
         ),
         2,

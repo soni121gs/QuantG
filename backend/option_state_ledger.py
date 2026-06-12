@@ -372,7 +372,13 @@ class OptionStateLedger:
                 "strategy_id": strategy_id
             })
             daily_loss_limit = float(risk["daily_loss_limit"]) if risk else 0.0
-            if daily_loss_limit > 0 and daily_pnl and float(daily_pnl.get("realised_pnl", 0.0)) <= -daily_loss_limit:
+            # Safety fallback: prefer canonical realized_pnl, fall back to the
+            # legacy realised_pnl spelling on any un-migrated doc — the daily-loss
+            # kill switch must never silently read 0 and stop enforcing the limit.
+            _daily_realized = (daily_pnl or {}).get("realized_pnl")
+            if _daily_realized is None:
+                _daily_realized = (daily_pnl or {}).get("realised_pnl", 0.0)
+            if daily_loss_limit > 0 and daily_pnl and float(_daily_realized or 0.0) <= -daily_loss_limit:
                 return LedgerDecision(False, "daily-loss-limit-hit", current_state)
 
             target_price, stoploss_price, trailing_sl = self._brackets(
@@ -595,8 +601,8 @@ class OptionStateLedger:
             self.db.option_daily_pnl.update_one(
                 {"trade_date": ist_now().date().isoformat(), "strategy_id": strategy_id},
                 {
-                    "$inc": {"realised_pnl": pnl, "trades": 1},
-                    "$setOnInsert": {"unrealised_pnl": 0.0}
+                    "$inc": {"realized_pnl": pnl, "trades": 1},
+                    "$setOnInsert": {"unrealized_pnl": 0.0}
                 },
                 upsert=True
             )
@@ -659,15 +665,15 @@ class OptionStateLedger:
             entry = float(pos["entry_price"])
             qty = int(pos["quantity"])
             if side == SIDE_SHORT:
-                unrealised = round((entry - float(ltp)) * qty, 2)
+                unrealized = round((entry - float(ltp)) * qty, 2)
             else:
-                unrealised = round((float(ltp) - entry) * qty, 2)
+                unrealized = round((float(ltp) - entry) * qty, 2)
 
             self.db.option_daily_pnl.update_one(
                 {"trade_date": ist_now().date().isoformat(), "strategy_id": strategy_id},
                 {
-                    "$set": {"unrealised_pnl": unrealised},
-                    "$setOnInsert": {"realised_pnl": 0.0, "trades": 0}
+                    "$set": {"unrealized_pnl": unrealized},
+                    "$setOnInsert": {"realized_pnl": 0.0, "trades": 0}
                 },
                 upsert=True
             )
@@ -717,8 +723,8 @@ class OptionStateLedger:
                         "kill_switch_enabled": bool(risk_row["kill_switch_enabled"]) if risk_row else False,
                     },
                     "daily_pnl": {
-                        "realised_pnl": pnl_row["realised_pnl"] if pnl_row else 0.0,
-                        "unrealised_pnl": pnl_row["unrealised_pnl"] if pnl_row else 0.0,
+                        "realized_pnl": pnl_row["realized_pnl"] if pnl_row else 0.0,
+                        "unrealized_pnl": pnl_row["unrealized_pnl"] if pnl_row else 0.0,
                         "trades": pnl_row["trades"] if pnl_row else 0,
                     },
                 }

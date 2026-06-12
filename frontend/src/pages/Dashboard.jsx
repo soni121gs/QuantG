@@ -384,7 +384,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
   const problem = failedOrder || asStatus(position?.execution_status) === "BROKER_NOT_FOUND";
   const warning = !problem && (pendingOrder || PENDING_POSITION_STATES.includes(asStatus(status)));
   const tone = problem ? "bad" : warning ? "warn" : positionOpen ? "good" : row.status === "live" ? "neutral" : "neutral";
-  const pnl = position?.pnl ?? row.active_position?.unrealized_pnl ?? row.daily_pnl?.realised_pnl ?? 0;
+  const pnl = position?.pnl ?? row.active_position?.unrealized_pnl ?? row.daily_pnl?.realized_pnl ?? 0;
   const slMissing = positionOpen && position?.stop_loss == null;
   const tpMissing = positionOpen && position?.take_profit == null;
   const live = row.status === "live";
@@ -1045,7 +1045,7 @@ export default function Dashboard() {
                   ))}
                   {strategies.slice(0, 5).map((row) => {
                     const pos = row.active_position || {};
-                    const spnl = pos.unrealized_pnl ?? row.daily_pnl?.realised_pnl ?? 0;
+                    const spnl = pos.unrealized_pnl ?? row.daily_pnl?.realized_pnl ?? 0;
                     const live = row.status === "live";
                     return (
                       <div key={row.strategy_id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3 hover:bg-[var(--qd-surface)]/20 px-2 rounded">

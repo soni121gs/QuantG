@@ -355,7 +355,7 @@ async def test_full_paper_execution_lifecycle():
     mock_ledger = MagicMock()
     mock_ledger.try_open_position = MagicMock(return_value=MagicMock(accepted=True))
     mock_ledger.confirm_position_fill = MagicMock(return_value=MagicMock(accepted=True))
-    mock_ledger.close_position = MagicMock(return_value=MagicMock(accepted=True, trade={"realised_pnl": 500.0}))
+    mock_ledger.close_position = MagicMock(return_value=MagicMock(accepted=True, trade={"realized_pnl": 500.0}))
     
     # Mocking order placement success
     order_doc = {
@@ -423,7 +423,7 @@ async def test_full_paper_execution_lifecycle():
             "side": "SELL",
             "symbol": "NIFTY2660424000CE",
             "mode": "paper",
-            "realised_pnl": 500.0,
+            "realized_pnl": 500.0,
         }
         
         mock_route_intent.return_value = exit_order_doc
@@ -441,7 +441,7 @@ async def test_full_paper_execution_lifecycle():
         
         assert res_exit["status"] == "PAPER_FILLED"
         print("DEBUG RES EXIT:", res_exit)
-        assert res_exit["realised_pnl"] == 500.0
+        assert res_exit["realized_pnl"] == 500.0
 
 
 @pytest.mark.anyio

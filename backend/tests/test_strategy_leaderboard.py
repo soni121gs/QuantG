@@ -15,11 +15,11 @@ def test_leaderboard_uses_only_closed_trades_with_known_strategy_links():
         {"id": "s2", "name": "Bravo"},
     ]
     trades = [
-        {"strategy_id": "s1", "realised_pnl": 1000, "closed_at": "2026-06-01T10:00:00+00:00"},
-        {"strategy_id": "s1", "realised_pnl": -250, "closed_at": "2026-06-02T10:00:00+00:00"},
-        {"strategy_id": "", "realised_pnl": 9999, "closed_at": "2026-06-02T10:00:00+00:00"},
-        {"strategy_id": "deleted", "realised_pnl": 9999, "closed_at": "2026-06-02T10:00:00+00:00"},
-        {"strategy_id": "s2", "realised_pnl": 100, "status": "OPEN"},
+        {"strategy_id": "s1", "realized_pnl": 1000, "closed_at": "2026-06-01T10:00:00+00:00"},
+        {"strategy_id": "s1", "realized_pnl": -250, "closed_at": "2026-06-02T10:00:00+00:00"},
+        {"strategy_id": "", "realized_pnl": 9999, "closed_at": "2026-06-02T10:00:00+00:00"},
+        {"strategy_id": "deleted", "realized_pnl": 9999, "closed_at": "2026-06-02T10:00:00+00:00"},
+        {"strategy_id": "s2", "realized_pnl": 100, "status": "OPEN"},
     ]
 
     result = build_strategy_leaderboard(strategies, trades, [], now=NOW)
@@ -46,12 +46,12 @@ def test_ranking_health_and_allocation_recommendations_are_read_only():
         {"id": "c", "name": "Weak C"},
     ]
     trades = [
-        {"strategy_id": "a", "realised_pnl": 700, "closed_at": "2026-05-20T10:00:00+00:00"},
-        {"strategy_id": "a", "realised_pnl": 600, "closed_at": "2026-05-25T10:00:00+00:00"},
-        {"strategy_id": "a", "realised_pnl": -100, "closed_at": "2026-06-01T10:00:00+00:00"},
-        {"strategy_id": "b", "realised_pnl": 350, "closed_at": "2026-05-28T10:00:00+00:00"},
-        {"strategy_id": "b", "realised_pnl": -100, "closed_at": "2026-06-01T10:00:00+00:00"},
-        {"strategy_id": "c", "realised_pnl": -500, "closed_at": "2026-06-02T10:00:00+00:00"},
+        {"strategy_id": "a", "realized_pnl": 700, "closed_at": "2026-05-20T10:00:00+00:00"},
+        {"strategy_id": "a", "realized_pnl": 600, "closed_at": "2026-05-25T10:00:00+00:00"},
+        {"strategy_id": "a", "realized_pnl": -100, "closed_at": "2026-06-01T10:00:00+00:00"},
+        {"strategy_id": "b", "realized_pnl": 350, "closed_at": "2026-05-28T10:00:00+00:00"},
+        {"strategy_id": "b", "realized_pnl": -100, "closed_at": "2026-06-01T10:00:00+00:00"},
+        {"strategy_id": "c", "realized_pnl": -500, "closed_at": "2026-06-02T10:00:00+00:00"},
     ]
 
     result = build_strategy_leaderboard(strategies, trades, [], now=NOW)
@@ -62,7 +62,7 @@ def test_ranking_health_and_allocation_recommendations_are_read_only():
     assert next(row for row in result["leaderboard"] if row["strategy_id"] == "c")["recommendation"] == "PAUSE_REVIEW"
     assert sum(row["recommended_percent"] for row in result["capital_allocation"]) == 100
     assert result["capital_allocation"][0]["strategy_id"] == "a"
-    assert result["basis"] == "closed_realised_trade_history_only"
+    assert result["basis"] == "closed_realized_trade_history_only"
 
 
 def test_option_trade_journal_rows_are_counted_when_strategy_is_known():

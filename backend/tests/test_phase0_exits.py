@@ -246,14 +246,14 @@ async def test_gt4_duplicate_exit_idempotent():
 # ── GT-5: Daily loss kill switch uses correct field ───────────────────────────
 
 def test_gt5_kill_switch_reads_realized_pnl():
-    """Verify _check_daily_loss_guard reads 'realized_pnl' (z) not 'realised_pnl' (s)."""
+    """Verify _check_daily_loss_guard reads 'realized_pnl' (z) not 'realized_pnl' (s)."""
     import inspect
     import server  # noqa: F401 — just verifying the source
     src = inspect.getsource(server._check_daily_loss_guard)  # type: ignore[attr-defined]
 
     # Must NOT use the UK spelling directly as the field to sum
-    assert '"realised_pnl"' not in src or 'realized_pnl' in src, (
-        "_check_daily_loss_guard must read 'realized_pnl' (z), not 'realised_pnl' (s)"
+    assert '"realized_pnl"' not in src or 'realized_pnl' in src, (
+        "_check_daily_loss_guard must read 'realized_pnl' (z), not 'realized_pnl' (s)"
     )
     # Must read from trade_fills (authoritative source)
     assert "trade_fills" in src, (

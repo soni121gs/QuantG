@@ -59,8 +59,6 @@ def fallback_gross_pnl(order: dict[str, Any]) -> Optional[float]:
     net = _float_or_none(order.get("net_pnl"))
     if net is None:
         net = _float_or_none(order.get("realized_pnl"))
-    if net is None:
-        net = _float_or_none(order.get("realised_pnl"))
     charges = _float_or_none(order.get("charges")) or 0.0
     if net is None or net == 0.0:
         return None
@@ -124,12 +122,11 @@ def backfill_fallback_orders(db, *, apply: bool, limit: int = 0) -> BackfillStat
                 "$or": [
                     {"net_pnl": {"$exists": True, "$ne": 0}},
                     {"realized_pnl": {"$exists": True, "$ne": 0}},
-                    {"realised_pnl": {"$exists": True, "$ne": 0}},
                 ]
             },
         ],
     }
-    cursor = db.orders.find(query, {"id": 1, "net_pnl": 1, "realized_pnl": 1, "realised_pnl": 1, "charges": 1})
+    cursor = db.orders.find(query, {"id": 1, "net_pnl": 1, "realized_pnl": 1, "charges": 1})
     if limit:
         cursor = cursor.limit(limit)
 

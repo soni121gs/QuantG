@@ -269,7 +269,7 @@ async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
                     "status": "CLOSED",
                     "open_quantity": 0,
                     "exit_price": exit_price,
-                    "realised_pnl": pnl,
+                    "realized_pnl": pnl,
                     "exit_reason": "reconciliation-repair",
                     "closed_at": now,
                     "updated_at": now,

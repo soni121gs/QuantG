@@ -20,7 +20,7 @@ def test_fallback_gross_pnl_uses_net_plus_exit_order_charges():
 
 def test_fallback_gross_pnl_accepts_realized_spellings():
     assert fallback_gross_pnl({"realized_pnl": -110, "charges": 10}) == -100.0
-    assert fallback_gross_pnl({"realised_pnl": 90, "charges": 5}) == 95.0
+    assert fallback_gross_pnl({"realized_pnl": 90, "charges": 5}) == 95.0
 
 
 def test_fallback_gross_pnl_skips_zero_or_missing_net():

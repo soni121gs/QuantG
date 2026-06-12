@@ -184,6 +184,6 @@ async def test_book_live_fill_routes_to_portfolio_ledger():
         res = await server._book_live_fill_from_order(order, fill_price=100.0, filled_qty=50)
         
     assert res is not None
-    assert res["realised_pnl"] == 0.0
+    assert res["realized_pnl"] == 0.0
     mock_ledger_instance.process_fill.assert_called_once()
     mock_db.orders.update_one.assert_called_once()

@@ -406,14 +406,14 @@ async def test_live_fill_booking_is_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_fill_ledger_summary_uses_trade_fills_for_realised_pnl():
+async def test_fill_ledger_summary_uses_trade_fills_for_realized_pnl():
     import server
 
     fake_db = MagicMock()
     fake_db.trade_fills = _FakeCollection(rows=[
-        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 100, "realised_pnl": 250, "brokerage": 20, "slippage": 5},
-        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 80, "realised_pnl": -100, "brokerage": 20, "slippage": 3},
-        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 90, "realised_pnl": 0, "brokerage": 20, "slippage": 0},
+        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 100, "realized_pnl": 250, "brokerage": 20, "slippage": 5},
+        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 80, "realized_pnl": -100, "brokerage": 20, "slippage": 3},
+        {"user_id": "u1", "mode": "live", "strategy_id": "s1", "qty": 10, "fill_price": 90, "realized_pnl": 0, "brokerage": 20, "slippage": 0},
     ])
 
     with patch.object(server, "db", fake_db):
@@ -424,6 +424,6 @@ async def test_fill_ledger_summary_uses_trade_fills_for_realised_pnl():
     assert summary["closed_trade_count"] == 2
     assert summary["wins"] == 1
     assert summary["losses"] == 1
-    assert summary["realised_pnl"] == 150
+    assert summary["realized_pnl"] == 150
     assert summary["gross_turnover"] == 2700
     assert summary["brokerage"] == 60

@@ -64,7 +64,7 @@ class TestFunds:
         d = r.json()
         # must have at minimum these fields
         for k in ("source", "available_cash", "opening_balance", "used_margin",
-                  "intraday_payin", "m2m_realised", "m2m_unrealised", "span", "delivery_margin"):
+                  "intraday_payin", "m2m_realized", "m2m_unrealized", "span", "delivery_margin"):
             assert k in d, f"missing field {k}"
         assert d["source"] == "paper"
         assert isinstance(d["available_cash"], (int, float))

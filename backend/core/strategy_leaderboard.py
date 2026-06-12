@@ -1,6 +1,6 @@
 """Strategy leaderboard and capital allocation analytics.
 
-Uses only closed realised trade history. Backtests, open P&L, and generated
+Uses only closed realized trade history. Backtests, open P&L, and generated
 placeholders are intentionally excluded from capital recommendations.
 """
 from __future__ import annotations
@@ -103,14 +103,14 @@ def normalize_closed_trades(
         add_trade(
             row,
             source="trades",
-            pnl_keys=["net_pnl", "net_realised_pnl", "realised_pnl", "realized_pnl", "gross_realised_pnl", "pnl"],
+            pnl_keys=["net_pnl", "net_realized_pnl", "realized_pnl", "gross_realized_pnl", "pnl"],
             close_keys=["closed_at", "exit_time", "filled_at", "updated_at"],
         )
     for row in raw_option_trades:
         add_trade(
             row,
             source="option_trade_journal",
-            pnl_keys=["net_pnl", "net_realised_pnl", "pnl", "realised_pnl", "realized_pnl"],
+            pnl_keys=["net_pnl", "net_realized_pnl", "pnl", "realized_pnl"],
             close_keys=["exit_time", "closed_at", "updated_at"],
         )
 
@@ -295,7 +295,7 @@ def build_strategy_leaderboard(
     traded = [row for row in leaderboard if row["lifetime"]["total_trades"] > 0]
     return {
         "as_of": now_utc.isoformat(),
-        "basis": "closed_realised_trade_history_only",
+        "basis": "closed_realized_trade_history_only",
         "leaderboard": leaderboard,
         "health_scores": [
             {

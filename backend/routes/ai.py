@@ -139,17 +139,17 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
             ).to_list(200)
-            realised = round(sum(float(o.get("realised_pnl") or 0) for o in orders), 2)
+            realized = round(sum(float(o.get("realized_pnl") or 0) for o in orders), 2)
             open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
             loss_limit = float(settings.get("max_daily_loss") or 0)
             data = {
                 "date": day,
                 "mode": "PAPER" if settings.get("paper_mode", True) else "LIVE",
                 "daily_loss_limit": loss_limit,
-                "realised_pnl": realised,
+                "realized_pnl": realized,
                 "open_pnl": open_pnl,
-                "total_pnl": round(realised + open_pnl, 2),
-                "loss_remaining": round(max(0.0, loss_limit + realised), 2) if loss_limit else None,
+                "total_pnl": round(realized + open_pnl, 2),
+                "loss_remaining": round(max(0.0, loss_limit + realized), 2) if loss_limit else None,
                 "orders_today": len(orders),
                 "max_trades_per_day": int(settings.get("max_trades_per_day") or 0),
                 "per_strategy_capital": settings.get("per_strategy_capital"),

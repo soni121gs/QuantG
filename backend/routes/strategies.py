@@ -119,11 +119,11 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
         {
             **row,
             "closed_at": row.get("filled_at"),
-            "pnl": row.get("realised_pnl"),
+            "pnl": row.get("realized_pnl"),
             "source": "trade_fills",
         }
         for row in fill_summary["fills"]
-        if float(row.get("realised_pnl") or 0) != 0
+        if float(row.get("realized_pnl") or 0) != 0
     ]
     closed_trades = [*closed_trades, *fill_trades]
     option_trades = await db.option_trade_journal.find(
@@ -135,7 +135,7 @@ async def strategy_leaderboard(user=Depends(get_current_user)):
         "source": "trade_fills",
         "fill_count": fill_summary["fill_count"],
         "closed_trade_count": fill_summary["closed_trade_count"],
-        "realised_pnl": fill_summary["realised_pnl"],
+        "realized_pnl": fill_summary["realized_pnl"],
     }
     return result
 
@@ -157,7 +157,7 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
         ).sort("created_at", -1).to_list(200)
         fill_summary = await _fill_ledger_summary(user["id"], mode="live", strategy_id=s["id"])
         completed = [o for o in live_orders if canonical_order_status(o.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
-        live_pnl = fill_summary["realised_pnl"]
+        live_pnl = fill_summary["realized_pnl"]
         live_win_rate = fill_summary["win_rate"]
         backtest_pnl = float((latest_backtest or {}).get("pnl") or 0)
         drift = round(live_pnl - backtest_pnl, 2) if latest_backtest else None
@@ -173,8 +173,8 @@ async def live_backtest_comparison(user=Depends(get_current_user)):
                 "orders": len(live_orders),
                 "completed": len(completed),
                 "fills": fill_summary["fill_count"],
-                "realised_pnl": live_pnl,
-                "realised_pnl_source": fill_summary["source"],
+                "realized_pnl": live_pnl,
+                "realized_pnl_source": fill_summary["source"],
                 "win_rate": live_win_rate,
             },
             "backtest": {

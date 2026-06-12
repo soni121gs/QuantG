@@ -26,7 +26,7 @@ async def risk_dashboard(user=Depends(get_current_user)):
     ).to_list(1000)
     positions = await _fetch_broker_positions_for_user(user, settings)
     fill_summary = await _fill_ledger_summary(user["id"], mode=mode, start=start, end=end)
-    realised = fill_summary["realised_pnl"]
+    realized = fill_summary["realized_pnl"]
     open_pnl = round(sum(float(p.get("pnl") or 0) for p in positions), 2)
     loss_limit = float(settings.get("max_daily_loss") or 0)
     gross_order_value = round(sum(abs(float(o.get("price") or 0) * int(o.get("qty") or 0)) for o in orders), 2)
@@ -42,13 +42,13 @@ async def risk_dashboard(user=Depends(get_current_user)):
         "date": datetime.now(timezone.utc).date().isoformat(),
         "mode": mode.upper(),
         "daily_loss_limit": loss_limit,
-        "realised_pnl": realised,
-        "realised_pnl_source": fill_summary["source"],
+        "realized_pnl": realized,
+        "realized_pnl_source": fill_summary["source"],
         "fill_count": fill_summary["fill_count"],
         "closed_trade_count": fill_summary["closed_trade_count"],
         "open_pnl": open_pnl,
-        "total_pnl": round(realised + open_pnl, 2),
-        "loss_remaining": round(max(0.0, loss_limit + realised), 2) if loss_limit else None,
+        "total_pnl": round(realized + open_pnl, 2),
+        "loss_remaining": round(max(0.0, loss_limit + realized), 2) if loss_limit else None,
         "trades_used": trades_used,
         "max_trades_per_day": max_trades,
         "trades_remaining": max(0, max_trades - trades_used) if max_trades else None,
@@ -73,7 +73,7 @@ async def trade_journal(user=Depends(get_current_user)):
     failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
     wins = fill_summary["wins"]
     losses = fill_summary["losses"]
-    total_pnl = fill_summary["realised_pnl"]
+    total_pnl = fill_summary["realized_pnl"]
     return {
         "summary": {
             "orders": len(rows),
@@ -84,8 +84,8 @@ async def trade_journal(user=Depends(get_current_user)):
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / max(1, wins + losses) * 100, 2),
-            "realised_pnl": total_pnl,
-            "realised_pnl_source": fill_summary["source"],
+            "realized_pnl": total_pnl,
+            "realized_pnl_source": fill_summary["source"],
         },
         "orders": rows,
         "filled_trades": fill_summary["fills"],

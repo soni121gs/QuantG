@@ -40,13 +40,13 @@ class PerformanceTracker:
 
         paper_trades_count = len(paper_trades)
         paper_pnl = sum(
-            float(t.get("net_pnl") or t.get("realised_pnl") or 0)
+            float(t.get("net_pnl") or t.get("realized_pnl") or 0)
             for t in paper_trades
         )
 
         paper_wins = sum(
             1 for t in paper_trades
-            if float(t.get("net_pnl") or t.get("realised_pnl") or 0) > 0
+            if float(t.get("net_pnl") or t.get("realized_pnl") or 0) > 0
         )
         paper_win_rate = round(paper_wins / max(1, paper_trades_count), 2)
 
@@ -61,8 +61,8 @@ class PerformanceTracker:
         thirty_day_pnl = 0.0
         
         for pos in positions:
-            pos_pnl = float(pos.get("realised_pnl") or 0.0)
-            # Use closed_at for closed positions so P&L lands in the day it was realised,
+            pos_pnl = float(pos.get("realized_pnl") or 0.0)
+            # Use closed_at for closed positions so P&L lands in the day it was realized,
             # not the day the position was opened. Fall back to created_at for open positions.
             ts_str = pos.get("closed_at") or pos.get("created_at")
             if ts_str:

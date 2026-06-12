@@ -3,9 +3,9 @@
 Covers:
 - GET /api/live/readiness shape & 6 checks
 - /api/orders includes filled_qty / pending_qty / status_message keys (paper => null)
-- Daily-loss guard: realised loss > max_daily_loss blocks orders
+- Daily-loss guard: realized loss > max_daily_loss blocks orders
 - kite_helper.instrument_token / safe_historical / safe_order_history exist with proper signatures
-- Paper BUY → SELL writes realised_pnl on the SELL order (best-effort; LTP drift may make pnl=0)
+- Paper BUY → SELL writes realized_pnl on the SELL order (best-effort; LTP drift may make pnl=0)
 """
 import os
 import time
@@ -107,8 +107,8 @@ class TestOrdersShape:
 
 # ---------- daily-loss guard ----------
 class TestDailyLossGuard:
-    def test_guard_blocks_when_realised_loss_exceeds_max(self, auth):
-        """Seed a fake losing closed order with realised_pnl below max_daily_loss,
+    def test_guard_blocks_when_realized_loss_exceeds_max(self, auth):
+        """Seed a fake losing closed order with realized_pnl below max_daily_loss,
         set max_daily_loss=1, then attempt a new order — must 400."""
         # Snapshot current settings to restore later
         prof = auth.get(f"{BASE_URL}/api/profile", timeout=15).json()
@@ -125,13 +125,13 @@ class TestDailyLossGuard:
                        json={"max_daily_loss": 1.0}, timeout=15)
         assert upd.status_code == 200, upd.text
 
-        # Inject a losing realised_pnl into orders via direct DB? not possible from client.
+        # Inject a losing realized_pnl into orders via direct DB? not possible from client.
         # Instead — best effort: place BUY then SELL many times to try realising a loss;
         # but LTP drift is small/random. Just verify the guard is wired:
-        # confirm an explicit order still attempts; whether it trips depends on existing realised_pnl.
+        # confirm an explicit order still attempts; whether it trips depends on existing realized_pnl.
         r = auth.post(f"{BASE_URL}/api/orders",
                       json={"symbol": "RELIANCE", "side": "BUY", "qty": 1}, timeout=15)
-        # Either passes (no realised loss yet today) or is blocked by guard.
+        # Either passes (no realized loss yet today) or is blocked by guard.
         if r.status_code == 400:
             assert "Daily loss guard" in r.text or "loss" in r.text.lower()
 
@@ -140,11 +140,11 @@ class TestDailyLossGuard:
                  json={"max_daily_loss": original_max_loss}, timeout=15)
 
 
-# ---------- realised_pnl on closing SELL ----------
+# ---------- realized_pnl on closing SELL ----------
 class TestRealisedPnlOnClose:
-    def test_paper_buy_then_sell_writes_realised_pnl_on_sell(self, auth):
+    def test_paper_buy_then_sell_writes_realized_pnl_on_sell(self, auth):
         """Buy 1 share, then sell 1 share. The SELL order document should have a
-        non-null `realised_pnl` field (may be 0 if LTP didn't move)."""
+        non-null `realized_pnl` field (may be 0 if LTP didn't move)."""
         symbol = "TCS"
         b = auth.post(f"{BASE_URL}/api/orders",
                       json={"symbol": symbol, "side": "BUY", "qty": 1}, timeout=15)
@@ -164,15 +164,15 @@ class TestRealisedPnlOnClose:
         if _is_market_closed_skip(sell_doc):
             return
 
-        # The SELL response or the persisted order must carry a realised_pnl field (key exists)
-        if "realised_pnl" not in sell_doc:
+        # The SELL response or the persisted order must carry a realized_pnl field (key exists)
+        if "realized_pnl" not in sell_doc:
             # Re-fetch from /api/orders and find the latest SELL on this symbol
             orders = auth.get(f"{BASE_URL}/api/orders", timeout=15).json()
             sells = [o for o in orders if o.get("symbol") == symbol and o.get("side") == "SELL"]
             assert sells, "no SELL order persisted"
             newest_sell = sells[0]
-            assert "realised_pnl" in newest_sell, (
-                f"closing SELL order missing realised_pnl field — keys: {list(newest_sell.keys())}"
+            assert "realized_pnl" in newest_sell, (
+                f"closing SELL order missing realized_pnl field — keys: {list(newest_sell.keys())}"
             )
 
 
