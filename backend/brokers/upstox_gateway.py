@@ -990,9 +990,7 @@ class UpstoxGateway:
         if "/v2/order/place" in path_lower:
             import json
             payload = kwargs.get("json") or {}
-            print("\n>>> [UPSTOX API SIMULATION] EXACT ORDER PAYLOAD SENDING TO UPSTOX:")
-            print(json.dumps(payload, indent=2))
-            print(">>> [UPSTOX API SIMULATION] END PAYLOAD <<<\n", flush=True)
+            logger.debug("Upstox API simulation order payload: %s", json.dumps(payload))
             
             logger.info(
                 "Upstox Live Order Routed: instrument_token=%s quantity=%s side=%s order_type=%s product=%s validity=%s",

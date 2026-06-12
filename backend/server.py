@@ -16058,6 +16058,51 @@ async def startup():
             logger.warning("Strategy code migration failed: %s", _mig_err)
 
     asyncio.create_task(_migrate_strategy_code_versions())
+
+    # Fix 3: Warn loudly at boot if running with the default JWT secret.
+    # The secret is SHA-256'd so it won't crash, but forging tokens is trivial
+    # for anyone who knows the well-known default value.
+    _raw_jwt_env = os.environ.get("JWT_SECRET") or os.environ.get("SECRET_KEY")
+    if not _raw_jwt_env:
+        logger.critical(
+            "JWT_SECRET is not set in environment — running with default development secret. "
+            "ALL SESSION TOKENS ARE CRYPTOGRAPHICALLY INSECURE. "
+            "Set JWT_SECRET to a random 64-character hex string before enabling live trading."
+        )
+
+    # Fix 2: Boot-time live arm state verification.
+    # When CORE_ENGINE_LIVE_ENABLED=true, confirm the DB arm state is consistent so
+    # operators know whether live orders are actually permitted before the first trade.
+    _live_env_on = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
+    try:
+        if _live_env_on:
+            logger.critical("CORE_ENGINE_LIVE_ENABLED=true — LIVE TRADING IS ACTIVE. Verifying arm state.")
+            armed_users = await db.live_arm_state.find({"armed": True}).to_list(100)
+            if not armed_users:
+                logger.critical(
+                    "LIVE TRADING ENABLED but no users have live_arm_state.armed=true. "
+                    "Live orders will be blocked at execution time until a user arms live trading via the UI."
+                )
+            else:
+                for _arm in armed_users:
+                    _uid = _arm.get("user_id", "unknown")
+                    if not _arm.get("global_live_enabled", False):
+                        logger.warning(
+                            "User %s has armed=true but global_live_enabled=false — live orders will be blocked.", _uid
+                        )
+                    else:
+                        logger.info("User %s: live_arm_state OK — armed=true, global_live_enabled=true.", _uid)
+        else:
+            # Warn if any user is armed in DB but env flag is off — helps catch accidental mismatches.
+            armed_count = await db.live_arm_state.count_documents({"armed": True})
+            if armed_count:
+                logger.warning(
+                    "%d user(s) have live_arm_state.armed=true in DB but CORE_ENGINE_LIVE_ENABLED=false. "
+                    "Live trading is blocked by env flag — this is expected in paper mode.", armed_count
+                )
+    except Exception as _arm_check_err:
+        logger.warning("Boot-time arm state check failed (non-fatal): %s", _arm_check_err)
+
     logger.info("QuantG API started")
 
 
