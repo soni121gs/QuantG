@@ -105,7 +105,7 @@ export default function OpsConsole() {
       load().catch(() => {});
       loadPendingUsers().catch(() => {});
       loadNeedsReview().catch(() => {});
-    }, 4000);
+    }, 15000);
     return () => clearInterval(t);
   }, [user, load, loadPendingUsers, loadNeedsReview]);
 
