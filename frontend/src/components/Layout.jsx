@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
+import { toast } from "sonner";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { Button } from "./ui/button";
@@ -297,6 +298,8 @@ export default function Layout({ children }) {
         api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
         api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
       ]);
+    } catch {
+      toast.error("Refresh failed — data may be stale");
     } finally {
       setShellRefreshing(false);
     }

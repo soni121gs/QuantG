@@ -23,14 +23,14 @@ export default function MarketHub() {
 
   const load = useCallback(async () => {
     const [h, r, j, c, cmp, f, ind, s] = await Promise.all([
-      api.get("/broker/health").catch(err => { console.error("health failed", err); return { data: null }; }),
-      api.get("/risk/dashboard").catch(err => { console.error("risk failed", err); return { data: null }; }),
-      api.get("/trade-journal").catch(err => { console.error("journal failed", err); return { data: null }; }),
-      api.get(`/option-chain/${underlying}`).catch(err => { console.error("chain failed", err); return { data: null }; }),
-      api.get("/strategies/live-backtest-comparison").catch(err => { console.error("comparison failed", err); return { data: null }; }),
-      api.get("/market/feed-comparison").catch(err => { console.error("feed failed", err); return { data: null }; }),
-      api.get(`/market/indicators/${underlying}`).catch(err => { console.error("indicators failed", err); return { data: null }; }),
-      api.get("/market/session-status").catch(err => { console.error("session failed", err); return { data: null }; }),
+      api.get("/broker/health").catch(() => ({ data: null })),
+      api.get("/risk/dashboard").catch(() => ({ data: null })),
+      api.get("/trade-journal").catch(() => ({ data: null })),
+      api.get(`/option-chain/${underlying}`).catch(() => ({ data: null })),
+      api.get("/strategies/live-backtest-comparison").catch(() => ({ data: null })),
+      api.get("/market/feed-comparison").catch(() => ({ data: null })),
+      api.get(`/market/indicators/${underlying}`).catch(() => ({ data: null })),
+      api.get("/market/session-status").catch(() => ({ data: null })),
     ]);
     if (h.data) setHealth(h.data);
     if (r.data) setRisk(r.data);

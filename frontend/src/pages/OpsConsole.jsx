@@ -105,7 +105,7 @@ export default function OpsConsole() {
   }, []);
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => toast.error("Failed to load operations data"));
     loadPendingUsers().catch(() => {});
     loadNeedsReview().catch(() => {});
     const t = setInterval(() => {
