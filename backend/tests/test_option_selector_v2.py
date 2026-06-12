@@ -302,12 +302,12 @@ def test_paper_quality_threshold_skip():
     contract["instrument_key"] = "NSE_FO|99999"
     contract["ltp"] = 0.5
     contract["quote_timestamp"] = None
-    # key=25, ltp=10, fresh=10(paper no age), spread=0, pref=10 → 55 → above threshold
-    # To fall below 50, strip the key score further — use a simulated:
-    # With simulated=True in paper (not hard blocked): sim_penalty=-5 → 50 (exactly at threshold)
-    # Let's set freshness_score to 0 by using a stale timestamp:
+    # PAPER_MIN_SCORE is intentionally lower than live. To fall below it without
+    # hard-blocking, use a simulated paper key with a valid Upstox-style shape.
     contract["quote_timestamp"] = _stale_iso(120)  # age = 120s > LIVE_STALE_SEC(30)
-    # freshness_score=0, key=25, ltp=10, spread=0, pref=10 → 45 → below paper threshold
+    contract["instrument_key"] = "NSE_FO|99999"
+    contract["simulated"] = True
+    # key=10, ltp=10, freshness=0, spread=0, pref=10, sim=-5 → 25
     result = select_option_contract(
         underlying="NIFTY",
         direction="CE",

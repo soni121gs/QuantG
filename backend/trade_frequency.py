@@ -56,6 +56,7 @@ _CLASS_CAPS: Dict[str, Dict[str, Any]] = {
 LOSS_STREAK_TRIGGER  = int(os.environ.get("LOSS_STREAK_TRIGGER",  "3"))
 LOSS_STREAK_PAUSE_MIN= int(os.environ.get("LOSS_STREAK_PAUSE_MIN","30"))
 LOSS_STREAK_HALF_CAP = os.environ.get("LOSS_STREAK_HALF_CAP", "true").lower() == "true"
+PROFIT_CAP_BOOST_MAX = int(os.environ.get("FREQ_PROFIT_CAP_BOOST_MAX", "2"))
 
 
 def _today_window() -> Tuple[str, str]:
@@ -84,14 +85,33 @@ async def check_frequency_gate(
     # Effective cap with regime freq_multiplier
     effective_cap = max(1, int(base_cap * max(0.1, freq_multiplier)))
 
-    # Count today's ENTRY orders for this strategy
+    profit_boost = 0
+    try:
+        strategy = await db.strategies.find_one(
+            {"id": strategy_id, "user_id": user_id},
+            {"_id": 0, "today_pnl": 1},
+        )
+        today_pnl = float((strategy or {}).get("today_pnl") or 0)
+        if today_pnl > 0:
+            profit_boost = min(PROFIT_CAP_BOOST_MAX, 1 + int(today_pnl >= 1000))
+            effective_cap += profit_boost
+    except Exception:
+        pass
+
+    # Count today's true ENTRY orders for this strategy. Option-buying exits are
+    # SELL orders with exit idempotency keys, so counting both sides prematurely
+    # shuts profitable strategies down after only a couple of round trips.
     try:
         today_entries = await db.orders.count_documents({
             "strategy_id": strategy_id,
             "user_id": user_id,
             "created_at": {"$gte": start, "$lt": end},
             "status": {"$nin": ["REJECTED", "CANCELLED", "FAILED", "SKIPPED", "SKIPPED_SIGNAL", "STALE"]},
-            "side": {"$in": ["BUY", "SELL"]},
+            "side": "BUY",
+            "$or": [
+                {"idempotency_key": {"$exists": False}},
+                {"idempotency_key": {"$not": {"$regex": "^exit:"}}},
+            ],
         })
     except Exception:
         today_entries = 0
@@ -122,7 +142,7 @@ async def check_frequency_gate(
     if today_entries >= effective_cap:
         return False, (
             f"DAILY_CAP: {today_entries}/{effective_cap} entries today "
-            f"(class={cls}, base={base_cap}, freq_mult={freq_multiplier:.1f})"
+            f"(class={cls}, base={base_cap}, freq_mult={freq_multiplier:.1f}, profit_boost={profit_boost})"
         )
 
     return True, None

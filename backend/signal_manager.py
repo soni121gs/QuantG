@@ -29,6 +29,9 @@ SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "3
 SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "0"))
 STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
 PAPER_SIMULATED_SOURCES = {"PAPER_SIMULATED_CONTRACT", "PAPER_SIMULATED_PRICE"}
+PAPER_OPTION_MIN_SCORE = int(os.environ.get("PAPER_OPTION_MIN_SCORE", "35"))
+LIVE_OPTION_MIN_SCORE = int(os.environ.get("LIVE_OPTION_MIN_SCORE", "70"))
+PROFIT_CAP_BOOST_MAX = int(os.environ.get("PROFIT_CAP_BOOST_MAX", "2"))
 
 
 def _today_window_utc_iso() -> Tuple[str, str]:
@@ -421,6 +424,20 @@ class SignalManager:
     """Sweeps PENDING signals, evaluates cooldown/max daily limits, and coordinates execution."""
 
     @staticmethod
+    def _effective_max_trades(max_trades: int, strategy: Dict[str, Any], risk_cfg: Dict[str, Any]) -> int:
+        today_pnl = _positive_float(strategy.get("today_pnl"))
+        if today_pnl is None or today_pnl <= 0:
+            return max_trades
+
+        daily_loss_limit = _positive_float(risk_cfg.get("daily_loss_limit")) or 0.0
+        boost = 1
+        if daily_loss_limit > 0 and today_pnl >= daily_loss_limit:
+            boost = min(PROFIT_CAP_BOOST_MAX, 2)
+        else:
+            boost = min(PROFIT_CAP_BOOST_MAX, boost)
+        return max_trades + max(0, boost)
+
+    @staticmethod
     async def validate_strategy_limits(db, strategy_id: str, user_id: str, visual_config: dict) -> Tuple[bool, Optional[str], float]:
         """Returns (ok, reason, allocation_multiplier).
 
@@ -445,9 +462,13 @@ class SignalManager:
             except (TypeError, ValueError):
                 max_trades = None
         if max_trades and max_trades > 0:
+            effective_max_trades = SignalManager._effective_max_trades(max_trades, strategy, risk_cfg)
             count_today = int(strategy.get("order_count_today") or 0)
-            if count_today >= max_trades:
-                logger.info(f"[LIMITS] strategy={strategy_id} blocked: max_trades_day={max_trades} reached (today={count_today})")
+            if count_today >= effective_max_trades:
+                logger.info(
+                    "[LIMITS] strategy=%s blocked: max_trades_day=%d reached (today=%d, base=%d)",
+                    strategy_id, effective_max_trades, count_today, max_trades,
+                )
                 return False, "max-trades-reached", 1.0
 
         # 2. Cooldown between trades
@@ -693,11 +714,16 @@ async def _dispatch_signal_via_unified_engine(
     if mode == "live" or (mode == "paper" and place_order_fn is not None):
         if mode == "live" and place_order_fn is None:
             raise ValueError("Live signal execution requires the server order core boundary.")
+        final_qty = int(risk_res["quantity"])
+        order_qty = final_qty
+        if option_contract:
+            order_qty = max(1, final_qty // max(1, lot_size))
+
         return await place_order_fn(
             user_id=user_id,
             symbol=symbol,
             side=side,
-            qty=requested_qty if option_contract else int(sig.get("qty") or sig.get("quantity") or requested_qty),
+            qty=order_qty,
             order_type=str(sig.get("order_type") or "MARKET").upper(),
             product=sig.get("product"),
             source=f"signal:strategy:{sig['strategy_id']}",
@@ -828,7 +854,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             # quality_readiness: BLOCK before any order is dispatched.
                             # Thresholds match option_selector_v2: live >= 70, paper >= 50.
                             sig_mode = sig.get("mode") or "paper"
-                            min_score = 70 if sig_mode == "live" else 50
+                            min_score = LIVE_OPTION_MIN_SCORE if sig_mode == "live" else PAPER_OPTION_MIN_SCORE
                             quality_score = sig.get("option_quality_score")
                             contract = sig.get("option_contract") or {}
                             trade_quality = contract.get("trade_quality_score") or {}

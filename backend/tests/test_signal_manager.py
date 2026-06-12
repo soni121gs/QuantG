@@ -310,6 +310,38 @@ async def test_signal_manager_max_trades_is_blocked():
     assert alloc_mult == 1.0
 
 
+@pytest.mark.anyio
+async def test_signal_manager_profitable_strategy_gets_extra_trade_slot():
+    db = MagicMock()
+
+    db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "user_id": "user-1",
+        "last_signal_at": None,
+        "order_count_today": 5,
+        "today_pnl": 250.0,
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 0,
+                "max_trades_day": 5,
+                "daily_loss_limit": 650,
+            }
+        },
+    })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
+
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(
+        db,
+        "strat-1",
+        "user-1",
+        {"risk": {"cooldown_minutes": 0, "max_trades_per_day": 5}},
+    )
+
+    assert ok
+    assert reason is None
+    assert alloc_mult == 1.0
+
+
 def test_conflict_resolver_strategy_specific_override():
     # Strategy position already active in group "NIFTY"
     active_pos = {
@@ -694,3 +726,51 @@ async def test_live_signal_dispatch_uses_server_order_core_boundary(monkeypatch)
     assert captured["order"]["option_contract"]["instrument_key"] == "NSE_FO|12345"
     assert captured["order"]["qty"] == 1
     assert captured["order"]["idempotency_key"] == "sig:sig-live"
+
+
+@pytest.mark.anyio
+async def test_dispatch_place_order_boundary_uses_risk_capped_lots(monkeypatch):
+    captured = {}
+
+    db = MagicMock()
+    db.strategy_positions.find_one = AsyncMock(return_value=None)
+    db.orders.find_one = AsyncMock(return_value=None)
+
+    async def fake_evaluate_order(self, **kwargs):
+        captured["risk"] = kwargs
+        return {"ok": True, "quantity": 65}
+
+    async def fake_place_order(**kwargs):
+        captured["order"] = kwargs
+        return {"id": "order-paper-1", "status": "FILLED", "mode": "paper"}
+
+    monkeypatch.setattr("core.risk_manager.RiskManager.evaluate_order", fake_evaluate_order)
+
+    sig = {
+        "id": "sig-paper-capped",
+        "user_id": "user-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26JUN25000CE",
+        "action": "BUY",
+        "confidence": 80,
+        "mode": "paper",
+        "price": 34.5,
+        "option_contract": {
+            "tradingsymbol": "NIFTY26JUN25000CE",
+            "instrument_key": "NSE_FO|12345",
+            "exchange": "NFO",
+            "segment": "NSE_FO",
+            "lot_size": 65,
+            "ltp": 34.5,
+            "source": "UPSTOX_LIVE",
+        },
+        "visual_config": {"options": {"enabled": True, "lots": 10}},
+    }
+    strategy = {"id": "strat-1", "user_id": "user-1", "mode": "paper", "status": "live"}
+
+    result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy, fake_place_order)
+
+    assert result["status"] == "FILLED"
+    assert captured["risk"]["requested_qty"] == 650
+    assert captured["order"]["qty"] == 1
