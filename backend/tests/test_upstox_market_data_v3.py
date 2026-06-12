@@ -150,6 +150,34 @@ def test_camelcase_and_snakecase_feed_tick_extraction():
     assert tick6["ltp"] == pytest.approx(45.2)
 
 
+def test_full_mode_tick_extraction_keeps_depth_volume_oi_and_greeks():
+    full_feed = {
+        "fullFeed": {
+            "marketFF": {
+                "ltpc": {"ltp": 112.5, "cp": 108.0, "ltt": 1740729552723, "ltq": 75},
+                "marketLevel": {
+                    "bidAskQuote": [
+                        {"bidP": 111.9, "bidQ": 650, "askP": 112.2, "askQ": 975}
+                    ]
+                },
+                "vtt": 25000,
+                "oi": 140000,
+                "iv": 15.7,
+                "optionGreeks": {"delta": 0.48, "theta": -4.1, "gamma": 0.02, "vega": 6.3, "rho": 1.2},
+            }
+        }
+    }
+    tick = extract_ltp_tick("NSE_FO|45450", full_feed)
+    assert tick["ltp"] == pytest.approx(112.5)
+    assert tick["bid"] == pytest.approx(111.9)
+    assert tick["ask"] == pytest.approx(112.2)
+    assert tick["bid_qty"] == pytest.approx(650)
+    assert tick["ask_qty"] == pytest.approx(975)
+    assert tick["volume"] == pytest.approx(25000)
+    assert tick["oi"] == pytest.approx(140000)
+    assert tick["delta"] == pytest.approx(0.48)
+
+
 def test_apply_decoded_message_populates_tick_cache_and_latest_tick():
     feed = UpstoxMarketDataFeedV3(access_token_getter=lambda: "token", api_base_url="https://api.upstox.com")
     

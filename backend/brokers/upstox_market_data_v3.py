@@ -281,6 +281,52 @@ def decode_feed_response(raw: bytes) -> Dict[str, Any]:
     return json_format.MessageToDict(message, preserving_proto_field_name=True)
 
 
+def _num_or_none(value: Any) -> Optional[float]:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _first_depth_quote(feed_node: Dict[str, Any]) -> Dict[str, Any]:
+    first_level = feed_node.get("firstLevelWithGreeks") or feed_node.get("first_level_with_greeks") or {}
+    if isinstance(first_level, dict):
+        first_depth = first_level.get("firstDepth") or first_level.get("first_depth") or {}
+        if isinstance(first_depth, dict) and first_depth:
+            return first_depth
+
+    full_feed = feed_node.get("fullFeed") or feed_node.get("full_feed") or {}
+    market_ff = {}
+    if isinstance(full_feed, dict):
+        market_ff = full_feed.get("marketFF") or full_feed.get("market_ff") or {}
+    market_level = {}
+    if isinstance(market_ff, dict):
+        market_level = market_ff.get("marketLevel") or market_ff.get("market_level") or {}
+    quotes = []
+    if isinstance(market_level, dict):
+        quotes = market_level.get("bidAskQuote") or market_level.get("bid_ask_quote") or []
+    if isinstance(quotes, list) and quotes:
+        return quotes[0] if isinstance(quotes[0], dict) else {}
+    if isinstance(quotes, dict):
+        return quotes
+    return {}
+
+
+def _full_market_node(feed_node: Dict[str, Any]) -> Dict[str, Any]:
+    full_feed = feed_node.get("fullFeed") or feed_node.get("full_feed") or {}
+    if not isinstance(full_feed, dict):
+        return {}
+    market_ff = full_feed.get("marketFF") or full_feed.get("market_ff") or {}
+    return market_ff if isinstance(market_ff, dict) else {}
+
+
+def _first_level_node(feed_node: Dict[str, Any]) -> Dict[str, Any]:
+    first_level = feed_node.get("firstLevelWithGreeks") or feed_node.get("first_level_with_greeks") or {}
+    return first_level if isinstance(first_level, dict) else {}
+
+
 def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: Optional[Any] = None) -> Optional[Dict[str, Any]]:
     if not isinstance(feed, dict):
         return None
@@ -309,6 +355,16 @@ def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: O
     ltp = ltpc.get("ltp")
     if ltp in (None, ""):
         return None
+    market_ff = _full_market_node(feed)
+    first_level = _first_level_node(feed)
+    depth = _first_depth_quote(feed)
+    bid = _num_or_none(depth.get("bidP") or depth.get("bid_p") or depth.get("bid") or depth.get("bid_price"))
+    ask = _num_or_none(depth.get("askP") or depth.get("ask_p") or depth.get("ask") or depth.get("ask_price"))
+    bid_qty = _num_or_none(depth.get("bidQ") or depth.get("bid_q") or depth.get("bid_qty") or depth.get("bid_quantity"))
+    ask_qty = _num_or_none(depth.get("askQ") or depth.get("ask_q") or depth.get("ask_qty") or depth.get("ask_quantity"))
+    greeks = first_level.get("optionGreeks") or first_level.get("option_greeks") or market_ff.get("optionGreeks") or market_ff.get("option_greeks") or {}
+    if not isinstance(greeks, dict):
+        greeks = {}
     received_at = datetime.now(timezone.utc).isoformat()
     broker_ts = ltpc.get("ltt") or current_ts
     timestamp_source = "broker_ltt" if ltpc.get("ltt") else "upstox_current_ts" if current_ts else "server_received_at"
@@ -324,13 +380,25 @@ def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: O
         "symbol": instrument_key.split("|")[-1] if "|" in instrument_key else instrument_key,
         "exchange": instrument_key.split("|")[0].replace("_FO", "") if "|" in instrument_key else None,
         "ltp": float(ltp),
-        "bid": None,
-        "ask": None,
+        "bid": bid,
+        "ask": ask,
+        "bid_qty": bid_qty,
+        "ask_qty": ask_qty,
         "close": float(ltpc.get("cp") or 0),
         "last_trade_time": broker_ts,
         "timestamp": broker_ts or received_at,
         "timestamp_source": timestamp_source,
         "last_trade_quantity": ltpc.get("ltq"),
+        "volume": _num_or_none(market_ff.get("vtt") or first_level.get("vtt")),
+        "vtt": _num_or_none(market_ff.get("vtt") or first_level.get("vtt")),
+        "oi": _num_or_none(market_ff.get("oi") or first_level.get("oi")),
+        "iv": _num_or_none(market_ff.get("iv") or first_level.get("iv")),
+        "option_greeks": greeks,
+        "delta": _num_or_none(greeks.get("delta")),
+        "theta": _num_or_none(greeks.get("theta")),
+        "gamma": _num_or_none(greeks.get("gamma")),
+        "vega": _num_or_none(greeks.get("vega")),
+        "rho": _num_or_none(greeks.get("rho")),
         "received_at": received_at,
         "exchange_ts": current_ts,
         "raw": feed,

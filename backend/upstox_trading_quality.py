@@ -232,6 +232,7 @@ def option_entry_quality_score(
     }
     score = int(round(sum(components[k] * weights[k] for k in weights)))
     warnings = []
+    depth_missing = bid <= 0 and ask <= 0 and volume <= 0 and oi <= 0
     if age is None or age > QUOTE_STALE_SECONDS:
         warnings.append("QUOTE_STALE")
     if spread_pct > 5:
@@ -240,6 +241,7 @@ def option_entry_quality_score(
         warnings.append("LOW_VOLUME")
     if premium <= 0:
         warnings.append("MISSING_PREMIUM")
+    readiness = "NO_DEPTH" if premium > 0 and depth_missing else "PASS" if score >= 65 and "QUOTE_STALE" not in warnings else "WARN" if score >= 45 else "BLOCK"
     return {
         "score": max(0, min(100, score)),
         "grade": "A" if score >= 80 else "B" if score >= 65 else "C" if score >= 45 else "D",
@@ -257,7 +259,7 @@ def option_entry_quality_score(
             "quote_age_sec": round(age, 3) if age is not None else None,
         },
         "warnings": warnings,
-        "readiness": "PASS" if score >= 65 and "QUOTE_STALE" not in warnings else "WARN" if score >= 45 else "BLOCK",
+        "readiness": readiness,
     }
 
 

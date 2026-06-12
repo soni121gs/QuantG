@@ -10829,7 +10829,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 _gw = await get_user_upstox_gateway(user_id)
                 if _gw:
                     asyncio.create_task(asyncio.to_thread(
-                        _gw.start_market_data_ws, [intent_doc["instrument_key"]], "ltpc"
+                        _gw.start_market_data_ws, [intent_doc["instrument_key"]], "full"
                     ))
             except Exception:
                 pass
@@ -15849,7 +15849,7 @@ async def startup():
 
         if upstox_gw and instrument.instrument_key:
             try:
-                sub_res = await asyncio.to_thread(upstox_gw.start_market_data_ws, [instrument.instrument_key], "ltpc")
+                sub_res = await asyncio.to_thread(upstox_gw.start_market_data_ws, [instrument.instrument_key], "full")
                 diagnostics.update({
                     "subscribed_key": instrument.instrument_key,
                     "subscription_result": sub_res,
@@ -16029,7 +16029,7 @@ async def startup():
                     if p.get("instrument_key") and "|" in str(p.get("instrument_key", ""))
                 ]
                 if tokens:
-                    await asyncio.to_thread(gateway.start_market_data_ws, tokens, "ltpc")
+                    await asyncio.to_thread(gateway.start_market_data_ws, tokens, "full")
                     logger.info("Startup: subscribed %d open-position tokens for user %s", len(tokens), uid)
         except Exception as _sub_err:
             logger.warning("Startup option token subscription failed: %s", _sub_err)

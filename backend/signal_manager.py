@@ -834,30 +834,8 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             trade_quality = contract.get("trade_quality_score") or {}
                             quality_readiness = contract.get("quality_readiness") or trade_quality.get("readiness", "")
 
-                            # PAPER unblock: the market feed runs in ltpc mode (no bid/ask/
-                            # volume/OI), so a contract can score BLOCK purely because the
-                            # depth inputs were never collected — not because quality is
-                            # genuinely bad. In paper mode, when depth is structurally absent,
-                            # downgrade BLOCK to WARN so the option_quality_score threshold
-                            # below decides instead of a hard depth-less block. Live mode is
-                            # unaffected. TODO: subscribe option tokens in full_d5 mode and
-                            # feed real depth into upstox_trading_quality for a true gate.
-                            if quality_readiness == "BLOCK" and sig_mode != "live":
-                                _m = trade_quality.get("metrics") or {}
-                                _depth_missing = (
-                                    _m.get("bid") in (None, 0)
-                                    and _m.get("ask") in (None, 0)
-                                    and not _m.get("volume")
-                                    and not _m.get("oi")
-                                )
-                                if _depth_missing:
-                                    quality_readiness = "WARN"
-                                    logger.info(
-                                        "[QUALITY] strategy=%s sig=%s BLOCK->WARN "
-                                        "(paper, no market-depth on ltpc feed)",
-                                        sig["strategy_id"], sig["id"],
-                                    )
-
+                            # NO_DEPTH is informational: the score threshold still applies,
+                            # but only a true BLOCK hard-stops the signal here.
                             quality_block_reason = None
                             if quality_readiness == "BLOCK":
                                 quality_block_reason = "option-quality-readiness-block"

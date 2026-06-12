@@ -43,6 +43,16 @@ def test_option_quality_penalizes_stale_wide_spread_contract():
     assert "WIDE_SPREAD" in bad["warnings"]
 
 
+def test_option_quality_reports_no_depth_separately_from_block():
+    scored = option_entry_quality_score(
+        {"strike": 25000, "spot": 24980, "ltp": 120},
+        quote={"ltp": 120, "timestamp": datetime.now(timezone.utc).isoformat()},
+        pcr=0.9,
+    )
+    assert scored["readiness"] == "NO_DEPTH"
+    assert scored["score"] >= 45
+
+
 def test_feed_health_marks_missing_snapshot_unready():
     status = {
         "connected": True,
