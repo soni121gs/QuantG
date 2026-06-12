@@ -232,7 +232,6 @@ export default function Orders() {
                   value={form.exchange}
                   onChange={(e) => {
                     const exchange = e.target.value;
-                    setSymbolResults([]);
                     setForm({
                       ...form,
                       exchange,
