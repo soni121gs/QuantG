@@ -377,6 +377,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     time_exit_minutes: risk.time_exit_minutes ?? "",
     indicator_exit_enabled: risk.indicator_exit_enabled ?? false,
     exit_mode: risk.exit_mode ?? "SQUARE_OFF",
+    strategy_category: risk.strategy_category ?? "intraday",
     broker: s.broker ?? "upstox",
     mode: s.mode ?? "paper",
   });
@@ -396,6 +397,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       time_exit_minutes: freshRisk.time_exit_minutes ?? "",
       indicator_exit_enabled: freshRisk.indicator_exit_enabled ?? false,
       exit_mode: freshRisk.exit_mode ?? "SQUARE_OFF",
+      strategy_category: freshRisk.strategy_category ?? "intraday",
       broker: s.broker ?? "upstox",
       mode: s.mode ?? "paper",
     });
@@ -418,6 +420,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         time_exit_minutes: form.time_exit_minutes !== "" ? parseInt(form.time_exit_minutes) : null,
         indicator_exit_enabled: !!form.indicator_exit_enabled,
         exit_mode: form.exit_mode,
+        strategy_category: form.strategy_category || null,
         broker: form.broker,
         mode: form.mode,
       };
@@ -630,14 +633,40 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
               )}
             </div>
 
+            <div className="border-t border-[var(--qd-border)] pt-2.5">
+              <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Strategy Category</label>
+              <select
+                value={form.strategy_category}
+                onChange={(e) => {
+                  const cat = e.target.value;
+                  if (cat === "scalper") {
+                    // Apply scalper frequency preset so it can actually scalp.
+                    setForm({ ...form, strategy_category: cat, cooldown_minutes: "1", max_trades_day: "20", daily_loss_limit: "3000" });
+                  } else {
+                    setForm({ ...form, strategy_category: cat });
+                  }
+                }}
+                className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="scalper">SCALPER — high frequency (cooldown ≤ 3m, ≥ 5 trades/day)</option>
+                <option value="intraday">INTRADAY — moderate frequency</option>
+                <option value="swing">SWING — low frequency</option>
+              </select>
+              {form.strategy_category === "scalper" && (parseInt(form.cooldown_minutes) > 3 || parseInt(form.max_trades_day) < 5) && (
+                <p className="mt-1 text-[10px] text-amber-400">
+                  ⚠ Scalper limits will be auto-corrected on save (cooldown capped at 3m, min 5 trades/day).
+                </p>
+              )}
+            </div>
+
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Cooldown (Min)</label>
-                <input 
-                  type="number" 
-                  value={form.cooldown_minutes} 
+                <input
+                  type="number"
+                  value={form.cooldown_minutes}
                   onChange={(e) => setForm({ ...form, cooldown_minutes: e.target.value })}
-                  placeholder="30" 
+                  placeholder="30"
                   className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
                 />
               </div>

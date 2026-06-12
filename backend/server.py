@@ -437,6 +437,7 @@ class StrategyRuntimeSettingsReq(BaseModel):
     indicator_exit_enabled: Optional[bool] = None
     exit_mode: Optional[str] = None
     risk_style: Optional[str] = None
+    strategy_category: Optional[str] = None
     adaptive_exits_enabled: Optional[bool] = None
     target_r_multiple: Optional[float] = None
     broker: Optional[str] = None
@@ -1548,9 +1549,9 @@ RISK_STYLE_PRESETS = {
         "take_profit_pct": 8.0,
         "trail_trigger_pct": 3.5,
         "trail_step_pct": 2.0,
-        "cooldown_minutes": 7,
-        "max_trades_day": 4,
-        "daily_loss_limit": 450.0,
+        "cooldown_minutes": 1,
+        "max_trades_day": 20,
+        "daily_loss_limit": 3000.0,
         "time_exit_minutes": 10,
         "target_r_multiple": 1.25,
     },
@@ -1616,6 +1617,17 @@ def _classify_strategy_risk_style(template: Dict[str, Any]) -> str:
     return "momentum"
 
 
+# Trade-frequency category derived from a strategy's risk_style. Independent of
+# the SL/TP exit profile — drives the scalper guardrail in normalize_strategy_risk.
+_RISK_STYLE_CATEGORY = {
+    "micro_scalp": "scalper",
+    "momentum": "intraday",
+    "breakout": "intraday",
+    "volatile_breakout": "intraday",
+    "pullback": "swing",
+}
+
+
 def _strategy_risk_profile(template: Dict[str, Any]) -> Dict[str, Any]:
     style = str(template.get("risk_style") or _classify_strategy_risk_style(template))
     risk = {
@@ -1624,6 +1636,7 @@ def _strategy_risk_profile(template: Dict[str, Any]) -> Dict[str, Any]:
         **dict(template.get("risk") or {}),
     }
     risk["risk_style"] = style
+    risk.setdefault("strategy_category", _RISK_STYLE_CATEGORY.get(style, "intraday"))
     risk["adaptive_exits_enabled"] = True
     risk["trailing_sl_enabled"] = True
     return risk
@@ -1645,6 +1658,7 @@ def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk"
         f"{prefix}.indicator_exit_enabled": bool(risk.get("indicator_exit_enabled", True)),
         f"{prefix}.exit_mode": risk.get("exit_mode") or DEFAULT_STRATEGY_RISK["exit_mode"],
         f"{prefix}.risk_style": risk.get("risk_style", "balanced"),
+        f"{prefix}.strategy_category": risk.get("strategy_category") or _RISK_STYLE_CATEGORY.get(str(risk.get("risk_style") or ""), "intraday"),
         f"{prefix}.adaptive_exits_enabled": bool(risk.get("adaptive_exits_enabled", True)),
         f"{prefix}.target_r_multiple": float(risk.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"]),
     }
@@ -7328,6 +7342,7 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
         "indicator_exit_enabled": req.indicator_exit_enabled,
         "exit_mode": req.exit_mode,
         "risk_style": req.risk_style,
+        "strategy_category": req.strategy_category,
         "adaptive_exits_enabled": req.adaptive_exits_enabled,
         "target_r_multiple": req.target_r_multiple,
     }

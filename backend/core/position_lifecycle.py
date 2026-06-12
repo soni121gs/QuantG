@@ -13,6 +13,14 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("quantg.position_lifecycle")
 
+# Trade-frequency categories (audit #9). A strategy's category is independent of
+# its risk_style: it governs how often the strategy may trade, not its SL/TP
+# profile. Scalpers must trade frequently, so their cooldown/trade caps are
+# bounded here and enforced in normalize_strategy_risk.
+STRATEGY_CATEGORIES = ("scalper", "intraday", "swing")
+SCALPER_MAX_COOLDOWN_MIN = 3   # a scalper may not be throttled beyond 3 min
+SCALPER_MIN_TRADES_DAY = 5     # a scalper must be allowed at least 5 trades/day
+
 # ── Default risk config ────────────────────────────────────────────────────────
 
 DEFAULT_STRATEGY_RISK: Dict[str, Any] = {
@@ -109,6 +117,19 @@ def normalize_strategy_risk(risk: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "adaptive_exits_enabled": bool(raw.get("adaptive_exits_enabled", DEFAULT_STRATEGY_RISK["adaptive_exits_enabled"])),
         "target_r_multiple": target_r_multiple,
     })
+    # Trade-frequency category guardrail (audit #9). Independent of risk_style
+    # (which governs the SL/TP exit profile). A "scalper" must be allowed to
+    # trade frequently — clamp swing-like cooldown/trade caps so a scalper can
+    # never be saved with throttling limits. Clamp (never raise): this function
+    # runs on every position read, so it must stay total over legacy data.
+    category = str(raw.get("strategy_category") or "").strip().lower()
+    if category in ("scalper", "intraday", "swing"):
+        raw["strategy_category"] = category
+        if category == "scalper":
+            if raw["cooldown_minutes"] > SCALPER_MAX_COOLDOWN_MIN:
+                raw["cooldown_minutes"] = SCALPER_MAX_COOLDOWN_MIN
+            if raw["max_trades_day"] < SCALPER_MIN_TRADES_DAY:
+                raw["max_trades_day"] = SCALPER_MIN_TRADES_DAY
     if stop_pct is not None:
         raw["stop_loss_pct"] = stop_pct
         raw["stoploss_pct"] = stop_pct
