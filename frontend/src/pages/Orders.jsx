@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, formatINR, formatApiErrorDetail } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
-import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
@@ -26,8 +26,7 @@ export default function Orders() {
     stop_loss: "",
     take_profit: "",
   });
-  const [symbolResults, setSymbolResults] = useState([]);
-  const [searching, setSearching] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -59,6 +58,7 @@ export default function Orders() {
 
   const submit = async (e) => {
     e.preventDefault();
+    setSubmitting(true);
     try {
       await api.post("/orders", {
         ...form,
@@ -72,34 +72,8 @@ export default function Orders() {
       toast.success("Order submitted");
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Order failed");
-    }
-  };
-
-  const collectInstrumentSymbols = (node, out = []) => {
-    if (!node || out.length > 20) return out;
-    if (Array.isArray(node)) {
-      node.forEach((x) => collectInstrumentSymbols(x, out));
-      return out;
-    }
-    if (typeof node === "object") {
-      const symbol = node.trdSym || node.trading_symbol || node.tradingSymbol || node.symbol || node.pSymbolName || node.ts;
-      if (symbol && !out.some((x) => x.symbol === symbol)) {
-        out.push({ symbol, token: node.instrument_token || node.instrumentToken || node.token || node.tk });
-      }
-      Object.values(node).forEach((x) => collectInstrumentSymbols(x, out));
-    }
-    return out;
-  };
-
-  const searchInstrumentSymbol = async () => {
-    if (!form.symbol.trim()) return;
-    setSearching(true);
-    try {
-      setSymbolResults(collectInstrumentSymbols([]));
-    } catch (e) {
-      alert(e.response?.data?.detail || "Instrument search failed");
     } finally {
-      setSearching(false);
+      setSubmitting(false);
     }
   };
 
@@ -159,7 +133,17 @@ export default function Orders() {
 
       <div className="qd-card">
         {filtered.length === 0 ? (
-          <div className="p-10 text-center font-mono text-sm text-[var(--qd-text-2)]">No orders match this filter.</div>
+          <div className="p-10 text-center space-y-3">
+            <p className="font-mono text-sm text-[var(--qd-text-2)]">No orders match this filter.</p>
+            {filter !== "ALL" && (
+              <button
+                onClick={() => setFilter("ALL")}
+                className="inline-flex items-center gap-2 rounded border border-[var(--qd-border)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-accent)] transition-colors"
+              >
+                Clear filter
+              </button>
+            )}
+          </div>
         ) : (
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
@@ -248,7 +232,6 @@ export default function Orders() {
                   value={form.exchange}
                   onChange={(e) => {
                     const exchange = e.target.value;
-                    setSymbolResults([]);
                     setForm({
                       ...form,
                       exchange,
@@ -278,21 +261,13 @@ export default function Orders() {
             {!["NSE", "BSE"].includes(form.exchange) && (
               <div>
                 <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
-                <div className="flex gap-2 mt-1">
-                  <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} placeholder="Exact trading symbol" className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-symbol" />
-                  <button type="button" onClick={searchInstrumentSymbol} disabled={searching || !form.symbol.trim()} className="border border-[var(--qd-border)] hover:border-[var(--qd-accent)] disabled:opacity-40 text-white px-3 py-2 text-xs font-mono uppercase rounded-sm">
-                    Search
-                  </button>
-                </div>
-                {symbolResults.length > 0 && (
-                  <div className="mt-2 max-h-28 overflow-y-auto border border-[var(--qd-border)] rounded-sm">
-                    {symbolResults.map((r) => (
-                      <button key={`${r.symbol}-${r.token || ""}`} type="button" onClick={() => setForm({ ...form, symbol: r.symbol })} className="w-full text-left px-3 py-1.5 text-xs font-mono text-[var(--qd-text-2)] hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)]">
-                        {r.symbol}{r.token ? ` - ${r.token}` : ""}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <input
+                  value={form.symbol}
+                  onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })}
+                  placeholder="Exact trading symbol e.g. NIFTY25JAN24C23000"
+                  className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm"
+                  data-testid="order-symbol"
+                />
               </div>
             )}
             <div className="grid grid-cols-2 gap-2">
@@ -329,8 +304,8 @@ export default function Orders() {
             </div>
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setOpen(false)} className="flex-1 border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] text-white py-2 text-xs font-mono uppercase rounded-sm">Cancel</button>
-              <button type="submit" className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">
-                Confirm {form.side}
+              <button type="submit" disabled={submitting} className={`flex-1 py-2 text-xs font-mono uppercase rounded-sm flex items-center justify-center gap-2 disabled:opacity-60 ${form.side === "BUY" ? "qd-btn-buy" : "qd-btn-sell"}`} data-testid="submit-order">
+                {submitting ? <><Loader2 size={14} className="animate-spin" /> Placing...</> : `Confirm ${form.side}`}
               </button>
             </div>
           </form>

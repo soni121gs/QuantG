@@ -12,8 +12,6 @@ import {
   Pause,
   Power,
   RefreshCw,
-  Save,
-  Settings,
   Shield,
   Target,
   TrendingDown,
@@ -232,132 +230,6 @@ const StatusPill = ({ children, tone = "neutral" }) => {
   );
 };
 
-const RuntimeInput = ({ label, value, onChange, disabled }) => (
-  <label className="space-y-1">
-    <span className="qd-section-title text-[9px]">{label}</span>
-    <input
-      type="number"
-      step="0.01"
-      disabled={disabled}
-      value={value}
-      onChange={(e) => onChange?.(Number(e.target.value))}
-      className="w-full rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-2 font-mono text-xs text-white disabled:opacity-60"
-    />
-  </label>
-);
-
-const EngineStrategyCard = ({ row, onSave }) => {
-  const pos = row.active_position || {};
-  const risk = row.risk_settings || {};
-  const pnl = pos.unrealized_pnl ?? 0;
-  const [form, setForm] = useState({
-    target_pct: row.target_pct ?? 28,
-    stoploss_pct: row.stoploss_pct ?? 14,
-    trailing_sl_enabled: row.trailing_sl_enabled ?? true,
-    trail_trigger_pct: row.trail_trigger_pct ?? 12,
-    trail_step_pct: row.trail_step_pct ?? 7,
-    cooldown_minutes: row.cooldown_minutes ?? 25,
-    max_trades_day: row.max_trades_day ?? 2,
-    daily_loss_limit: risk.daily_loss_limit ?? 0,
-    required_capital: row.required_capital ?? 0,
-    time_exit_minutes: row.time_exit_minutes ?? risk.time_exit_minutes ?? 35,
-    indicator_exit_enabled: row.indicator_exit_enabled ?? risk.indicator_exit_enabled ?? true,
-    exit_mode: row.exit_mode ?? risk.exit_mode ?? "tp_sl_tsl_or_signal",
-    risk_style: row.risk_style ?? risk.risk_style ?? "balanced",
-    adaptive_exits_enabled: row.adaptive_exits_enabled ?? risk.adaptive_exits_enabled ?? true,
-    target_r_multiple: row.target_r_multiple ?? risk.target_r_multiple ?? 1.45,
-  });
-
-  const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
-  const stateTone = row.state === "OPEN" ? "good" : row.state === "DISABLED" ? "bad" : row.state === "COOLDOWN" ? "warn" : "neutral";
-
-  return (
-    <article className="qd-card p-4 my-2">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="qd-section-title">{row.strategy_id}</div>
-          <h3 className="mt-1 truncate font-head text-lg font-semibold text-white">{row.name}</h3>
-        </div>
-        <StatusPill tone={stateTone}>{row.state || "Idle"}</StatusPill>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3 border-y border-[var(--qd-border)] py-3 md:grid-cols-4">
-        <Field label="Position" value={pos.symbol || "-"} />
-        <Field label="Entry" value={pos.entry_price ? money(pos.entry_price) : "-"} />
-        <Field label="LTP" value={pos.ltp ? money(pos.ltp) : "-"} />
-        <Field label="Open P&L" value={money(pnl)} tone={toneClass(pnl)} />
-        <Field label="Target" value={pos.target_price ? money(pos.target_price) : "-"} />
-        <Field label="Stoploss" value={pos.stoploss_price ? money(pos.stoploss_price) : "-"} />
-        <Field label="Trades" value={`${row.daily_pnl?.trades || 0}/${row.max_trades_day || 0}`} />
-        <Field label="Re-entry" value={row.re_entry_allowed ? "Allowed" : "Blocked"} tone={row.re_entry_allowed ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} />
-      </div>
-
-      <details className="mt-3">
-        <summary className="flex cursor-pointer list-none items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-2)]">
-          <Settings size={13} /> Runtime Settings
-        </summary>
-        <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <RuntimeInput label="Target %" value={form.target_pct} onChange={(v) => update("target_pct", v)} />
-          <RuntimeInput label="Stoploss %" value={form.stoploss_pct} onChange={(v) => update("stoploss_pct", v)} />
-          <RuntimeInput label="Trail trigger" value={form.trail_trigger_pct} onChange={(v) => update("trail_trigger_pct", v)} />
-          <RuntimeInput label="Trail step" value={form.trail_step_pct} onChange={(v) => update("trail_step_pct", v)} />
-          <RuntimeInput label="Cooldown" value={form.cooldown_minutes} onChange={(v) => update("cooldown_minutes", v)} />
-          <RuntimeInput label="Max trades" value={form.max_trades_day} onChange={(v) => update("max_trades_day", v)} />
-          <RuntimeInput label="Daily loss" value={form.daily_loss_limit} onChange={(v) => update("daily_loss_limit", v)} />
-          <RuntimeInput label="Time exit" value={form.time_exit_minutes} onChange={(v) => update("time_exit_minutes", v)} />
-          <RuntimeInput label="Target R" value={form.target_r_multiple} onChange={(v) => update("target_r_multiple", v)} />
-          <label className="col-span-2 space-y-1 md:col-span-1">
-            <span className="qd-section-title text-[9px]">Risk style</span>
-            <select
-              value={form.risk_style}
-              onChange={(e) => update("risk_style", e.target.value)}
-              className="w-full rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-2 font-mono text-xs text-white"
-            >
-              <option value="micro_scalp">Micro scalp</option>
-              <option value="momentum">Momentum</option>
-              <option value="breakout">Breakout</option>
-              <option value="volatile_breakout">Volatile breakout</option>
-              <option value="pullback">Pullback</option>
-              <option value="balanced">Balanced</option>
-            </select>
-          </label>
-          <label className="col-span-2 space-y-1 md:col-span-2">
-            <span className="qd-section-title text-[9px]">Exit mode</span>
-            <select
-              value={form.exit_mode}
-              onChange={(e) => update("exit_mode", e.target.value)}
-              className="w-full rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-2 py-2 font-mono text-xs text-white"
-            >
-              <option value="tp_sl_tsl_or_signal">TP/SL/Trail + Signal</option>
-              <option value="tp_sl_tsl_only">TP/SL/Trail only</option>
-              <option value="signal_only">Signal only</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
-            <input type="checkbox" checked={form.trailing_sl_enabled} onChange={(e) => update("trailing_sl_enabled", e.target.checked)} />
-            Trailing SL
-          </label>
-          <label className="flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
-            <input type="checkbox" checked={form.indicator_exit_enabled} onChange={(e) => update("indicator_exit_enabled", e.target.checked)} />
-            Signal exit
-          </label>
-          <label className="flex items-center gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-3 py-2 text-xs text-[var(--qd-text-2)]">
-            <input type="checkbox" checked={form.adaptive_exits_enabled} onChange={(e) => update("adaptive_exits_enabled", e.target.checked)} />
-            Adaptive exits
-          </label>
-          <button
-            type="button"
-            onClick={() => onSave(row.strategy_id, form)}
-            className="col-span-2 flex items-center justify-center gap-2 rounded bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-white hover:bg-[var(--qd-accent-hover)] md:col-span-4"
-          >
-            <Save size={13} /> Save Runtime Settings
-          </button>
-        </div>
-      </details>
-    </article>
-  );
-};
-
 const MarketRow = ({ item }) => (
   <div className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 hover:bg-[var(--qd-surface-2)]">
     <div className="min-w-0">
@@ -424,7 +296,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
       <div className="flex items-center justify-end gap-2">
         <button
           onClick={() => onToggle(row.strategy_id)}
-          className={`flex h-8 w-8 items-center justify-center rounded border transition-all ${
+          className={`flex h-11 w-11 items-center justify-center rounded border transition-all ${
             live
               ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
               : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
@@ -437,7 +309,7 @@ const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
         <button
           onClick={() => onExit(row.strategy_id)}
           disabled={!positionOpen}
-          className="flex h-8 w-8 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+          className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
           title={positionOpen ? "Square Off Strategy Positions" : "No open position for this strategy"}
           data-testid={`dashboard-exit-${row.strategy_id}`}
         >
@@ -468,6 +340,7 @@ export default function Dashboard() {
   const [optionChain, setOptionChain] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [busyStrategy, setBusyStrategy] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
 
   const load = useCallback(async () => {
@@ -605,20 +478,25 @@ export default function Dashboard() {
     await load();
   };
 
-  const saveRuntimeSettings = async (strategyId, form) => {
-    await api.put(`/strategies/${strategyId}/runtime-settings`, form);
-    await load();
-  };
-
   const toggleStrategy = async (id) => {
-    await api.post(`/strategies/${id}/toggle`);
-    await load();
+    setBusyStrategy(id);
+    try {
+      await api.post(`/strategies/${id}/toggle`);
+      await load();
+    } finally {
+      setBusyStrategy(null);
+    }
   };
 
   const exitStrategy = async (id) => {
     if (!window.confirm("Emergency Square Off: exit all open positions for this strategy?")) return;
-    await api.post(`/strategies/${id}/exit-all`);
-    await load();
+    setBusyStrategy(id);
+    try {
+      await api.post(`/strategies/${id}/exit-all`);
+      await load();
+    } finally {
+      setBusyStrategy(null);
+    }
   };
 
   return (
@@ -1038,61 +916,6 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* Active strategy logs */}
-                <div className="hidden">
-                  {strategies.filter((s) => s.state === "OPEN").map((row) => (
-                    <EngineStrategyCard key={row.strategy_id} row={row} onSave={saveRuntimeSettings} />
-                  ))}
-                  {strategies.slice(0, 5).map((row) => {
-                    const pos = row.active_position || {};
-                    const spnl = pos.unrealized_pnl ?? row.daily_pnl?.realized_pnl ?? 0;
-                    const live = row.status === "live";
-                    return (
-                      <div key={row.strategy_id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3 hover:bg-[var(--qd-surface)]/20 px-2 rounded">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-white">{row.name}</div>
-                          <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
-                            {pos.symbol || "No open trades"}
-                            {pos.target_price ? ` · TP ${money(pos.target_price)}` : ""}
-                            {pos.stoploss_price ? ` · SL ${money(pos.stoploss_price)}` : ""}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <StatusPill tone={row.state === "OPEN" ? "good" : row.state === "COOLDOWN" ? "warn" : row.state === "DISABLED" ? "bad" : "neutral"}>
-                            {row.state || "Idle"}
-                          </StatusPill>
-                          
-                          {/* Live Running controls */}
-                          <button
-                            onClick={() => toggleStrategy(row.strategy_id)}
-                            className={`flex items-center justify-center p-1.5 rounded border transition-all ${
-                              live 
-                                ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]" 
-                                : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
-                            }`}
-                            title={live ? "Pause Strategy" : "Go Live / Resume Strategy"}
-                            data-testid={`dashboard-toggle-${row.strategy_id}`}
-                          >
-                            {live ? <Pause size={12} /> : <Play size={12} />}
-                          </button>
-
-                          {/* Emergency Square Off */}
-                          <button
-                            onClick={() => exitStrategy(row.strategy_id)}
-                            className="flex items-center justify-center p-1.5 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black transition-all"
-                            title="Square Off Strategy Positions"
-                            data-testid={`dashboard-exit-${row.strategy_id}`}
-                          >
-                            <Shield size={12} />
-                          </button>
-                        </div>
-                        <div className={`min-w-[80px] text-right font-mono text-xs font-semibold ${toneClass(spnl)}`}>
-                          {money(spnl)}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
             </div>
 

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
+import { toast } from "sonner";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { Button } from "./ui/button";
@@ -288,10 +289,20 @@ export default function Layout({ children }) {
     return nseOpen;
   })();
 
-  const refreshShell = () => {
-    refreshExecution();
-    api.get("/funds").then((r) => setFunds(r.data)).catch(() => {});
-    api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
+  const [shellRefreshing, setShellRefreshing] = useState(false);
+  const refreshShell = async () => {
+    setShellRefreshing(true);
+    try {
+      await Promise.all([
+        refreshExecution(),
+        api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
+        api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
+      ]);
+    } catch {
+      toast.error("Refresh failed — data may be stale");
+    } finally {
+      setShellRefreshing(false);
+    }
   };
 
   const loadNotifications = useCallback(() => {
@@ -453,8 +464,8 @@ export default function Layout({ children }) {
             <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
               {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
             </span>
-            <Button variant="ghost" size="icon" onClick={refreshShell} data-testid="cmd-refresh" aria-label="Refresh">
-              <RefreshCw size={15} />
+            <Button variant="ghost" size="icon" onClick={refreshShell} disabled={shellRefreshing} data-testid="cmd-refresh" aria-label="Refresh">
+              <RefreshCw size={15} className={shellRefreshing ? "animate-spin" : ""} />
             </Button>
             <Button
               variant="ghost"
@@ -520,13 +531,6 @@ export default function Layout({ children }) {
                       </button>
                     ))}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => navigate("/design-canvas")}
-                    className="mt-3 w-full rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 text-left text-xs font-semibold text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
-                  >
-                    Open design canvas
-                  </button>
                 </div>
               )}
             </div>
@@ -700,21 +704,6 @@ export default function Layout({ children }) {
             <MiniBlotterDock funds={funds} wallet={executionWallet} summary={executionSummary} profile={profile} />
           </div>
 
-          {/* SEBI Compliance F&O Risk Disclosure */}
-          <div className="hidden" data-testid="sebi-disclosure">
-            <h4 className="font-mono font-bold text-[var(--qd-warn)] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <ShieldAlert size={14} /> SEBI Mandated Derivative Risk Disclosure
-            </h4>
-            <ul className="list-disc pl-4 space-y-1 font-mono text-[10px]">
-              <li>9 out of 10 individual traders in equity Futures and Options (F&O) segment incurred net losses.</li>
-              <li>On average, loss makers registered a net trading loss close to ₹ 50,000.</li>
-              <li>Over and above the net trading losses incurred, loss-makers expended an additional 28% of net trading losses as transaction costs.</li>
-              <li>Those making net profits incurred transaction costs of 15% to 50% of their net profits.</li>
-            </ul>
-            <p className="mt-2 text-[9px] text-[var(--qd-text-3)] font-mono italic">
-              Source: SEBI study dated January 25, 2023 on "Analysis of Profit and Loss of Individual Traders dealing in equity Futures and Options Segment".
-            </p>
-          </div>
         </main>
       </div>
 
@@ -876,7 +865,7 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 py-3 text-[10px] font-mono uppercase tracking-wider transition-colors ${
                 isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }

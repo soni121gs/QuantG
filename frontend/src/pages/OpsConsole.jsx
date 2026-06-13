@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { 
-  Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2, 
-  Wifi, Power, Play, SquareArrowOutUpRight, Key, CheckCircle2, 
-  XCircle, Zap, Shield, HardDrive, CircleDollarSign, ArrowUpRight, User
+  Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2,
+  Wifi, Power, Play, SquareArrowOutUpRight, Key, CheckCircle2,
+  XCircle, Zap, Shield, HardDrive, CircleDollarSign, ArrowUpRight, User, Loader2
 } from "lucide-react";
 import { api } from "../lib/api";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ export default function OpsConsole() {
   const [pendingUsers, setPendingUsers] = useState([]);
   const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
   const [reconciliationBreaks, setReconciliationBreaks] = useState(null);
+  const [userActionId, setUserActionId] = useState(null);
 
   const loadPendingUsers = useCallback(async () => {
     if (user?.role !== "owner") return;
@@ -62,23 +63,29 @@ export default function OpsConsole() {
   }, []);
 
   const handleApprove = async (userId, name) => {
+    setUserActionId(userId);
     try {
       await api.post(`/ops/users/${userId}/approve`);
       toast.success(`Approved registry entry for ${name}. Strategies seeded!`);
       loadPendingUsers();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Approval failed");
+    } finally {
+      setUserActionId(null);
     }
   };
 
   const handleReject = async (userId, name) => {
     if (!window.confirm(`Are you sure you want to reject and delete the registration request from ${name}?`)) return;
+    setUserActionId(userId);
     try {
       await api.post(`/ops/users/${userId}/reject`);
       toast.success(`Rejected and removed registry request from ${name}`);
       loadPendingUsers();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Rejection failed");
+    } finally {
+      setUserActionId(null);
     }
   };
 
@@ -98,14 +105,14 @@ export default function OpsConsole() {
   }, []);
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => toast.error("Failed to load operations data"));
     loadPendingUsers().catch(() => {});
     loadNeedsReview().catch(() => {});
     const t = setInterval(() => {
       load().catch(() => {});
       loadPendingUsers().catch(() => {});
       loadNeedsReview().catch(() => {});
-    }, 4000);
+    }, 15000);
     return () => clearInterval(t);
   }, [user, load, loadPendingUsers, loadNeedsReview]);
 
@@ -272,13 +279,16 @@ export default function OpsConsole() {
                     <td className="py-3 text-right space-x-2">
                       <button
                         onClick={() => handleApprove(p.id, p.name)}
-                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-emerald-950 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all shadow-md shadow-emerald-500/10"
+                        disabled={userActionId === p.id}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-60 text-emerald-950 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all shadow-md shadow-emerald-500/10 flex items-center gap-1.5"
                       >
+                        {userActionId === p.id ? <Loader2 size={11} className="animate-spin" /> : null}
                         Approve
                       </button>
                       <button
                         onClick={() => handleReject(p.id, p.name)}
-                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white text-red-400 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
+                        disabled={userActionId === p.id}
+                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white disabled:opacity-60 text-red-400 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
                       >
                         Reject
                       </button>

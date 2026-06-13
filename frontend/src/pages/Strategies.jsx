@@ -325,9 +325,15 @@ export default function Strategies() {
           </div>
         </div>
       ) : !filtered.length ? (
-        <div className="qd-card p-16 text-center">
+        <div className="qd-card p-16 text-center space-y-3">
           <Filter className="mx-auto mb-3 text-[var(--qd-text-3)]" />
           <p className="text-sm text-[var(--qd-text-2)]">No strategies match this filter.</p>
+          <button
+            onClick={() => setSelectedFilter("all")}
+            className="inline-flex items-center gap-2 rounded border border-[var(--qd-border)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-accent)] transition-colors"
+          >
+            Clear filter
+          </button>
         </div>
       ) : (
         <div className="space-y-2">
@@ -467,10 +473,6 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       }`} 
       data-testid={`strategy-${s.id}`}
     >
-      {false && isHft && (
-        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-indigo-500/10 via-cyan-500/5 to-transparent pointer-events-none rounded-bl-full animate-pulse" />
-      )}
-      
       <div className="flex flex-col gap-3 relative z-10 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           {isHft && (
@@ -509,39 +511,6 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             <span className="text-[8px] tracking-wider uppercase">{broker.connected ? "online" : "offline"}</span>
           </div>
         </div>
-      </div>
-
-      <p className="hidden">{s.description || "No description"}</p>
-
-      <div className="hidden">
-        <Metric label="Total Capital Required" value={money(s.required_capital)} />
-        <Metric label="Strategy Type" value={s.strategy_type || "Option Buying"} />
-        <Metric label="Asset" value={s.asset_class || "equity"} />
-        <Metric label="Data" value={sourceLabel(s.last_data_source)} tone={s.last_data_live ? "text-[var(--qd-profit)]" : ""} />
-        <div className="col-span-2 border-t border-[var(--qd-border)] pt-2.5 mt-0.5">
-          <Metric label="AI Market Suitability" value={s.market_suitability || "Any Market Condition"} tone="text-indigo-400 font-bold font-mono" />
-        </div>
-      </div>
-
-      <div className="hidden">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Bot size={15} className="text-[var(--qd-accent)]" />
-            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)]">AI Confidence Score</span>
-          </div>
-          <span className="font-mono text-lg font-bold text-white">{scoreValue ? `${scoreValue}%` : "-"}</span>
-        </div>
-        <div className="mt-2 h-2 overflow-hidden rounded bg-[var(--qd-surface-2)]">
-          <div className="h-full bg-[var(--qd-accent)]" style={{ width: `${Math.max(0, Math.min(100, scoreValue))}%` }} />
-        </div>
-        <p className="mt-2 line-clamp-2 text-xs text-[var(--qd-text-3)]">{score?.reason || s.ai_confidence_reason || "Waiting for live market structure."}</p>
-      </div>
-
-      <div className="hidden">
-        <Metric label="Scans" value={s.evaluations ?? 0} compact />
-        <Metric label="Orders" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
-        <Metric label="Last Signals" value={s.last_signals_count ?? 0} compact tone={(s.last_signals_count ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
-        <Metric label="Last Scan" value={timeAgo(s.last_evaluated_at)} compact />
       </div>
 
       {notice && (
@@ -806,10 +775,10 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
           <button onClick={() => toggle(s.id)} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`toggle-${s.id}`}>
             {live ? <><Pause size={13} /> Pause</> : <><Play size={13} /> {paused ? "Resume" : "Live"}</>}
           </button>
-          <Link to={editPath} className="rounded border border-[var(--qd-border)] px-3 py-2 text-center font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
+          <Link to={editPath} className="rounded border border-[var(--qd-border)] px-3 py-3 text-center font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
             Edit
           </Link>
-          <button onClick={() => del(s.id)} className="rounded border border-[var(--qd-border)] px-3 py-2 text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy">
+          <button onClick={() => del(s.id)} className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-border)] text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy">
             <Trash2 size={14} />
           </button>
         </div>
