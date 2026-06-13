@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Activity, BookOpen, HeartPulse, RefreshCw, ShieldCheck, SquareArrowOutUpRight, WalletCards } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, HeartPulse, RefreshCw, ShieldCheck, SquareArrowOutUpRight } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
@@ -13,8 +13,6 @@ export default function MarketHub() {
   const [health, setHealth] = useState(null);
   const [risk, setRisk] = useState(null);
   const [journal, setJournal] = useState(null);
-  const [chain, setChain] = useState(null);
-  const [comparison, setComparison] = useState(null);
   const [feed, setFeed] = useState(null);
   const [indicators, setIndicators] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
@@ -22,12 +20,10 @@ export default function MarketHub() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, c, cmp, f, ind, s] = await Promise.all([
+    const [h, r, j, f, ind, s] = await Promise.all([
       api.get("/broker/health").catch(() => ({ data: null })),
       api.get("/risk/dashboard").catch(() => ({ data: null })),
       api.get("/trade-journal").catch(() => ({ data: null })),
-      api.get(`/option-chain/${underlying}`).catch(() => ({ data: null })),
-      api.get("/strategies/live-backtest-comparison").catch(() => ({ data: null })),
       api.get("/market/feed-comparison").catch(() => ({ data: null })),
       api.get(`/market/indicators/${underlying}`).catch(() => ({ data: null })),
       api.get("/market/session-status").catch(() => ({ data: null })),
@@ -35,8 +31,6 @@ export default function MarketHub() {
     if (h.data) setHealth(h.data);
     if (r.data) setRisk(r.data);
     if (j.data) setJournal(j.data);
-    if (c.data) setChain(c.data);
-    if (cmp.data) setComparison(cmp.data);
     if (f.data) setFeed(f.data);
     if (ind.data) setIndicators(ind.data);
     if (s.data) setMarketSession(s.data);
@@ -86,7 +80,7 @@ export default function MarketHub() {
       <PageHeader
         eyebrow={`${APP_VERSION_LABEL} Control Room`}
         title="Market Hub"
-        subtitle="Broker health, ticker quality, option-chain context, and daily risk in one market workspace."
+        subtitle="Broker health, ticker quality, live signal stack, and daily risk in one market workspace."
         badge={<StatusBadge tone={(marketSession?.global_status === "OPEN" || risk?.market_open) ? "healthy" : "warning"}>{marketSession?.global_status || "Market"}</StatusBadge>}
         actions={
           <>
@@ -109,13 +103,13 @@ export default function MarketHub() {
         <Metric label="Risk Left" value={risk?.loss_remaining == null ? "-" : `₹${formatINR(risk.loss_remaining)}`} tone="warn" />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        {feed?.simulated_warning && (
-          <div className="rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)] xl:col-span-2">
-            {feed.simulated_warning}
-          </div>
-        )}
+      {feed?.simulated_warning && (
+        <div className="flex items-center gap-2 rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)]">
+          <AlertTriangle size={14} className="shrink-0" /> {feed.simulated_warning}
+        </div>
+      )}
 
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <section className="qd-card p-4">
           <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><HeartPulse size={16} /> Broker Health</h2>
           <div className="space-y-3">
@@ -159,7 +153,12 @@ export default function MarketHub() {
         </section>
 
         <section className="qd-card p-4 xl:col-span-2">
-          <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Activity size={16} /> Signal Stack</h2>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Signal Stack</h2>
+            <select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-xs text-white font-mono rounded-sm">
+              {["NIFTY", "BANKNIFTY", "SENSEX"].map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <Small label="Trend" value={indicators?.indicators?.trend || "-"} />
             <Small label="RSI" value={indicators?.indicators?.rsi ?? "-"} />
@@ -196,67 +195,6 @@ export default function MarketHub() {
         </section>
       </div>
 
-      <section className="qd-card">
-        <div className="border-b border-[var(--qd-border)] px-4 py-3">
-          <h2 className="font-head text-lg text-white flex items-center gap-2"><Activity size={16} /> Live vs Backtest</h2>
-        </div>
-        <div className="qd-table-wrap">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">Strategy</th><th className="px-4 py-2">Live P&L</th><th className="px-4 py-2">Backtest P&L</th><th className="px-4 py-2">Drift</th><th className="px-4 py-2">Signal Quality</th><th className="px-4 py-2">Verdict</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {(comparison?.items || []).slice(0, 12).map((row) => (
-                <tr key={row.strategy_id} className="border-t border-[var(--qd-border)]">
-                  <td className="px-4 py-2 text-white">{row.name}</td>
-                  <td className={`px-4 py-2 ${(row.live?.realized_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>₹{formatINR(row.live?.realized_pnl || 0)}</td>
-                  <td className={`px-4 py-2 ${(row.backtest?.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{row.backtest?.available ? `₹${formatINR(row.backtest.pnl || 0)}` : "-"}</td>
-                  <td className={`px-4 py-2 ${(row.drift || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{row.drift == null ? "-" : `₹${formatINR(row.drift)}`}</td>
-                  <td className="px-4 py-2 text-[var(--qd-text-2)]">{row.last_signal_validation?.confidence != null ? `${row.last_signal_validation.confidence}%` : row.last_filter_reason ? "filtered" : "-"}</td>
-                  <td className="px-4 py-2 text-[var(--qd-warn)]">{row.verdict}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="qd-card">
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--qd-border)] px-4 py-3">
-          <h2 className="font-head text-lg text-white flex items-center gap-2"><WalletCards size={16} /> Option Chain</h2>
-          <select value={underlying} onChange={(e) => setUnderlying(e.target.value)} className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-xs text-white font-mono rounded-sm">
-            {["NIFTY", "BANKNIFTY", "SENSEX"].map((u) => <option key={u} value={u}>{u}</option>)}
-          </select>
-        </div>
-        <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-          <Small label="Source" value={chain?.source || "-"} />
-          <Small label="Spot" value={`₹${formatINR(chain?.spot || 0)}`} />
-          <Small label="ATM" value={chain?.atm || "-"} />
-          <Small label="Expiry" value={chain?.expiry || "-"} />
-        </div>
-        <div className="qd-table-wrap">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
-                <th className="px-4 py-2">CE Symbol</th><th className="px-4 py-2">CE LTP</th><th className="px-4 py-2 text-center">Strike</th><th className="px-4 py-2">PE LTP</th><th className="px-4 py-2">PE Symbol</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {(chain?.rows || []).map((r) => (
-                <tr key={r.strike} className={`border-t border-[var(--qd-border)] ${r.strike === chain?.atm ? "bg-[rgba(0,122,255,0.08)]" : ""}`}>
-                  <td className="px-4 py-2 text-white">{r.ce?.symbol || "-"}</td>
-                  <td className="px-4 py-2 text-[var(--qd-profit)]">{r.ce?.ltp == null ? "-" : formatINR(r.ce.ltp)}</td>
-                  <td className="px-4 py-2 text-center text-white">{r.strike}</td>
-                  <td className="px-4 py-2 text-[var(--qd-loss)]">{r.pe?.ltp == null ? "-" : formatINR(r.pe.ltp)}</td>
-                  <td className="px-4 py-2 text-white">{r.pe?.symbol || "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }
