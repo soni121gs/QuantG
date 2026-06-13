@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { AlertCircle, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity } from "lucide-react";
+import { AlertCircle, ArrowRight, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity, MessageSquare, Plus } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
@@ -58,7 +58,6 @@ const renderMarkdown = (text) => {
   });
 };
 
-const SESSION = "default";
 const SUGGESTIONS = [
   "Verify my active strategies and drawdown limits",
   "Check Upstox feed and market status",
@@ -75,6 +74,27 @@ const BRIEF_PROMPTS = [
   "Build a checklist for index-option trades using Upstox instrument keys.",
 ];
 
+// Human-readable labels + formatters for the 6 settings the agent can propose.
+const FIELD_LABELS = {
+  paper_mode: { label: "Trading Mode", fmt: (v) => (v ? "PAPER" : "LIVE") },
+  max_daily_loss: { label: "Daily Loss Limit", fmt: (v) => `${Number(v).toLocaleString()} INR` },
+  max_position_size: { label: "Max Position Size", fmt: (v) => `${Number(v).toLocaleString()} INR` },
+  per_strategy_capital: { label: "Per-Strategy Capital", fmt: (v) => `${Number(v).toLocaleString()} INR` },
+  max_trades_per_day: { label: "Max Trades / Day", fmt: (v) => `${v}` },
+  default_qty: { label: "Default Quantity", fmt: (v) => `${v}` },
+};
+
+// Multiple conversations are tracked client-side; the backend already keys
+// chat history by an arbitrary session_id, so no server change is needed.
+const SESSIONS_KEY = "quantg-agent-sessions";
+const newSessionId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const loadSessions = () => {
+  try { return JSON.parse(window.localStorage.getItem(SESSIONS_KEY) || "[]"); } catch { return []; }
+};
+const saveSessions = (list) => {
+  try { window.localStorage.setItem(SESSIONS_KEY, JSON.stringify(list.slice(0, 30))); } catch { /* ignore */ }
+};
+
 export default function AIBot() {
   const { summary: executionSummary } = useExecutionState({ pollMs: 15000 });
   const [messages, setMessages] = useState([]);
@@ -84,9 +104,9 @@ export default function AIBot() {
   const [aiStatus, setAiStatus] = useState(null);
   const [marketAnalysis, setMarketAnalysis] = useState(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
-
-  // Real-time Dashboard state
   const [profile, setProfile] = useState(null);
+  const [sessions, setSessions] = useState(loadSessions);
+  const [sessionId, setSessionId] = useState(() => loadSessions()[0]?.id || newSessionId());
 
   const endRef = useRef(null);
 
@@ -94,28 +114,60 @@ export default function AIBot() {
   const netPnl = Number(executionSummary?.net_pnl) || 0;
   const drawdownUsedPct = lossLimit > 0 ? Math.min(100, Math.max(0, (Math.max(0, -netPnl) / lossLimit) * 100)) : 0;
   const drawdownTone = drawdownUsedPct >= 80 ? "rose" : drawdownUsedPct >= 50 ? "amber" : "emerald";
+  const providerLabel = aiStatus?.gemini_configured ? `Gemini (${aiStatus.model})` : "Local rules";
 
   const fetchProfile = () => {
     api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
   };
 
   useEffect(() => {
-    api.get(`/ai/chat/${SESSION}`).then((r) => setMessages(r.data)).catch(() => {});
     api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
     fetchProfile();
+    if (loadSessions().length === 0) {
+      const seed = [{ id: sessionId, title: "New chat", updatedAt: Date.now() }];
+      setSessions(seed);
+      saveSessions(seed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => {
+    api.get(`/ai/chat/${sessionId}`).then((r) => setMessages(r.data || [])).catch(() => setMessages([]));
+  }, [sessionId]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, busy]);
+
+  const upsertSession = (id, content) => {
+    setSessions((prev) => {
+      const existing = prev.find((s) => s.id === id);
+      const title = existing && existing.title && existing.title !== "New chat" ? existing.title : content.slice(0, 42);
+      const next = [{ id, title, updatedAt: Date.now() }, ...prev.filter((s) => s.id !== id)];
+      saveSessions(next);
+      return next;
+    });
+  };
+
+  const newChat = () => {
+    const id = newSessionId();
+    setSessions((prev) => {
+      const next = [{ id, title: "New chat", updatedAt: Date.now() }, ...prev];
+      saveSessions(next);
+      return next;
+    });
+    setSessionId(id);
+    setMessages([]);
+    setText("");
+  };
 
   const send = async (msg) => {
     const content = (msg ?? text).trim();
     if (!content || busy) return;
     setBusy(true);
     setText("");
-    const cid = `c-${Date.now()}`;
-    setMessages((m) => [...m, { id: cid, role: "user", content }]);
+    upsertSession(sessionId, content);
+    setMessages((m) => [...m, { id: `c-${Date.now()}`, role: "user", content }]);
     try {
-      const r = await api.post("/agent/chat", { session_id: SESSION, message: content });
+      const r = await api.post("/agent/chat", { session_id: sessionId, message: content });
       setMessages((m) => [...m, {
         id: `a-${Date.now()}`,
         role: "assistant",
@@ -123,7 +175,7 @@ export default function AIBot() {
         tools_used: r.data.tools_used,
         unavailable: r.data.unavailable,
         read_only: r.data.read_only,
-        pending_action: r.data.pending_action
+        pending_action: r.data.pending_action,
       }]);
     } catch (e) {
       setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `Error: ${e.response?.data?.detail || e.message}` }]);
@@ -133,14 +185,7 @@ export default function AIBot() {
   const handleApproveAction = async (actionId) => {
     try {
       await api.post("/agent/action/approve", { action_id: actionId });
-      setMessages((m) =>
-        m.map((msg) =>
-          msg.pending_action?.id === actionId
-            ? { ...msg, pending_action: { ...msg.pending_action, status: "approved" } }
-            : msg
-        )
-      );
-      // Immediately refresh profile dashboard metrics in real time!
+      setMessages((m) => m.map((msg) => msg.pending_action?.id === actionId ? { ...msg, pending_action: { ...msg.pending_action, status: "approved" } } : msg));
       fetchProfile();
     } catch (e) {
       alert(e.response?.data?.detail || "Action approval failed");
@@ -150,13 +195,7 @@ export default function AIBot() {
   const handleRejectAction = async (actionId) => {
     try {
       await api.post("/agent/action/reject", { action_id: actionId });
-      setMessages((m) =>
-        m.map((msg) =>
-          msg.pending_action?.id === actionId
-            ? { ...msg, pending_action: { ...msg.pending_action, status: "rejected" } }
-            : msg
-        )
-      );
+      setMessages((m) => m.map((msg) => msg.pending_action?.id === actionId ? { ...msg, pending_action: { ...msg.pending_action, status: "rejected" } } : msg));
     } catch (e) {
       alert(e.response?.data?.detail || "Action rejection failed");
     }
@@ -175,7 +214,7 @@ export default function AIBot() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-156px)] flex-col gap-4" data-testid="ai-bot-page">
+    <div className="space-y-5 pb-4" data-testid="ai-bot-page">
       <PageHeader
         eyebrow="Active Risk & Co-Pilot"
         title="Ask QuantG Agent"
@@ -183,17 +222,17 @@ export default function AIBot() {
         badge={<StatusBadge tone={profile?.paper_mode ? "paper" : "live"}>{profile?.paper_mode ? "Paper" : "Live"}</StatusBadge>}
         actions={
           <div className="flex rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1">
-          {MODES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setMode(item.id)}
-              className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "qd-force-white bg-[var(--qd-accent)]" : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"}`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+            {MODES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setMode(item.id)}
+                className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "qd-force-white bg-[var(--qd-accent)]" : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         }
       />
 
@@ -204,19 +243,13 @@ export default function AIBot() {
               <h2 className="font-head text-lg font-semibold text-white flex items-center gap-2"><Activity size={18} className="text-[var(--qd-accent)]" /> Market Analysis</h2>
               <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and Upstox feed state.</p>
             </div>
-            <Button
-              type="button"
-              onClick={runMarketAnalysis}
-              disabled={analysisBusy}
-              variant="primary"
-              size="sm"
-            >
+            <Button type="button" onClick={runMarketAnalysis} disabled={analysisBusy} variant="primary" size="sm">
               {analysisBusy ? "Analyzing..." : "Generate Analysis"}
             </Button>
           </div>
           {marketAnalysis?.content && (
-            <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)] whitespace-pre-wrap">
-              {marketAnalysis.content}
+            <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)]">
+              {renderMarkdown(marketAnalysis.content)}
             </div>
           )}
           <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
@@ -224,10 +257,7 @@ export default function AIBot() {
               <button
                 key={prompt}
                 type="button"
-                onClick={() => {
-                  setMode("agent");
-                  send(prompt);
-                }}
+                onClick={() => { setMode("agent"); send(prompt); }}
                 className="rounded border border-[var(--qd-border)] p-3.5 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] transition-all bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50"
               >
                 {prompt}
@@ -237,39 +267,54 @@ export default function AIBot() {
         </div>
       )}
 
-      {/* Main Grid Structure */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-0">
-        
-        {/* Left Column: Chat Area */}
-        <div className="lg:col-span-8 flex flex-col min-h-0 qd-card">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+        {/* Left: chat workspace — generous height, internal scroll, docked composer */}
+        <div className="lg:col-span-8 flex flex-col qd-card overflow-hidden h-[calc(100vh-210px)] min-h-[480px]">
+
+          {/* Conversation switcher */}
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-3 py-2.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <MessageSquare size={15} className="text-[var(--qd-text-3)] shrink-0" />
+              <select
+                value={sessionId}
+                onChange={(e) => setSessionId(e.target.value)}
+                className="max-w-[260px] truncate bg-transparent text-sm font-semibold text-[var(--qd-text)] outline-none cursor-pointer"
+                data-testid="ai-session-select"
+              >
+                {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || "New chat"}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-[var(--qd-border)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]" title="Reasoning provider">
+                <span className={`h-1.5 w-1.5 rounded-full ${aiStatus?.gemini_configured ? "bg-emerald-500" : "bg-amber-500"}`} /> {providerLabel}
+              </span>
+              <button
+                type="button"
+                onClick={newChat}
+                className="flex items-center gap-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)]"
+                data-testid="ai-new-chat"
+              >
+                <Plus size={13} /> New
+              </button>
+            </div>
+          </div>
+
+          {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages">
-            {messages.length === 0 && (
-              <div className="text-center py-16">
-                <Sparkles className="mx-auto text-[var(--qd-accent)] mb-4 animate-pulse" size={32} />
-                <p className="font-mono text-sm text-[var(--qd-text-2)] mb-8">How can I protect or configure your trading setup today?</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-xl mx-auto">
-                  {SUGGESTIONS.map((s) => (
-                    <button key={s} onClick={() => send(s)} className="text-left text-xs font-mono text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] p-4 transition-all rounded bg-[var(--qd-surface-2)]/10 hover:bg-[var(--qd-surface-2)]/40 hover:-translate-y-0.5">
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {messages.length === 0 ? (
+              <EmptyState onPick={send} />
+            ) : (
+              messages.map((m, i) => (
+                <Message key={m.id || `m-${i}`} m={m} profile={profile} onApprove={handleApproveAction} onReject={handleRejectAction} />
+              ))
             )}
-            {messages.map((m, i) => (
-              <Message
-                key={m.id || `m-${i}`}
-                m={m}
-                onApprove={handleApproveAction}
-                onReject={handleRejectAction}
-              />
-            ))}
-            {busy && <Message key="typing" m={{ role: "assistant", content: "..." }} />}
+            {busy && <TypingIndicator />}
             <div ref={endRef} />
           </div>
 
-          {/* Send Input — persistent quick actions + multi-line composer */}
-          <div className="border-t border-[var(--qd-border)] bg-[var(--qd-bg)]/20 rounded-b-xl">
+          {/* Composer: persistent quick actions + multi-line input */}
+          <div className="border-t border-[var(--qd-border)] bg-[var(--qd-bg)]/20">
             <div className="flex flex-wrap gap-1.5 px-3 pt-3">
               {SUGGESTIONS.map((s) => (
                 <button
@@ -300,49 +345,43 @@ export default function AIBot() {
           </div>
         </div>
 
-        {/* Right Column: Live Risk Management Dashboard */}
-        <div className="lg:col-span-4 flex flex-col gap-4 overflow-y-auto">
-          
-          {/* Live Status and Mode Indicator */}
-          <div className="qd-card p-5 flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b border-[var(--qd-border)]/50 pb-3">
-              <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-400" /> System Governance</h2>
-              <div className="flex items-center gap-2">
-                <span className={`w-2.5 h-2.5 rounded-full ${profile?.paper_mode ? "bg-rose-500 glow-pulse-red" : "bg-emerald-500 glow-pulse-green"}`} />
-                <span className="font-mono text-[10px] font-bold text-[var(--qd-text)] uppercase">{profile?.paper_mode ? "Sandbox Paper" : "Production Live"}</span>
+        {/* Right: compact, always-visible context */}
+        <div className="lg:col-span-4 space-y-4">
+
+          {/* System governance */}
+          <div className="qd-card p-4">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)]/50 pb-2.5">
+              <h2 className="font-head font-bold text-white text-xs uppercase tracking-wider flex items-center gap-2"><ShieldCheck size={15} className="text-emerald-400" /> System Governance</h2>
+              <div className="flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${profile?.paper_mode ? "bg-rose-500" : "bg-emerald-500"}`} />
+                <span className="font-mono text-[9px] font-bold text-[var(--qd-text)] uppercase">{profile?.paper_mode ? "Sandbox Paper" : "Production Live"}</span>
               </div>
             </div>
 
             {profile ? (
-              <div className="space-y-4">
-                {/* Active Mode Banner */}
-                <div className={`p-3.5 rounded border text-center font-mono text-xs font-bold ${profile.paper_mode ? "bg-rose-950/20 border-rose-500/30 text-rose-400" : "bg-emerald-950/20 border-emerald-500/30 text-emerald-400"}`}>
+              <div className="mt-3 space-y-3">
+                <div className={`px-3 py-2 rounded border text-center font-mono text-[11px] font-bold ${profile.paper_mode ? "bg-rose-950/20 border-rose-500/30 text-rose-400" : "bg-emerald-950/20 border-emerald-500/30 text-emerald-400"}`}>
                   {profile.paper_mode ? "PAPER / EMERGENCY PAUSE ACTIVE" : "TERMINAL ROUTING LIVE ORDERS"}
                 </div>
 
-                {/* Grid metrics */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
-                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Drawdown Limit</div>
-                    <div className="font-head font-bold text-sm text-white mt-1">{Number(profile.max_daily_loss).toLocaleString()} INR</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2.5 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
+                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Loss Limit</div>
+                    <div className="font-head font-bold text-sm text-white mt-0.5">{Number(profile.max_daily_loss || 0).toLocaleString()} INR</div>
                   </div>
-                  <div className="p-3 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
-                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Trades Speed Limit</div>
-                    <div className="font-head font-bold text-sm text-white mt-1">{profile.max_trades_per_day || "Unlimited"} / Day</div>
+                  <div className="p-2.5 bg-[var(--qd-surface-2)]/30 rounded border border-[var(--qd-border)]/50">
+                    <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Trades / Day</div>
+                    <div className="font-head font-bold text-sm text-white mt-0.5">{profile.max_trades_per_day || "Unlimited"}</div>
                   </div>
                 </div>
 
-                {/* Real drawdown usage: how much of the daily loss limit is consumed */}
-                <div className="space-y-1.5 mt-2">
+                <div className="space-y-1.5">
                   <div className="flex justify-between font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">
                     <span>Daily Drawdown Used</span>
                     <span className={`font-bold ${drawdownTone === "rose" ? "text-rose-400" : drawdownTone === "amber" ? "text-amber-400" : "text-emerald-400"}`}>{drawdownUsedPct.toFixed(0)}%</span>
                   </div>
-                  <div className="w-full bg-[var(--qd-bg)] rounded-full h-2.5 overflow-hidden border border-[var(--qd-border)]/60">
-                    <div
-                      className={`h-full rounded-full transition-all ${drawdownTone === "rose" ? "bg-rose-500" : drawdownTone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`}
-                      style={{ width: `${drawdownUsedPct}%` }}
-                    />
+                  <div className="w-full bg-[var(--qd-bg)] rounded-full h-2 overflow-hidden border border-[var(--qd-border)]/60">
+                    <div className={`h-full rounded-full transition-all ${drawdownTone === "rose" ? "bg-rose-500" : drawdownTone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${drawdownUsedPct}%` }} />
                   </div>
                   <div className="font-mono text-[9px] text-[var(--qd-text-3)]">
                     Net P&L {netPnl >= 0 ? "+" : ""}{netPnl.toLocaleString()} INR {lossLimit > 0 ? `of ${lossLimit.toLocaleString()} INR limit` : "· no loss limit set"}
@@ -350,68 +389,100 @@ export default function AIBot() {
                 </div>
               </div>
             ) : (
-              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-6 animate-pulse">Loading profile risk metrics...</div>
+              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-5 animate-pulse">Loading risk metrics…</div>
             )}
           </div>
 
-          {/* Capital Allocations & Size Limits */}
-          <div className="qd-card p-5">
-            <h2 className="font-head font-bold text-white text-sm uppercase tracking-wider border-b border-[var(--qd-border)]/50 pb-3 mb-4 flex items-center gap-2"><Sliders size={16} className="text-blue-400" /> Capital & Position Size Limits</h2>
-            
+          {/* Capital limits */}
+          <div className="qd-card p-4">
+            <h2 className="font-head font-bold text-white text-xs uppercase tracking-wider border-b border-[var(--qd-border)]/50 pb-2.5 flex items-center gap-2"><Sliders size={15} className="text-blue-400" /> Capital &amp; Size Limits</h2>
             {profile ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
-                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Per-Strategy Cap</div>
-                  <div className="font-mono text-xs font-extrabold text-blue-400">{Number(profile.per_strategy_capital || 0).toLocaleString()} INR</div>
-                </div>
-                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
-                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Max Position Size</div>
-                  <div className="font-mono text-xs font-extrabold text-blue-400">{Number(profile.max_position_size || 0).toLocaleString()} INR</div>
-                </div>
-                <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
-                  <div className="font-mono text-xs text-[var(--qd-text-2)]">Default Lot Quantity</div>
-                  <div className="font-mono text-xs font-extrabold text-blue-400">{profile.default_qty || "Not Set"}</div>
-                </div>
+              <div className="mt-3 space-y-2">
+                <CompactRow label="Per-Strategy Cap" value={`${Number(profile.per_strategy_capital || 0).toLocaleString()} INR`} />
+                <CompactRow label="Max Position Size" value={`${Number(profile.max_position_size || 0).toLocaleString()} INR`} />
+                <CompactRow label="Default Lot Qty" value={profile.default_qty || "Not set"} />
               </div>
             ) : (
-              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-6 animate-pulse">Loading size boundaries...</div>
+              <div className="text-center font-mono text-xs text-[var(--qd-text-3)] py-5 animate-pulse">Loading size boundaries…</div>
             )}
           </div>
 
-          {/* What the agent can actually do */}
-          <div className="qd-card p-5 text-xs leading-relaxed">
-            <h3 className="font-head font-bold text-white uppercase text-xs pb-3 mb-3 flex items-center gap-2 border-b border-[var(--qd-border)]/50"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> What I Can Do</h3>
+          {/* What the agent can do */}
+          <div className="qd-card p-4 text-xs leading-relaxed">
+            <h3 className="font-head font-bold text-white uppercase text-xs pb-2.5 mb-2.5 flex items-center gap-2 border-b border-[var(--qd-border)]/50"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> What I Can Do</h3>
 
             <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5"><ShieldCheck size={12} className="text-emerald-400" /> Reads automatically</div>
-            <ul className="mt-1.5 space-y-1 text-[var(--qd-text-2)]">
+            <ul className="mt-1.5 space-y-0.5 text-[var(--qd-text-2)]">
               <li>· Orders, positions &amp; execution state</li>
-              <li>· Strategies, their errors &amp; rejected orders</li>
-              <li>· Upstox feed, market status &amp; live ticks</li>
+              <li>· Strategies, errors &amp; rejected orders</li>
+              <li>· Upstox feed, market status &amp; ticks</li>
               <li>· Daily P&amp;L, loss limit &amp; capital usage</li>
             </ul>
 
-            <div className="mt-3 pt-3 border-t border-[var(--qd-border)]/50 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5"><Sliders size={12} className="text-blue-400" /> Can change — you approve each</div>
-            <ul className="mt-1.5 space-y-1 text-[var(--qd-text-2)]">
+            <div className="mt-2.5 pt-2.5 border-t border-[var(--qd-border)]/50 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5"><Sliders size={12} className="text-blue-400" /> Can change — you approve</div>
+            <ul className="mt-1.5 space-y-0.5 text-[var(--qd-text-2)]">
               <li>· Daily loss limit &amp; max trades / day</li>
               <li>· Position size &amp; per-strategy capital</li>
-              <li>· Default order quantity</li>
-              <li>· Paper ↔ Live mode (emergency kill)</li>
+              <li>· Default qty · Paper ↔ Live (kill)</li>
             </ul>
 
-            <div className="mt-3 pt-3 border-t border-[var(--qd-border)]/50 flex items-start gap-1.5 text-[var(--qd-text-3)]">
+            <div className="mt-2.5 pt-2.5 border-t border-[var(--qd-border)]/50 flex items-start gap-1.5 text-[var(--qd-text-3)]">
               <ShieldAlert size={12} className="mt-0.5 text-[var(--qd-loss)] flex-shrink-0" />
               <span>Never places, cancels, or exits trades. Every change needs your click.</span>
             </div>
           </div>
 
         </div>
-
       </div>
     </div>
   );
 }
 
-const Message = ({ m, onApprove, onReject }) => {
+const CompactRow = ({ label, value }) => (
+  <div className="flex items-center justify-between p-2.5 bg-[var(--qd-surface-2)]/20 rounded border border-[var(--qd-border)]/40">
+    <div className="font-mono text-xs text-[var(--qd-text-2)]">{label}</div>
+    <div className="font-mono text-xs font-extrabold text-blue-400">{value}</div>
+  </div>
+);
+
+const EmptyState = ({ onPick }) => (
+  <div className="flex h-full flex-col items-center justify-center text-center px-4">
+    <div className="w-14 h-14 rounded-2xl bg-[var(--qd-accent)]/15 border border-[var(--qd-accent)]/30 flex items-center justify-center mb-4">
+      <Sparkles className="text-[var(--qd-accent)]" size={26} />
+    </div>
+    <h3 className="font-head text-lg font-bold text-[var(--qd-text)]">How can I protect your trading setup?</h3>
+    <p className="mt-1.5 max-w-md text-sm text-[var(--qd-text-2)]">
+      I read your live orders, positions, risk and feed health, then answer grounded in that data. I can also propose risk-setting changes for you to approve.
+    </p>
+    <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-xl">
+      {SUGGESTIONS.map((s) => (
+        <button
+          key={s}
+          onClick={() => onPick(s)}
+          className="text-left text-xs text-[var(--qd-text-2)] border border-[var(--qd-border)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] p-3.5 rounded-[var(--qd-radius-sm)] bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50 transition-all hover:-translate-y-0.5"
+        >
+          {s}
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
+const TypingIndicator = () => (
+  <div className="flex gap-3">
+    <div className="w-8 h-8 rounded bg-[var(--qd-accent)] flex items-center justify-center flex-shrink-0 shadow-md">
+      <Bot size={16} className="text-white" />
+    </div>
+    <div className="flex items-center gap-1.5 rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface-2)]/65 px-4 py-3">
+      <span className="font-mono text-[11px] text-[var(--qd-text-3)] mr-1">Reading your account</span>
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
+    </div>
+  </div>
+);
+
+const Message = ({ m, profile, onApprove, onReject }) => {
   const isUser = m.role === "user";
   const hasAction = !isUser && m.pending_action;
 
@@ -428,28 +499,23 @@ const Message = ({ m, onApprove, onReject }) => {
     return <span className="action-badge badge-normal"><Sliders size={11} /> Parameter Adaptation</span>;
   };
 
-  const getActionDescription = (actionName, params) => {
-    const list = [];
-    if (params?.paper_mode !== undefined) {
-      list.push(`Set Trading Mode to: ${params.paper_mode ? "PAPER / EMERGENCY PAUSE" : "LIVE TRADING"}`);
-    }
-    if (params?.max_daily_loss !== undefined) {
-      list.push(`Change Daily Loss Limit to: ${Number(params.max_daily_loss).toLocaleString()} INR`);
-    }
-    if (params?.max_position_size !== undefined) {
-      list.push(`Change Maximum Position Size to: ${Number(params.max_position_size).toLocaleString()} INR`);
-    }
-    if (params?.per_strategy_capital !== undefined) {
-      list.push(`Set Strategy Capital Allocation: ${Number(params.per_strategy_capital).toLocaleString()} INR`);
-    }
-    if (params?.default_qty !== undefined) {
-      list.push(`Change Default Order Quantity: ${params.default_qty}`);
-    }
-    if (params?.max_trades_per_day !== undefined) {
-      list.push(`Adjust Max Trades Per Day: ${params.max_trades_per_day}`);
-    }
-    return list.map((item, index) => <div key={index} className="font-mono text-xs text-[var(--qd-text)] py-1">{item}</div>);
-  };
+  const changeRows = (params) => Object.keys(params || {})
+    .filter((k) => FIELD_LABELS[k])
+    .map((k) => {
+      const cfg = FIELD_LABELS[k];
+      const current = profile ? profile[k] : undefined;
+      const hasCurrent = current !== undefined && current !== null && current !== "";
+      return (
+        <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[var(--qd-border)]/30 last:border-0">
+          <span className="font-mono text-[10px] uppercase tracking-wide text-[var(--qd-text-3)]">{cfg.label}</span>
+          <span className="flex items-center gap-2 font-mono text-xs">
+            {hasCurrent && <span className="text-[var(--qd-text-3)] line-through">{cfg.fmt(current)}</span>}
+            <ArrowRight size={11} className="text-[var(--qd-accent)]" />
+            <span className="font-bold text-[var(--qd-text)]">{cfg.fmt(params[k])}</span>
+          </span>
+        </div>
+      );
+    });
 
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : ""}`}>
@@ -466,48 +532,40 @@ const Message = ({ m, onApprove, onReject }) => {
         )}
 
         {hasAction && (
-          <div className="mt-4 p-4 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)]/80 relative overflow-hidden">
-            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-2 mb-3">
-              <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] font-semibold">AI System Action Proposal</div>
+          <div className="mt-4 rounded-lg border border-[var(--qd-accent)]/40 bg-[var(--qd-bg)]/80 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)]/40 px-3 py-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
+                <ShieldCheck size={12} className="text-[var(--qd-accent)]" /> Action proposal · needs approval
+              </div>
               {getActionBadge(m.pending_action.action, m.pending_action.params)}
             </div>
 
-            <div className="space-y-1 my-3 bg-[var(--qd-surface-2)]/50 p-3 rounded border border-[var(--qd-border)]/40">
-              {getActionDescription(m.pending_action.action, m.pending_action.params)}
+            <div className="px-3 py-2">
+              {changeRows(m.pending_action.params)}
             </div>
 
             {m.pending_action.status === "pending" && (
-              <div className="flex gap-2 mt-4">
-                <Button
-                  onClick={() => onApprove(m.pending_action.id)}
-                  className="flex-1 font-mono text-[11px] uppercase tracking-wider"
-                  variant="success"
-                  size="sm"
-                >
-                  Approve Action
+              <div className="flex gap-2 p-3 pt-0">
+                <Button onClick={() => onApprove(m.pending_action.id)} className="flex-1 font-mono text-[11px] uppercase tracking-wider" variant="success" size="sm">
+                  <CheckCircle2 size={14} /> Approve
                 </Button>
-                <Button
-                  onClick={() => onReject(m.pending_action.id)}
-                  className="flex-1 font-mono text-[11px] uppercase tracking-wider"
-                  variant="danger"
-                  size="sm"
-                >
-                  Decline
+                <Button onClick={() => onReject(m.pending_action.id)} className="flex-1 font-mono text-[11px] uppercase tracking-wider" variant="danger" size="sm">
+                  <XCircle size={14} /> Decline
                 </Button>
               </div>
             )}
 
             {m.pending_action.status === "approved" && (
-              <div className="mt-3 py-2 px-3 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-emerald-400 text-xs font-mono">
+              <div className="m-3 mt-0 py-2 px-3 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-emerald-400 text-xs font-mono">
                 <CheckCircle2 size={14} className="flex-shrink-0" />
-                <span>Action approved and successfully committed to terminal settings.</span>
+                <span>Approved and committed to your terminal settings.</span>
               </div>
             )}
 
             {m.pending_action.status === "rejected" && (
-              <div className="mt-3 py-2 px-3 rounded bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-rose-400 text-xs font-mono">
+              <div className="m-3 mt-0 py-2 px-3 rounded bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-rose-400 text-xs font-mono">
                 <XCircle size={14} className="flex-shrink-0" />
-                <span>Action proposal rejected and discarded.</span>
+                <span>Proposal rejected and discarded.</span>
               </div>
             )}
           </div>
@@ -532,9 +590,7 @@ const Message = ({ m, onApprove, onReject }) => {
         {!isUser && m.unavailable?.length > 0 && (
           <div className="mt-2.5 flex gap-2 rounded border border-[var(--qd-loss)]/60 bg-[var(--qd-bg)] p-2 text-[11px] text-[var(--qd-loss)]">
             <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
-            <div>
-              Some read-only data was unavailable. The answer may be incomplete.
-            </div>
+            <div>Some read-only data was unavailable. The answer may be incomplete.</div>
           </div>
         )}
       </div>
