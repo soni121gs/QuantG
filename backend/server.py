@@ -1199,6 +1199,18 @@ You are QuantBot inside QuantG, a personal Indian algo-trading terminal. You are
 - Ground all advice in the specific parameters, brokers, limits, and rules of QuantG.
 - Keep responses concise, structured, and easy to read.
 
+### EXAMPLES (match this grounding, tone, and brevity — do not copy verbatim)
+Example 1
+User: Why do so few of my signals turn into trades?
+Assistant: Most signals are filtered before they reach the order manager. Two common causes in QuantG:
+- **FakeSignalFilter threshold** — signals scoring below 40% (35% for HFT/scalper strategies) are rejected. Trend fights, whipsaws, and flat ATR all cut the score.
+- **Option-quality / feed gate** — if the V3 `ltpc` tick for the selected contract is stale or the contract fails liquidity checks, the signal is skipped even when scored well.
+Check the strategy's `last_error` and whether signals show PROCESSED vs FILTERED/SKIPPED to see which gate is firing. Loosening filters trades quality for quantity — I won't promise more fills.
+
+Example 2
+User: What lot size should I use for a NIFTY options strategy?
+Assistant: Don't hardcode it. QuantG resolves lot size from `core/market_domains.py` — NIFTY is 65 and BANKNIFTY is 30 today, but these change, so the engine reads them via `resolve_domain_by_underlying(...).get_lot_size(...)`. In the visual card set your capital and lot count; the order manager multiplies by the live lot size when it builds the order.
+
 Recent chat:
 {history_text or "None"}
 
@@ -1262,6 +1274,11 @@ Hard rules:
 - Prefer fewer, higher-quality signals with volume/VWAP/ATR/trend filters.
 - Keep risk realistic. Do not promise profit.
 
+EXAMPLE (return JSON in exactly this shape — values are illustrative, adapt to the real instruction):
+User instruction: "Add a volume filter so it only buys on above-average volume."
+Output:
+{{"name": "EMA Cross + Volume", "description": "Only buys the MA20 breakout when the latest bar's volume beats the 20-bar average.", "python_code": "def run(data):\\n    closes=[r['close'] for r in data]\\n    vols=[r['volume'] for r in data]\\n    if len(closes)<21: return []\\n    ma=sum(closes[-20:])/20\\n    avg_vol=sum(vols[-20:])/20\\n    if closes[-1]>ma and vols[-1]>avg_vol:\\n        return [{{'date': data[-1]['date'], 'action': 'BUY'}}]\\n    return []", "visual_config": {{"symbol": "NIFTY"}}, "notes": ["Buys only when price > MA20 and volume > 20-bar average.", "Deterministic and sandbox-safe — no imports or network."]}}
+
 Existing strategy:
 name: {strategy.get("name")}
 description: {strategy.get("description")}
@@ -1285,7 +1302,15 @@ Return JSON with:
     response = requests.post(
         url,
         params={"key": api_key},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            # JSON mode: forces a single parseable JSON value (no markdown fences or
+            # prose preamble), which is the main failure mode _extract_json_object
+            # was working around. We deliberately do NOT pin a rigid responseSchema:
+            # visual_config is an open-ended object and a strict schema would drop
+            # legitimate config keys the model sets. responseMimeType is enough.
+            "generationConfig": {"responseMimeType": "application/json"},
+        },
         timeout=GEMINI_TIMEOUT_SEC,
     )
     response.raise_for_status()
