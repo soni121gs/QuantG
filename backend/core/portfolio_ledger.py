@@ -330,6 +330,15 @@ class PortfolioLedger:
                 "option_type": opt.get("option_type"),
                 "underlying": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
                 "symbol_group": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
+                # Snapshot of greeks/IV/OI/order-flow captured at signal time
+                # (carried on the option_contract). Analytics only — not read
+                # by any trade decision path.
+                "greeks_at_entry": {
+                    k: opt.get(k)
+                    for k in ("iv", "oi", "delta", "theta", "gamma", "vega", "rho",
+                              "bid", "ask", "bid_qty", "ask_qty", "tbq", "tsq")
+                    if opt.get(k) is not None
+                } or None,
             }
 
             # ── Stamp ABSOLUTE risk prices + exit deadline at entry ─────────────

@@ -222,7 +222,7 @@ class QuoteService:
             if callable(subscribe_method) and not inspect.iscoroutinefunction(subscribe_method):
                 try:
                     self._diag(subscribed_key=symbol)
-                    sub_res = await asyncio.to_thread(subscribe_method, [symbol], "ltpc")
+                    sub_res = await asyncio.to_thread(subscribe_method, [symbol], "full")
                     self._diag(subscription_result=sub_res)
                 except Exception as exc:
                     self._diag(subscription_result={"ok": False, "error": str(exc)[:200]})

@@ -393,6 +393,8 @@ def extract_ltp_tick(instrument_key: str, feed: Dict[str, Any], *, current_ts: O
         "vtt": _num_or_none(market_ff.get("vtt") or first_level.get("vtt")),
         "oi": _num_or_none(market_ff.get("oi") or first_level.get("oi")),
         "iv": _num_or_none(market_ff.get("iv") or first_level.get("iv")),
+        "tbq": _num_or_none(market_ff.get("tbq")),
+        "tsq": _num_or_none(market_ff.get("tsq")),
         "option_greeks": greeks,
         "delta": _num_or_none(greeks.get("delta")),
         "theta": _num_or_none(greeks.get("theta")),

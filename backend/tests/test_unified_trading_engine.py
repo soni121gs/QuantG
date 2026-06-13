@@ -265,7 +265,7 @@ class TestQuoteService:
 
         assert quote is not None
         assert quote.ltp == 6503.0
-        assert upstox.subscribed == (["BSE_FO|566001"], "ltpc")
+        assert upstox.subscribed == (["BSE_FO|566001"], "full")
         assert service.last_diagnostics["subscribed_key"] == "BSE_FO|566001"
         assert service.last_diagnostics["cache_lookup_key"] == "BSE_FO|566001"
 

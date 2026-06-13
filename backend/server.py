@@ -6382,6 +6382,10 @@ UPSTOX_EQUITY_INSTRUMENTS = {
     "SENSEX": "BSE_INDEX|SENSEX",
 }
 
+# India VIX rides the index WS feed for IV-regime data collection (db.vix_history).
+# Key verified against db.upstox_instruments (segment NSE_INDEX).
+UPSTOX_VIX_INSTRUMENT_KEY = "NSE_INDEX|India VIX"
+
 # Watchlist shows only the two main indices with real-time data from the WS feed.
 INDEX_WATCHLIST = [
     {"symbol": "NIFTY",  "name": "Nifty 50",  "key": "NSE_INDEX|Nifty 50", "base": 24850.40},
@@ -13216,6 +13220,16 @@ async def _resolve_option_for_strategy(
     if _qts is not None:
         resolved_contract["received_at"] = _qts
 
+    # Mirror greeks / IV / OI / order-flow fields off the full-mode tick so they
+    # persist on the signal doc (option_contract is embedded whole) and flow
+    # through order → fill → position for entry-time analytics. (Phase 1: data
+    # collection only — nothing reads these for trade decisions yet.)
+    for _gf in ("iv", "oi", "delta", "theta", "gamma", "vega", "rho",
+                "bid_qty", "ask_qty", "tbq", "tsq"):
+        _gv = _qq.get(_gf)
+        if _gv is not None:
+            resolved_contract[_gf] = _gv
+
     resolved_contract["trade_quality_score"] = option_entry_quality_score(
         resolved_contract,
         spot=spot,
@@ -13949,7 +13963,11 @@ async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] =
     if not keys:
         logger.warning("Upstox ticker startup skipped: no_tokens_resolved user=%s failures=%s", user_id, failures[:8])
         return {"started": False, "reason": "no_tokens_resolved", "failures": failures[:8], "status": gateway.status()}
-    result = await asyncio.to_thread(gateway.start_market_data_ws, keys, "ltpc")
+    if UPSTOX_VIX_INSTRUMENT_KEY not in keys:
+        keys.append(UPSTOX_VIX_INSTRUMENT_KEY)
+    # "full" (full_d5) instead of "ltpc": index feeds gain OHLC, and any option
+    # keys later joining this connection get bid/ask depth + greeks/IV/OI.
+    result = await asyncio.to_thread(gateway.start_market_data_ws, keys, "full")
     if result.get("ok"):
         logger.info("Upstox ticker startup successful user=%s tokens=%s", user_id, len(keys))
     else:
@@ -15332,12 +15350,48 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _gateway_check_done_date: Optional[str] = None
     _lifecycle_reset_done_date: Optional[str] = None
     _squareoff_done_date: Optional[str] = None
+    _vix_last_snapshot_minute: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
             ist = _ist_now()
             today = ist.date().isoformat()
             hour, minute = ist.hour, ist.minute
+
+            # India VIX snapshot every 5 min during market hours → db.vix_history.
+            # One doc per day; "value" converges to the daily close at 15:30. This
+            # series feeds the IV-rank regime gate (Phase 2).
+            _vix_bucket = f"{today}:{hour}:{minute // 5}"
+            if (
+                ist.weekday() < 5
+                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and _vix_last_snapshot_minute != _vix_bucket
+            ):
+                _vix_last_snapshot_minute = _vix_bucket
+                try:
+                    vix_value = None
+                    users_vix = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                    for row in users_vix:
+                        gw_vix = await get_user_upstox_gateway(row["id"])
+                        if not gw_vix or not gw_vix.connected:
+                            continue
+                        vix_tick = gw_vix.latest_tick(UPSTOX_VIX_INSTRUMENT_KEY)
+                        if vix_tick and vix_tick.get("ltp"):
+                            vix_value = float(vix_tick["ltp"])
+                            break
+                    if vix_value is not None and vix_value > 0:
+                        await db.vix_history.update_one(
+                            {"date": today},
+                            {
+                                "$set": {"value": vix_value, "updated_at": datetime.now(timezone.utc).isoformat()},
+                                "$min": {"low": vix_value},
+                                "$max": {"high": vix_value},
+                                "$setOnInsert": {"open": vix_value},
+                            },
+                            upsert=True,
+                        )
+                except Exception as _vix_err:
+                    logger.debug("VIX snapshot failed: %s", _vix_err)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:

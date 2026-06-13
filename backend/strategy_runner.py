@@ -893,6 +893,15 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         # Regime snapshot at signal time
                         "regime_snapshot": last_sig.get("regime_snapshot") or {},
                         "regime": (last_sig.get("regime_snapshot") or {}).get("regime"),
+                        # Greeks/IV/OI snapshot at signal time (flat copy of the
+                        # contract fields for analytics queries; the full contract
+                        # is embedded above in option_contract)
+                        "greeks_at_signal": {
+                            k: (option_contract or {}).get(k)
+                            for k in ("iv", "oi", "delta", "theta", "gamma", "vega", "rho",
+                                      "bid", "ask", "bid_qty", "ask_qty", "tbq", "tsq")
+                            if (option_contract or {}).get(k) is not None
+                        } or None,
                         # Phase 4: ATR-based exit policy (overrides percentage defaults in position_guardian)
                         "exit_policy": last_sig.get("exit_policy"),
                         "underlying_atr_pct": last_sig.get("underlying_atr_pct"),
