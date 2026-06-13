@@ -346,15 +346,22 @@ async def _process_one_position(
         return
 
     # ── 15:10 IST force-close ─────────────────────────────────────────────────
-    # All positions must be closed by 15:10 regardless of their individual
-    # max_hold_minutes or SL/TP levels. Fire exit and return immediately.
+    # Intraday positions (MIS, I, CO) must be closed by 15:10 regardless of their individual
+    # max_hold_minutes or SL/TP levels. Delivery and NRML positions bypass this.
     if squareoff:
-        logger.info(
-            "position_monitor: squareoff-1510 firing for pos=%s user=%s symbol=%s",
-            pos.get("id"), user_id, symbol,
-        )
-        await close_fn(user_id, sid, reason="intraday-squareoff-1510")
-        return
+        product_type = str(pos.get("product") or "MIS").upper().strip()
+        if product_type in ("MIS", "I", "CO"):
+            logger.info(
+                "position_monitor: squareoff-1510 firing for pos=%s user=%s symbol=%s",
+                pos.get("id"), user_id, symbol,
+            )
+            await close_fn(user_id, sid, reason="intraday-squareoff-1510")
+            return
+        else:
+            logger.debug(
+                "position_monitor: skipping squareoff-1510 for overnight pos=%s product=%s symbol=%s",
+                pos.get("id"), product_type, symbol,
+            )
 
     # ── Stamp default SL/TP on UNPROTECTED positions (F7 fix) ────────────────
     # Positions created without stop_loss/take_profit in the intent are stamped

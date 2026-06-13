@@ -677,6 +677,12 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
     visual_config["risk"] = risk
 
     update_fields = {"visual_config": visual_config, "broker": "upstox"}
+    if req.product is not None:
+        if "options" not in visual_config:
+            visual_config["options"] = {}
+        visual_config["options"]["product"] = req.product
+        update_fields["product"] = req.product
+        row["product"] = req.product
     if req.broker is not None:
         update_fields["broker"] = "upstox"
         row["broker"] = "upstox"

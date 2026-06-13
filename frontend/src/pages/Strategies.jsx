@@ -45,7 +45,10 @@ const filters = [
   { id: "all", label: "All Systems" },
   { id: "hft", label: "HFT / Upstox" },
   { id: "buying", label: "Option Buying" },
-  { id: "selling", label: "Option Selling" },  { id: "live", label: "Live Auto-Traders" },
+  { id: "selling", label: "Option Selling" },
+  { id: "equity_intraday", label: "Equity Intraday" },
+  { id: "equity_delivery", label: "Equity Delivery" },
+  { id: "live", label: "Live Auto-Traders" },
 ];
 
 const noticeFor = (s) => {
@@ -107,7 +110,12 @@ export default function Strategies() {
     } else if (selectedFilter === "buying") {
       result = list.filter((s) => s.strategy_type === "Option Buying");
     } else if (selectedFilter === "selling") {
-      result = list.filter((s) => s.strategy_type === "Option Selling");    } else if (selectedFilter === "live") {
+      result = list.filter((s) => s.strategy_type === "Option Selling");
+    } else if (selectedFilter === "equity_intraday") {
+      result = list.filter((s) => s.strategy_type === "Equity Intraday");
+    } else if (selectedFilter === "equity_delivery") {
+      result = list.filter((s) => s.strategy_type === "Equity Delivery");
+    } else if (selectedFilter === "live") {
       result = list.filter((s) => s.status === "live");
     }
 
@@ -138,7 +146,10 @@ export default function Strategies() {
       s.description?.toLowerCase().includes("upstox")
     ).length,
     buying: list.filter((s) => s.strategy_type === "Option Buying").length,
-    selling: list.filter((s) => s.strategy_type === "Option Selling").length,    live: list.filter((s) => s.status === "live").length,
+    selling: list.filter((s) => s.strategy_type === "Option Selling").length,
+    equity_intraday: list.filter((s) => s.strategy_type === "Equity Intraday").length,
+    equity_delivery: list.filter((s) => s.strategy_type === "Equity Delivery").length,
+    live: list.filter((s) => s.status === "live").length,
   }), [list]);
 
   const toggle = async (id) => {
@@ -386,6 +397,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     strategy_category: risk.strategy_category ?? "intraday",
     broker: s.broker ?? "upstox",
     mode: s.mode ?? "paper",
+    product: s.visual_config?.options?.product ?? s.product ?? "MIS",
   });
 
   useEffect(() => {
@@ -406,6 +418,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       strategy_category: freshRisk.strategy_category ?? "intraday",
       broker: s.broker ?? "upstox",
       mode: s.mode ?? "paper",
+      product: s.visual_config?.options?.product ?? s.product ?? "MIS",
     });
   }, [s]);
 
@@ -429,6 +442,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         strategy_category: form.strategy_category || null,
         broker: form.broker,
         mode: form.mode,
+        product: form.product,
       };
       await api.put(`/strategies/${s.id}/runtime-settings`, payload);
       toast.success("Strategy risk settings synced successfully");
@@ -687,7 +701,7 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
             </div>
 
             {/* Broker & Mode deployment configuration overrides */}
-            <div className="grid grid-cols-2 gap-2 border-t border-[var(--qd-border)] pt-2.5">
+            <div className="grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2.5">
               <div>
                 <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
                 <select 
@@ -707,6 +721,18 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
                 >
                   <option value="paper">Paper Trading (Simulated)</option>
                   <option value="live">Live Trading (Production)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Product Type</label>
+                <select 
+                  value={form.product} 
+                  onChange={(e) => setForm({ ...form, product: e.target.value })}
+                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="MIS">MIS (Intraday)</option>
+                  <option value="CNC">CNC (Delivery)</option>
+                  <option value="NRML">NRML (Normal)</option>
                 </select>
               </div>
             </div>

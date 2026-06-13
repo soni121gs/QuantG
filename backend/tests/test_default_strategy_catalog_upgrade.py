@@ -17,6 +17,16 @@ EXPECTED_DEFAULT_NAMES = {
     "BANKNIFTY HFT Momentum Scalper",
     "NIFTY Quick EMA Scalper",
     "BANKNIFTY Volatility Breakout",
+    "UPSTOX RELIANCE Advanced Momentum Trend Rider",
+    "UPSTOX SBIN Macro Short Seller",
+    "UPSTOX HDFCBANK Range Mean Reversion",
+    "UPSTOX ICICIBANK News & Volatility Catalyst",
+    "UPSTOX TCS Defensive Swing Accumulator",
+    "UPSTOX INFY VWAP Pullback Buyer",
+    "UPSTOX AXISBANK Macro Trend Follower",
+    "UPSTOX LT Infrastructure Momentum Rider",
+    "UPSTOX BHARTIARTL Defensive Intraday Trend",
+    "UPSTOX KOTAKBANK RSI Rebound Swing",
 }
 
 
@@ -45,9 +55,15 @@ def test_default_strategy_catalog_is_the_reported_nine_supported_option_buyers()
     names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
 
     assert names == EXPECTED_DEFAULT_NAMES
-    assert len(DEFAULT_OPTION_STRATEGIES) == 9
-    assert all(strategy["instrument_group"] in {"NFO", "BFO"} for strategy in DEFAULT_OPTION_STRATEGIES)
-    assert all(strategy["underlying"] in {"NIFTY", "BANKNIFTY", "SENSEX"} for strategy in DEFAULT_OPTION_STRATEGIES)
+    assert len(DEFAULT_OPTION_STRATEGIES) == 19
+    assert all(strategy["instrument_group"] in {"NFO", "BFO", "NSE", "BSE"} for strategy in DEFAULT_OPTION_STRATEGIES)
+    assert all(
+        strategy["underlying"] in {
+            "NIFTY", "BANKNIFTY", "SENSEX", "RELIANCE", "TCS", "HDFCBANK",
+            "ICICIBANK", "SBIN", "INFY", "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"
+        }
+        for strategy in DEFAULT_OPTION_STRATEGIES
+    )
 
 
 def test_default_strategy_templates_are_not_collapsed_to_generic_retail_code():
@@ -57,6 +73,9 @@ def test_default_strategy_templates_are_not_collapsed_to_generic_retail_code():
         code = (strategy.get("python_code") or "").strip()
         assert code != generic, strategy["name"]
         assert "position = \"NONE\"" in code, strategy["name"]
+        if strategy.get("instrument_group") in ("NSE", "BSE"):
+            # Cash equity templates do not require option-style exits or options-specific risk styles
+            continue
         assert "time exit" in code.lower() or "scalper time exit" in code.lower(), strategy["name"]
         assert strategy.get("risk_style") in {"momentum", "breakout", "pullback", "micro_scalp", "volatile_breakout"}
 

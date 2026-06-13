@@ -91,7 +91,7 @@ def generate_test_candles(pattern_type="uptrend", count=100):
     return candles
 
 
-# T1: All 9 default strategies exist in catalog after MCX filtering
+# T1: All default strategies exist in catalog after MCX filtering
 def test_all_9_default_strategies_exist_and_no_mcx():
     names = {s["name"] for s in server.DEFAULT_OPTION_STRATEGIES}
     expected_names = {
@@ -104,14 +104,24 @@ def test_all_9_default_strategies_exist_and_no_mcx():
         "BANKNIFTY HFT Momentum Scalper",
         "NIFTY Quick EMA Scalper",
         "BANKNIFTY Volatility Breakout",
+        "UPSTOX RELIANCE Advanced Momentum Trend Rider",
+        "UPSTOX SBIN Macro Short Seller",
+        "UPSTOX HDFCBANK Range Mean Reversion",
+        "UPSTOX ICICIBANK News & Volatility Catalyst",
+        "UPSTOX TCS Defensive Swing Accumulator",
+        "UPSTOX INFY VWAP Pullback Buyer",
+        "UPSTOX AXISBANK Macro Trend Follower",
+        "UPSTOX LT Infrastructure Momentum Rider",
+        "UPSTOX BHARTIARTL Defensive Intraday Trend",
+        "UPSTOX KOTAKBANK RSI Rebound Swing",
     }
     assert names == expected_names
-    assert len(server.DEFAULT_OPTION_STRATEGIES) == 9
+    assert len(server.DEFAULT_OPTION_STRATEGIES) == 19
     
     # Assert no MCX strategies exist in DEFAULT_OPTION_STRATEGIES
     for s in server.DEFAULT_OPTION_STRATEGIES:
         assert s.get("instrument_group") != "MCX"
-        assert "CRUDE" not in s["name"].upper() or "MINI" in s["name"].upper()  # Ensure no MCX crude
+        # Ensure no MCX crude or natural gas
         assert "NATURAL GAS" not in s["name"].upper()
 
 

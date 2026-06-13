@@ -683,6 +683,11 @@ async def _dispatch_signal_via_unified_engine(
         return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block", "reason_code": "DUPLICATE_SIGNAL"}
 
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
+    product = (
+        sig.get("product")
+        or (sig.get("visual_config") or {}).get("options", {}).get("product")
+        or (strategy.get("visual_config") or {}).get("options", {}).get("product")
+    )
     risk_res = await RiskManager(db).evaluate_order(
         user_id=user_id,
         strategy_id=sig["strategy_id"],
@@ -696,6 +701,7 @@ async def _dispatch_signal_via_unified_engine(
         take_profit=take_profit,
         lot_size=lot_size,
         risk_style=risk_style,
+        product=product,
     )
     if not risk_res.get("ok"):
         await CoreEventStore(db).log_event(
@@ -725,7 +731,7 @@ async def _dispatch_signal_via_unified_engine(
             side=side,
             qty=order_qty,
             order_type=str(sig.get("order_type") or "MARKET").upper(),
-            product=sig.get("product"),
+            product=product,
             source=f"signal:strategy:{sig['strategy_id']}",
             option_contract=option_contract,
             exchange=(option_contract or {}).get("exchange") or sig.get("exchange") or "NSE",
@@ -755,6 +761,7 @@ async def _dispatch_signal_via_unified_engine(
     final_qty = int(risk_res["quantity"])
     intent_doc["lot_size"] = lot_size
     intent_doc["lots"] = max(1, final_qty // max(1, lot_size))
+    intent_doc["product"] = product
     if option_contract:
         intent_doc["instrument_token"] = (
             option_contract.get("instrument_key")

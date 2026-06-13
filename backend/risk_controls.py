@@ -24,6 +24,7 @@ class SizeInputs:
     risk_style: str = "balanced"
     margin_buffer: float = 0.85
     max_lot: int = 0  # hard ceiling in lots (0 = unset). Sizing never exceeds this.
+    margin_requirement_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,8 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     risk_budget = equity * risk_fraction
 
     qty_risk = floor(risk_budget / unit_loss) if unit_loss > 0 else 0
-    qty_margin = floor((free_margin * float(inputs.margin_buffer or 0.85)) / entry) if free_margin > 0 else requested
+    margin_cost = entry * float(inputs.margin_requirement_ratio or 1.0)
+    qty_margin = floor((free_margin * float(inputs.margin_buffer or 0.85)) / margin_cost) if free_margin > 0 else requested
     qty_value = floor(max_position_value / entry) if max_position_value > 0 else requested
     qty_requested = requested
 
@@ -123,11 +125,12 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     if quantity < lot_size:
         one_lot_risk = unit_loss * lot_size
         one_lot_value = entry * lot_size
+        one_lot_margin_cost = entry * float(inputs.margin_requirement_ratio or 1.0) * lot_size
         near_one_lot_risk_budget = risk_budget >= one_lot_risk * 0.98
         if (
             requested <= lot_size
             and near_one_lot_risk_budget
-            and free_margin * float(inputs.margin_buffer or 0.85) >= one_lot_value
+            and free_margin * float(inputs.margin_buffer or 0.85) >= one_lot_margin_cost
             and max_position_value >= one_lot_value
         ):
             return SizeResult(True, lot_size, "accepted one lot within stop-risk budget tolerance", risk_budget, unit_loss, round(one_lot_value, 2), caps)

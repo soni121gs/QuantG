@@ -15,6 +15,8 @@ NSE_CLOSE_MINUTE = 15 * 60 + 30  # 15:30 IST
 SEGMENT_WINDOWS = {
     DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
     DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
+    DomainType.NSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE Equity"),
+    DomainType.BSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE Equity"),
 }
 
 
@@ -42,7 +44,7 @@ class MarketSessionService:
         """Check if a specific market segment is open.
         
         Args:
-            domain: DomainType enum (NSE_FO, BSE_FO), MarketDomain object, or string representation.
+            domain: DomainType enum (NSE_FO, BSE_FO, NSE_EQ, BSE_EQ), MarketDomain object, or string representation.
             now_utc: Optional datetime for testing
             
         Returns:
@@ -180,9 +182,11 @@ class MarketSessionService:
         """Get status for all market segments.
         
         Returns:
-            dict: Status for NSE_FO and BSE_FO
+            dict: Status for NSE_FO, BSE_FO, NSE_EQ, and BSE_EQ
         """
         return {
             "NSE_FO": MarketSessionService.get_segment_status(DomainType.NSE_FO, now_utc),
             "BSE_FO": MarketSessionService.get_segment_status(DomainType.BSE_FO, now_utc),
+            "NSE_EQ": MarketSessionService.get_segment_status(DomainType.NSE_EQ, now_utc),
+            "BSE_EQ": MarketSessionService.get_segment_status(DomainType.BSE_EQ, now_utc),
         }

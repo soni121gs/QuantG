@@ -222,3 +222,74 @@ def test_exit_reason_none_when_within_range():
 def pytest_approx(v):
     import pytest
     return pytest.approx(v)
+
+
+# ---------------------------------------------------------------------------
+# Equity Trading Integration tests
+# ---------------------------------------------------------------------------
+
+def test_equity_domain_resolution():
+    from core.market_domains import resolve_domain_by_underlying, DomainType
+    domain = resolve_domain_by_underlying("RELIANCE")
+    assert domain.name == DomainType.NSE_EQ
+    assert domain.segment == "NSE_EQ"
+    assert domain.get_lot_size("RELIANCE") == 1
+
+
+def test_equity_sizing_with_leverage():
+    from risk_controls import SizeInputs, compute_position_size
+    # Intraday MIS has 0.20 margin requirement (5x leverage)
+    inputs_mis = SizeInputs(
+        equity=10000.0,
+        free_margin=10000.0,
+        requested_qty=100,
+        lot_size=1,
+        entry_price=1000.0,
+        stop_loss_price=950.0,
+        max_position_value=50000.0,
+        daily_loss_limit=5000.0,
+        margin_requirement_ratio=0.20,
+        margin_buffer=1.0,
+    )
+    res_mis = compute_position_size(inputs_mis)
+    assert res_mis.allowed
+    assert res_mis.caps["margin"] == 50
+
+
+def test_equity_sizing_without_leverage():
+    from risk_controls import SizeInputs, compute_position_size
+    # Delivery CNC has 1.0 margin requirement (no leverage)
+    inputs_cnc = SizeInputs(
+        equity=10000.0,
+        free_margin=10000.0,
+        requested_qty=100,
+        lot_size=1,
+        entry_price=1000.0,
+        stop_loss_price=950.0,
+        max_position_value=50000.0,
+        daily_loss_limit=5000.0,
+        margin_requirement_ratio=1.0,
+        margin_buffer=1.0,
+    )
+    res_cnc = compute_position_size(inputs_cnc)
+    assert res_cnc.allowed
+    assert res_cnc.caps["margin"] == 10
+
+
+def test_intraday_vs_delivery_squareoff():
+    # Intraday MIS positions should trigger squareoff
+    pos_mis = {"id": "p1", "product": "MIS", "open_quantity": 10}
+    # Delivery CNC positions should not trigger squareoff
+    pos_cnc = {"id": "p2", "product": "CNC", "open_quantity": 5}
+    # Overnight NRML positions should not trigger squareoff
+    pos_nrml = {"id": "p3", "product": "NRML", "open_quantity": 8}
+    
+    def check_squareoff(pos, squareoff_due):
+        if not squareoff_due:
+            return False
+        product_type = str(pos.get("product") or "MIS").upper().strip()
+        return product_type in ("MIS", "I", "CO")
+        
+    assert check_squareoff(pos_mis, True) is True
+    assert check_squareoff(pos_cnc, True) is False
+    assert check_squareoff(pos_nrml, True) is False

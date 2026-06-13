@@ -9,6 +9,8 @@ from typing import Set, Dict, Any
 class DomainType(str, Enum):
     NSE_FO = "NSE_FO"
     BSE_FO = "BSE_FO"
+    NSE_EQ = "NSE_EQ"
+    BSE_EQ = "BSE_EQ"
 
 class MarketDomain:
     def __init__(self, name: DomainType, exchange: str, segment: str, underlyings: Set[str], lot_sizes: Dict[str, int], strike_intervals: Dict[str, int]):
@@ -65,9 +67,29 @@ BSE_FO_DOMAIN = MarketDomain(
     strike_intervals={"SENSEX": 100}
 )
 
+NSE_EQ_DOMAIN = MarketDomain(
+    name=DomainType.NSE_EQ,
+    exchange="NSE",
+    segment="NSE_EQ",
+    underlyings=set(),
+    lot_sizes={},
+    strike_intervals={}
+)
+
+BSE_EQ_DOMAIN = MarketDomain(
+    name=DomainType.BSE_EQ,
+    exchange="BSE",
+    segment="BSE_EQ",
+    underlyings=set(),
+    lot_sizes={},
+    strike_intervals={}
+)
+
 ALL_DOMAINS = {
     DomainType.NSE_FO: NSE_FO_DOMAIN,
     DomainType.BSE_FO: BSE_FO_DOMAIN,
+    DomainType.NSE_EQ: NSE_EQ_DOMAIN,
+    DomainType.BSE_EQ: BSE_EQ_DOMAIN,
 }
 
 def resolve_domain_by_underlying(underlying: str) -> MarketDomain:
@@ -86,14 +108,7 @@ def resolve_domain_by_underlying(underlying: str) -> MarketDomain:
             return BSE_FO_DOMAIN
 
     # Standard equity fallback (e.g. RELIANCE, TCS) to prevent crashes
-    return MarketDomain(
-        name=DomainType.NSE_FO,
-        exchange="NSE",
-        segment="NSE_EQ",
-        underlyings=set(),
-        lot_sizes={},
-        strike_intervals={}
-    )
+    return NSE_EQ_DOMAIN
 
 def resolve_domain_by_name(name: str) -> MarketDomain:
     try:

@@ -442,6 +442,7 @@ class StrategyRuntimeSettingsReq(BaseModel):
     target_r_multiple: Optional[float] = None
     broker: Optional[str] = None
     mode: Optional[str] = None
+    product: Optional[str] = None
 
 
 class ProfileUpdateReq(BaseModel):
@@ -3773,6 +3774,938 @@ DEFAULT_OPTION_STRATEGIES = [
 """,
         "market_suitability": "Volatile Retail Momentum",
     },
+    {
+        "name": "UPSTOX RELIANCE Advanced Momentum Trend Rider",
+        "description": "Rides strong bull trends using double EMA (9/21) filtered by index direction and tod_vol_ratio to ensure high volume participation. Uses trailing ATR stops.",
+        "underlying": "RELIANCE",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 15000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 55: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+    
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    
+    signals = []
+    position = "NONE"
+    
+    for i in range(30, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
+        bullish = ema9[i] > ema21[i] and ema9[i-1] <= ema21[i-1] and tod_vol > 1.1
+        bearish = ema9[i] < ema21[i] and ema9[i-1] >= ema21[i-1]
+        
+        if position == "NONE":
+            if bullish:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 85.0,
+                    "entry_reason": "EMA bullish crossover",
+                    "target_R": 2.2,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if bearish:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 85.0,
+                    "entry_reason": "EMA bearish crossover exit",
+                    "target_R": 2.2,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Strong Bull Markets & Intraday Momentum",
+    },
+    {
+        "name": "UPSTOX SBIN Macro Short Seller",
+        "description": "Short-selling intraday strategy for bear markets. Enters when price drops below VWAP and sloping 200 EMA, utilizing volume-backed breakdowns.",
+        "underlying": "SBIN",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 15000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 55: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+    
+    weighted = 0.0
+    total_vol = 0.0
+    vwap = []
+    for h, l, c, v in zip(highs, lows, closes, vols):
+        weighted += ((h + l + c) / 3.0) * v
+        total_vol += v
+        vwap.append(weighted / max(1.0, total_vol))
+        
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+        
+    ema50 = ema(closes, 50)
+    
+    signals = []
+    position = "NONE"
+    
+    for i in range(50, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "PE",
+                    "setup_type": "bearish_breakdown",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.2,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
+        bearish_entry = closes[i] < vwap[i] and closes[i] < ema50[i] and tod_vol > 1.2 and closes[i] < min(closes[max(0, i-10):i])
+        bearish_exit = closes[i] > vwap[i] or closes[i] > ema50[i]
+        
+        if position == "NONE":
+            if bearish_entry:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "PE",
+                    "setup_type": "bearish_breakdown",
+                    "confidence": 85.0,
+                    "entry_reason": "VWAP & EMA bearish breakdown",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.2,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "SHORT"
+        elif position == "SHORT":
+            if bearish_exit:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "PE",
+                    "setup_type": "bearish_breakdown",
+                    "confidence": 85.0,
+                    "entry_reason": "Bearish trend reversal exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.2,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Bear Markets & Intraday Short Breakdown",
+    },
+    {
+        "name": "UPSTOX HDFCBANK Range Mean Reversion",
+        "description": "Mean reversion strategy for rangebound/low volatility environments. Uses Bollinger Bands compression/reversals with RSI filters.",
+        "underlying": "HDFCBANK",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 12000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [float(d['close']) for d in data]
+    
+    rsi = [50.0] * len(closes)
+    for i in range(14, len(closes)):
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-13, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-13, i+1)) or 0.0001
+        rs = gains / losses
+        rsi[i] = 100 - (100 / (1 + rs))
+        
+    signals = []
+    position = "NONE"
+    
+    for i in range(20, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "mean_reversion",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 1.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.0,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "range",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        chunk = closes[i-20:i]
+        sma = sum(chunk) / 20
+        var = sum((x - sma) ** 2 for x in chunk) / 20
+        std = var ** 0.5
+        lower_band = sma - 2 * std
+        
+        if position == "NONE":
+            if rsi[i] < 30 and closes[i] <= lower_band:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "mean_reversion",
+                    "confidence": 80.0,
+                    "entry_reason": "Bollinger lower band buy",
+                    "target_R": 1.8,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.2,
+                    "max_hold_minutes": 120,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "range",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if closes[i] >= sma or rsi[i] > 70:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "mean_reversion",
+                    "confidence": 80.0,
+                    "entry_reason": "SMA target exit",
+                    "target_R": 1.8,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.2,
+                    "max_hold_minutes": 120,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "range",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Flat, Consolidating, and Rangebound Markets",
+    },
+    {
+        "name": "UPSTOX ICICIBANK News & Volatility Catalyst",
+        "description": "High-volatility intraday breakout strategy designed to capture sharp news-driven and earnings catalysts. Enters on extreme volume and ATR spikes.",
+        "underlying": "ICICIBANK",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 20000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    
+    tr = [0.0] * len(closes)
+    for j in range(1, len(closes)):
+        tr[j] = max(highs[j] - lows[j], abs(highs[j] - closes[j-1]), abs(lows[j] - closes[j-1]))
+    atr = [0.0] * len(closes)
+    for j in range(14, len(closes)):
+        atr[j] = sum(tr[j-13:j+1]) / 14
+        
+    signals = []
+    position = "NONE"
+    
+    for i in range(20, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "volatility_breakout",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "volatile",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        donchian_high = max(highs[i-20:i])
+        tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
+        news_trigger = closes[i] > donchian_high and tod_vol > 2.0
+        
+        if position == "NONE":
+            if news_trigger:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "volatility_breakout",
+                    "confidence": 95.0,
+                    "entry_reason": "News catalyst breakout buy",
+                    "target_R": 2.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 120,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "volatile",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            donchian_low = min(lows[i-20:i])
+            if closes[i] < donchian_low:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "volatility_breakout",
+                    "confidence": 95.0,
+                    "entry_reason": "Breakdown exit",
+                    "target_R": 2.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 120,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "volatile",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "High Volatility, Earnings Release, and News Catalysts",
+    },
+    {
+        "name": "UPSTOX TCS Defensive Swing Accumulator",
+        "description": "Swing delivery strategy built to accumulate defensive IT giant during global corrections/macro selloffs. Enters when daily RSI is extremely oversold.",
+        "underlying": "TCS",
+        "strategy_type": "Equity Delivery",
+        "required_capital": 30000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "CNC",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [float(d['close']) for d in data]
+    
+    rsi = [50.0] * len(closes)
+    for i in range(14, len(closes)):
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-13, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-13, i+1)) or 0.0001
+        rs = gains / losses
+        rsi[i] = 100 - (100 / (1 + rs))
+        
+    signals = []
+    position = "NONE"
+    
+    for i in range(20, len(data)):
+        if position == "NONE":
+            if rsi[i] < 25:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "defensive_accumulation",
+                    "confidence": 85.0,
+                    "entry_reason": "Macro RSI extreme oversold",
+                    "target_R": 3.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 2.0,
+                    "max_hold_minutes": 1440,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "any",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if rsi[i] > 60:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "defensive_accumulation",
+                    "confidence": 85.0,
+                    "entry_reason": "Macro RSI overbought recovery",
+                    "target_R": 3.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 2.0,
+                    "max_hold_minutes": 1440,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "any",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "World Affairs, Global Risk-Off & Macro Reversals",
+    },
+    {
+        "name": "UPSTOX INFY VWAP Pullback Buyer",
+        "description": "Intraday pullback buyer. Waits for price to pull back below VWAP inside a strong EMA 50 uptrend, entering on VWAP breakout recovery.",
+        "underlying": "INFY",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 10000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 55: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+    
+    cum_pv = 0.0
+    cum_v = 0.0
+    vwap = [0.0] * len(closes)
+    for j in range(len(closes)):
+        typical = (highs[j] + lows[j] + closes[j]) / 3.0
+        cum_pv += typical * vols[j]
+        cum_v += vols[j]
+        vwap[j] = cum_pv / max(1.0, cum_v)
+        
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+        
+    ema50 = ema(closes, 50)
+    signals = []
+    position = "NONE"
+    
+    for i in range(50, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "pullback",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        trend_bullish = closes[i] > ema50[i]
+        pulled_back = lows[i] <= vwap[i]
+        recovered = closes[i] > vwap[i]
+        
+        if position == "NONE":
+            if trend_bullish and pulled_back and recovered:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "pullback",
+                    "confidence": 85.0,
+                    "entry_reason": "VWAP pullback buy",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if closes[i] < ema50[i]:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "pullback",
+                    "confidence": 85.0,
+                    "entry_reason": "EMA trend break exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Intraday Pullback in Uptrends",
+    },
+    {
+        "name": "UPSTOX AXISBANK Macro Trend Follower",
+        "description": "Macro EMA filter trend follower. Enters when 9/21 EMA crossover aligns with slope of 200 EMA.",
+        "underlying": "AXISBANK",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 15000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 210: return []
+    closes = [float(d['close']) for d in data]
+    
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+        
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    ema200 = ema(closes, 200)
+    
+    signals = []
+    position = "NONE"
+    
+    for i in range(200, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        macro_up = ema200[i] > ema200[i-1]
+        crossover_buy = ema9[i] > ema21[i] and ema9[i-1] <= ema21[i-1]
+        crossover_sell = ema9[i] < ema21[i]
+        
+        if position == "NONE":
+            if macro_up and crossover_buy:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 85.0,
+                    "entry_reason": "Macro EMA crossover buy",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if crossover_sell:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "trend_follow",
+                    "confidence": 85.0,
+                    "entry_reason": "Macro EMA cross exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Intraday Trending Markets",
+    },
+    {
+        "name": "UPSTOX LT Infrastructure Momentum Rider",
+        "description": "Intraday momentum strategy designed for capital goods sector (L&T). Captures breakouts of Donchian channels with dynamic trailing stops.",
+        "underlying": "LT",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 18000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [float(d['close']) for d in data]
+    highs = [float(d.get('high', d['close'])) for d in data]
+    lows = [float(d.get('low', d['close'])) for d in data]
+    
+    signals = []
+    position = "NONE"
+    
+    for i in range(20, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "breakout",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        donchian_high = max(highs[i-20:i])
+        donchian_low = min(lows[i-20:i])
+        
+        if position == "NONE":
+            if closes[i] > donchian_high:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "breakout",
+                    "confidence": 85.0,
+                    "entry_reason": "Donchian channel breakout buy",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if closes[i] < donchian_low:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "breakout",
+                    "confidence": 85.0,
+                    "entry_reason": "Donchian channel breakdown exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Intraday Breakout & Sector Momentum",
+    },
+    {
+        "name": "UPSTOX BHARTIARTL Defensive Intraday Trend",
+        "description": "Defensive intraday trend following on low-beta telecom giant. Minimizes whipsaw losses using smoothed moving averages.",
+        "underlying": "BHARTIARTL",
+        "strategy_type": "Equity Intraday",
+        "required_capital": 15000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "MIS",
+        "python_code": """def run(data):
+    if len(data) < 55: return []
+    closes = [float(d['close']) for d in data]
+    
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+        
+    ema20 = ema(closes, 20)
+    ema50 = ema(closes, 50)
+    signals = []
+    position = "NONE"
+    
+    for i in range(50, len(data)):
+        clock = str(data[i].get('date', ''))[11:16]
+        if clock and clock > '15:05':
+            if position != "NONE":
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "defensive_trend",
+                    "confidence": 50.0,
+                    "entry_reason": "Time exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 60,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+            continue
+            
+        crossover_buy = ema20[i] > ema50[i] and ema20[i-1] <= ema50[i-1]
+        crossover_sell = ema20[i] < ema50[i]
+        
+        if position == "NONE":
+            if crossover_buy:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "defensive_trend",
+                    "confidence": 85.0,
+                    "entry_reason": "Telecom ema crossover buy",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if crossover_sell:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "defensive_trend",
+                    "confidence": 85.0,
+                    "entry_reason": "Telecom ema crossover exit",
+                    "target_R": 2.0,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.5,
+                    "max_hold_minutes": 180,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "trending",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Low Volatility Stable Trend Markets",
+    },
+    {
+        "name": "UPSTOX KOTAKBANK RSI Rebound Swing",
+        "description": "Swing delivery strategy designed for Kotak Bank. Enters on daily RSI recovery above 30 from oversold zones.",
+        "underlying": "KOTAKBANK",
+        "strategy_type": "Equity Delivery",
+        "required_capital": 25000.0,
+        "instrument_group": "NSE",
+        "lots": 1,
+        "product": "CNC",
+        "python_code": """def run(data):
+    if len(data) < 30: return []
+    closes = [float(d['close']) for d in data]
+    
+    rsi = [50.0] * len(closes)
+    for i in range(14, len(closes)):
+        gains = sum(max(closes[j] - closes[j-1], 0) for j in range(i-13, i+1))
+        losses = sum(max(closes[j-1] - closes[j], 0) for j in range(i-13, i+1)) or 0.0001
+        rs = gains / losses
+        rsi[i] = 100 - (100 / (1 + rs))
+        
+    signals = []
+    position = "NONE"
+    
+    for i in range(20, len(data)):
+        if position == "NONE":
+            if rsi[i-1] <= 30 and rsi[i] > 30:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "BUY",
+                    "direction": "CE",
+                    "setup_type": "rsi_swing",
+                    "confidence": 85.0,
+                    "entry_reason": "RSI recovery oversold buy",
+                    "target_R": 2.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.8,
+                    "max_hold_minutes": 1440,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "any",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "LONG"
+        elif position == "LONG":
+            if rsi[i] > 65:
+                signals.append({
+                    "date": data[i]["date"],
+                    "action": "SELL",
+                    "direction": "CE",
+                    "setup_type": "rsi_swing",
+                    "confidence": 85.0,
+                    "entry_reason": "RSI overbought target exit",
+                    "target_R": 2.5,
+                    "initial_stop_R": 1.0,
+                    "trail_after_R": 1.8,
+                    "max_hold_minutes": 1440,
+                    "invalidation_rule": "time_or_stop",
+                    "regime_required": "any",
+                    "option_selection_preference": "ATM",
+                    "signal_version": "v13",
+                    "strategy_logic_version": "1.0"
+                })
+                position = "NONE"
+    return signals
+""",
+        "market_suitability": "Swing Trading Financials Recovery (CNC)",
+    },
 ]
 
 LEGACY_OPTION_STRATEGIES = DEFAULT_OPTION_STRATEGIES
@@ -5115,20 +6048,40 @@ LEGACY_DEFAULT_STRATEGY_NAMES = {
 def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     underlying = str(template["underlying"]).upper()
     instrument_group = str(template.get("instrument_group") or ("BFO" if underlying == "SENSEX" else "NFO")).upper()
-    strategy_type = template.get("strategy_type") or ("Option Selling" if str(template.get("strike_mode") or "").upper().endswith("SELL") else "Option Buying")
+    
+    is_equity = instrument_group in ("NSE", "BSE")
+    strategy_type = template.get("strategy_type") or (
+        "Option Selling" if str(template.get("strike_mode") or "").upper().endswith("SELL") 
+        else ("Option Buying" if not is_equity else "Equity Intraday")
+    )
     if instrument_group == "MCX" or underlying in REMOVED_COMMODITY_UNDERLYINGS:
         raise ValueError(f"MCX strategy templates are removed from QuantG: {template.get('name')}")
     required_capital = float(template.get("required_capital") or (45000.0 if underlying == "SENSEX" else 35000.0))
     is_commodity = False
-    options_block = {
-        "enabled": True,
-        "underlying": underlying,
-        "strike_mode": template["strike_mode"],
-        "otm_points": template["otm_points"],
-        "expiry_offset": template.get("expiry_offset", 0),
-        "lots": template["lots"],
-        "required_capital": required_capital,
-    }
+    
+    if is_equity:
+        options_block = {
+            "enabled": False,
+            "underlying": underlying,
+            "strike_mode": None,
+            "otm_points": 0,
+            "expiry_offset": 0,
+            "lots": template.get("lots") or 1,
+            "required_capital": required_capital,
+            "product": template.get("product") or "MIS"
+        }
+    else:
+        options_block = {
+            "enabled": True,
+            "underlying": underlying,
+            "strike_mode": template["strike_mode"],
+            "otm_points": template["otm_points"],
+            "expiry_offset": template.get("expiry_offset", 0),
+            "lots": template["lots"],
+            "required_capital": required_capital,
+            "product": template.get("product") or "NRML"
+        }
+        
     risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}
     return {
         "id": str(uuid.uuid4()),
@@ -5137,7 +6090,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
         "description": template["description"],
         "kind": "python",
         "python_code": template["python_code"],
-        "asset_class": "options",
+        "asset_class": "equity" if is_equity else "options",
         "strategy_type": strategy_type,
         "required_capital": required_capital,
         "instrument_group": instrument_group,
@@ -5307,6 +6260,7 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
     for template in DEFAULT_OPTION_STRATEGIES:
         risk_profile = _strategy_risk_profile(template)
         risk_profile["required_capital"] = float(template.get("required_capital") or 0)
+        is_eq_temp = template.get("instrument_group") in ("NSE", "BSE")
         res = await db.strategies.update_one(
             {"user_id": user_id, "name": template["name"]},
             {"$set": {
@@ -5316,11 +6270,12 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "required_capital": float(template.get("required_capital") or 0),
                 "instrument_group": template.get("instrument_group"),
                 "market_suitability": template.get("market_suitability", "Retail live momentum"),
-                "visual_config.options.enabled": True,
+                "visual_config.options.enabled": not is_eq_temp,
                 "visual_config.options.underlying": str(template.get("underlying") or "NIFTY").upper(),
-                "visual_config.options.strike_mode": template.get("strike_mode", "ATM_BUY"),
+                "visual_config.options.strike_mode": template.get("strike_mode"),
                 "visual_config.options.otm_points": int(template.get("otm_points") or 0),
                 "visual_config.options.lots": int(template.get("lots") or 1),
+                "visual_config.options.product": template.get("product") or ("MIS" if is_eq_temp else "NRML"),
                 **_risk_update_fields(risk_profile),
                 "default_strategy_version": "v13-live-brain-r1",
                 "strategy_logic_version": "1.0",
@@ -6399,6 +7354,8 @@ UPSTOX_EQUITY_INSTRUMENTS = {
     "ICICIBANK": "NSE_EQ|INE090A01021",
     "SBIN": "NSE_EQ|INE062A01020",
     "AXISBANK": "NSE_EQ|INE238A01034",
+    "BHARTIARTL": "NSE_EQ|INE397D01024",
+    "KOTAKBANK": "NSE_EQ|INE237A01036",
     "ITC": "NSE_EQ|INE154A01025",
     "LT": "NSE_EQ|INE018A01030",
     "MARUTI": "NSE_EQ|INE585B01010",
@@ -10498,6 +11455,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         from core.portfolio_ledger import PortfolioLedger
         from core.market_domains import resolve_domain_by_underlying
 
+        if not product and strategy_row:
+            product = strategy_row.get("product") or (strategy_row.get("visual_config") or {}).get("options", {}).get("product")
+
         domain = resolve_domain_by_underlying(symbol)
         order_mgr = OrderManager(db)
         session_date = datetime.now(timezone.utc).date().isoformat()
@@ -10531,6 +11491,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             or (option_contract or {}).get("instrument_token")
             or target_symbol
         )
+        if not option_contract and exchange in ("NSE", "BSE"):
+            key_lookup = UPSTOX_EQUITY_INSTRUMENTS.get(symbol)
+            if not key_lookup:
+                inst_doc = await db.upstox_instruments.find_one({"exchange": exchange, "trading_symbol": symbol})
+                if inst_doc:
+                    key_lookup = inst_doc.get("instrument_key")
+            if key_lookup:
+                target_instrument_key = key_lookup
         # Entry-duplicate gates apply to NEW entries only. Exit orders (including
         # BUY exits of OPTION_SHORT positions) must never be blocked by them —
         # the account_duplicate check used to match the very EXITING position
@@ -10764,7 +11732,9 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 mode="paper" if paper else "live",
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                lot_size=_lot_size
+                lot_size=_lot_size,
+                risk_style=risk_style,
+                product=product
             )
 
         if not risk_res["ok"]:
@@ -10808,6 +11778,13 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
             intent_doc["asset_class"] = "OPTION_LONG" if side == "BUY" else "OPTION_SHORT"
             intent_doc["lot_size"] = int(option_contract.get("lot_size") or _lot_size or 1)
             intent_doc["underlying"] = option_contract.get("underlying") or symbol
+        else:
+            intent_doc["instrument_key"] = target_instrument_key
+            intent_doc["instrument_token"] = target_instrument_key
+            intent_doc["asset_type"] = "equity"
+            intent_doc["asset_class"] = "EQUITY"
+            intent_doc["lot_size"] = 1
+            intent_doc["underlying"] = symbol
 
         ledger = PortfolioLedger(db)
         router = ExecutionRouter(

@@ -43,7 +43,8 @@ class RiskManager:
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
         lot_size: int = 1,
-        risk_style: str = "balanced"
+        risk_style: str = "balanced",
+        product: Optional[str] = None,
     ) -> Dict[str, Any]:  # returns {ok, status, reason, quantity}
         """Performs pre-trade risk and parameter evaluations for a potential order placement.
         
@@ -167,6 +168,16 @@ class RiskManager:
         max_lot = int(float(visual_risk.get("max_lot") or 0) or 0)
         ceiling_lots = max_lot if max_lot > 0 else max(1, configured_lots)
 
+        margin_requirement_ratio = 1.0
+        if domain.name in (DomainType.NSE_EQ, DomainType.BSE_EQ):
+            resolved_product = str(product or "MIS").upper().strip()
+            if resolved_product in ("MIS", "I", "CO"):
+                margin_requirement_ratio = 0.20
+            else:
+                margin_requirement_ratio = 1.0
+        else:
+            margin_requirement_ratio = 1.0
+
         size_inputs = SizeInputs(
             equity=equity,
             free_margin=free_margin,
@@ -178,6 +189,7 @@ class RiskManager:
             daily_loss_limit=daily_loss_limit,
             risk_style=risk_style,
             max_lot=ceiling_lots,
+            margin_requirement_ratio=margin_requirement_ratio,
         )
         
         size_res = compute_position_size(size_inputs)
