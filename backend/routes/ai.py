@@ -338,6 +338,26 @@ async def get_ai_chat(session_id: str, user=Depends(get_current_user)):
         {"user_id": user["id"], "session_id": session_id},
         {"_id": 0, "user_id": 0, "session_id": 0},
     ).sort("created_at", 1).to_list(100)
+
+    # Stored chat messages keep the pending_action status captured at write time
+    # ("pending"). Sync it with the live pending_actions collection so already
+    # approved/rejected proposals don't reappear as actionable on reload.
+    action_ids = [
+        row["pending_action"]["id"]
+        for row in rows
+        if row.get("pending_action") and row["pending_action"].get("id")
+    ]
+    if action_ids:
+        actions = await db.pending_actions.find(
+            {"action_id": {"$in": action_ids}},
+            {"_id": 0, "action_id": 1, "status": 1},
+        ).to_list(len(action_ids))
+        status_by_id = {a["action_id"]: a.get("status") for a in actions}
+        for row in rows:
+            pending = row.get("pending_action")
+            if pending and pending.get("id") in status_by_id:
+                pending["status"] = status_by_id[pending["id"]] or pending.get("status")
+
     return rows
 
 

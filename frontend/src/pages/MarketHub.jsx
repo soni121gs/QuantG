@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Activity, AlertTriangle, BookOpen, HeartPulse, RefreshCw, ShieldCheck, SquareArrowOutUpRight } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, HeartPulse, RefreshCw, ShieldCheck, Sparkles, SquareArrowOutUpRight } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
+import { renderMarkdown } from "../lib/markdown";
 
 const BROKER_LABELS = { upstox: "Upstox" };
 
@@ -18,6 +19,8 @@ export default function MarketHub() {
   const [marketSession, setMarketSession] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
 
   const load = useCallback(async () => {
     const [h, r, j, f, ind, s] = await Promise.all([
@@ -67,6 +70,18 @@ export default function MarketHub() {
       toast.error(e.response?.data?.detail || "No healthy feed to auto-pick yet");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runAnalysis = async () => {
+    setAnalysisBusy(true);
+    try {
+      const r = await api.get("/ai/market-analysis");
+      setAnalysis(r.data);
+    } catch (e) {
+      setAnalysis({ content: `Error: ${e.response?.data?.detail || e.message}` });
+    } finally {
+      setAnalysisBusy(false);
     }
   };
 
@@ -194,6 +209,30 @@ export default function MarketHub() {
           </div>
         </section>
       </div>
+
+      <section className="qd-card p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
+          <div>
+            <h2 className="font-head text-lg text-white flex items-center gap-2"><Sparkles size={16} className="text-[var(--qd-accent)]" /> AI Market Brief</h2>
+            <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and Upstox feed state.</p>
+          </div>
+          <button
+            onClick={runAnalysis}
+            disabled={analysisBusy}
+            className="border border-[var(--qd-accent)] text-[var(--qd-accent)] hover:bg-[var(--qd-accent)]/10 px-3 py-2 text-xs font-mono uppercase rounded-sm flex items-center gap-2 disabled:opacity-60"
+          >
+            {analysisBusy ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {analysisBusy ? "Analyzing..." : "Generate Brief"}
+          </button>
+        </div>
+        {analysis?.content ? (
+          <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)]">
+            {renderMarkdown(analysis.content)}
+          </div>
+        ) : (
+          <div className="text-xs font-mono text-[var(--qd-text-3)]">Generate a Gemini summary of current market structure and your strategy scores.</div>
+        )}
+      </section>
 
     </div>
   );

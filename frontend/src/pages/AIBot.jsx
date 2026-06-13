@@ -1,77 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { AlertCircle, ArrowRight, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity, MessageSquare, Plus } from "lucide-react";
+import { AlertCircle, ArrowRight, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, MessageSquare, Plus } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
-
-// Minimal, dependency-free markdown renderer for agent replies (bold, inline
-// code, bullet/numbered lists, headings). Builds real React nodes — no
-// dangerouslySetInnerHTML — so Gemini's markdown stops showing as raw ** **.
-const renderInline = (text) => {
-  const parts = [];
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-    const token = match[0];
-    if (token.startsWith("**")) {
-      parts.push(<strong key={key++} className="font-semibold text-[var(--qd-text)]">{token.slice(2, -2)}</strong>);
-    } else {
-      parts.push(<code key={key++} className="rounded bg-[var(--qd-bg)] px-1 py-0.5 font-mono text-[0.85em] text-[var(--qd-accent)]">{token.slice(1, -1)}</code>);
-    }
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts;
-};
-
-const renderMarkdown = (text) => {
-  const lines = String(text || "").split("\n");
-  const blocks = [];
-  let list = null;
-  let para = [];
-  const flushPara = () => { if (para.length) { blocks.push({ type: "p", content: para.join(" ") }); para = []; } };
-  const flushList = () => { if (list) { blocks.push(list); list = null; } };
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) { flushPara(); flushList(); continue; }
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
-    const ul = /^[-*]\s+(.*)$/.exec(line);
-    const ol = /^\d+\.\s+(.*)$/.exec(line);
-    if (h) { flushPara(); flushList(); blocks.push({ type: "h", level: h[1].length, content: h[2] }); }
-    else if (ul) { flushPara(); if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; } list.items.push(ul[1]); }
-    else if (ol) { flushPara(); if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; } list.items.push(ol[1]); }
-    else { flushList(); para.push(line); }
-  }
-  flushPara();
-  flushList();
-  return blocks.map((b, i) => {
-    if (b.type === "h") {
-      return <div key={i} className={`font-head font-bold text-[var(--qd-text)] mt-2 first:mt-0 ${b.level === 1 ? "text-base" : "text-sm"}`}>{renderInline(b.content)}</div>;
-    }
-    if (b.type === "ul") return <ul key={i} className="my-1.5 list-disc space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</ul>;
-    if (b.type === "ol") return <ol key={i} className="my-1.5 list-decimal space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</ol>;
-    return <p key={i} className="my-1.5 leading-relaxed first:mt-0">{renderInline(b.content)}</p>;
-  });
-};
+import { renderMarkdown } from "../lib/markdown";
 
 const SUGGESTIONS = [
   "Verify my active strategies and drawdown limits",
   "Check Upstox feed and market status",
   "Lower my daily loss limit to 6000 INR for protection",
   "Switch terminal to emergency paper mode",
-];
-const MODES = [
-  { id: "agent", label: "Ask Agent" },
-  { id: "brief", label: "Market Brief" },
-];
-const BRIEF_PROMPTS = [
-  "Create a short market brief for NIFTY, BANKNIFTY, and SENSEX.",
-  "Summarize risks before placing live orders today.",
-  "Build a checklist for index-option trades using Upstox instrument keys.",
 ];
 
 // Human-readable labels + formatters for the 6 settings the agent can propose.
@@ -100,10 +39,7 @@ export default function AIBot() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState("agent");
   const [aiStatus, setAiStatus] = useState(null);
-  const [marketAnalysis, setMarketAnalysis] = useState(null);
-  const [analysisBusy, setAnalysisBusy] = useState(false);
   const [profile, setProfile] = useState(null);
   const [sessions, setSessions] = useState(loadSessions);
   const [sessionId, setSessionId] = useState(() => loadSessions()[0]?.id || newSessionId());
@@ -201,71 +137,14 @@ export default function AIBot() {
     }
   };
 
-  const runMarketAnalysis = async () => {
-    setAnalysisBusy(true);
-    try {
-      const r = await api.get("/ai/market-analysis");
-      setMarketAnalysis(r.data);
-    } catch (e) {
-      setMarketAnalysis({ content: `Error: ${e.response?.data?.detail || e.message}` });
-    } finally {
-      setAnalysisBusy(false);
-    }
-  };
-
   return (
     <div className="space-y-5 pb-4" data-testid="ai-bot-page">
       <PageHeader
         eyebrow="Active Risk & Co-Pilot"
         title="Ask QuantG Agent"
-        subtitle="Trading diagnostics, market briefings, and governed action proposals in one command surface."
+        subtitle="Trading diagnostics and governed action proposals, grounded in your live account."
         badge={<StatusBadge tone={profile?.paper_mode ? "paper" : "live"}>{profile?.paper_mode ? "Paper" : "Live"}</StatusBadge>}
-        actions={
-          <div className="flex rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-bg)] p-1">
-            {MODES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setMode(item.id)}
-                className={`rounded-[var(--qd-radius-sm)] px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider ${mode === item.id ? "qd-force-white bg-[var(--qd-accent)]" : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"}`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        }
       />
-
-      {mode === "brief" && (
-        <div className="qd-card p-5">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
-            <div>
-              <h2 className="font-head text-lg font-semibold text-white flex items-center gap-2"><Activity size={18} className="text-[var(--qd-accent)]" /> Market Analysis</h2>
-              <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and Upstox feed state.</p>
-            </div>
-            <Button type="button" onClick={runMarketAnalysis} disabled={analysisBusy} variant="primary" size="sm">
-              {analysisBusy ? "Analyzing..." : "Generate Analysis"}
-            </Button>
-          </div>
-          {marketAnalysis?.content && (
-            <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)]">
-              {renderMarkdown(marketAnalysis.content)}
-            </div>
-          )}
-          <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
-            {BRIEF_PROMPTS.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                onClick={() => { setMode("agent"); send(prompt); }}
-                className="rounded border border-[var(--qd-border)] p-3.5 text-left font-mono text-xs text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] transition-all bg-[var(--qd-surface-2)]/20 hover:bg-[var(--qd-surface-2)]/50"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
