@@ -3,6 +3,60 @@ import { api } from "../lib/api";
 import { AlertCircle, Bot, Send, Sparkles, User, ShieldAlert, Sliders, CheckCircle2, XCircle, ShieldCheck, HelpCircle, Activity } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
+import { useExecutionState } from "../hooks/useExecutionState";
+
+// Minimal, dependency-free markdown renderer for agent replies (bold, inline
+// code, bullet/numbered lists, headings). Builds real React nodes — no
+// dangerouslySetInnerHTML — so Gemini's markdown stops showing as raw ** **.
+const renderInline = (text) => {
+  const parts = [];
+  const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith("**")) {
+      parts.push(<strong key={key++} className="font-semibold text-[var(--qd-text)]">{token.slice(2, -2)}</strong>);
+    } else {
+      parts.push(<code key={key++} className="rounded bg-[var(--qd-bg)] px-1 py-0.5 font-mono text-[0.85em] text-[var(--qd-accent)]">{token.slice(1, -1)}</code>);
+    }
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+};
+
+const renderMarkdown = (text) => {
+  const lines = String(text || "").split("\n");
+  const blocks = [];
+  let list = null;
+  let para = [];
+  const flushPara = () => { if (para.length) { blocks.push({ type: "p", content: para.join(" ") }); para = []; } };
+  const flushList = () => { if (list) { blocks.push(list); list = null; } };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { flushPara(); flushList(); continue; }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const ul = /^[-*]\s+(.*)$/.exec(line);
+    const ol = /^\d+\.\s+(.*)$/.exec(line);
+    if (h) { flushPara(); flushList(); blocks.push({ type: "h", level: h[1].length, content: h[2] }); }
+    else if (ul) { flushPara(); if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; } list.items.push(ul[1]); }
+    else if (ol) { flushPara(); if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; } list.items.push(ol[1]); }
+    else { flushList(); para.push(line); }
+  }
+  flushPara();
+  flushList();
+  return blocks.map((b, i) => {
+    if (b.type === "h") {
+      return <div key={i} className={`font-head font-bold text-[var(--qd-text)] mt-2 first:mt-0 ${b.level === 1 ? "text-base" : "text-sm"}`}>{renderInline(b.content)}</div>;
+    }
+    if (b.type === "ul") return <ul key={i} className="my-1.5 list-disc space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</ul>;
+    if (b.type === "ol") return <ol key={i} className="my-1.5 list-decimal space-y-1 pl-5">{b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</ol>;
+    return <p key={i} className="my-1.5 leading-relaxed first:mt-0">{renderInline(b.content)}</p>;
+  });
+};
 
 const SESSION = "default";
 const SUGGESTIONS = [
@@ -22,6 +76,7 @@ const BRIEF_PROMPTS = [
 ];
 
 export default function AIBot() {
+  const { summary: executionSummary } = useExecutionState({ pollMs: 15000 });
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29,11 +84,16 @@ export default function AIBot() {
   const [aiStatus, setAiStatus] = useState(null);
   const [marketAnalysis, setMarketAnalysis] = useState(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
-  
+
   // Real-time Dashboard state
   const [profile, setProfile] = useState(null);
-  
+
   const endRef = useRef(null);
+
+  const lossLimit = Number(profile?.max_daily_loss) || 0;
+  const netPnl = Number(executionSummary?.net_pnl) || 0;
+  const drawdownUsedPct = lossLimit > 0 ? Math.min(100, Math.max(0, (Math.max(0, -netPnl) / lossLimit) * 100)) : 0;
+  const drawdownTone = drawdownUsedPct >= 80 ? "rose" : drawdownUsedPct >= 50 ? "amber" : "emerald";
 
   const fetchProfile = () => {
     api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
@@ -208,19 +268,35 @@ export default function AIBot() {
             <div ref={endRef} />
           </div>
 
-          {/* Send Input */}
-          <div className="border-t border-[var(--qd-border)] p-3 flex items-center gap-2 bg-[var(--qd-bg)]/20 rounded-b-xl">
-            <input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Configure drawdown controls, toggle emergency kill, or update settings..."
-              className="flex-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-[var(--qd-text)] font-mono rounded"
-              data-testid="ai-input"
-            />
-            <Button onClick={() => send()} disabled={busy || !text.trim()} variant="primary" size="lg" data-testid="ai-send-btn" aria-label="Send message">
-              <Send size={16} />
-            </Button>
+          {/* Send Input — persistent quick actions + multi-line composer */}
+          <div className="border-t border-[var(--qd-border)] bg-[var(--qd-bg)]/20 rounded-b-xl">
+            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => send(s)}
+                  disabled={busy}
+                  className="rounded-full border border-[var(--qd-border)] px-3 py-1 text-[11px] text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] disabled:opacity-50"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+            <div className="p-3 flex items-end gap-2">
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                rows={1}
+                placeholder="Ask about positions, risk or feed health — or say 'lower my daily loss limit to 6000'. Enter to send · Shift+Enter for a new line."
+                className="flex-1 resize-none max-h-32 bg-[var(--qd-bg)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)] outline-none px-4 py-3 text-sm text-[var(--qd-text)] rounded"
+                data-testid="ai-input"
+              />
+              <Button onClick={() => send()} disabled={busy || !text.trim()} variant="primary" size="lg" data-testid="ai-send-btn" aria-label="Send message">
+                <Send size={16} />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -256,14 +332,20 @@ export default function AIBot() {
                   </div>
                 </div>
 
-                {/* Progress Drawdown Bar */}
+                {/* Real drawdown usage: how much of the daily loss limit is consumed */}
                 <div className="space-y-1.5 mt-2">
                   <div className="flex justify-between font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">
-                    <span>Daily Drawdown Margin</span>
-                    <span className="text-amber-400 font-bold">Risk Boundary</span>
+                    <span>Daily Drawdown Used</span>
+                    <span className={`font-bold ${drawdownTone === "rose" ? "text-rose-400" : drawdownTone === "amber" ? "text-amber-400" : "text-emerald-400"}`}>{drawdownUsedPct.toFixed(0)}%</span>
                   </div>
                   <div className="w-full bg-[var(--qd-bg)] rounded-full h-2.5 overflow-hidden border border-[var(--qd-border)]/60">
-                    <div className="bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500 h-full rounded-full" style={{ width: "65%" }}></div>
+                    <div
+                      className={`h-full rounded-full transition-all ${drawdownTone === "rose" ? "bg-rose-500" : drawdownTone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`}
+                      style={{ width: `${drawdownUsedPct}%` }}
+                    />
+                  </div>
+                  <div className="font-mono text-[9px] text-[var(--qd-text-3)]">
+                    Net P&L {netPnl >= 0 ? "+" : ""}{netPnl.toLocaleString()} INR {lossLimit > 0 ? `of ${lossLimit.toLocaleString()} INR limit` : "· no loss limit set"}
                   </div>
                 </div>
               </div>
@@ -296,10 +378,30 @@ export default function AIBot() {
             )}
           </div>
 
-          {/* Quick Help & Guidelines */}
-          <div className="qd-card p-5 text-xs leading-relaxed text-[var(--qd-text-2)]">
-            <h3 className="font-head font-bold text-white uppercase text-xs pb-2 flex items-center gap-2"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> Copilot Guidelines</h3>
-            <p className="mt-1 font-mono">You can speak freely with the co-pilot to adjust parameters. All critical changes require your explicit click approval here before committing to Upstox live routes.</p>
+          {/* What the agent can actually do */}
+          <div className="qd-card p-5 text-xs leading-relaxed">
+            <h3 className="font-head font-bold text-white uppercase text-xs pb-3 mb-3 flex items-center gap-2 border-b border-[var(--qd-border)]/50"><HelpCircle size={14} className="text-[var(--qd-accent)]" /> What I Can Do</h3>
+
+            <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5"><ShieldCheck size={12} className="text-emerald-400" /> Reads automatically</div>
+            <ul className="mt-1.5 space-y-1 text-[var(--qd-text-2)]">
+              <li>· Orders, positions &amp; execution state</li>
+              <li>· Strategies, their errors &amp; rejected orders</li>
+              <li>· Upstox feed, market status &amp; live ticks</li>
+              <li>· Daily P&amp;L, loss limit &amp; capital usage</li>
+            </ul>
+
+            <div className="mt-3 pt-3 border-t border-[var(--qd-border)]/50 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5"><Sliders size={12} className="text-blue-400" /> Can change — you approve each</div>
+            <ul className="mt-1.5 space-y-1 text-[var(--qd-text-2)]">
+              <li>· Daily loss limit &amp; max trades / day</li>
+              <li>· Position size &amp; per-strategy capital</li>
+              <li>· Default order quantity</li>
+              <li>· Paper ↔ Live mode (emergency kill)</li>
+            </ul>
+
+            <div className="mt-3 pt-3 border-t border-[var(--qd-border)]/50 flex items-start gap-1.5 text-[var(--qd-text-3)]">
+              <ShieldAlert size={12} className="mt-0.5 text-[var(--qd-loss)] flex-shrink-0" />
+              <span>Never places, cancels, or exits trades. Every change needs your click.</span>
+            </div>
           </div>
 
         </div>
@@ -357,7 +459,11 @@ const Message = ({ m, onApprove, onReject }) => {
         </div>
       )}
       <div className={`max-w-[85%] px-4 py-3 rounded-lg shadow-sm border ${isUser ? "qd-force-white bg-[var(--qd-accent)] border-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)]/65 border-[var(--qd-border)] text-[var(--qd-text)]"}`}>
-        <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed font-sans">{m.content}</pre>
+        {isUser ? (
+          <div className="whitespace-pre-wrap text-sm leading-relaxed">{m.content}</div>
+        ) : (
+          <div className="text-sm leading-relaxed">{renderMarkdown(m.content)}</div>
+        )}
 
         {hasAction && (
           <div className="mt-4 p-4 rounded border border-[var(--qd-border)] bg-[var(--qd-bg)]/80 relative overflow-hidden">
