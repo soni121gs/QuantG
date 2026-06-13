@@ -73,38 +73,87 @@ const KpiCard = ({ label, value, sub, icon: Icon, tone, testid }) => (
   </div>
 );
 
-const MarketPulseGraphic = ({ pnl = 0, marketOpen, label }) => {
-  const positive = Number(pnl || 0) >= 0;
-  const path = positive
-    ? "M6 96 C38 74 48 82 74 58 S124 24 160 38 S214 82 258 42 S314 18 354 30"
-    : "M6 34 C38 54 50 46 76 72 S126 112 162 96 S214 52 258 88 S314 116 354 102";
+const buildSparkPath = (series, w, h, pad = 6) => {
+  if (!series || series.length < 2) return "";
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const span = max - min || 1;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+  const step = innerW / (series.length - 1);
+  return series
+    .map((v, i) => {
+      const x = pad + i * step;
+      const y = pad + innerH - ((v - min) / span) * innerH;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+};
+
+// Real NIFTY widget: live LTP + period change from genuine candle data, with a
+// graceful stats-only fallback when candles are unavailable (e.g. analytics
+// token not configured or market closed). Replaces the old decorative SVG.
+const NiftyPulseChart = ({ niftyLtp, sensexLtp, candles = [], marketOpen, label, feedLabel }) => {
+  const series = (candles || []).map((c) => Number(c.close ?? c.c)).filter((n) => Number.isFinite(n));
+  const hasChart = series.length >= 2;
+  const first = series[0];
+  const last = series[series.length - 1];
+  const liveLtp = Number(niftyLtp) || last || 0;
+  const change = hasChart ? last - first : 0;
+  const pct = hasChart && first ? (change / first) * 100 : 0;
+  const positive = change >= 0;
+  const W = 360;
+  const H = 96;
+  const PAD = 6;
+  const line = buildSparkPath(series, W, H, PAD);
+  const step = series.length > 1 ? (W - PAD * 2) / (series.length - 1) : 0;
+  const lastX = PAD + (series.length - 1) * step;
+  const area = hasChart ? `${line} L${lastX.toFixed(1)} ${H} L${PAD} ${H} Z` : "";
 
   return (
-    <div className="qd-market-pulse" aria-hidden="true">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="qd-section-title">NIFTY Pulse</div>
-          <div className="mt-1 font-mono text-xs font-bold text-[var(--qd-text)]">{label || "SESSION"}</div>
+    <div className="qd-market-pulse" data-testid="nifty-pulse">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="qd-section-title">NIFTY 50</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="font-mono text-2xl font-bold tracking-tight text-[var(--qd-text)]">{liveLtp ? formatINR(liveLtp) : "—"}</span>
+            {hasChart && (
+              <span className={`font-mono text-xs font-bold ${positive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                {positive ? "▲" : "▼"} {Math.abs(pct).toFixed(2)}%
+              </span>
+            )}
+          </div>
         </div>
         <span className={`qd-pulse-status ${marketOpen ? "is-open" : "is-closed"}`}>{marketOpen ? "Live" : "Closed"}</span>
       </div>
-      <svg viewBox="0 0 360 132" className="mt-4 h-28 w-full">
-        <defs>
-          <linearGradient id="pulseLine" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="var(--qd-accent)" />
-            <stop offset="55%" stopColor="var(--qd-cyan)" />
-            <stop offset="100%" stopColor={positive ? "var(--qd-profit)" : "var(--qd-loss)"} />
-          </linearGradient>
-        </defs>
-        <path d="M0 120 H360" stroke="var(--qd-border)" strokeWidth="1" />
-        <path d="M0 78 H360" stroke="var(--qd-border)" strokeWidth="1" opacity="0.7" />
-        <path d="M0 36 H360" stroke="var(--qd-border)" strokeWidth="1" opacity="0.45" />
-        <path d={`${path} L354 126 L6 126 Z`} fill="var(--qd-accent)" opacity="0.08" />
-        <path d={path} fill="none" stroke="url(#pulseLine)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="5" />
-        {[46, 118, 190, 262, 334].map((x, index) => (
-          <circle key={x} cx={x} cy={index % 2 ? 82 : 42} r="3.5" fill="var(--qd-accent)" opacity="0.75" />
-        ))}
-      </svg>
+
+      {hasChart ? (
+        <svg viewBox={`0 0 ${W} ${H}`} className="mt-3 h-24 w-full" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="niftyPulseLine" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0%" stopColor="var(--qd-accent)" />
+              <stop offset="100%" stopColor={positive ? "var(--qd-profit)" : "var(--qd-loss)"} />
+            </linearGradient>
+          </defs>
+          <path d={area} fill="var(--qd-accent)" opacity="0.08" />
+          <path d={line} fill="none" stroke="url(#niftyPulseLine)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+      ) : (
+        <div className="mt-3 flex h-24 items-center justify-center rounded-[var(--qd-radius-sm)] border border-dashed border-[var(--qd-border)] px-3 text-center text-[11px] text-[var(--qd-text-3)]">
+          {marketOpen ? "Waiting for NIFTY candles…" : "Intraday chart unavailable (market closed or analytics token not set)"}
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--qd-border)] pt-3">
+        <div>
+          <div className="qd-section-title text-[9px]">SENSEX</div>
+          <div className="mt-1 font-mono text-sm font-semibold text-[var(--qd-text)]">{sensexLtp ? formatINR(sensexLtp) : "—"}</div>
+        </div>
+        <div className="text-right">
+          <div className="qd-section-title text-[9px]">Feed</div>
+          <div className="mt-1 truncate font-mono text-xs text-[var(--qd-text-2)]" title={feedLabel || label}>{feedLabel || label || "—"}</div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -342,6 +391,7 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState("");
   const [busyStrategy, setBusyStrategy] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
+  const [niftyCandles, setNiftyCandles] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -371,6 +421,27 @@ export default function Dashboard() {
     const t = setInterval(load, 60000);
     return () => clearInterval(t);
   }, [load]);
+
+  const loadNiftyCandles = useCallback(async () => {
+    const key = encodeURIComponent("NSE_INDEX|Nifty 50");
+    try {
+      let res = await api.get(`/market/candles/${key}`, { params: { interval: "30minute" } });
+      let candles = res?.data?.candles || [];
+      if (!candles.length) {
+        res = await api.get(`/market/candles/${key}`, { params: { interval: "1day" } });
+        candles = res?.data?.candles || [];
+      }
+      setNiftyCandles(candles.slice(-64));
+    } catch {
+      setNiftyCandles([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNiftyCandles();
+    const t = setInterval(loadNiftyCandles, 60000);
+    return () => clearInterval(t);
+  }, [loadNiftyCandles]);
 
   const pnl = executionSummary.net_pnl ?? 0;
   const grossPnl = executionSummary.gross_pnl ?? pnl;
@@ -541,7 +612,14 @@ export default function Dashboard() {
                   </Link>
                 </div>
               </div>
-              <MarketPulseGraphic pnl={pnl} marketOpen={marketOpen} label={marketStatusLabel} />
+              <NiftyPulseChart
+                niftyLtp={telemetry?.market_status?.nifty?.ltp}
+                sensexLtp={telemetry?.market_status?.sensex?.ltp}
+                candles={niftyCandles}
+                marketOpen={marketOpen}
+                label={marketStatusLabel}
+                feedLabel={telemetry?.market_status?.feed_source_label}
+              />
             </div>
           </div>
 

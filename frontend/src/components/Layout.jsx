@@ -29,6 +29,7 @@ import {
   ExternalLink,
   AlertTriangle,
   PanelRight,
+  PanelRightClose,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -150,7 +151,7 @@ const formatNotificationTime = (value) => {
   });
 };
 
-const MiniBlotterDock = ({ funds, wallet, summary, profile }) => {
+const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
   const pnl = summary?.net_pnl ?? 0;
   const cash = funds?.available_cash ?? wallet?.balance ?? 0;
   const usedMargin = Number(funds?.used_margin ?? 0);
@@ -165,7 +166,15 @@ const MiniBlotterDock = ({ funds, wallet, summary, profile }) => {
           <div className="qd-section-title">Mini Blotter</div>
           <div className="mt-1 text-xs text-[var(--qd-text-2)]">Always-on account context</div>
         </div>
-        <PanelRight size={17} className="text-[var(--qd-accent)]" />
+        <button
+          type="button"
+          onClick={onCollapse}
+          className="rounded-[var(--qd-radius-sm)] p-1 text-[var(--qd-text-3)] hover:bg-[var(--qd-surface-2)] hover:text-[var(--qd-text)]"
+          title="Collapse account rail"
+          data-testid="blotter-collapse"
+        >
+          <PanelRightClose size={17} />
+        </button>
       </div>
       <div className="mt-4 grid gap-3">
         <div className="qd-blotter-metric">
@@ -253,6 +262,15 @@ export default function Layout({ children }) {
     const saved = window.localStorage.getItem("quantg-theme-v2") || "daylight";
     return VALID_THEME_IDS.has(saved) ? saved : "daylight";
   });
+  const [blotterOpen, setBlotterOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("quantg-blotter-open") === "true";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("quantg-blotter-open", blotterOpen ? "true" : "false");
+  }, [blotterOpen]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -689,7 +707,7 @@ export default function Layout({ children }) {
 
         {/* Main */}
         <main className="flex-1 min-w-0 qd-grid-bg">
-          <div className="grid gap-4 p-3 pb-24 md:p-5 lg:grid-cols-[minmax(0,1fr)_240px] lg:pb-5 xl:grid-cols-[minmax(0,1fr)_260px]">
+          <div className={`grid gap-4 p-3 pb-24 md:p-5 lg:pb-5 ${blotterOpen ? "lg:grid-cols-[minmax(0,1fr)_240px] xl:grid-cols-[minmax(0,1fr)_260px]" : "lg:grid-cols-1"}`}>
             <div className="min-w-0">
               {children}
               <button
@@ -701,9 +719,28 @@ export default function Layout({ children }) {
                 <ShieldAlert size={13} /> F&O Risk Disclosure
               </button>
             </div>
-            <MiniBlotterDock funds={funds} wallet={executionWallet} summary={executionSummary} profile={profile} />
+            {blotterOpen && (
+              <MiniBlotterDock
+                funds={funds}
+                wallet={executionWallet}
+                summary={executionSummary}
+                profile={profile}
+                onCollapse={() => setBlotterOpen(false)}
+              />
+            )}
           </div>
 
+          {!blotterOpen && (
+            <button
+              type="button"
+              onClick={() => setBlotterOpen(true)}
+              className="hidden lg:flex fixed right-0 top-28 z-40 items-center gap-2 rounded-l-[var(--qd-radius-sm)] border border-r-0 border-[var(--qd-border)] bg-[var(--qd-surface)] px-2 py-3 text-[var(--qd-text-2)] shadow-sm hover:text-[var(--qd-text)]"
+              title="Show account rail"
+              data-testid="blotter-expand"
+            >
+              <PanelRight size={16} />
+            </button>
+          )}
         </main>
       </div>
 
