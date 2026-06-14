@@ -26,6 +26,7 @@ from pymongo import ReturnDocument
 
 from safe_exec import safe_run_strategy
 from market_protection import MarketTrendAnalyzer
+from core.market_clock import is_trading_session_active
 from core.option_selector_v2 import select_option_contract
 from market_regime import update_regime, get_cached_regime
 from trade_frequency import check_frequency_gate, record_strategy_filter, compute_tod_volume_ratio
@@ -346,6 +347,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
     """
     logger.info(f"Strategy runner starting (tick={TICK_SECONDS}s, pod={POD_ID})")
     while not stop_event.is_set():
+        # Global market hours gate: do nothing outside 9:00 AM – 3:35 PM IST Mon–Fri.
+        # This prevents all DB reads/writes and lock acquisition when the market is closed.
+        if not is_trading_session_active():
+            await _sleep_or_stop(stop_event, TICK_SECONDS)
+            continue
         owns_lock = await _acquire_lock(db)
         if not owns_lock:
             # Another pod is leader; skip this tick.

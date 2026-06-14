@@ -16353,6 +16353,8 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _lifecycle_reset_done_date: Optional[str] = None
     _squareoff_done_date: Optional[str] = None
     _vix_last_snapshot_minute: Optional[str] = None
+    _schedule_activate_done_date: Optional[str] = None
+    _schedule_pause_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -16433,6 +16435,48 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     )
                 else:
                     logger.info("FIX5: All %d user gateways connected at market open", len(results))
+
+            # 9:00 AM IST Mon–Fri — auto-activate strategies that were paused by the market schedule.
+            # Only re-activates strategies with schedule_paused=True; manually paused ones are left alone.
+            if (
+                ist.weekday() < 5
+                and _schedule_activate_done_date != today
+                and hour == 9 and 0 <= minute < 15
+            ):
+                _schedule_activate_done_date = today
+                try:
+                    result = await db.strategies.update_many(
+                        {"schedule_paused": True},
+                        {"$set": {"status": "live", "schedule_paused": False,
+                                  "schedule_resumed_at": ist.isoformat()}},
+                    )
+                    logger.info(
+                        "Market schedule: 9:00 AM — auto-activated %d strategies",
+                        result.modified_count,
+                    )
+                except Exception as _act_err:
+                    logger.warning("Market schedule activate failed: %s", _act_err)
+
+            # 3:35 PM IST Mon–Fri — auto-pause all live strategies at market close.
+            # Sets schedule_paused=True so 9:00 AM restore can distinguish from manual pauses.
+            if (
+                ist.weekday() < 5
+                and _schedule_pause_done_date != today
+                and hour == 15 and 35 <= minute < 50
+            ):
+                _schedule_pause_done_date = today
+                try:
+                    result = await db.strategies.update_many(
+                        {"status": "live"},
+                        {"$set": {"status": "paused", "schedule_paused": True,
+                                  "schedule_paused_at": ist.isoformat()}},
+                    )
+                    logger.info(
+                        "Market schedule: 3:35 PM — auto-paused %d strategies at market close",
+                        result.modified_count,
+                    )
+                except Exception as _pause_err:
+                    logger.warning("Market schedule pause failed: %s", _pause_err)
 
             # 15:15 IST — unconditional EOD square-off (exit guarantee, weekdays only).
             # Window check (>= 15:15, before 15:30) instead of exact-minute so a slow
@@ -17159,6 +17203,28 @@ async def startup():
     except Exception as _arm_check_err:
         logger.warning("Boot-time arm state check failed (non-fatal): %s", _arm_check_err)
 
+    # Market schedule startup restore: if backend restarts during market hours, re-activate
+    # any strategies that were auto-paused by the 3:35 PM scheduler the previous session.
+    async def _restore_schedule_on_startup():
+        await asyncio.sleep(5)
+        try:
+            from core.market_clock import is_trading_session_active, get_ist_now
+            ist = get_ist_now()
+            if ist.weekday() < 5 and is_trading_session_active():
+                result = await db.strategies.update_many(
+                    {"schedule_paused": True},
+                    {"$set": {"status": "live", "schedule_paused": False,
+                              "schedule_resumed_at": ist.isoformat()}},
+                )
+                if result.modified_count:
+                    logger.info(
+                        "Startup: auto-activated %d schedule-paused strategies (market is open)",
+                        result.modified_count,
+                    )
+        except Exception as _sr_err:
+            logger.warning("Startup schedule restore failed: %s", _sr_err)
+
+    asyncio.create_task(_restore_schedule_on_startup())
     logger.info("QuantG API started")
 
 
