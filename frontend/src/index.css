@@ -236,6 +236,55 @@ a[class*="bg-[var(--qd-loss)]"] {
   color: #ffffff !important;
 }
 
+/* Force white text on buttons and badge backgrounds across all themes */
+button.text-white,
+a.text-white,
+button[class*="bg-[var(--qd-loss)]"],
+button[class*="bg-[var(--qd-accent)]"],
+button[class*="bg-red-"],
+button[class*="bg-rose-"],
+button[class*="bg-emerald-"],
+button[class*="bg-blue-"],
+button[class*="bg-indigo-"],
+a[class*="bg-[var(--qd-loss)]"],
+a[class*="bg-[var(--qd-accent)]"],
+a[class*="bg-red-"],
+a[class*="bg-rose-"],
+a[class*="bg-emerald-"],
+a[class*="bg-blue-"],
+a[class*="bg-indigo-"],
+.badge-kill,
+.badge-normal,
+.badge-size,
+.badge-drawdown,
+.bg-red-500,
+.bg-emerald-500,
+.bg-blue-600,
+.bg-indigo-600,
+.bg-rose-600,
+.bg-emerald-600,
+[class*="bg-[var(--qd-accent)]"],
+[class*="bg-[var(--qd-loss)]"] {
+  color: #ffffff !important;
+}
+
+/* Ensure hover:text-white works correctly on hover states */
+.hover\:text-white:hover,
+[class*="hover:text-white"]:hover {
+  color: #ffffff !important;
+}
+
+/* Ensure nested elements with text-white inside colored backgrounds remain white */
+[class*="bg-[var(--qd-loss)]"] .text-white,
+[class*="bg-[var(--qd-accent)]"] .text-white,
+[class*="bg-red-"] .text-white,
+[class*="bg-emerald-"] .text-white,
+[class*="bg-blue-"] .text-white,
+[class*="bg-indigo-"] .text-white,
+[class*="bg-rose-"] .text-white {
+  color: #ffffff !important;
+}
+
 @layer base {
   :root {
     --background: 224 39% 5%;
@@ -312,7 +361,7 @@ textarea {
   border-radius: var(--qd-radius-sm);
   background-color: var(--qd-elevated);
   border: 1px solid var(--qd-border);
-  color: var(--qd-text);
+  color: var(--qd-text) !important;
 }
 
 input:hover,

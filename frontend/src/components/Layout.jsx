@@ -440,7 +440,7 @@ export default function Layout({ children }) {
                 <span className="font-head font-extrabold text-[var(--qd-text)] text-base">
                   Quant<span className="text-[var(--qd-accent)]">G</span>
                 </span>
-                <div className="mt-1 hidden text-[9px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)] sm:block">
+                <div className="mt-1 hidden text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)] sm:block">
                   Trading Cockpit {APP_VERSION_LABEL}
                 </div>
               </div>
@@ -554,9 +554,9 @@ export default function Layout({ children }) {
             </div>
             <div className="flex items-center gap-2">
               <div className="hidden lg:flex flex-col items-end leading-none font-mono">
-                <span className="text-[10px] text-[var(--qd-text-2)]">{user?.email}</span>
+                <span className="text-[11px] text-[var(--qd-text-2)]">{user?.email}</span>
                 {user?.role && (
-                  <span className={`text-[8px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
+                  <span className={`text-[10px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
                     user.role === "owner" 
                       ? "bg-[rgba(255,159,10,0.08)] text-[var(--qd-warn)] border-[var(--qd-warn)]/30" 
                       : "bg-indigo-500/10 text-indigo-300 border-indigo-500/20"
@@ -622,13 +622,13 @@ export default function Layout({ children }) {
                 Advanced Trading
               </div>
               <span
-                className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
                 data-testid="sidebar-version-badge"
               >
                 {APP_VERSION_LABEL}
               </span>
             </div>
-            <div className="text-[8px] text-[var(--qd-text-2)] mt-1.5">
+            <div className="text-[10px] text-[var(--qd-text-2)] mt-1.5">
               QuantG Terminal · Real-time · Live
             </div>
           </div>
@@ -698,7 +698,7 @@ export default function Layout({ children }) {
                   </div>
                 </div>
               </nav>
-              <div className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
+              <div className="text-[11px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)] pt-2">
                 Advanced Trading Platform {APP_VERSION_LABEL}
               </div>
             </aside>

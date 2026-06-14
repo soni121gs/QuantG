@@ -288,7 +288,7 @@ export default function OpsConsole() {
                       <button
                         onClick={() => handleReject(p.id, p.name)}
                         disabled={userActionId === p.id}
-                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white disabled:opacity-60 text-red-400 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
+                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white disabled:opacity-60 text-[var(--qd-loss)] font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
                       >
                         Reject
                       </button>
@@ -413,7 +413,7 @@ export default function OpsConsole() {
       )}
 
       {/* SYSTEM STATUS RIBBON */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <MetricCard label="Mode" value={data?.mode || "PAPER"} tone={data?.mode === "LIVE" ? "loss" : "warn"} isPulse={data?.mode === "LIVE"} />
         <MetricCard label="Market" value={data?.market?.status || "CLOSED"} tone={data?.market?.open ? "profit" : "warn"} />
         <MetricCard label="Session P&L" value={money(sessionPnl)} tone={sessionPnl >= 0 ? "profit" : "loss"} />
@@ -564,32 +564,32 @@ export default function OpsConsole() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
-                <div className="text-lg font-bold text-white font-mono mt-1">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
+                <div className="text-sm sm:text-base font-bold text-white font-mono mt-1 truncate">
                   {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
                 </div>
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Execution limit</div>
               </div>
 
               <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
-                <div className="text-lg font-bold text-[var(--qd-loss)] font-mono mt-1">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
+                <div className="text-sm sm:text-base font-bold text-[var(--qd-loss)] font-mono mt-1 truncate">
                   {usedMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
                 </div>
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Current block</div>
               </div>
 
               <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
-                <div className="text-lg font-bold text-[var(--qd-warn)] font-mono mt-1">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
+                <div className="text-sm sm:text-base font-bold text-[var(--qd-warn)] font-mono mt-1 truncate">
                   {spanMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
                 </div>
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Underlying hedge margin</div>
               </div>
 
               <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
-                <div className="text-lg font-bold text-blue-400 font-mono mt-1">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
+                <div className="text-sm sm:text-base font-bold text-blue-400 font-mono mt-1 truncate">
                   {fundsData?.source === "paper" ? "5.0x MIS" : "1.0x NRML"}
                 </div>
                 <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Daily leverage capacity</div>
@@ -849,10 +849,10 @@ function actionMessage(key, data) {
 // Sleek Metric Card
 const MetricCard = ({ label, value, tone, isPulse }) => (
   <div className="border border-[var(--qd-border)] bg-[var(--qd-surface-2)] backdrop-blur-md rounded-md p-3 hover:border-[var(--qd-border-strong)] transition-all">
-    <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className="flex items-center gap-1.5 mt-1">
       {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
-      <div className={`font-head text-base font-bold tracking-tight truncate ${
+      <div className={`font-head text-[13px] sm:text-sm font-bold tracking-tight truncate ${
         tone === "profit" ? "text-[var(--qd-profit)]" : 
         tone === "loss" ? "text-[var(--qd-loss)] animate-pulse" : 
         tone === "warn" ? "text-[var(--qd-warn)]" : 
@@ -866,9 +866,9 @@ const MetricCard = ({ label, value, tone, isPulse }) => (
 
 // Diagnostics Row
 const DiagRow = ({ k, v }) => (
-  <div className="flex justify-between items-center border-b border-[rgba(255,255,255,0.04)] pb-2 pt-1 font-mono text-[11px]">
-    <span className="text-[var(--qd-text-3)]">{k}</span>
-    <span className="text-white text-right font-medium max-w-[200px] truncate select-all">{v}</span>
+  <div className="flex justify-between items-center border-b border-[rgba(255,255,255,0.04)] pb-2 pt-1 font-mono text-[11px] gap-2">
+    <span className="text-[var(--qd-text-3)] shrink-0">{k}</span>
+    <span className="text-white text-right font-medium truncate select-all flex-1 min-w-0">{v}</span>
   </div>
 );
 
@@ -886,9 +886,9 @@ const TelemetryMetric = ({ label, value, desc, status, isPulse }) => {
       <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">{label}</div>
       <div className="flex items-center gap-1.5 mt-1">
         {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
-        <div className={`font-head text-sm font-bold truncate ${getStatusColor()}`}>{value}</div>
+        <div className={`font-head text-xs sm:text-sm font-bold ${getStatusColor()}`}>{value}</div>
       </div>
-      <div className="text-[9px] text-[var(--qd-text-3)] mt-0.5 font-mono truncate">{desc}</div>
+      <div className="text-[9px] text-[var(--qd-text-3)] mt-0.5 font-mono">{desc}</div>
     </div>
   );
 };
