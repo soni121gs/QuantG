@@ -58,8 +58,8 @@ BLOCKED_UNDERLYINGS: frozenset[str] = frozenset({
 })
 
 LIVE_STALE_SEC: float = float(os.environ.get("QUANTG_OPTION_STALE_SEC", "30"))
-LIVE_MIN_SCORE: int = 70
-PAPER_MIN_SCORE: int = 35
+LIVE_MIN_SCORE: int = int(os.environ.get("QUANTG_OPTION_MIN_SCORE_LIVE", "70"))
+PAPER_MIN_SCORE: int = int(os.environ.get("QUANTG_OPTION_MIN_SCORE_PAPER", "35"))
 
 VALID_PREFERENCES: frozenset[str] = frozenset({"ATM", "ITM1", "OTM1", "AUTO"})
 VALID_DIRECTIONS: frozenset[str] = frozenset({"CE", "PE"})
