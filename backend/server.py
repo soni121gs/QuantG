@@ -11461,6 +11461,14 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         if not product and strategy_row:
             product = strategy_row.get("product") or (strategy_row.get("visual_config") or {}).get("options", {}).get("product")
 
+        # Resolve risk_style once, unconditionally. The risk manager consumes it
+        # for every non-exit order below. It used to be bound only inside the
+        # market-data-quality block, whose guard (`not (price and price > 0)`)
+        # is false for the common case of an entry signal that already carries a
+        # valid price — so risk_style stayed unbound and the order raised
+        # UnboundLocalError, silently dropping the signal at the execution boundary.
+        risk_style = (strategy_row or {}).get("risk_style") or ((strategy_row or {}).get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
+
         domain = resolve_domain_by_underlying(symbol)
         order_mgr = OrderManager(db)
         session_date = datetime.now(timezone.utc).date().isoformat()
@@ -11629,7 +11637,6 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
                 return _clean_order_response(skip_doc)
 
             # 2. Market Data Quality (staleness, spread, token presence, etc.)
-            risk_style = (strategy_row or {}).get("risk_style") or ((strategy_row or {}).get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
             bid = float(option_contract.get("bid") or 0)
             ask = float(option_contract.get("ask") or 0)
             quality = evaluate_market_data_quality(
