@@ -14232,6 +14232,46 @@ async def _resolve_option_for_strategy(
     if _qts is not None:
         resolved_contract["received_at"] = _qts
 
+    # Phase 1 greeks backfill. The full-mode WS tick almost always misses on first
+    # resolution (the subscription was only just sent, so latest_tick returns
+    # nothing and we fall back to the REST ltp-only quote), and the search-fallback
+    # path carries no chain data at all — so quality_quote usually has no greeks/OI
+    # and greeks_at_signal lands as null. Backfill from a targeted option-chain
+    # fetch for THIS contract's *actual* expiry (the chain at the top of this
+    # function uses the nearest expiry and misses later-dated monthlies). The REST
+    # option chain reliably returns option_greeks + market_data. Best-effort only:
+    # gated on missing greeks so the hot path is untouched when the tick had them,
+    # and wrapped so it can never block resolution.
+    if (
+        gateway_connected
+        and not _is_simulated_contract
+        and not any(_qq.get(_g) is not None for _g in ("iv", "delta", "theta", "gamma", "vega"))
+    ):
+        try:
+            _spot_key = upstox_keys.get(underlying)
+            if _spot_key:
+                _gchain = await asyncio.to_thread(
+                    upstox_gw.get_option_chain, _spot_key, expiry_dt.date().isoformat()
+                )
+                if _gchain and _gchain.get("status") == "success":
+                    for _gnode in (_gchain.get("data") or []):
+                        if int(float(_gnode.get("strike_price") or 0)) == int(strike):
+                            _gopt = _gnode.get("call_options" if opt_type == "CE" else "put_options") or {}
+                            _gg = _gopt.get("option_greeks") or {}
+                            _gmd = _gopt.get("market_data") or {}
+                            for _gk in ("iv", "delta", "theta", "gamma", "vega"):
+                                if _gg.get(_gk) is not None:
+                                    _qq.setdefault(_gk, _gg.get(_gk))
+                            if _gmd.get("oi") is not None:
+                                _qq.setdefault("oi", _gmd.get("oi"))
+                            if resolved_contract.get("bid") is None and _gmd.get("bid_price") is not None:
+                                resolved_contract["bid"] = _gmd.get("bid_price")
+                            if resolved_contract.get("ask") is None and _gmd.get("ask_price") is not None:
+                                resolved_contract["ask"] = _gmd.get("ask_price")
+                            break
+        except Exception as _gexc:
+            logger.debug("greeks chain backfill failed for %s %s %s: %s", underlying, strike, opt_type, _gexc)
+
     # Mirror greeks / IV / OI / order-flow fields off the full-mode tick so they
     # persist on the signal doc (option_contract is embedded whole) and flow
     # through order → fill → position for entry-time analytics. (Phase 1: data
