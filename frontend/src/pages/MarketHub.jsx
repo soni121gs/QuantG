@@ -17,19 +17,21 @@ export default function MarketHub() {
   const [feed, setFeed] = useState(null);
   const [indicators, setIndicators] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
+  const [ivRank, setIvRank] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, f, ind, s] = await Promise.all([
+    const [h, r, j, f, ind, s, iv] = await Promise.all([
       api.get("/broker/health").catch(() => ({ data: null })),
       api.get("/risk/dashboard").catch(() => ({ data: null })),
       api.get("/trade-journal").catch(() => ({ data: null })),
       api.get("/market/feed-comparison").catch(() => ({ data: null })),
       api.get(`/market/indicators/${underlying}`).catch(() => ({ data: null })),
       api.get("/market/session-status").catch(() => ({ data: null })),
+      api.get("/market/iv-rank").catch(() => ({ data: null })),
     ]);
     if (h.data) setHealth(h.data);
     if (r.data) setRisk(r.data);
@@ -37,6 +39,7 @@ export default function MarketHub() {
     if (f.data) setFeed(f.data);
     if (ind.data) setIndicators(ind.data);
     if (s.data) setMarketSession(s.data);
+    if (iv.data) setIvRank(iv.data);
   }, [underlying]);
 
   useEffect(() => {
@@ -165,6 +168,26 @@ export default function MarketHub() {
             <Row k="Per-strategy capital" v={`₹${formatINR(risk?.per_strategy_capital || 0)}`} />
             <Row k="Max position size" v={`₹${formatINR(risk?.max_position_size || 0)}`} />
           </div>
+        </section>
+
+        <section className="qd-card p-4">
+          <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Activity size={16} /> IV Regime</h2>
+          {ivRank?.available ? (
+            <div className="space-y-2">
+              <Row k="IV Rank" v={`${ivRank.iv_rank}`} />
+              <Row k="IV Percentile" v={`${ivRank.iv_percentile}%`} />
+              <Row k="India VIX" v={`${ivRank.current}`} />
+              <Row k="52w range" v={`${ivRank.min} – ${ivRank.max}`} />
+              <Row k="Buy gate" v={`${ivRank.gate_state} · cap ${ivRank.buy_max}`} />
+              <div className={`text-[10px] font-mono mt-1 ${ivRank.would_block_buys ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
+                {ivRank.would_block_buys
+                  ? `IV rich — option-buying ${ivRank.blocking ? "BLOCKED" : "would block if gate enabled"}`
+                  : "IV cheap — option-buying allowed"}
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs font-mono text-[var(--qd-text-3)]">{ivRank?.reason || "Loading IV rank…"}</div>
+          )}
         </section>
 
         <section className="qd-card p-4 xl:col-span-2">

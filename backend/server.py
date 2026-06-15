@@ -1477,6 +1477,33 @@ async def watchlist(user=Depends(get_current_user)):
     ]
 
 
+@api.get("/market/iv-rank")
+async def market_iv_rank(user=Depends(get_current_user)):
+    """India VIX–derived IV rank / percentile plus the Phase 2 option-buying
+    gate state. Powers the IV-regime card and explains why the IV-rank gate
+    would (or wouldn't) block buying option premium right now."""
+    from iv_regime import (
+        compute_iv_rank,
+        IV_RANK_GATE_ENABLED,
+        IV_RANK_GATE_SHADOW,
+        IV_RANK_BUY_MAX,
+    )
+    data = await compute_iv_rank(db)
+    if not data:
+        return {"available": False, "reason": "insufficient India VIX history"}
+    iv_rank = data.get("iv_rank")
+    would_block = iv_rank is not None and iv_rank > IV_RANK_BUY_MAX
+    gate_state = "enabled" if IV_RANK_GATE_ENABLED else ("shadow" if IV_RANK_GATE_SHADOW else "off")
+    return {
+        "available": True,
+        **data,
+        "buy_max": IV_RANK_BUY_MAX,
+        "gate_state": gate_state,
+        "would_block_buys": bool(would_block),
+        "blocking": bool(would_block and IV_RANK_GATE_ENABLED),
+    }
+
+
 @api.get("/market/candles/{instrument_key:path}")
 async def market_candles(
     instrument_key: str,
