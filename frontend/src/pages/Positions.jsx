@@ -16,6 +16,7 @@ const statusTone = (status) => {
 export default function Positions() {
   const { positions, summary, loading, error, refresh, paperMode, executionBroker } = useExecutionState({ pollMs: 15000 });
   const [exiting, setExiting] = useState(null);
+  const [expanded, setExpanded] = useState(null);
 
   const exit = async (symbol) => {
     if (!window.confirm(`Square off your full ${symbol} position at market price?`)) return;
@@ -96,13 +97,24 @@ export default function Positions() {
                   const longPos = qty > 0;
                   const isSpread = p.structure === "credit_spread";
                   const maxLossTotal = p.max_loss_total ?? (p.max_loss != null ? p.max_loss * Math.abs(qty) : null);
+                  const stableKey = `${p.symbol}-${p.strategy_id || ""}`;
+                  const legs = p.legs || [];
+                  const isOpen = expanded === stableKey;
                   return (
-                    <tr key={`${p.symbol}-${p.strategy_id || ""}`} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`pos-${p.symbol}`}>
+                    <React.Fragment key={stableKey}>
+                    <tr className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`pos-${p.symbol}`}>
                       <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{p.strategy_name || p.strategy_id || "broker"}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-text)]">
                         {p.symbol}
                         {isSpread && (
-                          <span className="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm bg-[rgba(0,122,255,0.12)] text-[var(--qd-accent)]">spread</span>
+                          <button
+                            type="button"
+                            onClick={() => setExpanded(isOpen ? null : stableKey)}
+                            className="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm bg-[rgba(0,122,255,0.12)] text-[var(--qd-accent)] hover:bg-[rgba(0,122,255,0.2)]"
+                            data-testid={`spread-toggle-${p.symbol}`}
+                          >
+                            spread {isOpen ? "▾" : "▸"}
+                          </button>
                         )}
                         {isSpread && (
                           <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
@@ -150,6 +162,62 @@ export default function Positions() {
                         )}
                       </td>
                     </tr>
+                    {isSpread && isOpen && (
+                      <tr className="bg-[var(--qd-surface-2)]" data-testid={`spread-detail-${p.symbol}`}>
+                        <td colSpan={11} className="px-4 py-3">
+                          {(() => {
+                            const short = legs.find((l) => l.role === "short");
+                            const long = legs.find((l) => l.role === "long");
+                            const netDelta = short?.delta != null && long?.delta != null ? -Number(short.delta) + Number(long.delta) : null;
+                            const netTheta = short?.theta != null && long?.theta != null ? -Number(short.theta) + Number(long.theta) : null;
+                            const maxProfitTotal = p.net_credit != null ? p.net_credit * Math.abs(qty) : null;
+                            const pnl = Number(p.pnl || 0);
+                            let markerPct = 50;
+                            if (maxProfitTotal != null && maxLossTotal != null && maxProfitTotal + maxLossTotal > 0) {
+                              markerPct = Math.max(0, Math.min(100, ((pnl + maxLossTotal) / (maxProfitTotal + maxLossTotal)) * 100));
+                            }
+                            const legRow = (leg) =>
+                              leg ? (
+                                <div className="flex items-center gap-3 text-[11px]">
+                                  <span className={`w-10 font-semibold ${leg.side === "SELL" ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"}`}>{leg.side}</span>
+                                  <span className="text-[var(--qd-text)] w-40">{leg.strike} {leg.option_type}</span>
+                                  <span className="text-[var(--qd-text-2)]">@ ₹{formatINR(leg.premium)}</span>
+                                  {leg.delta != null && <span className="text-[var(--qd-text-3)]">δ {Number(leg.delta).toFixed(2)}</span>}
+                                </div>
+                              ) : null;
+                            return (
+                              <div className="space-y-2 max-w-2xl">
+                                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">// SPREAD LEGS{p.direction ? ` — ${p.direction}` : ""}</div>
+                                {legRow(short)}
+                                {legRow(long)}
+                                <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-[11px] text-[var(--qd-text-2)]">
+                                  <span>Net credit ₹{formatINR(p.net_credit)}</span>
+                                  {maxLossTotal != null && <span>Max loss ₹{formatINR(maxLossTotal)}</span>}
+                                  {netDelta != null && <span>Net δ {netDelta.toFixed(2)}</span>}
+                                  {netTheta != null && <span>Net θ {netTheta.toFixed(1)}</span>}
+                                  <span>Value {p.ltp != null ? `₹${formatINR(p.ltp)}` : "—"} · TP {p.take_profit != null ? `₹${formatINR(p.take_profit)}` : "—"} · SL {p.stop_loss != null ? `₹${formatINR(p.stop_loss)}` : "—"}</span>
+                                </div>
+                                {maxProfitTotal != null && maxLossTotal != null && (
+                                  <div>
+                                    <div className="relative h-2 overflow-hidden rounded-full bg-[var(--qd-surface-3)]">
+                                      <div className="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--qd-loss)_25%,transparent)]" style={{ width: "50%" }} />
+                                      <div className="absolute inset-y-0 right-0 bg-[color-mix(in_srgb,var(--qd-profit)_25%,transparent)]" style={{ width: "50%" }} />
+                                      <div className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-[var(--qd-text)]" style={{ left: `${markerPct}%` }} />
+                                    </div>
+                                    <div className="mt-0.5 flex justify-between text-[9px] text-[var(--qd-text-3)]">
+                                      <span>-₹{formatINR(maxLossTotal)}</span>
+                                      <span className={pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>P&amp;L ₹{formatINR(pnl)}</span>
+                                      <span>+₹{formatINR(maxProfitTotal)}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
