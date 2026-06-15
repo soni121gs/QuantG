@@ -17137,6 +17137,39 @@ async def startup():
             "resolver_stage": diagnostics.get("resolver_stage"),
             "resolver_reason": diagnostics.get("resolver_reason"),
         }
+        # Phase 1 greeks: contract_payload is built from the InstrumentResolver +
+        # QuoteService, neither of which carries greeks/OI/depth (QuoteService is
+        # ltp-only), so greeks_at_signal lands null on every LIVE option signal.
+        # (This is the runner's real resolver — _resolve_option_for_strategy, fixed
+        # separately, is only used by manual routes.) Fetch greeks from the option
+        # chain for this contract's expiry. Best-effort; never blocks resolution.
+        try:
+            _spot_keys = {
+                "NIFTY": "NSE_INDEX|Nifty 50",
+                "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+                "SENSEX": "BSE_INDEX|SENSEX",
+            }
+            _sk = _spot_keys.get(str(instrument.underlying or underlying).upper())
+            if upstox_gw and _sk and instrument.expiry and instrument.strike:
+                _gchain = await asyncio.to_thread(
+                    upstox_gw.get_option_chain, _sk, str(instrument.expiry)[:10]
+                )
+                if _gchain and _gchain.get("status") == "success":
+                    _otype = str(instrument.option_type or "").upper()
+                    for _gnode in (_gchain.get("data") or []):
+                        if int(float(_gnode.get("strike_price") or 0)) == int(float(instrument.strike)):
+                            _gopt = _gnode.get("call_options" if _otype == "CE" else "put_options") or {}
+                            _gg = _gopt.get("option_greeks") or {}
+                            _gmd = _gopt.get("market_data") or {}
+                            for _gk in ("iv", "delta", "theta", "gamma", "vega"):
+                                if _gg.get(_gk) is not None:
+                                    contract_payload[_gk] = _gg.get(_gk)
+                            for _src, _dst in (("oi", "oi"), ("bid_price", "bid"), ("ask_price", "ask")):
+                                if _gmd.get(_src) is not None:
+                                    contract_payload[_dst] = _gmd.get(_src)
+                            break
+        except Exception as _gexc:
+            logger.debug("live greeks chain fetch failed for %s: %s", instrument.instrument_key, _gexc)
         contract_payload["trade_quality_score"] = option_entry_quality_score(
             contract_payload,
             spot=spot_hint,
