@@ -336,7 +336,7 @@ class PortfolioLedger:
                 "greeks_at_entry": {
                     k: opt.get(k)
                     for k in ("iv", "oi", "delta", "theta", "gamma", "vega", "rho",
-                              "bid", "ask", "bid_qty", "ask_qty", "tbq", "tsq")
+                              "bid", "ask", "bid_qty", "ask_qty", "tbq", "tsq", "target_delta")
                     if opt.get(k) is not None
                 } or None,
             }

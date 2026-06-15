@@ -178,6 +178,14 @@ class ExecutionStateManager:
             # the existing Positions table renders sensibly, and expose the extras.
             structure = row.get("structure")
             is_spread = structure == "credit_spread"
+            # Phase 2 #4/#2: surface entry greeks (δ/θ/IV) + the delta target the
+            # selector aimed for, so the UI can show "δ 0.46 (target 0.45)".
+            g_entry = row.get("greeks_at_entry") or {}
+            greeks_lite = (
+                {"delta": g_entry.get("delta"), "theta": g_entry.get("theta"), "iv": g_entry.get("iv")}
+                if g_entry else None
+            )
+            target_delta = g_entry.get("target_delta") if g_entry.get("target_delta") is not None else row.get("target_delta")
             pos_out = {
                 "id": row.get("id"),
                 "strategy_id": row.get("strategy_id"),
@@ -198,6 +206,8 @@ class ExecutionStateManager:
                 "entry_order_id": row.get("entry_order_id"),
                 "broker_order_id": row.get("entry_broker_order_id") or row.get("broker_order_id"),
                 "mode": row.get("mode") or "paper",  # default to paper — never assume live
+                "greeks": greeks_lite,
+                "target_delta": target_delta,
             }
             if is_spread:
                 pos_out.update({
@@ -293,6 +303,8 @@ class ExecutionStateManager:
                     "net_credit": sp.get("net_credit"),
                     "max_loss": sp.get("max_loss"),
                     "legs": sp.get("legs"),
+                    "greeks": sp.get("greeks"),
+                    "target_delta": sp.get("target_delta"),
                 })
                 if ledger.get("ltp") is not None:
                     bp_merged["ltp"] = ledger.get("ltp")
@@ -370,6 +382,8 @@ class ExecutionStateManager:
                 "max_loss": sp.get("max_loss"),
                 "max_loss_total": sp.get("max_loss_total"),
                 "legs": sp.get("legs"),
+                "greeks": sp.get("greeks"),
+                "target_delta": sp.get("target_delta"),
             })
 
         return merged_positions

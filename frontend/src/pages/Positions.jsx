@@ -109,6 +109,14 @@ export default function Positions() {
                             credit ₹{formatINR(p.net_credit)}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
                           </div>
                         )}
+                        {!isSpread && p.greeks && p.greeks.delta != null && (
+                          <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
+                            δ {Number(p.greeks.delta).toFixed(2)}
+                            {p.target_delta != null ? ` (tgt ${Number(p.target_delta).toFixed(2)})` : ""}
+                            {p.greeks.theta != null ? ` · θ ${Number(p.greeks.theta).toFixed(1)}` : ""}
+                            {p.greeks.iv != null ? ` · IV ${Number(p.greeks.iv).toFixed(1)}` : ""}
+                          </div>
+                        )}
                       </td>
                       <td className={`px-4 py-2.5 ${isSpread ? "text-[var(--qd-text-2)]" : longPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{isSpread ? qty : `${longPos ? "+" : ""}${qty}`}</td>
                       <td className="px-4 py-2.5">{formatINR(p.avg_price)}</td>
