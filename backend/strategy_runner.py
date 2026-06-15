@@ -31,6 +31,7 @@ from core.option_selector_v2 import select_option_contract
 from market_regime import update_regime, get_cached_regime
 from trade_frequency import check_frequency_gate, record_strategy_filter, compute_tod_volume_ratio
 from iv_regime import compute_iv_rank, iv_buy_gate, IV_RANK_GATE_ENABLED, IV_RANK_GATE_SHADOW
+from order_flow import orderflow_imbalance, orderflow_gate, ORDERFLOW_GATE_ENABLED, ORDERFLOW_GATE_SHADOW
 
 logger = logging.getLogger("quantg.runner")
 
@@ -878,6 +879,30 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             continue
                     except Exception as _iv_exc:
                         logger.debug("iv_rank gate failed for %s: %s", s["id"], _iv_exc)
+
+                # ── Phase 2 #3: order-flow confirmation (option buyers) ───────
+                # Built but default OFF. Requires net buying pressure (tbq/tsq)
+                # on the contract being bought. Shadow logs would-blocks only.
+                if (ORDERFLOW_GATE_ENABLED or ORDERFLOW_GATE_SHADOW) and option_buying_mode and _is_entry and option_contract:
+                    try:
+                        _imb = orderflow_imbalance(option_contract)
+                        _ofd = orderflow_gate(_imb, "BUY")
+                        if _ofd["shadow"]:
+                            logger.info("ORDERFLOW_WOULD_BLOCK strategy=%s %s", s["id"], _ofd["reason"])
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "ORDERFLOW_SHADOW", _ofd["reason"])
+                        elif _ofd["block"]:
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "ORDERFLOW_GATE", _ofd["reason"])
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _ofd["reason"]},
+                                 "$inc": inc_set},
+                            )
+                            continue
+                    except Exception as _of_exc:
+                        logger.debug("orderflow gate failed for %s: %s", s["id"], _of_exc)
 
                 # Insert signal into db.signals collection instead of placing order directly
                 try:
