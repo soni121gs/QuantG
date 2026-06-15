@@ -71,7 +71,14 @@ class OPTION_QUALITY:
 
 class PAPER_TRADING:
     STARTING_BALANCE = int(os.getenv("PAPER_STARTING_BALANCE", "500000"))  # INR
-    SLIPPAGE_PCT = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.05"))          # 5 bps (0.05%)
+    SLIPPAGE_PCT = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.05"))          # 5 bps (0.05%) — equity base / floor
+
+    # Slippage model: a simulated MARKET order crosses the book, so the realistic
+    # cost is ~half the bid-ask spread (used when live bid/ask or spread_pct is
+    # available). These are the fallbacks when the book is unknown, plus a hard
+    # cap so a garbage quote can't model an absurd fill.
+    OPTION_SLIPPAGE_PCT = float(os.getenv("PAPER_OPTION_SLIPPAGE_PCT", "0.30"))  # 30 bps fallback for options
+    SLIPPAGE_MAX_PCT = float(os.getenv("PAPER_SLIPPAGE_MAX_PCT", "5.0"))         # cap at 5% of price
 
     # Partial fill: strikes with volume below this threshold get a partial fill
     # (50–99% of requested qty). Set to 0 to disable partial fill simulation.

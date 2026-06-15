@@ -34,6 +34,53 @@ from execution_bridge import submit_order as bridge_submit_order, ExecutionDispa
 
 logger = logging.getLogger("quantg.execution_router")
 
+
+def _to_float(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _estimate_slippage(fill_price: float, option_contract: Dict[str, Any], is_option: bool) -> float:
+    """Estimate per-unit slippage (INR) for a simulated market-order fill.
+
+    A market order crosses the book, so the realistic cost is ~half the bid-ask
+    spread. Preference order:
+      1. live bid/ask on the contract  → half the absolute spread
+      2. contract spread_pct (from option_selector_v2) → half that, as INR
+      3. asset-class base bps (options >> equity) when the book is unknown
+    Always at least the equity base bps (crossing is never free) and capped at
+    SLIPPAGE_MAX_PCT so a bad quote (e.g. bid 0.05 / ask 50) can't model an
+    absurd fill.
+    """
+    from config import PAPER_TRADING
+
+    if fill_price <= 0:
+        return 0.0
+
+    half_spread: Optional[float] = None
+    bid = _to_float(
+        option_contract.get("bid") or option_contract.get("bid_price") or option_contract.get("best_bid_price")
+    )
+    ask = _to_float(
+        option_contract.get("ask") or option_contract.get("ask_price") or option_contract.get("best_ask_price")
+    )
+    if bid > 0 and ask > 0 and ask >= bid:
+        half_spread = (ask - bid) / 2.0
+    else:
+        spread_pct = _to_float(option_contract.get("spread_pct"))
+        if 0 < spread_pct < 100:
+            half_spread = fill_price * (spread_pct / 100.0) / 2.0
+
+    base_pct = PAPER_TRADING.OPTION_SLIPPAGE_PCT if is_option else PAPER_TRADING.SLIPPAGE_PCT
+    slip = half_spread if half_spread is not None else fill_price * (base_pct / 100.0)
+
+    floor = fill_price * (PAPER_TRADING.SLIPPAGE_PCT / 100.0)
+    cap = fill_price * (PAPER_TRADING.SLIPPAGE_MAX_PCT / 100.0)
+    return round(min(max(slip, floor), cap), 2)
+
+
 class PaperAdapter:
     """Paper trading execution adapter.
     
@@ -50,7 +97,7 @@ class PaperAdapter:
     - Fills are instant (not async)
     - No broker interaction (deterministic)
     - Uses virtual wallet for fund management
-    - Simulated slippage: 0.02% on price, 0.05% brokerage
+    - Simulated slippage: ~half the bid-ask spread (see _estimate_slippage)
     """
     def __init__(self, db, ledger: PortfolioLedger):
         self.db = db
@@ -102,9 +149,14 @@ class PaperAdapter:
                 logger.debug("PaperAdapter: quote timestamp unparseable for order=%s symbol=%s: %s",
                              intent.get("id"), intent.get("target_symbol"), exc)
 
-        # ── 2. Slippage from config (5 bps default, env-overridable) ─────────
-        slippage_frac = PAPER_TRADING.SLIPPAGE_PCT / 100.0
-        slippage = round(fill_price * slippage_frac, 2)
+        # ── 2. Slippage: ~half the bid-ask spread (market-order crossing cost),
+        #       falling back to an asset-class base when the book is unknown. ──
+        is_option = (
+            "CE" in str(intent.get("target_symbol") or "")
+            or "PE" in str(intent.get("target_symbol") or "")
+            or "option" in str(intent.get("asset_type") or "").lower()
+        )
+        slippage = _estimate_slippage(fill_price, option_contract, is_option)
         final_price = round(
             fill_price + slippage if side == "BUY" else fill_price - slippage, 2
         )
