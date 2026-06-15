@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { api, formatINR } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge as AppStatusBadge } from "../components/ui/app-shell";
+import { reasonLabel } from "../lib/reasonLabels";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
@@ -43,7 +44,7 @@ const sourceLabel = (source) => {
 };
 
 const noticeFor = (s) => {
-  if (s.last_filter_reason) return { text: s.last_filter_reason, kind: "filter" };
+  if (s.last_filter_reason) return { text: reasonLabel(s.last_filter_reason).label, kind: "filter" };
   if (s.last_error?.startsWith("Signal filtered:")) return { text: s.last_error, kind: "filter" };
   if (s.last_error?.includes("entry blocked: cooldown-active")) return { text: "Entry skipped: cooldown active", kind: "filter" };
   if (s.last_error?.includes("entry blocked: duplicate-buy-dropped")) return { text: "Entry skipped: duplicate buy dropped", kind: "filter" };

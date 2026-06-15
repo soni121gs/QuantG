@@ -5,6 +5,7 @@ import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
+import { reasonLabel, reasonToneClass } from "../lib/reasonLabels";
 
 const OPEN_STATUSES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "EXIT_PENDING", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING"];
 const FILLED_STATUSES = ["FILLED", "PAPER_FILLED", "CLOSED", "COMPLETE"];
@@ -175,9 +176,14 @@ export default function Orders() {
                   <td className="px-4 py-2.5 text-[var(--qd-profit)]">-</td>
                   <td className="px-4 py-2.5 text-[var(--qd-warn)]">SKIPPED</td>
                   <td className="px-4 py-2.5 text-[11px] max-w-[260px]">
-                    <span className="text-[var(--qd-warn)] break-words leading-tight" title={o.skip_reason || o.reason_code || ""}>
-                      {(o.reason_code || o.skip_reason || "preflight").slice(0, 100)}
-                    </span>
+                    {(() => {
+                      const rl = reasonLabel(o.reason_code || o.skip_reason || "preflight");
+                      return (
+                        <span className={`${reasonToneClass(rl.tone)} break-words leading-tight`} title={rl.hint || rl.raw}>
+                          {rl.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}
@@ -202,14 +208,14 @@ export default function Orders() {
                     "text-[var(--qd-warn)]"
                   }`}>{status}</td>
                   <td className="px-4 py-2.5 text-[11px] max-w-[260px]">
-                    {isRejected && rejectReason ? (
-                      <span
-                        className="text-[var(--qd-loss)] break-words leading-tight"
-                        title={rejectReason}
-                      >
-                        {rejectReason.length > 100 ? rejectReason.slice(0, 100) + "…" : rejectReason}
-                      </span>
-                    ) : (
+                    {isRejected && rejectReason ? (() => {
+                      const rl = reasonLabel(rejectReason);
+                      return (
+                        <span className={`${reasonToneClass(rl.tone)} break-words leading-tight`} title={rl.hint || rl.raw}>
+                          {rl.label.length > 100 ? rl.label.slice(0, 100) + "…" : rl.label}
+                        </span>
+                      );
+                    })() : (
                       <span className="text-[var(--qd-text-3)]">—</span>
                     )}
                   </td>
