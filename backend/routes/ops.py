@@ -113,6 +113,40 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
     return await ops_diagnostics(user=user)
 
 
+@router.get("/feature-flags")
+async def ops_feature_flags(user=Depends(get_current_user)):
+    """Read-only state of the Phase 2 options-alpha features (env-driven).
+    Lets the UI show what's active without SSHing into the box."""
+    from core.position_lifecycle import EXIT_THETA_AWARE_ENABLED
+    from options_delta import OPTION_DELTA_SELECTION_ENABLED
+    from iv_regime import IV_RANK_GATE_ENABLED, IV_RANK_GATE_SHADOW, IV_RANK_BUY_MAX
+    from order_flow import ORDERFLOW_GATE_ENABLED, ORDERFLOW_GATE_SHADOW, ORDERFLOW_MIN_IMBALANCE
+    from core.spread_builder import CREDIT_SPREADS_ENABLED
+
+    def gate_state(enabled: bool, shadow: bool) -> str:
+        return "enabled" if enabled else ("shadow" if shadow else "off")
+
+    return {
+        "features": [
+            {"key": "theta_exit", "label": "Theta-aware exits",
+             "state": "on" if EXIT_THETA_AWARE_ENABLED else "off",
+             "detail": "Cuts stalled long-option buys before theta bleeds them."},
+            {"key": "delta_selection", "label": "Delta strike selection",
+             "state": "on" if OPTION_DELTA_SELECTION_ENABLED else "off",
+             "detail": "Picks the strike nearest a per-style target delta."},
+            {"key": "iv_rank_gate", "label": "IV-rank gate",
+             "state": gate_state(IV_RANK_GATE_ENABLED, IV_RANK_GATE_SHADOW),
+             "detail": f"Blocks buying when IV rank > {IV_RANK_BUY_MAX:.0f}."},
+            {"key": "orderflow_gate", "label": "Order-flow gate",
+             "state": gate_state(ORDERFLOW_GATE_ENABLED, ORDERFLOW_GATE_SHADOW),
+             "detail": f"Needs net buying pressure ≥ {ORDERFLOW_MIN_IMBALANCE:.2f}."},
+            {"key": "credit_spreads", "label": "Credit spreads",
+             "state": "on" if CREDIT_SPREADS_ENABLED else "off",
+             "detail": "Defined-risk spreads (per-strategy opt-in)."},
+        ],
+    }
+
+
 @router.get("/runtime")
 async def ops_runtime_route(user=Depends(get_current_user)):
     from server import (

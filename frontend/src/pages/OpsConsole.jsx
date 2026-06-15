@@ -40,6 +40,7 @@ export default function OpsConsole() {
   const [pendingUsers, setPendingUsers] = useState([]);
   const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
   const [reconciliationBreaks, setReconciliationBreaks] = useState(null);
+  const [featureFlags, setFeatureFlags] = useState([]);
   const [userActionId, setUserActionId] = useState(null);
 
   const loadPendingUsers = useCallback(async () => {
@@ -96,7 +97,10 @@ export default function OpsConsole() {
       
       const f = await api.get("/funds");
       setFundsData(f.data);
-      
+
+      const ff = await api.get("/ops/feature-flags").catch(() => ({ data: { features: [] } }));
+      setFeatureFlags(ff.data?.features || []);
+
       // Jitter latency slightly to reflect actual HFT dispatcher round-trips
       setSimulatedLatency(Math.floor(10 + Math.random() * 8));
     } catch (e) {
@@ -657,6 +661,37 @@ export default function OpsConsole() {
 
         </div>
 
+      </div>
+
+      {/* PHASE 2 FEATURE FLAGS (read-only) */}
+      <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 shadow-xl">
+        <h2 className="font-head text-base font-bold text-white flex items-center gap-2 border-b border-[var(--qd-border)] pb-4 mb-4">
+          <Zap size={18} className="text-[var(--qd-accent)]" /> Options-Alpha Features
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {featureFlags.length === 0 ? (
+            <div className="text-xs font-mono text-[var(--qd-text-3)]">Loading…</div>
+          ) : (
+            featureFlags.map((f) => {
+              const on = f.state === "on" || f.state === "enabled";
+              const tone = on
+                ? "bg-[rgba(52,199,89,0.12)] text-[var(--qd-profit)] border-[var(--qd-profit)]/30"
+                : f.state === "shadow"
+                ? "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)] border-[var(--qd-warn)]/30"
+                : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] border-[var(--qd-border)]";
+              return (
+                <div key={f.key} className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3" data-testid={`feature-${f.key}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-head text-sm font-bold text-[var(--qd-text)]">{f.label}</span>
+                    <span className={`text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-sm border ${tone}`}>{f.state}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-[var(--qd-text-2)] leading-snug">{f.detail}</p>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <p className="mt-3 text-[10px] font-mono text-[var(--qd-text-3)]">Read-only · set via env (docker-compose). Rollout: off → shadow → enabled.</p>
       </div>
 
       {/* QUICK AUTOMATION CONTROL PANEL */}
