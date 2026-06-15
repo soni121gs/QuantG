@@ -740,9 +740,10 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 | TASK-006 | 23 broker-free unit tests in test_core_logic.py | 6f61247 | 2026-06-11 |
 | TASK-007 | Canonical get_strategy_pnl_today() in portfolio_ledger | 6f61247 | 2026-06-11 |
 | TASK-021 | Implement live readiness and paper trading audit fixes | b38e5c0 | 2026-06-15 |
+| TASK-022 | Redesign Strategies UI, relocate test action to About modal | 43d4dd9 | 2026-06-15 |
 
 ---
 
 *Last updated: 2026-06-15*
-*Total tasks: 21 (17 active + 3 backlog + 1 audit)*
-*Open: 13 · In progress: 0 · Done: 8*
+*Total tasks: 22 (17 active + 3 backlog + 1 audit + 1 UI)*
+*Open: 13 · In progress: 0 · Done: 9*
