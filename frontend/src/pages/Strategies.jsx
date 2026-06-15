@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Code2,
   Filter,
+  HelpCircle,
   Pause,
   Play,
   Plus,
@@ -41,16 +42,6 @@ const sourceLabel = (source) => {
   return source;
 };
 
-const filters = [
-  { id: "all", label: "All Systems" },
-  { id: "hft", label: "HFT / Upstox" },
-  { id: "buying", label: "Option Buying" },
-  { id: "selling", label: "Option Selling" },
-  { id: "equity_intraday", label: "Equity Intraday" },
-  { id: "equity_delivery", label: "Equity Delivery" },
-  { id: "live", label: "Live Auto-Traders" },
-];
-
 const noticeFor = (s) => {
   if (s.last_filter_reason) return { text: s.last_filter_reason, kind: "filter" };
   if (s.last_error?.startsWith("Signal filtered:")) return { text: s.last_error, kind: "filter" };
@@ -69,7 +60,8 @@ export default function Strategies() {
   const [scores, setScores] = useState({});
   const [testing, setTesting] = useState(null);
   const [testResult, setTestResult] = useState(null);
-  const [selectedFilter, setSelectedFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [aboutStrategy, setAboutStrategy] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState("score");
 
@@ -100,23 +92,17 @@ export default function Strategies() {
 
   const filtered = useMemo(() => {
     let result = [...list];
-    if (selectedFilter === "hft") {
-      result = list.filter((s) =>
-        s.name?.toLowerCase().includes("upstox") ||
-        s.name?.toLowerCase().includes("hft") ||
-        s.description?.toLowerCase().includes("hft") ||
-        s.description?.toLowerCase().includes("upstox")
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (s) =>
+          s.name?.toLowerCase().includes(q) ||
+          s.description?.toLowerCase().includes(q) ||
+          s.strategy_type?.toLowerCase().includes(q) ||
+          s.instrument_group?.toLowerCase().includes(q)
       );
-    } else if (selectedFilter === "buying") {
-      result = list.filter((s) => s.strategy_type === "Option Buying");
-    } else if (selectedFilter === "selling") {
-      result = list.filter((s) => s.strategy_type === "Option Selling");
-    } else if (selectedFilter === "equity_intraday") {
-      result = list.filter((s) => s.strategy_type === "Equity Intraday");
-    } else if (selectedFilter === "equity_delivery") {
-      result = list.filter((s) => s.strategy_type === "Equity Delivery");
-    } else if (selectedFilter === "live") {
-      result = list.filter((s) => s.status === "live");
     }
 
     // Apply sorting
@@ -135,22 +121,7 @@ export default function Strategies() {
     }
 
     return result;
-  }, [list, selectedFilter, sortBy, scores]);
-
-  const counts = useMemo(() => ({
-    all: list.length,
-    hft: list.filter((s) =>
-      s.name?.toLowerCase().includes("upstox") ||
-      s.name?.toLowerCase().includes("hft") ||
-      s.description?.toLowerCase().includes("hft") ||
-      s.description?.toLowerCase().includes("upstox")
-    ).length,
-    buying: list.filter((s) => s.strategy_type === "Option Buying").length,
-    selling: list.filter((s) => s.strategy_type === "Option Selling").length,
-    equity_intraday: list.filter((s) => s.strategy_type === "Equity Intraday").length,
-    equity_delivery: list.filter((s) => s.strategy_type === "Equity Delivery").length,
-    live: list.filter((s) => s.status === "live").length,
-  }), [list]);
+  }, [list, searchQuery, sortBy, scores]);
 
   const toggle = async (id) => {
     await api.post(`/strategies/${id}/toggle`);
@@ -242,25 +213,27 @@ export default function Strategies() {
         }
       />
 
-      <section className="qd-filter-bar flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 pr-1 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">
-            <Filter size={14} className="text-[var(--qd-accent)]" /> Categories
-          </div>
-          {filters.map((item) => (
+      <section className="qd-filter-bar flex flex-col gap-3 md:flex-row md:items-center md:justify-between p-3.5">
+        <div className="relative flex-1 max-w-md w-full">
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-[var(--qd-text-3)]">
+            <Filter size={16} />
+          </span>
+          <input
+            type="text"
+            placeholder="Search strategies by name or description..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-8 py-2 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] focus:border-[var(--qd-accent)] rounded text-xs text-[var(--qd-text)] outline-none placeholder-[var(--qd-text-3)] font-sans"
+            data-testid="strategy-search-input"
+          />
+          {searchQuery && (
             <button
-              key={item.id}
-              onClick={() => setSelectedFilter(item.id)}
-              className={`rounded px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-all duration-300 ${
-                selectedFilter === item.id
-                  ? "qd-force-white border border-[var(--qd-accent)] bg-[var(--qd-accent)] shadow-sm"
-                  : "border border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-[var(--qd-text)]"
-              }`}
-              data-testid={`filter-${item.id}`}
+              onClick={() => setSearchQuery("")}
+              className="absolute inset-y-0 right-0 flex items-center pr-3 text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             >
-              {item.label} <span className="text-[var(--qd-text-3)] font-bold">({counts[item.id]})</span>
+              <X size={14} />
             </button>
-          ))}
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -338,12 +311,12 @@ export default function Strategies() {
       ) : !filtered.length ? (
         <div className="qd-card p-16 text-center space-y-3">
           <Filter className="mx-auto mb-3 text-[var(--qd-text-3)]" />
-          <p className="text-sm text-[var(--qd-text-2)]">No strategies match this filter.</p>
+          <p className="text-sm text-[var(--qd-text-2)]">No strategies match this search query.</p>
           <button
-            onClick={() => setSelectedFilter("all")}
+            onClick={() => setSearchQuery("")}
             className="inline-flex items-center gap-2 rounded border border-[var(--qd-border)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-accent)] transition-colors"
           >
-            Clear filter
+            Clear Search
           </button>
         </div>
       ) : (
@@ -353,10 +326,9 @@ export default function Strategies() {
               key={s.id}
               s={s}
               score={scores[s.id]}
-              testing={testing}
               toggle={toggle}
               del={del}
-              testRun={testRun}
+              onAbout={setAboutStrategy}
               manualOrder={manualOrder}
               exitAll={exitAll}
               load={load}
@@ -366,12 +338,24 @@ export default function Strategies() {
         </div>
       )}
 
-      {testResult && <TestResultModal testResult={testResult} onClose={() => setTestResult(null)} />}
+      {aboutStrategy && (
+        <AboutStrategyModal
+          s={aboutStrategy}
+          score={scores[aboutStrategy.id]}
+          testing={testing}
+          testResult={testResult}
+          testRun={testRun}
+          onClose={() => {
+            setAboutStrategy(null);
+            setTestResult(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, exitAll, load, upstoxStatus }) {
+function StrategyCard({ s, score, toggle, del, onAbout, manualOrder, exitAll, load, upstoxStatus }) {
   const live = s.status === "live";
   const paused = s.status === "paused";
   const notice = noticeFor(s);
@@ -846,8 +830,12 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
           >
             <Shield size={13} /> Exit
           </button>
-          <button onClick={() => testRun(s.id)} disabled={testing === s.id} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white disabled:opacity-50" data-testid={`test-run-${s.id}`}>
-            <Activity size={13} /> {testing === s.id ? "Running" : "Test"}
+          <button
+            onClick={() => onAbout(s)}
+            className="flex items-center justify-center gap-2 rounded border border-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white"
+            data-testid={`about-${s.id}`}
+          >
+            <HelpCircle size={13} /> About
           </button>
           <button onClick={() => toggle(s.id)} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`toggle-${s.id}`}>
             {live ? <><Pause size={13} /> Pause</> : <><Play size={13} /> {paused ? "Resume" : "Live"}</>}
@@ -895,49 +883,280 @@ function ActionButton({ onClick, icon: Icon, label, tone }) {
   );
 }
 
-function TestResultModal({ testResult, onClose }) {
+function AboutStrategyModal({ s, score, testing, testResult, testRun, onClose }) {
+  const live = s.status === "live";
+  const paused = s.status === "paused";
+  const risk = s.visual_config?.risk || {};
+  const options = s.visual_config?.options || {};
+  
+  // AI score values
+  const aiScore = score?.score ?? s.ai_confidence_score;
+  const aiReason = score?.reason ?? s.ai_confidence_reason;
+  const marketInfo = score?.market;
+
+  // Split reasons
+  const telemetryReasons = aiReason ? aiReason.split(";").map(r => r.trim()).filter(Boolean) : [];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose} data-testid="test-result-modal">
-      <div className="qd-card max-h-[85vh] w-full max-w-2xl overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-start justify-between gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 overflow-y-auto" onClick={onClose} data-testid="about-strategy-modal">
+      <div className="qd-card w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 md:p-8 flex flex-col gap-6" onClick={(e) => e.stopPropagation()}>
+        
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-[var(--qd-border)] pb-4">
           <div>
-            <div className="qd-section-title">Test Run Results</div>
-            <h2 className="mt-1 font-head text-xl text-white">{testResult.symbol || "Strategy"}</h2>
+            <div className="qd-section-title flex items-center gap-1.5">
+              <span>{s.instrument_group || "NSE"} / {s.kind}</span>
+              <span className="w-1 h-1 rounded-full bg-[var(--qd-text-3)]" />
+              <span>{s.strategy_type || "Option Buying"}</span>
+            </div>
+            <h2 className="mt-1 font-head text-2xl font-bold text-white">{s.name}</h2>
+            <div className="flex items-center gap-2 mt-2">
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)]" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
+                {s.mode === "live" ? "LIVE PRODUCTION" : "PAPER SIMULATED"}
+              </span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${live ? "bg-emerald-500/10 border border-emerald-500/30 text-[var(--qd-profit)]" : "bg-amber-500/10 border border-amber-500/30 text-[var(--qd-warn)]"}`}>
+                {s.status?.toUpperCase() || "DRAFT"}
+              </span>
+            </div>
           </div>
-          <button onClick={onClose} className="text-[var(--qd-text-2)] hover:text-[var(--qd-text)]" data-testid="close-test-modal" aria-label="Close test result">
-            <X size={18} />
+          <button onClick={onClose} className="text-[var(--qd-text-3)] hover:text-white transition-colors" aria-label="Close modal">
+            <X size={22} />
           </button>
         </div>
-        {testResult.error && (
-          <div className="mb-3 rounded border border-[var(--qd-loss)] bg-[rgba(255,59,48,0.1)] p-3 text-xs text-[var(--qd-loss)]">
-            {testResult.error}
+
+        {/* Responsive Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 min-h-0 overflow-y-visible">
+          
+          {/* Left Column: Info & AI Telemetry */}
+          <div className="space-y-6">
+            {/* Description */}
+            <div className="space-y-2">
+              <h3 className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">Strategy Description</h3>
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-lg p-4 text-sm text-[var(--qd-text)] leading-relaxed">
+                {s.description || "No description provided for this strategy. Configure descriptions in the builder or editor."}
+              </div>
+            </div>
+
+            {/* Suitability Badge */}
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-3)]">Market Suitability:</span>
+              <span className="px-3 py-1 rounded-full bg-[var(--qd-surface-3)] border border-[var(--qd-border-strong)] text-xs text-white font-semibold">
+                {s.market_suitability || "Any Market Condition"}
+              </span>
+            </div>
+
+            {/* AI Telemetry System */}
+            <div className="space-y-3 border-t border-[var(--qd-border)] pt-4">
+              <h3 className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
+                <Bot size={14} className="text-[var(--qd-accent)]" /> Live AI Telemetry & Confidence
+              </h3>
+              
+              {aiScore != null ? (
+                <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border-strong)] rounded-lg p-4 space-y-4">
+                  {/* Gauge */}
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">AI Confidence Score</span>
+                      <div className="font-head text-3xl font-bold text-white flex items-baseline gap-1">
+                        {aiScore}%
+                        <span className="text-xs text-[var(--qd-text-3)] font-mono">confidence</span>
+                      </div>
+                    </div>
+                    {/* Progress Bar (mini gauge) */}
+                    <div className="w-24 bg-[var(--qd-surface-3)] rounded-full h-3 overflow-hidden border border-[var(--qd-border)]">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          aiScore >= 70 ? "bg-[var(--qd-profit)]" : aiScore >= 40 ? "bg-[var(--qd-accent)]" : "bg-[var(--qd-loss)]"
+                        }`}
+                        style={{ width: `${aiScore}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Reasons split */}
+                  {telemetryReasons.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">Telemetry Signals Checked</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {telemetryReasons.map((reasonText, idx) => {
+                          const isWarning = reasonText.toLowerCase().includes("error") || reasonText.toLowerCase().includes("paused");
+                          return (
+                            <span 
+                              key={idx} 
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
+                                isWarning 
+                                  ? "bg-rose-500/10 border-rose-500/30 text-[var(--qd-loss)]" 
+                                  : "bg-emerald-500/10 border-emerald-500/30 text-[var(--qd-profit)]"
+                              }`}
+                            >
+                              {isWarning ? "⚠" : "✓"} {reasonText}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Market Quote */}
+                  {marketInfo && (
+                    <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="block font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Spot Reference</span>
+                        <span className="font-mono font-semibold text-white">
+                          {score.symbol}: {money(marketInfo.price)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">24h Change</span>
+                        <span className={`font-mono font-semibold ${marketInfo.pct >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                          {marketInfo.pct >= 0 ? "+" : ""}{marketInfo.pct?.toFixed(2)}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-lg p-4 text-xs text-[var(--qd-text-3)] text-center">
+                  No live AI telemetry computed yet. Save runtime limits and enable the strategy to start telemetry scoring.
+                </div>
+              )}
+            </div>
           </div>
-        )}
-        {testResult.ok && (
-          <div className="space-y-4 text-xs">
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-              <Metric label="Total P&L" value={money(testResult.summary?.total_pnl)} tone={(testResult.summary?.total_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} />
-              <Metric label="Return" value={`${testResult.summary?.return_pct?.toFixed(2) || 0}%`} />
-              <Metric label="Win Rate" value={`${testResult.summary?.win_rate?.toFixed(1) || 0}%`} />
-              <Metric label="Trades" value={testResult.summary?.trades || 0} />
-              <Metric label="Wins" value={testResult.summary?.wins || 0} tone="text-[var(--qd-profit)]" />
-              <Metric label="Losses" value={testResult.summary?.losses || 0} tone="text-[var(--qd-loss)]" />
-            </div>
-            <div className="border-t border-[var(--qd-border)] pt-3">
-              <Metric label="Data Source" value={testResult.data_source || "-"} />
-            </div>
-            {testResult.signal_validation && (
-              <div className="rounded border border-[var(--qd-border)] p-3">
+
+          {/* Right Column: Spec & Exits & Relocated Backtest */}
+          <div className="space-y-6">
+            {/* Specs & Risk Bounds */}
+            <div className="space-y-3">
+              <h3 className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">Trading Specs & Exit Parameters</h3>
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-lg p-4 space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
-                  <Metric label="Confidence" value={`${testResult.signal_validation.confidence}%`} />
-                  <Metric label="Threshold" value={`${testResult.signal_validation.threshold}%`} />
-                  <Metric label="Trend" value={testResult.signal_validation.trend?.trend || "-"} />
-                  <Metric label="RSI" value={testResult.signal_validation.trend?.rsi ?? "-"} />
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Allocated Capital</span>
+                    <strong className="block text-sm text-white font-mono mt-0.5">{money(s.required_capital)}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Product / Class</span>
+                    <strong className="block text-sm text-white font-mono mt-0.5">{risk.product || s.product || "MIS"} / {s.asset_class?.toUpperCase() || "OPTIONS"}</strong>
+                  </div>
+                </div>
+
+                {options.enabled && (
+                  <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
+                    <div>
+                      <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Structure</span>
+                      <strong className="block text-white font-mono mt-0.5">{options.structure === "credit_spread" ? "Credit Spread" : "Single Leg"}</strong>
+                    </div>
+                    {options.structure === "credit_spread" && (
+                      <>
+                        <div>
+                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Short Δ</span>
+                          <strong className="block text-white font-mono mt-0.5">{options.short_delta ?? 0.3}</strong>
+                        </div>
+                        <div>
+                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Width (Strikes)</span>
+                          <strong className="block text-white font-mono mt-0.5">{options.spread_width ?? 2}</strong>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Target Profit</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.target_pct != null ? `${risk.target_pct}%` : "None"}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Stop Loss</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.stoploss_pct != null ? `${risk.stoploss_pct}%` : "None"}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Trailing SL</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.trailing_sl_enabled ? `Yes (Trig: ${risk.trail_trigger_pct}%)` : "Disabled"}</strong>
+                  </div>
+                </div>
+
+                <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Cooldown</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.cooldown_minutes ? `${risk.cooldown_minutes}m` : "None"}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Max Trades/Day</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.max_trades_day ?? "None"}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Daily Loss Limit</span>
+                    <strong className="block text-white font-mono mt-0.5">{risk.daily_loss_limit ? money(risk.daily_loss_limit) : "None"}</strong>
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
+
+            {/* Relocated Performance Test Section */}
+            <div className="space-y-3 border-t border-[var(--qd-border)] pt-4">
+              <h3 className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
+                <Activity size={14} className="text-[var(--qd-accent)]" /> Performance & Backtest Test
+              </h3>
+              
+              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-lg p-4 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-xs text-[var(--qd-text-3)] max-w-[200px]">
+                    Run a 60-day historical analysis on index data to verify this strategy's profitability and metrics.
+                  </p>
+                  <Button 
+                    onClick={() => testRun(s.id)} 
+                    disabled={testing === s.id} 
+                    variant="outline" 
+                    size="sm"
+                    className="flex-shrink-0"
+                  >
+                    {testing === s.id ? (
+                      <>
+                        <RefreshCw size={13} className="animate-spin" /> Running...
+                      </>
+                    ) : (
+                      <>
+                        <Activity size={13} /> Run Performance Test
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {/* Backtest Test Results rendering inline */}
+                {testResult && (
+                  <div className="border-t border-[var(--qd-border)] pt-3 space-y-3">
+                    {testResult.error ? (
+                      <div className="rounded border border-[var(--qd-loss)] bg-[rgba(255,59,48,0.1)] p-3 text-xs text-[var(--qd-loss)] font-mono font-bold">
+                        {testResult.error}
+                      </div>
+                    ) : testResult.ok ? (
+                      <div className="space-y-3 text-xs">
+                        <div className="grid grid-cols-3 gap-2">
+                          <Metric label="Total P&L" value={money(testResult.summary?.total_pnl)} tone={(testResult.summary?.total_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} compact />
+                          <Metric label="Return" value={`${testResult.summary?.return_pct?.toFixed(2) || 0}%`} compact />
+                          <Metric label="Win Rate" value={`${testResult.summary?.win_rate?.toFixed(1) || 0}%`} compact />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-1 border-t border-[rgba(255,255,255,0.05)]">
+                          <Metric label="Trades" value={testResult.summary?.trades || 0} compact />
+                          <Metric label="Wins" value={testResult.summary?.wins || 0} tone="text-[var(--qd-profit)]" compact />
+                          <Metric label="Losses" value={testResult.summary?.losses || 0} tone="text-[var(--qd-loss)]" compact />
+                        </div>
+                        <div className="text-[10px] text-[var(--qd-text-3)] font-mono flex justify-between">
+                          <span>Data: {testResult.data_source || "-"}</span>
+                          <span>Ref: {testResult.symbol_analysed || "-"}</span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+
           </div>
-        )}
+
+        </div>
+
       </div>
     </div>
   );
