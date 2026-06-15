@@ -739,7 +739,7 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 | TASK-005 | AGENT_ROUTER.md symptom-to-file decision tree | 6f61247 | 2026-06-11 |
 | TASK-006 | 23 broker-free unit tests in test_core_logic.py | 6f61247 | 2026-06-11 |
 | TASK-007 | Canonical get_strategy_pnl_today() in portfolio_ledger | 6f61247 | 2026-06-11 |
-| TASK-021 | Implement live readiness and paper trading audit fixes | pending | 2026-06-15 |
+| TASK-021 | Implement live readiness and paper trading audit fixes | b38e5c0 | 2026-06-15 |
 
 ---
 
