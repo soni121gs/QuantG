@@ -52,6 +52,7 @@ import options_helper
 import backtrader_runner
 import strategy_runner
 from signal_manager import signal_manager_loop
+from options_delta import OPTION_DELTA_SELECTION_ENABLED, target_delta_for_style, pick_delta_strike
 from option_state_ledger import OptionStateLedger
 from execution_bridge import payload_from_intent, submit_order as bridge_submit_order
 from execution_state import execution_state_manager
@@ -17172,18 +17173,86 @@ async def startup():
                 )
                 if _gchain and _gchain.get("status") == "success":
                     _otype = str(instrument.option_type or "").upper()
-                    for _gnode in (_gchain.get("data") or []):
-                        if int(float(_gnode.get("strike_price") or 0)) == int(float(instrument.strike)):
+                    _nodes = _gchain.get("data") or []
+
+                    # Phase 2 #2: delta-based strike selection. Pick the strike whose
+                    # |delta| is closest to the risk-style target from the chain we
+                    # already fetched; fall back to the resolver's ATM/OTM strike when
+                    # disabled or when no usable delta strike is found.
+                    _sel_strike = int(float(instrument.strike))
+                    _tgt = None
+                    _delta_pick = None
+                    if OPTION_DELTA_SELECTION_ENABLED:
+                        _rstyle = (
+                            (strategy or {}).get("risk_style")
+                            or ((strategy or {}).get("visual_config") or {}).get("risk", {}).get("risk_style")
+                        )
+                        _tgt = target_delta_for_style(_rstyle)
+                        _delta_pick = pick_delta_strike(_nodes, _otype, _tgt)
+                        if _delta_pick and _delta_pick.get("strike"):
+                            _sel_strike = int(float(_delta_pick["strike"]))
+                            contract_payload["target_delta"] = _tgt
+
+                    # Locate the selected node (delta-pick or resolver strike) and
+                    # mirror its greeks/OI/depth onto the contract.
+                    _gopt = None
+                    _gexpiry = None
+                    for _gnode in _nodes:
+                        if int(float(_gnode.get("strike_price") or 0)) == _sel_strike:
                             _gopt = _gnode.get("call_options" if _otype == "CE" else "put_options") or {}
-                            _gg = _gopt.get("option_greeks") or {}
-                            _gmd = _gopt.get("market_data") or {}
-                            for _gk in ("iv", "delta", "theta", "gamma", "vega"):
-                                if _gg.get(_gk) is not None:
-                                    contract_payload[_gk] = _gg.get(_gk)
-                            for _src, _dst in (("oi", "oi"), ("bid_price", "bid"), ("ask_price", "ask")):
-                                if _gmd.get(_src) is not None:
-                                    contract_payload[_dst] = _gmd.get(_src)
+                            _gexpiry = _gnode.get("expiry")
                             break
+                    if _gopt:
+                        _gg = _gopt.get("option_greeks") or {}
+                        _gmd = _gopt.get("market_data") or {}
+                        for _gk in ("iv", "delta", "theta", "gamma", "vega"):
+                            if _gg.get(_gk) is not None:
+                                contract_payload[_gk] = _gg.get(_gk)
+                        for _src, _dst in (("oi", "oi"), ("bid_price", "bid"), ("ask_price", "ask")):
+                            if _gmd.get(_src) is not None:
+                                contract_payload[_dst] = _gmd.get(_src)
+
+                        # Re-point the contract to the delta-selected strike — but only
+                        # when it differs from the resolved strike AND the node carries a
+                        # usable instrument_key and a positive LTP (so we never swap onto
+                        # an illiquid/zero-quote strike).
+                        _new_key = _gopt.get("instrument_key")
+                        _new_ltp = _gmd.get("ltp") or _gmd.get("last_price")
+                        if (_sel_strike != int(float(instrument.strike)) and _new_key
+                                and _new_ltp and float(_new_ltp) > 0):
+                            _new_sym = _gopt.get("trading_symbol")
+                            if not _new_sym and _gexpiry:
+                                try:
+                                    _ed = datetime.strptime(str(_gexpiry)[:10], "%Y-%m-%d")
+                                    _new_sym = (
+                                        f"{str(instrument.underlying or underlying).upper()} "
+                                        f"{_sel_strike} {_otype} {_ed.strftime('%d %b %y').upper()}"
+                                    )
+                                except Exception:
+                                    _new_sym = contract_payload.get("tradingsymbol")
+                            _now_iso = datetime.now(timezone.utc).isoformat()
+                            contract_payload.update({
+                                "tradingsymbol": _new_sym or contract_payload.get("tradingsymbol"),
+                                "trading_symbol": _new_sym or contract_payload.get("trading_symbol"),
+                                "instrument_token": _new_key,
+                                "instrument_key": _new_key,
+                                "strike": _sel_strike,
+                                "ltp": float(_new_ltp),
+                                "quote_source": "option_chain_delta",
+                                "received_at": _now_iso,
+                                "quote_timestamp": _now_iso,
+                                "delta_selected": True,
+                            })
+                            try:
+                                await asyncio.to_thread(upstox_gw.start_market_data_ws, [_new_key], "full")
+                            except Exception:
+                                pass
+                            logger.info(
+                                "delta-select: %s %s target=%.2f → strike=%s delta=%.3f (resolver had %s)",
+                                str(instrument.underlying or underlying).upper(), _otype,
+                                float(_tgt or 0), _sel_strike,
+                                float((_delta_pick or {}).get("delta") or 0), int(float(instrument.strike)),
+                            )
         except Exception as _gexc:
             logger.debug("live greeks chain fetch failed for %s: %s", instrument.instrument_key, _gexc)
         contract_payload["trade_quality_score"] = option_entry_quality_score(
