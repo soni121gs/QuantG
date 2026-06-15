@@ -38,6 +38,7 @@ import { APP_VERSION_LABEL } from "../lib/version";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/app-shell";
+import ReadinessBanner from "./ReadinessBanner";
 
 const NAV_GROUPS = [
   {
@@ -709,6 +710,7 @@ export default function Layout({ children }) {
         <main className="flex-1 min-w-0 qd-grid-bg">
           <div className={`grid gap-4 p-3 pb-24 md:p-5 lg:pb-5 ${blotterOpen ? "lg:grid-cols-[minmax(0,1fr)_240px] xl:grid-cols-[minmax(0,1fr)_260px]" : "lg:grid-cols-1"}`}>
             <div className="min-w-0">
+              <ReadinessBanner />
               {children}
               <button
                 type="button"
