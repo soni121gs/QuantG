@@ -14059,6 +14059,13 @@ async def _resolve_option_for_strategy(
                                         expiry_dt = datetime.strptime(str(node["expiry"]), "%Y-%m-%d")
                                     except Exception:
                                         pass
+                                # Upstox option-chain nodes carry no trading_symbol, so
+                                # build the canonical verbose form the rest of the system
+                                # uses ("BANKNIFTY 54000 CE 30 JUN 26") instead of letting
+                                # the compact fallback below produce "BANKNIFTY26063054000CE"
+                                # — a format mismatch would break symbol-based dedup/display.
+                                if not tradingsymbol:
+                                    tradingsymbol = f"{underlying} {int(strike)} {opt_type} {expiry_dt.strftime('%d %b %y').upper()}"
                                 break
         except Exception as e:
             logger.warning(f"Upstox option chain lookup failed: {e}")
