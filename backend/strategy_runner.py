@@ -484,17 +484,16 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                     "$inc": inc_set})
                     continue
 
-                # Allow signals from the last 20 candles (~100 min on 5-min bars).
-                # Covers the full max_hold_minutes window (40 min) plus buffer so
-                # intraday trend-following strategies don't drop valid entry signals.
+                # Allow signals from the last 2 candles (max 10 min on 5-min bars)
+                # to prevent entering stale/decayed trades.
                 # Ancient signals from yesterday are still blocked since data only
                 # contains today's intraday + recent context bars.
-                recent_dates = {d.get("date") for d in data[-20:]}
+                recent_dates = {d.get("date") for d in data[-2:]}
                 if last_sig_date not in recent_dates:
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
                                                              "last_signals_count": signals_count,
-                                                             "last_filter_reason": f"Stale signal (date={last_sig_date!r} not in last 3 candles)"},
+                                                             "last_filter_reason": f"Stale signal (date={last_sig_date!r} not in last 2 candles)"},
                                                     "$inc": inc_set})
                     continue
 

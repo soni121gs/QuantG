@@ -333,4 +333,24 @@ async def reconcile_and_repair_positions(user_id: str) -> Dict[str, int]:
                 )
                 stats["protections_verified"] += 1
                 
+    # Flag mismatch state to the risk manager (blocks entries during misalignment)
+    mismatches = []
+    if stats["orphans_healed"] > 0:
+        mismatches.append(f"orphans_healed:{stats['orphans_healed']}")
+    if stats["stale_closed"] > 0:
+        mismatches.append(f"stale_closed:{stats['stale_closed']}")
+    if stats["quantities_aligned"] > 0:
+        mismatches.append(f"quantities_aligned:{stats['quantities_aligned']}")
+        
+    mismatch_detected = len(mismatches) > 0
+    await db.risk_state.update_one(
+        {"_id": f"position_reconciliation:{user_id}"},
+        {"$set": {
+            "mismatch_detected": mismatch_detected,
+            "mismatches": mismatches,
+            "updated_at": now
+        }},
+        upsert=True
+    )
+
     return stats

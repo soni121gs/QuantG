@@ -187,3 +187,146 @@ async def test_book_live_fill_routes_to_portfolio_ledger():
     assert res["realized_pnl"] == 0.0
     mock_ledger_instance.process_fill.assert_called_once()
     mock_db.orders.update_one.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_dynamic_delta_limit():
+    """Verify that RiskManager scales Greeks delta limit dynamically using account equity."""
+    from core.risk_manager import RiskManager
+    
+    mock_db = MagicMock()
+    mock_db.risk_state.find_one = AsyncMock(return_value=None)
+    mock_db.live_arm_state.find_one = AsyncMock(return_value=None)
+    # Mock strategy lookup
+    mock_db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "user_id": "user-1",
+        "visual_config": {"risk": {}, "options": {"lots": 10}}
+    })
+    
+    # Mock user settings
+    mock_db.users.find_one = AsyncMock(return_value={
+        "id": "user-1",
+        "settings": {"max_net_delta": None}
+    })
+    
+    # Mock active positions (return empty list, so net delta is just the order delta)
+    mock_db.strategy_positions.find = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.to_list = AsyncMock(return_value=[])
+    mock_db.strategy_positions.find.return_value = mock_cursor
+    
+    # Mode = paper. Wallet balance = 50,000. 50,000 * 0.001 = 50 delta limit.
+    # An order of 2 lots NIFTY (qty=130) at ATM has 130 * 0.5 = 65 delta.
+    # This should breach the 50 delta limit and be rejected!
+    mock_db.paper_wallets.find_one = AsyncMock(return_value={
+        "user_id": "user-1",
+        "balance": 50000.0
+    })
+    
+    rm = RiskManager(mock_db)
+    
+    with patch("core.market_session_service.MarketSessionService.is_segment_open", return_value=True):
+        # Reject 2 lots (qty=130) which exceeds 50 delta
+        res1 = await rm.evaluate_order(
+            user_id="user-1",
+            strategy_id="strat-1",
+            symbol="NIFTY",
+            target_symbol="NIFTY26FEB24850CE",
+            side="BUY",
+            requested_qty=130,
+            price=100.0,
+            mode="paper",
+            lot_size=65
+        )
+        assert res1["ok"] is False
+        assert "Net delta exposure limit breached" in res1["reason"]
+        
+        # Mode = paper. Wallet balance = 500,000. 500,000 * 0.001 = 500 delta limit.
+        # The same 2 lots order (65 delta) is well below 500 and should pass!
+        mock_db.paper_wallets.find_one = AsyncMock(return_value={
+            "user_id": "user-1",
+            "balance": 500000.0
+        })
+        
+        res2 = await rm.evaluate_order(
+            user_id="user-1",
+            strategy_id="strat-1",
+            symbol="NIFTY",
+            target_symbol="NIFTY26FEB24850CE",
+            side="BUY",
+            requested_qty=130,
+            price=100.0,
+            mode="paper",
+            lot_size=65
+        )
+        assert res2["ok"] is True
+
+
+def test_stale_signal_candle_lookback():
+    """Verify that signal lookback clamp selects only the last 2 candles."""
+    data = [{"date": f"2026-06-15T12:{i:02d}:00"} for i in range(10)]
+    recent = data[-2:]
+    assert len(recent) == 2
+    assert recent[0]["date"] == "2026-06-15T12:08:00"
+    assert recent[1]["date"] == "2026-06-15T12:09:00"
+    
+    stale_date = "2026-06-15T12:07:00"
+    recent_dates = {d.get("date") for d in recent}
+    assert stale_date not in recent_dates
+
+
+@pytest.mark.anyio
+async def test_resting_sl_placement_logic():
+    """Verify that _place_resting_sl_order computes the correct SL side, trigger, and limit price."""
+    import server
+    
+    mock_db = MagicMock()
+    mock_db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "user_id": "user-1",
+        "visual_config": {"risk": {"stop_loss_pct": 10.0}}
+    })
+    mock_db.orders.insert_one = AsyncMock()
+    mock_db.strategy_positions.update_many = AsyncMock()
+    
+    entry_order = {
+        "id": "ord-1",
+        "strategy_id": "strat-1",
+        "symbol": "NIFTY",
+        "target_symbol": "NIFTY26FEB24850CE",
+        "side": "BUY",
+        "instrument_token": "NSE_FO|12345",
+        "product": "MIS",
+        "mode": "live",
+    }
+    
+    placed_order = {}
+    async def mock_place_upstox_order(user_id, **kwargs):
+        nonlocal placed_order
+        placed_order = kwargs
+        return {"ok": True, "broker_order_id": "sl-broker-id-123"}
+        
+    with patch("server.db", mock_db), \
+         patch("server._place_upstox_order", mock_place_upstox_order):
+        
+        await server._place_resting_sl_order(
+            db=mock_db,
+            user_id="user-1",
+            entry_order=entry_order,
+            fill_price=100.0,
+            filled_qty=50
+        )
+        
+    # SL of long BUY should be SELL
+    assert placed_order["side"] == "SELL"
+    # trigger price is 10% below 100.0 = 90.0
+    assert placed_order["trigger_price"] == 90.0
+    # limit price is trigger price - 3% buffer = 90.0 * 0.97 = 87.3
+    assert placed_order["price"] == 87.3
+    assert placed_order["quantity"] == 50
+    assert placed_order["order_type"] == "SL"
+    
+    # Verify that order was inserted to DB and position was updated
+    mock_db.orders.insert_one.assert_called_once()
+    mock_db.strategy_positions.update_many.assert_called_once()

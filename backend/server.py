@@ -7049,6 +7049,33 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             results.append({"symbol": sym, "qty": qty_net, "status": "skipped", "reason": "already-exiting-or-closed"})
             continue
 
+        # If there's a resting stop-loss order at the broker, cancel it first
+        broker_sl_order_id = pos.get("broker_sl_order_id")
+        if broker_sl_order_id and pos.get("mode") == "live":
+            try:
+                logger.info(
+                    "Cancelling resting SL order=%s for pos=%s symbol=%s before manual/TP/time exit",
+                    broker_sl_order_id, pos["id"], sym
+                )
+                gateway = await get_user_upstox_gateway(user_id)
+                if gateway and gateway.connected:
+                    cancel_res = await asyncio.to_thread(gateway.cancel_order, broker_sl_order_id)
+                    logger.info("Resting SL order cancellation result: %s", cancel_res)
+                    # Also update the tracking order in db.orders to CANCELLED
+                    await db.orders.update_many(
+                        {"broker_order_id": broker_sl_order_id, "user_id": user_id},
+                        {"$set": {
+                            "status": "CANCELLED",
+                            "execution_status": "CANCELLED",
+                            "status_message": "CANCELLED: cancelled prior to technical exit execution",
+                            "updated_at": datetime.now(timezone.utc).isoformat()
+                        }}
+                    )
+                else:
+                    logger.warning("Could not cancel resting SL: Upstox gateway not connected.")
+            except Exception as cancel_exc:
+                logger.warning("Exception while cancelling resting SL order %s: %s", broker_sl_order_id, cancel_exc)
+
         exit_side = "BUY" if str(pos.get("asset_class") or "").upper() == "OPTION_SHORT" or str(pos.get("position_side") or "").upper() == "SHORT" else "SELL"
         # EXIT GUARANTEE: idempotency key is the position id ALONE. A position has
         # exactly ONE exit, regardless of which reason fires it or how many times.
@@ -12709,6 +12736,9 @@ async def _advance_pending_order_from_broker(
                         {"$set": position_update},
                     )
                     changed_positions += res.modified_count
+                    if order.get("mode") == "live":
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(_place_resting_sl_order(db, user_id, order, entry_price, final_qty))
             if strategy_id and is_exit:
                 exit_positions = await db.strategy_positions.find(
                     {"user_id": user_id, "exit_broker_order_id": str(broker_order_id), "status": {"$in": ["EXITING", "CLOSED"]}},
@@ -16201,6 +16231,171 @@ async def _mongo_position_monitor_loop(stop_event: asyncio.Event) -> None:
     logger.warning("_mongo_position_monitor_loop called but superseded by position_monitor.py — no-op")
 
 
+async def _place_resting_sl_order(
+    db: Any,
+    user_id: str,
+    entry_order: Dict[str, Any],
+    fill_price: float,
+    filled_qty: int,
+) -> None:
+    """Submit a resting stop-loss order (type SL) to Upstox immediately after entry fill."""
+    try:
+        strategy_id = entry_order.get("strategy_id")
+        symbol = entry_order.get("symbol")
+        target_symbol = entry_order.get("target_symbol") or symbol
+        
+        # 1. Resolve stop loss price
+        # Check order_intent first, then fallback to defaults or strategy tp_sl_tsl_config
+        intent_doc = entry_order.get("order_intent") or {}
+        stop_loss_price = intent_doc.get("stop_loss") or entry_order.get("stop_loss")
+        
+        if not stop_loss_price:
+            # Load strategy config to check if stop_loss_pct exists
+            strategy = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
+            risk_cfg = (strategy or {}).get("visual_config", {}).get("risk", {})
+            sl_pct = float(risk_cfg.get("stop_loss_pct") or 15.0)
+            # Long entry -> SL is below fill price. Short entry -> SL is above fill price.
+            side = str(entry_order.get("side") or "BUY").upper()
+            if side == "BUY":
+                stop_loss_price = round(fill_price * (1 - sl_pct / 100.0), 2)
+            else:
+                stop_loss_price = round(fill_price * (1 + sl_pct / 100.0), 2)
+
+        if not stop_loss_price or stop_loss_price <= 0:
+            logger.warning(
+                "Resting SL placement skipped: could not resolve stop loss price for order=%s symbol=%s",
+                entry_order.get("id"), target_symbol
+            )
+            return
+
+        # 2. Place SL order to Upstox
+        # Side is opposite of entry
+        entry_side = str(entry_order.get("side") or "BUY").upper()
+        sl_side = "SELL" if entry_side == "BUY" else "BUY"
+        
+        # SL order triggers when price crosses stop_loss_price.
+        # For a SELL SL (long exit), price falls to trigger. Limit price should be slightly lower (buffer).
+        # For a BUY SL (short exit), price rises to trigger. Limit price should be slightly higher (buffer).
+        # We use a 3% buffer.
+        buffer_frac = 0.03
+        if sl_side == "SELL":
+            limit_price = round(stop_loss_price * (1 - buffer_frac), 2)
+        else:
+            limit_price = round(stop_loss_price * (1 + buffer_frac), 2)
+            
+        logger.info(
+            "Placing resting SL order for strategy=%s symbol=%s qty=%d trigger=%.2f limit=%.2f",
+            strategy_id, target_symbol, filled_qty, stop_loss_price, limit_price
+        )
+        
+        # We route this through _place_upstox_order helper in server.py
+        # Validity is DAY, order_type is "SL" (which is SL-LMT in Upstox V2)
+        res = await _place_upstox_order(
+            user_id,
+            instrument_token=entry_order.get("instrument_token"),
+            side=sl_side,
+            quantity=filled_qty,
+            order_type="SL",
+            product=entry_order.get("product") or "MIS",
+            price=limit_price,
+            trigger_price=stop_loss_price,
+            tag=f"sl:{strategy_id[:18]}"
+        )
+        
+        if res.get("ok") or res.get("order_id") or res.get("broker_order_id"):
+            sl_broker_order_id = res.get("order_id") or res.get("broker_order_id")
+            # Create a pending SL order document in db.orders to track it
+            now = datetime.now(timezone.utc).isoformat()
+            sl_order_doc = {
+                "id": f"sl_order_{uuid.uuid4().hex[:12]}",
+                "user_id": user_id,
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "target_symbol": target_symbol,
+                "side": sl_side,
+                "qty": filled_qty,
+                "status": "PLACED",
+                "execution_status": "PLACED",
+                "requested_price": limit_price,
+                "price": limit_price,
+                "trigger_price": stop_loss_price,
+                "exchange": entry_order.get("exchange") or "NFO",
+                "segment": entry_order.get("segment") or "NSE_FO",
+                "mode": "live",
+                "broker": "upstox",
+                "broker_order_id": sl_broker_order_id,
+                "is_resting_sl": True,
+                "parent_entry_order_id": entry_order.get("id"),
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.orders.insert_one(sl_order_doc)
+            
+            # Update position to link the resting SL broker order id
+            await db.strategy_positions.update_many(
+                {
+                    "user_id": user_id,
+                    "strategy_id": strategy_id,
+                    "target_symbol": target_symbol,
+                    "mode": "live",
+                    "status": "OPEN"
+                },
+                {"$set": {
+                    "broker_sl_order_id": sl_broker_order_id,
+                    "tp_sl_tsl_config.stoploss_price": stop_loss_price,
+                    "tp_sl_tsl_config.protection_status": "RESTING_SL_PLACED",
+                    "updated_at": now
+                }}
+            )
+            logger.info("Successfully registered resting SL order=%s in DB and position", sl_broker_order_id)
+        else:
+            logger.error("Failed to place resting SL order at broker: %s", res.get("error"))
+    except Exception as exc:
+        logger.exception("Exception in _place_resting_sl_order: %s", exc)
+
+
+async def _on_portfolio_stream_event(db, payload: Dict[str, Any], uid: str) -> None:
+    """Process real-time portfolio WebSocket stream updates.
+
+    1. Store raw event and update order table via apply_broker_truth_event.
+    2. Route to _advance_pending_order_from_broker to write to ledger trade_fills/trades immediately.
+    """
+    await apply_broker_truth_event(db, {**payload, "user_id": uid}, source="portfolio_stream")
+    order_id = payload.get("order_id") or payload.get("broker_order_id")
+    raw_status = payload.get("status") or payload.get("order_status") or payload.get("state")
+    if order_id and raw_status:
+        status = _normalize_upstox_order_status(raw_status)
+        avg_price = 0.0
+        if payload.get("average_price") not in (None, ""):
+            try:
+                avg_price = float(payload.get("average_price"))
+            except Exception:
+                pass
+        filled_qty = None
+        if payload.get("filled_quantity") not in (None, ""):
+            try:
+                filled_qty = int(float(payload.get("filled_quantity")))
+            except Exception:
+                pass
+        pending_qty = None
+        if payload.get("pending_quantity") not in (None, ""):
+            try:
+                pending_qty = int(float(payload.get("pending_quantity")))
+            except Exception:
+                pass
+        status_message = payload.get("status_message") or raw_status
+        await _advance_pending_order_from_broker(
+            user_id=uid,
+            broker_order_id=str(order_id),
+            status=str(status or ""),
+            avg_price=avg_price,
+            filled_qty=filled_qty,
+            pending_qty=pending_qty,
+            status_message=str(status_message or ""),
+            raw_report=payload
+        )
+
+
 async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
     interval = max(10, int(os.environ.get("BROKER_RECONCILE_INTERVAL_SEC", "30")))
     logger.info("Broker reconciliation loop started interval=%ss", interval)
@@ -16235,9 +16430,15 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
                             if user_id not in streams:
                                 loop = asyncio.get_running_loop()
 
+                                async def _process_stream_event_async(payload_dict, user_uid):
+                                    try:
+                                        await _on_portfolio_stream_event(db, payload_dict, user_uid)
+                                    except Exception as exc:
+                                        logger.error("Error processing portfolio stream event: %s", exc)
+
                                 def _on_event(payload, uid=user_id):
                                     loop.call_soon_threadsafe(
-                                        lambda: asyncio.create_task(apply_broker_truth_event(db, {**payload, "user_id": uid}, source="portfolio_stream"))
+                                        lambda: asyncio.create_task(_process_stream_event_async(payload, uid))
                                     )
 
                                 stream = UpstoxPortfolioStream(access_token_getter=lambda gateway=gw: gateway.access_token, event_callback=_on_event)

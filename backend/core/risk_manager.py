@@ -316,9 +316,18 @@ class RiskManager:
         else:
             order_delta = -DELTA_PROXY * quantity if side == "BUY" else DELTA_PROXY * quantity
 
-        # Default cap 500 (env-overridable). The old default of 50 deadlocked the
-        # platform: one NIFTY lot (65) at 0.5 delta = 32.5, so a single open
-        # position blocked every further option entry account-wide.
+        # Resolve account equity/free margin to dynamically scale delta limits
+        equity = 100000.0
+        if mode == "paper":
+            wallet = await self.db.paper_wallets.find_one({"user_id": user_id})
+            if isinstance(wallet, dict):
+                equity = float(wallet.get("balance") or wallet.get("available_balance") or equity)
+        else:
+            user = await self.db.users.find_one({"id": user_id})
+            if user and "funds" in user:
+                equity = float(user["funds"].get("free_margin") or equity)
+
+        # Dynamic cap: 0.1% of account equity, floor of 50.0, overridable by settings or env.
         try:
             _env_delta_cap = float(os.environ.get("QUANTG_MAX_NET_DELTA", "") or 0)
         except ValueError:
@@ -327,7 +336,7 @@ class RiskManager:
             visual_risk.get("max_net_delta")
             or settings.get("max_net_delta")
             or _env_delta_cap
-            or 500.0
+            or max(50.0, equity * 0.001)
         )
 
         try:
