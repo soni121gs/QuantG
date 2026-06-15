@@ -682,6 +682,29 @@ async def _dispatch_signal_via_unified_engine(
             return existing
         return {"ok": False, "status": "SKIPPED", "reason": "duplicate idempotency block", "reason_code": "DUPLICATE_SIGNAL"}
 
+    # Phase 2 #5: credit spread — open both legs as ONE position via the isolated
+    # spread lifecycle, sized by defined risk (max loss). Bypasses the single-leg
+    # risk/route path entirely. Opt-in per strategy + global CREDIT_SPREADS_ENABLED.
+    _oc = option_contract or {}
+    if _oc.get("structure") == "credit_spread" and _oc.get("spread"):
+        from core.spread_builder import CREDIT_SPREADS_ENABLED, lots_for_risk
+        from core.spread_lifecycle import open_credit_spread
+        if not CREDIT_SPREADS_ENABLED:
+            return {"ok": False, "status": "SKIPPED", "reason": "credit spreads disabled",
+                    "reason_code": "CREDIT_SPREADS_DISABLED"}
+        _spread = _oc["spread"]
+        _risk_budget = float(
+            visual_risk.get("required_capital")
+            or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
+            or 15000.0
+        )
+        _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        return await open_credit_spread(
+            db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
+            spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
+            idempotency_key=idem_key, signal_id=sig["id"],
+        )
+
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
     product = (
         sig.get("product")
