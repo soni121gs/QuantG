@@ -726,6 +726,124 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 
 ---
 
+## PRIORITY — Phase 2 UI Polish (surface the options-alpha features)
+
+Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gate, credit spreads) is deployed; config + strategy/positions UI are done. These tasks make the engine's behaviour legible in the UI. All are frontend-leaning, low engine risk, gated/additive. Do in order; deploy + verify each. Frontend changes require `docker-compose build frontend && docker-compose up -d frontend` (a restart does NOT pick up JSX).
+
+### TASK-023 — Friendly labels for Phase 2 exit/skip reasons
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Session size**: ~45 min
+- **Prerequisite**: None
+
+**Problem**: New reasons render as raw codes (`theta-decay-10m`, `theta-no-progress-8m`, `spread-tp`, `spread-sl`, `IV_RANK_GATE`, `IV_RANK_SHADOW`, `ORDERFLOW_GATE`, `ORDERFLOW_SHADOW`, `CREDIT_SPREADS_DISABLED`). `Strategies.jsx` already has a `noticeFor()` mapper for older reasons; the Phase 2 ones aren't covered, and Orders/Positions show reasons raw.
+
+**Files to touch**: `frontend/src/lib/` (new shared `reasonLabels.js` helper), `frontend/src/pages/Strategies.jsx`, `frontend/src/pages/Orders.jsx`, `frontend/src/pages/Positions.jsx`.
+
+**Steps**: add a `reasonLabel(code)` → `{ label, tone, hint }` map (covering Phase 2 + existing codes); render exit_reason / last_filter_reason / rejection_reason through it with a colored chip + tooltip. Keep raw code in a title attr for debugging.
+
+**Verify**: a position closed `theta-decay-12m` shows "Closed early — theta decay (12m)"; a skipped signal `IV_RANK_GATE` shows "Blocked — IV too rich for buying".
+
+### TASK-024 — "Why isn't it trading?" readiness banner
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Prerequisite**: None
+
+**Problem**: Token expires nightly + strategies sit paused → screens look silently empty. No in-app signal of the blocking condition.
+
+**Files to touch**: `frontend/src/components/` (new `ReadinessBanner.jsx`), mount in `Layout.jsx` (or Dashboard/Strategies). Reuse existing `/upstox/status` and `/strategies` data.
+
+**Steps**: top strip that shows, when blocking: "Upstox token expired — reconnect" (link to ApiKeys) and "0 of N strategies armed — arm to trade". Hide when token live AND ≥1 strategy live. Subtle, dismissible.
+
+**Verify**: with token disconnected / all paused, banner shows both messages; after reconnect + arming, it disappears.
+
+### TASK-025 — Greeks (δ/θ/IV) on positions & signals
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Prerequisite**: None
+
+**Problem**: `greeks_at_signal`/`greeks_at_entry` now populate but are shown nowhere. Delta-selection picks strikes by δ — users can't see it.
+
+**Files to touch**: `backend/execution_state.py` (carry `delta/theta/iv` + `target_delta` onto the position snapshot), `frontend/src/pages/Positions.jsx` (show δ/θ/IV, ideally a detail popover).
+
+**Steps**: surface entry greeks on the position row/popover; show "δ 0.46 (target 0.45)" when `target_delta` present.
+
+**Verify**: an option position shows its δ/θ/IV; a delta-selected one shows target vs actual.
+
+### TASK-026 — Spread leg detail (expandable row / popover)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Prerequisite**: TASK-025 (shares the popover pattern)
+
+**Problem**: Spread positions show a badge + credit/max-loss but not the two legs.
+
+**Files to touch**: `frontend/src/pages/Positions.jsx` (legs already in snapshot from `execution_state.py`).
+
+**Steps**: expandable row/tooltip showing short & long leg (strike/type/premium), net δ/θ, current spread value vs TP(50%)/SL(2×) levels; small progress bar from credit→max-loss.
+
+**Verify**: a credit_spread position expands to show both legs and where value sits between TP and SL.
+
+### TASK-027 — Phase 2 feature-status panel (read-only)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Prerequisite**: None
+
+**Problem**: Gate flags are env-driven and invisible in-app; you must SSH to know what's on.
+
+**Files to touch**: `backend/server.py` or `backend/routes/ops.py` (new `GET /ops/feature-flags` returning each Phase 2 flag's state), `frontend/src/pages/OpsConsole.jsx` (render a status panel).
+
+**Steps**: endpoint returns theta-exit/delta/IV-rank/order-flow/credit-spreads as ON/OFF/shadow (read env). UI shows colored chips. Read-only (no toggles).
+
+**Verify**: panel matches `docker exec quantg-backend printenv | grep` for the flags.
+
+### TASK-028 — Structure badge on strategy cards
+- **Status**: `[ ]`
+- **Tier**: 3 (small)
+- **Session size**: ~30 min
+- **Prerequisite**: None
+
+**Problem**: Can't tell at a glance which option strategies are credit-spread vs single-leg.
+
+**Files to touch**: `frontend/src/pages/Strategies.jsx`.
+
+**Steps**: show a "Spread" / "Single-leg" chip on option strategies from `visual_config.options.structure`.
+
+**Verify**: a strategy set to `credit_spread` shows the Spread chip.
+
+### TASK-029 — IV-Regime card → visual gauge
+- **Status**: `[ ]`
+- **Tier**: 3 (small)
+- **Session size**: ~30 min
+- **Prerequisite**: None
+
+**Problem**: MarketHub IV-Regime card is text rows; no visual sense of where IV rank sits.
+
+**Files to touch**: `frontend/src/pages/MarketHub.jsx`.
+
+**Steps**: add a horizontal bar showing IV rank within the 52w min–max, plus a cheap/rich colored chip from `would_block_buys`.
+
+**Verify**: card shows a bar with the marker at the current rank.
+
+### TASK-030 — Per-strategy trade-cap indicator
+- **Status**: `[ ]`
+- **Tier**: 3 (small)
+- **Session size**: ~30 min
+- **Prerequisite**: None
+
+**Problem**: New caps (now 8/day) and throttling aren't visible as they fill.
+
+**Files to touch**: `frontend/src/pages/Strategies.jsx` (uses `order_count_today` + `visual_config.risk.max_trades_day`).
+
+**Steps**: small "N / 8 today" counter per strategy; muted when 0, warn-tone when at cap.
+
+**Verify**: a strategy with 3 fills shows "3 / 8".
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
