@@ -683,6 +683,19 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
         visual_config["options"]["product"] = req.product
         update_fields["product"] = req.product
         row["product"] = req.product
+    # Phase 2 #5: persist credit-spread structure config onto visual_config.options.
+    if req.structure is not None or req.spread_width is not None or req.short_delta is not None:
+        if "options" not in visual_config:
+            visual_config["options"] = {}
+        if req.structure is not None:
+            structure = str(req.structure).strip().lower()
+            if structure not in ("single_leg", "credit_spread"):
+                raise HTTPException(status_code=400, detail="structure must be single_leg or credit_spread")
+            visual_config["options"]["structure"] = structure
+        if req.spread_width is not None:
+            visual_config["options"]["spread_width"] = max(1, int(req.spread_width))
+        if req.short_delta is not None:
+            visual_config["options"]["short_delta"] = max(0.05, min(0.95, float(req.short_delta)))
     if req.broker is not None:
         update_fields["broker"] = "upstox"
         row["broker"] = "upstox"

@@ -38,6 +38,9 @@ const DEFAULT_OPTIONS = {
   otm_points: 100,
   lots: 1,
   expiry_offset: 0,
+  structure: "single_leg",   // or "credit_spread" (defined-risk, Phase 2)
+  spread_width: 2,           // short→long strike distance in # of intervals
+  short_delta: 0.30,         // target |delta| for the spread's short leg
 };
 
 export default function VisualBuilder() {
@@ -176,6 +179,58 @@ export default function VisualBuilder() {
                   </label>
                 ))}
               </div>
+            </div>
+
+            {/* Structure: single leg vs defined-risk credit spread (Phase 2 #5) */}
+            <div>
+              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Structure</label>
+              <div className="flex gap-2">
+                {[
+                  { id: "single_leg", label: "Single Leg" },
+                  { id: "credit_spread", label: "Credit Spread" },
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setOptions({ ...options, structure: st.id })}
+                    className={`flex-1 px-3 py-2 font-mono text-xs uppercase rounded-sm border ${
+                      (options.structure || "single_leg") === st.id
+                        ? "qd-force-white border-[var(--qd-accent)] bg-[var(--qd-accent)]"
+                        : "border-[var(--qd-border)] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)]"
+                    }`}
+                    data-testid={`structure-${st.id}`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+              {options.structure === "credit_spread" && (
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Short Δ (target)</label>
+                    <input
+                      type="number" step="0.05" min="0.05" max="0.95"
+                      value={options.short_delta ?? 0.30}
+                      onChange={(e) => setOptions({ ...options, short_delta: Math.max(0.05, Math.min(0.95, +e.target.value)) })}
+                      className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono w-full rounded-sm"
+                      data-testid="short-delta-input"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Width (strikes)</label>
+                    <input
+                      type="number" min="1" max="20"
+                      value={options.spread_width ?? 2}
+                      onChange={(e) => setOptions({ ...options, spread_width: Math.max(1, +e.target.value) })}
+                      className="bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono w-full rounded-sm"
+                      data-testid="spread-width-input"
+                    />
+                  </div>
+                  <div className="col-span-2 text-[10px] text-[var(--qd-text-2)] font-mono leading-relaxed">
+                    Bullish → bull-put · bearish → bear-call. Short leg ≈ {(options.short_delta ?? 0.30)}Δ, long leg {options.spread_width ?? 2} strike(s) further OTM. Defined risk; requires the platform-level credit-spreads switch.
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* OTM points (only for OTM mode) */}

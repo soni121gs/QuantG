@@ -444,6 +444,10 @@ class StrategyRuntimeSettingsReq(BaseModel):
     broker: Optional[str] = None
     mode: Optional[str] = None
     product: Optional[str] = None
+    # Phase 2 #5: option structure — "single_leg" (default) or "credit_spread".
+    structure: Optional[str] = None
+    spread_width: Optional[int] = None   # short→long strike distance, in # of strike intervals
+    short_delta: Optional[float] = None  # target |delta| for the spread's short leg
 
 
 class ProfileUpdateReq(BaseModel):

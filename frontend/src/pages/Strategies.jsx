@@ -398,6 +398,9 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
     broker: s.broker ?? "upstox",
     mode: s.mode ?? "paper",
     product: s.visual_config?.options?.product ?? s.product ?? "MIS",
+    structure: s.visual_config?.options?.structure ?? "single_leg",
+    spread_width: s.visual_config?.options?.spread_width ?? 2,
+    short_delta: s.visual_config?.options?.short_delta ?? 0.30,
   });
 
   useEffect(() => {
@@ -419,6 +422,9 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
       broker: s.broker ?? "upstox",
       mode: s.mode ?? "paper",
       product: s.visual_config?.options?.product ?? s.product ?? "MIS",
+      structure: s.visual_config?.options?.structure ?? "single_leg",
+      spread_width: s.visual_config?.options?.spread_width ?? 2,
+      short_delta: s.visual_config?.options?.short_delta ?? 0.30,
     });
   }, [s]);
 
@@ -443,6 +449,9 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
         broker: form.broker,
         mode: form.mode,
         product: form.product,
+        structure: form.structure,
+        spread_width: (form.spread_width !== "" && form.spread_width != null) ? parseInt(form.spread_width) : null,
+        short_delta: (form.short_delta !== "" && form.short_delta != null) ? parseFloat(form.short_delta) : null,
       };
       await api.put(`/strategies/${s.id}/runtime-settings`, payload);
       toast.success("Strategy risk settings synced successfully");
@@ -761,8 +770,50 @@ function StrategyCard({ s, score, testing, toggle, del, testRun, manualOrder, ex
               </div>
             </div>
 
-            <button 
-              type="submit" 
+            {/* Phase 2 #5: credit-spread structure (options strategies only) */}
+            {s.visual_config?.options?.enabled && (
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                <div>
+                  <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Structure</label>
+                  <select
+                    value={form.structure}
+                    onChange={(e) => setForm({ ...form, structure: e.target.value })}
+                    className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    data-testid="settings-structure"
+                  >
+                    <option value="single_leg">Single Leg</option>
+                    <option value="credit_spread">Credit Spread</option>
+                  </select>
+                </div>
+                {form.structure === "credit_spread" && (
+                  <>
+                    <div>
+                      <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Short Δ</label>
+                      <input
+                        type="number" step="0.05" min="0.05" max="0.95"
+                        value={form.short_delta}
+                        onChange={(e) => setForm({ ...form, short_delta: e.target.value })}
+                        className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                        data-testid="settings-short-delta"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Width (strikes)</label>
+                      <input
+                        type="number" min="1" max="20"
+                        value={form.spread_width}
+                        onChange={(e) => setForm({ ...form, spread_width: e.target.value })}
+                        className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                        data-testid="settings-spread-width"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <button
+              type="submit"
               disabled={saving}
               className="w-full py-2 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-[var(--qd-accent-contrast)] font-mono text-[10px] uppercase font-bold tracking-wider rounded border border-[var(--qd-border-strong)] shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
             >

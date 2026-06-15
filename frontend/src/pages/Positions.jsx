@@ -94,11 +94,23 @@ export default function Positions() {
                   const qty = intQty(p.qty);
                   const pnlTone = (p.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]";
                   const longPos = qty > 0;
+                  const isSpread = p.structure === "credit_spread";
+                  const maxLossTotal = p.max_loss_total ?? (p.max_loss != null ? p.max_loss * Math.abs(qty) : null);
                   return (
                     <tr key={`${p.symbol}-${p.strategy_id || ""}`} className="border-t border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]" data-testid={`pos-${p.symbol}`}>
                       <td className="px-4 py-2.5 text-[var(--qd-text-2)]">{p.strategy_name || p.strategy_id || "broker"}</td>
-                      <td className="px-4 py-2.5 text-[var(--qd-text)]">{p.symbol}</td>
-                      <td className={`px-4 py-2.5 ${longPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{longPos ? "+" : ""}{qty}</td>
+                      <td className="px-4 py-2.5 text-[var(--qd-text)]">
+                        {p.symbol}
+                        {isSpread && (
+                          <span className="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm bg-[rgba(0,122,255,0.12)] text-[var(--qd-accent)]">spread</span>
+                        )}
+                        {isSpread && (
+                          <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
+                            credit ₹{formatINR(p.net_credit)}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
+                          </div>
+                        )}
+                      </td>
+                      <td className={`px-4 py-2.5 ${isSpread ? "text-[var(--qd-text-2)]" : longPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{isSpread ? qty : `${longPos ? "+" : ""}${qty}`}</td>
                       <td className="px-4 py-2.5">{formatINR(p.avg_price)}</td>
                       <td className="px-4 py-2.5">{formatINR(p.ltp)}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-profit)]">{p.take_profit != null ? formatINR(p.take_profit) : "—"}</td>
@@ -111,17 +123,23 @@ export default function Positions() {
                         }`}>{p.mode || (paperMode ? "paper" : "live")}</span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        <button
-                          onClick={() => exit(p.symbol)}
-                          disabled={exiting === p.symbol}
-                          className={`text-[10px] uppercase tracking-wider px-3 py-1 rounded-sm disabled:opacity-50 flex items-center gap-1 ml-auto ${
-                            longPos ? "bg-[var(--qd-loss)] text-white" : "bg-[var(--qd-profit)] text-black"
-                          }`}
-                          data-testid={`exit-${p.symbol}`}
-                        >
-                          {exiting === p.symbol ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />}
-                          Exit
-                        </button>
+                        {isSpread ? (
+                          <span className="text-[9px] uppercase tracking-widest px-2 py-1 rounded-sm bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] ml-auto inline-block" title="Both legs auto-managed by TP 50% / SL 2x / EOD square-off">
+                            Auto TP/SL
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => exit(p.symbol)}
+                            disabled={exiting === p.symbol}
+                            className={`text-[10px] uppercase tracking-wider px-3 py-1 rounded-sm disabled:opacity-50 flex items-center gap-1 ml-auto ${
+                              longPos ? "bg-[var(--qd-loss)] text-white" : "bg-[var(--qd-profit)] text-black"
+                            }`}
+                            data-testid={`exit-${p.symbol}`}
+                          >
+                            {exiting === p.symbol ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />}
+                            Exit
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

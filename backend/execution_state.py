@@ -172,11 +172,17 @@ class ExecutionStateManager:
             except (TypeError, ValueError):
                 db_ltp = None
             db_pnl = float(row.get("unrealized_pnl") or 0) if row.get("unrealized_pnl") is not None else None
-            out.append({
+            # Phase 2 #5: credit spreads are one position with two legs. The value
+            # to close is short_ltp - long_ltp (stored as spread_value); avg_price
+            # already holds the net credit. Map TP/SL to the spread value levels so
+            # the existing Positions table renders sensibly, and expose the extras.
+            structure = row.get("structure")
+            is_spread = structure == "credit_spread"
+            pos_out = {
                 "id": row.get("id"),
                 "strategy_id": row.get("strategy_id"),
                 "strategy_name": name_by_id.get(str(row.get("strategy_id") or "")),
-                "symbol": row.get("trading_symbol") or row.get("symbol"),
+                "symbol": row.get("trading_symbol") or row.get("symbol") or row.get("target_symbol"),
                 "exchange": row.get("exchange"),
                 "segment": segment_from_exchange(row.get("exchange") or "NSE", row.get("asset_class") or "DIRECT"),
                 "instrument_token": row.get("instrument_token"),
@@ -192,7 +198,20 @@ class ExecutionStateManager:
                 "entry_order_id": row.get("entry_order_id"),
                 "broker_order_id": row.get("entry_broker_order_id") or row.get("broker_order_id"),
                 "mode": row.get("mode") or "paper",  # default to paper — never assume live
-            })
+            }
+            if is_spread:
+                pos_out.update({
+                    "structure": "credit_spread",
+                    "symbol": row.get("target_symbol") or pos_out["symbol"],
+                    "last_ltp": row.get("spread_value") if row.get("spread_value") is not None else db_ltp,
+                    "take_profit": row.get("spread_tp_value"),
+                    "stop_loss": row.get("spread_sl_value"),
+                    "net_credit": row.get("net_credit"),
+                    "max_loss": row.get("max_loss"),
+                    "max_loss_total": row.get("max_loss_total"),
+                    "legs": row.get("legs") or [],
+                })
+            out.append(pos_out)
         return out
 
     def _ledger_risk_by_strategy(self) -> Dict[str, Dict[str, Any]]:
@@ -270,6 +289,10 @@ class ExecutionStateManager:
                     "ledger_status": ledger.get("position_status") or "ACTIVE",
                     "entry_order_id": sp.get("entry_order_id"),
                     "broker_order_id": sp.get("broker_order_id"),
+                    "structure": sp.get("structure"),
+                    "net_credit": sp.get("net_credit"),
+                    "max_loss": sp.get("max_loss"),
+                    "legs": sp.get("legs"),
                 })
                 if ledger.get("ltp") is not None:
                     bp_merged["ltp"] = ledger.get("ltp")
@@ -341,6 +364,12 @@ class ExecutionStateManager:
                 "ledger_status": ledger.get("position_status"),
                 "entry_order_id": sp.get("entry_order_id"),
                 "broker_order_id": sp.get("broker_order_id"),
+                # Phase 2 #5: carry credit-spread fields through to the UI.
+                "structure": sp.get("structure"),
+                "net_credit": sp.get("net_credit"),
+                "max_loss": sp.get("max_loss"),
+                "max_loss_total": sp.get("max_loss_total"),
+                "legs": sp.get("legs"),
             })
 
         return merged_positions

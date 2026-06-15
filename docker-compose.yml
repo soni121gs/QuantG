@@ -36,6 +36,25 @@ services:
       CORE_ENGINE_PAPER_ENABLED: "true"
       CORE_ENGINE_LIVE_ENABLED: "${CORE_ENGINE_LIVE_ENABLED:-false}"
       LEGACY_EXECUTION_WRITES_ENABLED: "false"
+      # ── Phase 2 options-alpha features (all overridable; defaults match code) ──
+      # #4 theta-aware exits (ON): early-exit long option buyers that stall.
+      EXIT_THETA_AWARE_ENABLED: "${EXIT_THETA_AWARE_ENABLED:-true}"
+      EXIT_THETA_NOPROGRESS_MIN: "${EXIT_THETA_NOPROGRESS_MIN:-8}"
+      EXIT_THETA_MIN_PROGRESS_R: "${EXIT_THETA_MIN_PROGRESS_R:-0.3}"
+      # #2 delta-based strike selection (ON): pick strike by target delta.
+      OPTION_DELTA_SELECTION_ENABLED: "${OPTION_DELTA_SELECTION_ENABLED:-true}"
+      # #1 IV-rank gate (OFF → shadow → enabled): block buying expensive premium.
+      IV_RANK_GATE_ENABLED: "${IV_RANK_GATE_ENABLED:-false}"
+      IV_RANK_GATE_SHADOW: "${IV_RANK_GATE_SHADOW:-false}"
+      IV_RANK_BUY_MAX: "${IV_RANK_BUY_MAX:-70}"
+      # #3 order-flow gate (OFF → shadow → enabled): need net buying pressure.
+      ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-false}"
+      ORDERFLOW_GATE_SHADOW: "${ORDERFLOW_GATE_SHADOW:-false}"
+      ORDERFLOW_MIN_IMBALANCE: "${ORDERFLOW_MIN_IMBALANCE:-0.15}"
+      # #5 defined-risk credit spreads (OFF): per-strategy opt-in via structure.
+      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-false}"
+      CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
+      CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
     volumes:
       - backend-state:/data
     depends_on:
