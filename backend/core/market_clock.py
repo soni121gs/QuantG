@@ -24,6 +24,11 @@ MARKET_HOLIDAYS_IST = {
 SEGMENT_WINDOWS = {
     DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
     DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
+    # Cash equity trades the same 9:15–15:30 IST session as F&O. Without these
+    # entries every NSE_EQ/BSE_EQ strategy (the UPSTOX <STOCK> cash strategies)
+    # resolves to "Unsupported segment domain" and the runner skips it every tick.
+    DomainType.NSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE Equity"),
+    DomainType.BSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE Equity"),
 }
 
 def get_ist_now(now_utc: Optional[datetime] = None) -> datetime:
