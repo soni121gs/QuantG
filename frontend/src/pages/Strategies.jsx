@@ -359,6 +359,12 @@ export default function Strategies() {
 function StrategyCard({ s, score, toggle, del, onAbout, manualOrder, exitAll, load, upstoxStatus }) {
   const live = s.status === "live";
   const paused = s.status === "paused";
+  const cardOpts = s.visual_config?.options || {};
+  const isOptionStrat = !!cardOpts.enabled;
+  const isSpreadCard = cardOpts.structure === "credit_spread";
+  const maxTd = s.visual_config?.risk?.max_trades_day;
+  const tradesToday = s.order_count_today ?? 0;
+  const atCap = maxTd != null && tradesToday >= maxTd;
   const notice = noticeFor(s);
   const editPath = s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`;
   const scoreValue = score?.score ?? s.ai_confidence_score ?? 0;  
@@ -501,6 +507,19 @@ function StrategyCard({ s, score, toggle, del, onAbout, manualOrder, exitAll, lo
             <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-[var(--qd-text)]">
               BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
             </span>
+            {isOptionStrat && (
+              <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
+                {isSpreadCard ? "SPREAD" : "SINGLE-LEG"}
+              </span>
+            )}
+            {maxTd != null && (
+              <span
+                className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider border ${atCap ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"}`}
+                title="Trades today / daily cap"
+              >
+                {tradesToday} / {maxTd} today
+              </span>
+            )}
           </div>
         </div>
         <div className="grid min-w-[280px] grid-cols-3 gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2 sm:grid-cols-6 lg:grid-cols-3 xl:grid-cols-6">
