@@ -7118,6 +7118,20 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             place_kwargs["symbol"] = sym
             place_kwargs["qty"] = qty_net
             place_kwargs["exchange"] = pos.get("exchange") or "NSE"
+            # FIX 5: equity exits must carry a price too. Without one, _place_order_core
+            # falls through to the ₹0.05 nominal MARKET fill (cash equity has no
+            # subscribed WS token, and the simulated fallback is skipped while the
+            # market is open) — booking a phantom loss equal to the full notional.
+            # Mirror the option branch: prefer last_ltp, else average_buy_price.
+            raw_ltp = pos.get("last_ltp")
+            try:
+                last_known_ltp = float(raw_ltp) if raw_ltp and raw_ltp != "LTP_UNAVAILABLE" else 0.0
+            except (TypeError, ValueError):
+                last_known_ltp = 0.0
+            if last_known_ltp <= 0:
+                last_known_ltp = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
+            if last_known_ltp > 0:
+                place_kwargs["price"] = last_known_ltp
         # FIX 3: mark as exit so _place_order_core skips all price quality guards
         place_kwargs["is_exit_order"] = True
         try:
@@ -11690,15 +11704,17 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
 
         paper_ltp = price if (price and price > 0) else (contract_ltp if contract_ltp > 0 else (0.0 if market_session.get("open") else _get_paper_ltp(symbol, option_contract)))
         if paper_ltp <= 0:
-            # FIX 3: exit orders with no price use a nominal ₹0.05 MARKET fill.
-            # This lets paper exits process without a real price rather than being
-            # permanently blocked — the position is closed and the wallet is credited ₹0.
+            # FIX 5: exit orders with no resolvable price fall back to a realistic
+            # simulated price (_get_paper_ltp) rather than a ₹0.05 nominal. The old
+            # ₹0.05 fill booked a phantom loss equal to the full notional on every
+            # price-less exit (notably cash equity, which has no subscribed WS token
+            # and whose simulated fallback was skipped while the market was open).
             if is_exit_order:
+                paper_ltp = _get_paper_ltp(symbol, option_contract)
                 logger.warning(
-                    "EXIT order for %s has paper_ltp=0 — using ₹0.05 nominal for MARKET exit (is_exit_order=True)",
-                    target_symbol,
+                    "EXIT order for %s has no resolvable price — using simulated ₹%.2f for MARKET exit (is_exit_order=True)",
+                    target_symbol, paper_ltp,
                 )
-                paper_ltp = 0.05
             else:
                 skip_doc = await _persist_core_paper_skipped_order(
                     user_id=user_id,
