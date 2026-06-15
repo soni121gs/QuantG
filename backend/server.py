@@ -14012,7 +14012,24 @@ async def _resolve_option_for_strategy(
         try:
             spot_key = upstox_keys.get(underlying)
             if spot_key:
-                chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, None)
+                # Upstox's /v2/option/chain REQUIRES a concrete expiry_date — passing
+                # None returns HTTP 400, so this lookup always failed and EVERY
+                # resolution silently fell through to the search fallback (no chain
+                # match → no PCR, no chain-sourced greeks). Resolve the target expiry
+                # first from the option-contract list, honouring expiry_offset
+                # (0 = nearest, expiries sorted ascending).
+                chain_expiry = None
+                try:
+                    _contracts = await asyncio.to_thread(upstox_gw.get_option_contracts, spot_key)
+                    _expiries = sorted({
+                        c.get("expiry") for c in ((_contracts or {}).get("data") or [])
+                        if c.get("expiry")
+                    })
+                    if _expiries:
+                        chain_expiry = _expiries[min(max(int(expiry_offset or 0), 0), len(_expiries) - 1)]
+                except Exception as _exp_exc:
+                    logger.warning("Upstox option expiry lookup failed for %s: %s", underlying, _exp_exc)
+                chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, chain_expiry)
                 if chain and chain.get("status") == "success":
                     data = chain.get("data", []) or []
                     chain_loaded = len(data) > 0
@@ -14032,6 +14049,11 @@ async def _resolve_option_for_strategy(
                                 instrument_token = opt_node.get("instrument_key")
                                 tradingsymbol = opt_node.get("trading_symbol")
                                 quality_quote = dict(opt_node.get("market_data") or {})
+                                # Greeks live in a separate option_greeks sub-object,
+                                # not market_data — fold them in so the Phase 1 mirror
+                                # picks them up straight from the chain match (and the
+                                # greeks backfill further below can skip its extra fetch).
+                                quality_quote.update(opt_node.get("option_greeks") or {})
                                 if node.get("expiry"):
                                     try:
                                         expiry_dt = datetime.strptime(str(node["expiry"]), "%Y-%m-%d")
