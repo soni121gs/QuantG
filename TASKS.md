@@ -731,7 +731,7 @@ Improve `backend/core/paper_broker.py`: add configurable slippage (default 5 bps
 Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gate, credit spreads) is deployed; config + strategy/positions UI are done. These tasks make the engine's behaviour legible in the UI. All are frontend-leaning, low engine risk, gated/additive. Do in order; deploy + verify each. Frontend changes require `docker-compose build frontend && docker-compose up -d frontend` (a restart does NOT pick up JSX).
 
 ### TASK-023 — Friendly labels for Phase 2 exit/skip reasons
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 86705ba · 2026-06-16
 - **Tier**: 2
 - **Session size**: ~45 min
 - **Prerequisite**: None
@@ -745,7 +745,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: a position closed `theta-decay-12m` shows "Closed early — theta decay (12m)"; a skipped signal `IV_RANK_GATE` shows "Blocked — IV too rich for buying".
 
 ### TASK-024 — "Why isn't it trading?" readiness banner
-- **Status**: `[ ]`
+- **Status**: `[x]` commit ff7f411 · 2026-06-16
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Prerequisite**: None
@@ -759,7 +759,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: with token disconnected / all paused, banner shows both messages; after reconnect + arming, it disappears.
 
 ### TASK-025 — Greeks (δ/θ/IV) on positions & signals
-- **Status**: `[ ]`
+- **Status**: `[x]` commit b8f7f70 · 2026-06-16
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Prerequisite**: None
@@ -773,7 +773,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: an option position shows its δ/θ/IV; a delta-selected one shows target vs actual.
 
 ### TASK-026 — Spread leg detail (expandable row / popover)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 362f731 · 2026-06-16
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Prerequisite**: TASK-025 (shares the popover pattern)
@@ -787,7 +787,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: a credit_spread position expands to show both legs and where value sits between TP and SL.
 
 ### TASK-027 — Phase 2 feature-status panel (read-only)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit f872522 · 2026-06-16
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Prerequisite**: None
@@ -801,7 +801,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: panel matches `docker exec quantg-backend printenv | grep` for the flags.
 
 ### TASK-028 — Structure badge on strategy cards
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 63b9829 · 2026-06-16
 - **Tier**: 3 (small)
 - **Session size**: ~30 min
 - **Prerequisite**: None
@@ -815,7 +815,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: a strategy set to `credit_spread` shows the Spread chip.
 
 ### TASK-029 — IV-Regime card → visual gauge
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 6c15010 · 2026-06-16
 - **Tier**: 3 (small)
 - **Session size**: ~30 min
 - **Prerequisite**: None
@@ -829,7 +829,7 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 **Verify**: card shows a bar with the marker at the current rank.
 
 ### TASK-030 — Per-strategy trade-cap indicator
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 63b9829 · 2026-06-16
 - **Tier**: 3 (small)
 - **Session size**: ~30 min
 - **Prerequisite**: None
@@ -859,6 +859,14 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 | TASK-007 | Canonical get_strategy_pnl_today() in portfolio_ledger | 6f61247 | 2026-06-11 |
 | TASK-021 | Implement live readiness and paper trading audit fixes | b38e5c0 | 2026-06-15 |
 | TASK-022 | Redesign Strategies UI, relocate test action to About modal | 43d4dd9 | 2026-06-15 |
+| TASK-023 | Friendly labels for Phase 2 exit/skip reasons | 86705ba | 2026-06-16 |
+| TASK-024 | "Why isn't it trading?" readiness banner | ff7f411 | 2026-06-16 |
+| TASK-025 | Greeks (δ/θ/IV) on positions | b8f7f70 | 2026-06-16 |
+| TASK-026 | Expandable spread leg detail on Positions | 362f731 | 2026-06-16 |
+| TASK-027 | Phase 2 feature-flag status panel | f872522 | 2026-06-16 |
+| TASK-028 | Structure badge on strategy cards | 63b9829 | 2026-06-16 |
+| TASK-029 | IV-regime visual gauge | 6c15010 | 2026-06-16 |
+| TASK-030 | Per-strategy trade-cap indicator | 63b9829 | 2026-06-16 |
 
 ---
 
