@@ -16433,6 +16433,25 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         if vix_tick and vix_tick.get("ltp"):
                             vix_value = float(vix_tick["ltp"])
                             break
+                        # WS cache routinely misses for the index/VIX feed (it
+                        # serves REST-bootstrap only — see the "tick cache empty"
+                        # logs), so latest_tick returns nothing and vix_history was
+                        # never written. Fall back to a REST market quote, which
+                        # works for index keys even when the live WS feed does not.
+                        try:
+                            _vq = await asyncio.to_thread(
+                                gw_vix.get_market_quote, [UPSTOX_VIX_INSTRUMENT_KEY]
+                            )
+                            # Parse without an instrument_key: Upstox keys the LTP
+                            # response by colon format (NSE_INDEX:India VIX) while
+                            # our key uses a pipe, so an exact-key match would miss.
+                            # We requested only VIX, so the single node is the value.
+                            _vltp = UpstoxGateway.parse_quote_ltp(_vq)
+                            if _vltp and float(_vltp) > 0:
+                                vix_value = float(_vltp)
+                                break
+                        except Exception:
+                            continue
                     if vix_value is not None and vix_value > 0:
                         await db.vix_history.update_one(
                             {"date": today},
