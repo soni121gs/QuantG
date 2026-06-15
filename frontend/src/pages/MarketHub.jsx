@@ -175,6 +175,24 @@ export default function MarketHub() {
           {ivRank?.available ? (
             <div className="space-y-2">
               <Row k="IV Rank" v={`${ivRank.iv_rank}`} />
+              <div className="pt-0.5">
+                <div className="relative h-2 overflow-hidden rounded-full bg-[var(--qd-surface-3)]">
+                  <div
+                    className={`absolute inset-y-0 left-0 ${ivRank.would_block_buys ? "bg-[color-mix(in_srgb,var(--qd-warn)_45%,transparent)]" : "bg-[color-mix(in_srgb,var(--qd-accent)_45%,transparent)]"}`}
+                    style={{ width: `${Math.max(0, Math.min(100, ivRank.iv_rank))}%` }}
+                  />
+                  <div
+                    className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-[var(--qd-warn)]"
+                    style={{ left: `${Math.max(0, Math.min(100, ivRank.buy_max))}%` }}
+                    title={`Buy gate cap ${ivRank.buy_max}`}
+                  />
+                </div>
+                <div className="mt-0.5 flex justify-between text-[9px] text-[var(--qd-text-3)]">
+                  <span>0 · cheap</span>
+                  <span>cap {ivRank.buy_max}</span>
+                  <span>100 · rich</span>
+                </div>
+              </div>
               <Row k="IV Percentile" v={`${ivRank.iv_percentile}%`} />
               <Row k="India VIX" v={`${ivRank.current}`} />
               <Row k="52w range" v={`${ivRank.min} – ${ivRank.max}`} />
