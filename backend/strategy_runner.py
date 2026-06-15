@@ -30,6 +30,7 @@ from core.market_clock import is_trading_session_active
 from core.option_selector_v2 import select_option_contract
 from market_regime import update_regime, get_cached_regime
 from trade_frequency import check_frequency_gate, record_strategy_filter, compute_tod_volume_ratio
+from iv_regime import compute_iv_rank, iv_buy_gate, IV_RANK_GATE_ENABLED, IV_RANK_GATE_SHADOW
 
 logger = logging.getLogger("quantg.runner")
 
@@ -853,6 +854,30 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 continue
                     except Exception as _ep_exc:
                         logger.debug("exit_policy attach failed for %s: %s", s["id"], _ep_exc)
+
+                # ── Phase 2 #1: IV-rank regime gate (option buyers) ───────────
+                # Built but default OFF. Shadow mode logs would-blocks without
+                # acting; enabled mode skips the entry. Zero overhead when off.
+                if (IV_RANK_GATE_ENABLED or IV_RANK_GATE_SHADOW) and option_buying_mode and _is_entry:
+                    try:
+                        _ivr = await compute_iv_rank(db)
+                        _ivd = iv_buy_gate((_ivr or {}).get("iv_rank"))
+                        if _ivd["shadow"]:
+                            logger.info("IV_RANK_WOULD_BLOCK strategy=%s %s", s["id"], _ivd["reason"])
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "IV_RANK_SHADOW", _ivd["reason"])
+                        elif _ivd["block"]:
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "IV_RANK_GATE", _ivd["reason"])
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _ivd["reason"]},
+                                 "$inc": inc_set},
+                            )
+                            continue
+                    except Exception as _iv_exc:
+                        logger.debug("iv_rank gate failed for %s: %s", s["id"], _iv_exc)
 
                 # Insert signal into db.signals collection instead of placing order directly
                 try:
