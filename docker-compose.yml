@@ -51,8 +51,9 @@ services:
       ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-false}"
       ORDERFLOW_GATE_SHADOW: "${ORDERFLOW_GATE_SHADOW:-false}"
       ORDERFLOW_MIN_IMBALANCE: "${ORDERFLOW_MIN_IMBALANCE:-0.15}"
-      # #5 defined-risk credit spreads (OFF): per-strategy opt-in via structure.
-      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-false}"
+      # #5 defined-risk credit spreads (ON): per-strategy opt-in via
+      # visual_config.options.structure == "credit_spread". Sized by max-loss.
+      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-true}"
       CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
     volumes:
