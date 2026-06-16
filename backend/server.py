@@ -15381,6 +15381,10 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     if not state_doc:
         raise HTTPException(status_code=400, detail="Invalid or expired Upstox OAuth state. Start login again.")
     user_id = state_doc["user_id"]
+    # Capture the gateway that currently owns the running market-data feed BEFORE
+    # fresh=True replaces the cache — we need it to stop the old feed (which is
+    # looping 401s on the now-expired token) once the new token is stored.
+    prior_feed_gw = _UPSTOX_GATEWAYS.get(user_id)
     gateway = await get_user_upstox_gateway(user_id, fresh=True)
     if not gateway:
         raise HTTPException(status_code=400, detail="Upstox credentials are not configured for this user.")
@@ -15427,7 +15431,39 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
     await db.broker_oauth_states.delete_one({"state": state, "broker": "upstox"})
     _UPSTOX_GATEWAYS.pop(user_id, None)
     _UPSTOX_TOKEN_VALIDATION_CACHE.pop(user_id, None)
-    logger.info("Upstox OAuth connected and token stored for user=%s", user_id)
+
+    # The market-data feed runs on a long-lived gateway and reads its token via a
+    # getter bound to that instance. Saving a new token alone does NOT reach the
+    # running feed — and Upstox issues no refresh token, so the feed loops 401s on
+    # the expired token until the process restarts. Stop the old feed and start a
+    # fresh one on a gateway rebuilt from the new token so reconnect self-heals.
+    if prior_feed_gw is not None:
+        try:
+            await asyncio.to_thread(prior_feed_gw.stop_market_data_ws)
+        except Exception as _stop_err:
+            logger.warning("Upstox OAuth: failed to stop prior feed user=%s: %s", user_id, _stop_err)
+    try:
+        ticker_result = await _start_user_upstox_ticker(user_id)
+        # Re-subscribe any open-position option tokens onto the fresh feed.
+        open_positions = await db.strategy_positions.find(
+            {"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
+            {"instrument_key": 1, "_id": 0},
+        ).to_list(200)
+        pos_tokens = [
+            p["instrument_key"] for p in open_positions
+            if p.get("instrument_key") and "|" in str(p.get("instrument_key", ""))
+        ]
+        if pos_tokens:
+            gw = await get_user_upstox_gateway(user_id)
+            if gw:
+                await asyncio.to_thread(gw.start_market_data_ws, pos_tokens, "full")
+        logger.info(
+            "Upstox OAuth connected, token stored, feed restarted for user=%s started=%s pos_tokens=%d",
+            user_id, ticker_result.get("started"), len(pos_tokens),
+        )
+    except Exception as _feed_err:
+        logger.warning("Upstox OAuth: feed restart after token store failed user=%s: %s", user_id, _feed_err)
+
     base = _public_base_url(None)
     return RedirectResponse(url=f"{base}/broker-keys?upstox=connected", status_code=303)
 
@@ -16933,6 +16969,14 @@ async def upstox_token_webhook(user_id: str, request: Request):
     # Invalidate cached validation and gateway so they reload with new token
     _UPSTOX_TOKEN_VALIDATION_CACHE.pop(user_id, None)
     old_gw = _UPSTOX_GATEWAYS.pop(user_id, None)
+
+    # Stop the old feed so it stops looping 401s on the expired token instead of
+    # leaking a dead reconnect thread alongside the new feed.
+    if old_gw is not None:
+        try:
+            await asyncio.to_thread(old_gw.stop_market_data_ws)
+        except Exception as _stop_err:
+            logger.warning("FIX7 WEBHOOK: failed to stop old feed user=%s: %s", user_id, _stop_err)
 
     # Reconnect gateway with the new token
     gw = await get_user_upstox_gateway(user_id)
