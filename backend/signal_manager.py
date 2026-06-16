@@ -674,6 +674,47 @@ async def _dispatch_signal_via_unified_engine(
                 "reason_code": "SYMBOL_GROUP_ACTIVE_POSITION_EXISTS",
             }
 
+    # Symmetric guard for SELL: a strategy can emit an exit/SELL signal that
+    # arrives AFTER the position was already closed by the monitor (TP/SL/time
+    # exit) or a prior exit. With no live position to act on, the fill is a
+    # redundant exit — the portfolio ledger rejects it as DUPLICATE_EXIT, which
+    # surfaces as a REJECTED "NEEDS CHECK" order on the dashboard. We replicate
+    # the ledger's exact DUPLICATE_EXIT condition here and SKIP cleanly BEFORE
+    # creating an order: behaviour-preserving (the fill would have been rejected
+    # anyway) but no doomed order, no wallet churn, no false alarm. A genuine
+    # short entry (SELL with no prior CLOSED LONG on the symbol) is untouched.
+    if side == "SELL":
+        strat_id = sig.get("strategy_id") or strategy.get("id")
+        live_pos = await db.strategy_positions.find_one(
+            {
+                "user_id": user_id,
+                "strategy_id": strat_id,
+                "target_symbol": target_symbol,
+                "mode": mode,
+                "status": {"$in": ["OPEN", "EXITING", "PENDING_BROKER"]},
+            },
+            {"_id": 0, "id": 1},
+        )
+        if not live_pos:
+            closed_long = await db.strategy_positions.find_one(
+                {
+                    "user_id": user_id,
+                    "strategy_id": strat_id,
+                    "target_symbol": target_symbol,
+                    "mode": mode,
+                    "position_side": "LONG",
+                    "status": "CLOSED",
+                },
+                {"_id": 0, "id": 1},
+            )
+            if closed_long:
+                return {
+                    "ok": False,
+                    "status": "SKIPPED",
+                    "reason": f"No live position to exit for {target_symbol}; already closed (redundant exit signal).",
+                    "reason_code": "REDUNDANT_EXIT_NO_LIVE_POSITION",
+                }
+
     idem_key = sig.get("idempotency_key") or f"sig:{sig['id']}"
     order_mgr = OrderManager(db)
     if not await order_mgr.verify_and_lock_idempotency(idem_key, user_id):
