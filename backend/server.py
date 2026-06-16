@@ -17139,6 +17139,34 @@ async def startup():
     except Exception as e:
         logger.warning(f"option_market_ticks TTL index skipped: {e}")
 
+    # Notifications: collapse any pre-existing duplicates (keep oldest per event),
+    # then enforce a unique (user_id, dedupe_key) index. This is the DB-level
+    # guarantee behind create_notification_once — without it, concurrent callers
+    # race past the find_one check and double-insert the same alert. Idempotent:
+    # safe to run every startup.
+    try:
+        removed = 0
+        async for grp in db.notifications.aggregate([
+            {"$group": {
+                "_id": {"u": "$user_id", "k": "$dedupe_key"},
+                "ids": {"$push": "$_id"},
+                "n": {"$sum": 1},
+            }},
+            {"$match": {"n": {"$gt": 1}}},
+        ]):
+            dup_ids = grp.get("ids", [])[1:]  # keep first, drop the rest
+            if dup_ids:
+                res = await db.notifications.delete_many({"_id": {"$in": dup_ids}})
+                removed += res.deleted_count
+        await db.notifications.create_index(
+            [("user_id", 1), ("dedupe_key", 1)], unique=True, name="uniq_user_dedupe"
+        )
+        if removed:
+            logger.warning("Notifications: removed %s duplicate alerts before uniqueness enforcement", removed)
+        logger.info("Notifications: unique (user_id, dedupe_key) index ensured")
+    except Exception as e:
+        logger.warning(f"notifications dedupe/index step failed: {e}")
+
     try:
         recovered_fills = await _recover_pending_paper_fills()
         if recovered_fills:

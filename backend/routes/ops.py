@@ -439,12 +439,19 @@ async def ops_clear_stale_paper_orders(req: OpsActionReq = None, user=Depends(ge
             "broker_status_message": "Paper position cleared manually via Ops console.",
             "updated_at": now
         },
-         "$unset": {"active_instrument_key": "", "active_strategy_key": ""}}
+         "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}}
     )
-    
+
+    # Drop the UI position mirror too. The mirror (db.positions) is only
+    # auto-deleted on a full CLOSE — cancelling the strategy_positions above
+    # without this leaves orphaned mirror rows that show up as phantom "ORPHAN"
+    # holdings on the Positions page. All active paper positions were just
+    # cancelled, so no valid paper mirror row remains.
+    mirror_res = await db.positions.delete_many({"user_id": user["id"], "mode": "paper"})
+
     await db.strategy_position_locks.delete_many({"user_id": user["id"]})
-    
-    return {"ok": True, "cleared_orders": res.modified_count}
+
+    return {"ok": True, "cleared_orders": res.modified_count, "cleared_position_mirrors": mirror_res.deleted_count}
 
 
 @router.post("/accounts/reset-all-trading-state")

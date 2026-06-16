@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from pymongo.errors import DuplicateKeyError
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -48,7 +50,14 @@ async def create_notification_once(
         "created_at": now,
         "updated_at": now,
     }
-    await db.notifications.insert_one(doc)
+    # The find_one check above is only a fast path; it loses races between
+    # concurrent callers (e.g. overlapping notification polls). The unique
+    # (user_id, dedupe_key) index is the real guarantee — if a concurrent
+    # caller inserted the same event first, swallow the duplicate.
+    try:
+        await db.notifications.insert_one(doc)
+    except DuplicateKeyError:
+        return None
     doc.pop("_id", None)
     return doc
 
