@@ -18,13 +18,19 @@ OPTION_DELTA_SELECTION_ENABLED = (
 )
 
 # Target |delta| per risk_style.
+# These are LONG-option (buyer) targets. ATM (0.50) is the worst strike for a
+# buyer: maximum premium and maximum theta bleed (observed BANKNIFTY ATM theta
+# ≈ -25/day). Directional buyers want slightly-OTM strikes — cheaper premium,
+# more leverage per rupee, and a far smaller absolute position (which is what
+# turned expensive ATM BANKNIFTY into outsized rupee swings on 06-16). So
+# breakout/momentum buyers target ~0.35-0.40 delta rather than ATM.
 DELTA_TARGETS: Dict[str, float] = {
     "micro_scalp": 0.35,
-    "momentum": 0.45,
-    "breakout": 0.50,
-    "volatile_breakout": 0.50,
+    "momentum": 0.40,
+    "breakout": 0.35,
+    "volatile_breakout": 0.35,
     "pullback": 0.40,
-    "balanced": 0.45,
+    "balanced": 0.40,
 }
 DELTA_TARGET_DEFAULT = float(os.environ.get("OPTION_DELTA_TARGET_DEFAULT", "0.45"))
 # Don't select an illiquid near-zero-premium strike just because its delta matches.

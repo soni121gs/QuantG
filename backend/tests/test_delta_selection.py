@@ -76,8 +76,10 @@ def test_empty_chain_returns_none():
 
 
 def test_target_delta_for_style():
-    assert target_delta_for_style("momentum") == 0.45
+    # Buyer targets: slightly-OTM, not ATM (ATM=0.50 is max premium + max theta).
+    assert target_delta_for_style("momentum") == 0.40
     assert target_delta_for_style("micro_scalp") == 0.35
-    assert target_delta_for_style("breakout") == 0.50
+    assert target_delta_for_style("breakout") == 0.35
+    assert target_delta_for_style("volatile_breakout") == 0.35
     assert target_delta_for_style(None) == 0.45  # default
     assert target_delta_for_style("nonsense") == 0.45  # default
