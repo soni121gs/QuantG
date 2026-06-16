@@ -180,9 +180,33 @@ class BacktestEngine:
         avg_win = round(gross_profits / len(wins), 2) if len(wins) > 0 else 0.0
         avg_loss = round(gross_losses / len(losses), 2) if len(losses) > 0 else 0.0
         
+        # Risk-adjusted return: Sharpe & Sortino from per-trade returns (as a
+        # fraction of starting capital). These are the honest objective-function
+        # inputs an AutoResearch loop must optimise — a high win_rate with a fat
+        # tail scores poorly here, unlike the naive strategy_score below.
+        sharpe = 0.0
+        sortino = 0.0
+        if total_trades >= 2:
+            rets = [t["pnl"] / 100000.0 for t in trades]
+            n = len(rets)
+            mean_r = sum(rets) / n
+            var = sum((r - mean_r) ** 2 for r in rets) / (n - 1)
+            std = var ** 0.5
+            # Annualise by trade frequency (trades observed over the test window
+            # scaled to a ~252-session year); falls back to per-trade Sharpe.
+            ann = (252.0 / n) ** 0.5 if n > 0 else 1.0
+            sharpe = round((mean_r / std) * ann, 3) if std > 0 else 0.0
+            downside = [r for r in rets if r < 0]
+            if downside:
+                dvar = sum(r ** 2 for r in downside) / len(downside)
+                dstd = dvar ** 0.5
+                sortino = round((mean_r / dstd) * ann, 3) if dstd > 0 else 0.0
+            elif mean_r > 0:
+                sortino = 99.0
+
         # Score calculation
         strategy_score = round((win_rate * 50) + (profit_factor * 10) - (max_drawdown * 100), 2)
-        
+
         result_doc = {
             "id": f"run_{uuid.uuid4().hex[:12]}",
             "strategy_id": strategy_id,
@@ -196,6 +220,8 @@ class BacktestEngine:
             "return_pct": round((total_pnl / 100000.0) * 100, 2),
             "average_win": avg_win,
             "average_loss": avg_loss,
+            "sharpe": sharpe,
+            "sortino": sortino,
             "strategy_score": strategy_score,
             "data_quality": "HIGH" if len(candles) > 200 else "LOW",
             "trades": trades,

@@ -113,6 +113,21 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
     return await ops_diagnostics(user=user)
 
 
+@router.get("/scorecard")
+async def ops_scorecard(days: int = 7, scope: str = "me", user=Depends(get_current_user)):
+    """Phase 0 eval harness: per-strategy signal funnel + realised P&L, with a
+    health verdict (silent / throttled / lossy / healthy / idle). scope=all is
+    owner-only (cross-account); default scope=me is the caller's strategies."""
+    from research_scorecard import build_scorecard
+    uid: Optional[str] = user["id"]
+    if scope == "all":
+        if user.get("role") != "owner":
+            raise HTTPException(status_code=403, detail="scope=all requires owner role")
+        uid = None
+    days = max(1, min(int(days or 7), 90))
+    return await build_scorecard(db, days=days, user_id=uid)
+
+
 @router.get("/feature-flags")
 async def ops_feature_flags(user=Depends(get_current_user)):
     """Read-only state of the Phase 2 options-alpha features (env-driven).

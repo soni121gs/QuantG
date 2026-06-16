@@ -16705,6 +16705,69 @@ async def _eod_square_off_all_users() -> Dict[str, Any]:
     return summary
 
 
+async def _snapshot_option_chains(db) -> int:
+    """Phase 1 — persist a compact NIFTY/BANKNIFTY option-chain snapshot to
+    db.historical_chains (one doc per underlying per call). Captures the real
+    per-strike ltp/greeks/OI/bid-ask so future walk-forward backtests run on
+    actual option data, not mock candles. Best-effort; never raises."""
+    spot_keys = {"NIFTY": "NSE_INDEX|Nifty 50", "BANKNIFTY": "NSE_INDEX|Nifty Bank"}
+    gw = None
+    for row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
+        g = await get_user_upstox_gateway(row["id"])
+        if g and getattr(g, "connected", False):
+            gw = g
+            break
+    if not gw:
+        return 0
+
+    def _leg(o: Dict[str, Any]) -> Dict[str, Any]:
+        md = o.get("market_data") or {}
+        gk = o.get("option_greeks") or {}
+        return {
+            "ltp": md.get("ltp") or md.get("last_price"),
+            "oi": md.get("oi"), "vol": md.get("volume"),
+            "bid": md.get("bid_price"), "ask": md.get("ask_price"),
+            "delta": gk.get("delta"), "iv": gk.get("iv"), "theta": gk.get("theta"),
+        }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    today = _ist_now().date().isoformat()
+    written = 0
+    for underlying, skey in spot_keys.items():
+        try:
+            contracts = await asyncio.to_thread(gw.get_option_contracts, skey)
+            expiries = sorted({
+                c.get("expiry") for c in ((contracts or {}).get("data") or []) if c.get("expiry")
+            })
+            expiry = expiries[0] if expiries else None
+            chain = await asyncio.to_thread(gw.get_option_chain, skey, expiry)
+            if not chain or chain.get("status") != "success":
+                continue
+            spot = None
+            strikes: List[Dict[str, Any]] = []
+            for node in (chain.get("data") or []):
+                strike = node.get("strike_price")
+                if strike is None:
+                    continue
+                if spot is None:
+                    spot = node.get("underlying_spot_price") or node.get("spot_price")
+                strikes.append({
+                    "strike": strike,
+                    "ce": _leg(node.get("call_options") or {}),
+                    "pe": _leg(node.get("put_options") or {}),
+                })
+            if not strikes:
+                continue
+            await db.historical_chains.insert_one({
+                "underlying": underlying, "expiry": expiry, "spot": spot,
+                "ts": now_iso, "date": today, "n_strikes": len(strikes), "strikes": strikes,
+            })
+            written += 1
+        except Exception as exc:
+            logger.debug("chain snapshot failed for %s: %s", underlying, exc)
+    return written
+
+
 async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times.
 
@@ -16717,6 +16780,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _lifecycle_reset_done_date: Optional[str] = None
     _squareoff_done_date: Optional[str] = None
     _vix_last_snapshot_minute: Optional[str] = None
+    _chain_last_snapshot_minute: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
@@ -16779,6 +16843,24 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         )
                 except Exception as _vix_err:
                     logger.debug("VIX snapshot failed: %s", _vix_err)
+
+            # Phase 1 — option-chain snapshot every 5 min during market hours →
+            # db.historical_chains. Accumulates the real (greeks + OI + bid/ask)
+            # NIFTY/BANKNIFTY chains a walk-forward backtest needs instead of mock
+            # candles. Foundation for the AutoResearch eval loop.
+            _chain_bucket = f"{today}:{hour}:{minute // 5}"
+            if (
+                ist.weekday() < 5
+                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and _chain_last_snapshot_minute != _chain_bucket
+            ):
+                _chain_last_snapshot_minute = _chain_bucket
+                try:
+                    _n_chains = await _snapshot_option_chains(db)
+                    if _n_chains:
+                        logger.info("Chain snapshot: wrote %d underlying chains to historical_chains", _n_chains)
+                except Exception as _chain_err:
+                    logger.debug("Chain snapshot failed: %s", _chain_err)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
