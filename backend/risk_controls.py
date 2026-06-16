@@ -98,8 +98,12 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     stop = _positive(inputs.stop_loss_price)
     unit_loss = abs(entry - stop) if stop > 0 else max(entry * 0.06, 1.0)
     risk_fraction = RISK_FRACTION_BY_STYLE.get(style, RISK_FRACTION_BY_STYLE["balanced"])
-    # daily_loss_limit is a per-day P&L kill switch (checked upstream in risk_manager).
-    # Do NOT use it as a per-trade risk budget cap — that would block 1-lot entries.
+    # risk_budget caps sizing to a fraction of equity. Separately, daily_loss_limit
+    # now also acts as a per-TRADE stop-risk ceiling (enforced below): no single
+    # position may risk the entire day's budget. This was historically left uncapped
+    # to always allow 1 lot, but that let an expensive ATM strike (e.g. BANKNIFTY
+    # 1-lot risking ~₹1,800 vs a ₹750 budget) through. The correct response to an
+    # unaffordable strike is a cheaper, further-OTM contract — not an oversized bet.
     risk_budget = equity * risk_fraction
 
     qty_risk = floor(risk_budget / unit_loss) if unit_loss > 0 else 0
@@ -122,20 +126,36 @@ def compute_position_size(inputs: SizeInputs) -> SizeResult:
     quantity = min(caps.values()) if caps else 0
     order_value = round(quantity * entry, 2)
 
+    # Per-trade stop-risk ceiling: trim so the position's risk-at-stop does not
+    # exceed the strategy's daily loss budget. Rounds down to whole lots.
+    if daily_loss_limit > 0 and unit_loss > 0 and quantity > 0:
+        max_risk_qty = (floor(daily_loss_limit / unit_loss) // lot_size) * lot_size
+        if max_risk_qty < quantity:
+            caps["trade_risk"] = max(0, max_risk_qty)
+            quantity = max(0, max_risk_qty)
+            order_value = round(quantity * entry, 2)
+
     if quantity < lot_size:
         one_lot_risk = unit_loss * lot_size
         one_lot_value = entry * lot_size
         one_lot_margin_cost = entry * float(inputs.margin_requirement_ratio or 1.0) * lot_size
         near_one_lot_risk_budget = risk_budget >= one_lot_risk * 0.98
+        # A single lot must also fit within the per-trade stop-risk ceiling
+        # (same 0.98 rounding tolerance used for the risk-budget check above).
+        one_lot_within_trade_risk = daily_loss_limit <= 0 or one_lot_risk * 0.98 <= daily_loss_limit
         if (
             requested <= lot_size
             and near_one_lot_risk_budget
+            and one_lot_within_trade_risk
             and free_margin * float(inputs.margin_buffer or 0.85) >= one_lot_margin_cost
             and max_position_value >= one_lot_value
         ):
             return SizeResult(True, lot_size, "accepted one lot within stop-risk budget tolerance", risk_budget, unit_loss, round(one_lot_value, 2), caps)
         reason = "risk budget, margin, or max position cap allows less than one lot"
-        if caps.get("margin", 0) < lot_size:
+        if not one_lot_within_trade_risk:
+            reason = (f"1-lot stop-risk ₹{one_lot_risk:.0f} exceeds per-trade loss limit "
+                      f"₹{daily_loss_limit:.0f} — use a cheaper (further-OTM) strike")
+        elif caps.get("margin", 0) < lot_size:
             reason = "insufficient margin"
         elif caps.get("risk", 0) < lot_size:
             reason = "insufficient risk budget"
