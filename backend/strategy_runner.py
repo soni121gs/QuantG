@@ -547,6 +547,38 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     kw in (last_sig.get("entry_reason") or "").lower()
                     for kw in ("exit", "time exit", "squareoff", "close")
                 )
+
+                # ── Exit-signal position reconciliation ───────────────────────
+                # An exit signal (e.g. "Macro EMA cross exit") only makes sense if
+                # the strategy actually holds a position. The position monitor runs
+                # its own TP/SL/time exits, so by the time the strategy's exit
+                # signal fires the position is often already closed. Letting a
+                # position-less exit flow on to order placement is the root cause of
+                # two bugs: a SELL becomes a rejected DUPLICATE_EXIT ("NEEDS CHECK"
+                # noise), and a BUY hits the ledger's create-new path and opens a
+                # PHANTOM LONG. The option-buying path already reconciles against an
+                # active position; this makes every path (incl. equity) do the same.
+                if not _is_entry:
+                    _open_pos = await db.strategy_positions.find_one(
+                        {
+                            "user_id": s["user_id"],
+                            "strategy_id": s["id"],
+                            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+                        },
+                        {"_id": 0, "id": 1},
+                    )
+                    if not _open_pos:
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set,
+                                      "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": "Exit signal with no open position — suppressed (already closed by monitor or never opened)."},
+                             "$unset": {"last_error": ""},
+                             "$inc": inc_set},
+                        )
+                        continue
+
                 if _is_entry:
                     # Determine option direction: v13 signals carry explicit "direction"
                     # field ("CE"=bullish exposure, "PE"=bearish exposure).
