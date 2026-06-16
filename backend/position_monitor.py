@@ -275,7 +275,13 @@ async def _resolve_ltp(
     # ── Source 1: V3 WS cache → REST (via quote_ltp_fn), with shared TTL cache ─
     # The TTL cache ensures position_monitor and position_guardian share one
     # REST fetch per instrument per 2.5 s, staying inside Upstox rate limits.
-    if ikey:
+    #
+    # SKIP for cash-equity keys (NSE_EQ|… / BSE_EQ|…): equities are never
+    # subscribed to the V3 options feed, so this cache returns a wrong/garbage
+    # LTP for them — which trips SL/TP and books phantom P&L (e.g. TCS priced at
+    # ₹2205 vs ~₹4100). Equity positions fall through to the symbol-LTP source.
+    is_cash_equity = "_EQ|" in str(ikey or "")
+    if ikey and not is_cash_equity:
         cache_key = f"ltp:{user_id}:{ikey}"
         ltp = await _get_cached_ltp(cache_key, quote_ltp_fn, user_id, ikey)
         if ltp is not None:
