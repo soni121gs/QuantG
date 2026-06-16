@@ -43,12 +43,15 @@ services:
       EXIT_THETA_MIN_PROGRESS_R: "${EXIT_THETA_MIN_PROGRESS_R:-0.3}"
       # #2 delta-based strike selection (ON): pick strike by target delta.
       OPTION_DELTA_SELECTION_ENABLED: "${OPTION_DELTA_SELECTION_ENABLED:-true}"
-      # #1 IV-rank gate (OFF → shadow → enabled): block buying expensive premium.
-      IV_RANK_GATE_ENABLED: "${IV_RANK_GATE_ENABLED:-false}"
+      # #1 IV-rank gate (ON): block option BUYS only when IV is richly priced
+      # (top 30% of its range). Lenient by design + no-ops until VIX history
+      # builds, so it trims expensive entries without starving trade frequency.
+      IV_RANK_GATE_ENABLED: "${IV_RANK_GATE_ENABLED:-true}"
       IV_RANK_GATE_SHADOW: "${IV_RANK_GATE_SHADOW:-false}"
-      IV_RANK_BUY_MAX: "${IV_RANK_BUY_MAX:-70}"
-      # #3 order-flow gate (OFF → shadow → enabled): need net buying pressure.
-      ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-false}"
+      IV_RANK_BUY_MAX: "${IV_RANK_BUY_MAX:-75}"
+      # #3 order-flow gate (ON): require mild net buying pressure for a BUY.
+      # No book data never blocks, so it only filters clearly-adverse entries.
+      ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-true}"
       ORDERFLOW_GATE_SHADOW: "${ORDERFLOW_GATE_SHADOW:-false}"
       ORDERFLOW_MIN_IMBALANCE: "${ORDERFLOW_MIN_IMBALANCE:-0.15}"
       # #5 defined-risk credit spreads (ON): per-strategy opt-in via
