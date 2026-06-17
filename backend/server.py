@@ -7176,7 +7176,9 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             "idempotency_key": pos_exit_idem,
             "exit_reason": reason,
         }
-        if pos.get("asset_type") == "option" or str(pos.get("exchange") or "").upper() in {"NFO", "BFO"}:
+        _pos_at = str(pos.get("asset_type") or "").lower()
+        _pos_exch = str(pos.get("exchange") or "").upper()
+        if _pos_at == "option" or _pos_exch in {"NFO", "BFO"}:
             # Resolve lot_size from position doc first, then fall back to market domain.
             underlying = pos.get("underlying") or pos.get("symbol_group") or "NIFTY"
             domain_lot = resolve_domain_by_underlying(underlying).get_lot_size(underlying)
@@ -7207,7 +7209,7 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 last_known_ltp = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
             if last_known_ltp > 0:
                 place_kwargs["price"] = last_known_ltp
-        else:
+        elif _pos_at == "equity" or _pos_exch in {"NSE", "BSE"}:
             place_kwargs["symbol"] = sym
             place_kwargs["qty"] = qty_net
             place_kwargs["exchange"] = pos.get("exchange") or "NSE"
@@ -7225,6 +7227,28 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 last_known_ltp = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
             if last_known_ltp > 0:
                 place_kwargs["price"] = last_known_ltp
+        else:
+            # FAIL-CLOSED (2026-06-17): unrecognized position shape. Never fall through
+            # to a generic order — defaulting an unknown asset_type to the equity path
+            # is exactly what minted the "BANKNIFTY-bullish-spread" phantom EQUITY
+            # position. Revert EXITING→OPEN and skip, surfacing the anomaly loudly
+            # rather than trading something undefined. (option_spread is already routed
+            # to close_credit_spread above, so it never reaches here.)
+            now_unknown = datetime.now(timezone.utc).isoformat()
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id, "status": "EXITING"},
+                {"$set": {"status": "OPEN", "updated_at": now_unknown,
+                          "exit_error": f"unrecognized asset_type={_pos_at or 'none'} exchange={_pos_exch or 'none'} — exit skipped (fail-closed)"},
+                 "$unset": {"exit_attempt_at": ""}},
+            )
+            logger.error(
+                "Exit FAIL-CLOSED for pos=%s sym=%s: unrecognized asset_type=%r exchange=%r — "
+                "refusing generic order to avoid phantom; reverted to OPEN.",
+                pos["id"], sym, _pos_at, _pos_exch,
+            )
+            results.append({"symbol": sym, "qty": qty_net, "status": "skipped",
+                            "reason": "fail-closed-unknown-asset-type"})
+            continue
         # FIX 3: mark as exit so _place_order_core skips all price quality guards
         place_kwargs["is_exit_order"] = True
         try:
@@ -11508,6 +11532,35 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         raise HTTPException(status_code=400, detail="order_type must be MARKET or LIMIT")
     if order_type == "LIMIT" and price is None:
         raise HTTPException(status_code=400, detail="LIMIT orders require a price")
+
+    # GUARD (fail-closed, 2026-06-17): an order that resolves to a derivatives segment
+    # (NSE_FO/BSE_FO) MUST carry a valid pipe/colon-delimited broker instrument_key
+    # ("NSE_FO|<token>"). resolve_domain_by_underlying() matches a symbol to a
+    # derivatives underlying via startswith(), so a synthetic or mis-routed label
+    # (e.g. "BANKNIFTY-bullish-spread", a strategy name) is classified as a derivative,
+    # has the underlying's lot size re-applied, and would fill as a phantom position
+    # (the 2026-06-17 −16.5k loss). A real option/future always has a broker key by
+    # this point; equity (NSE_EQ) is exempt — its key may be a bare symbol when the
+    # ISIN lookup misses. Mirrors the existing quote-path key check.
+    from core.market_domains import resolve_domain_by_underlying as _guard_resolve_domain
+    _guard_key = str(
+        (option_contract or {}).get("instrument_key")
+        or (option_contract or {}).get("instrument_token")
+        or symbol or ""
+    )
+    _guard_domain = _guard_resolve_domain(symbol)
+    _guard_dn = _guard_domain.name.value if hasattr(_guard_domain.name, "value") else str(_guard_domain.name)
+    if _guard_dn in ("NSE_FO", "BSE_FO") and "|" not in _guard_key and ":" not in _guard_key:
+        logger.error(
+            "ORDER REJECTED (invalid derivative instrument): symbol=%r resolved_domain=%s "
+            "instrument_key=%r side=%s source=%s — no broker key; refusing to trade a "
+            "synthetic/mis-routed symbol as a phantom position.",
+            symbol, _guard_dn, _guard_key, side, source,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid derivative instrument '{symbol}': missing broker instrument_key (expected 'NSE_FO|<token>').",
+        )
 
     # FIX 5: Check gateway_blocked before placing ANY new order (not exits — they must go through)
     if not is_exit_order and _GATEWAY_BLOCKED.get(user_id):
