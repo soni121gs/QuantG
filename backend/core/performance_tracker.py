@@ -50,32 +50,45 @@ class PerformanceTracker:
         )
         paper_win_rate = round(paper_wins / max(1, paper_trades_count), 2)
 
-        # 3. Calculate time-bracket P&Ls from strategy positions
-        positions = await self.db.strategy_positions.find({
+        # 3. Calculate time-bracket P&Ls from the canonical ledger (db.trade_fills).
+        # Single source of truth: same collection + realized_pnl field + CLOSE/REDUCE
+        # filter as portfolio_ledger.get_strategy_pnl_today and the execution-snapshot
+        # summary. Previously this summed strategy_positions.realized_pnl, which the
+        # legacy paper fill engine (_apply_paper_fill_to_position) never writes to —
+        # so legacy-filled trades were silently missing from today/7d/30d here while
+        # appearing elsewhere. Reading trade_fills fixes that divergence.
+        # NOTE: spread_lifecycle does not yet write trade_fills (Stage 4) — credit
+        # spread P&L is excluded until that lands; the spread engine is disabled.
+        closing_fills = await self.db.trade_fills.find({
             "strategy_id": strategy_id,
-            "user_id": user_id
-        }).to_list(length=1000)
+            "user_id": user_id,
+            "action": {"$in": ["CLOSE", "REDUCE"]},
+            "created_at": {"$gte": thirty_days_ago.isoformat()},
+        }, {"_id": 0, "realized_pnl": 1, "created_at": 1}).to_list(length=5000)
 
         today_pnl = 0.0
         seven_day_pnl = 0.0
         thirty_day_pnl = 0.0
-        
-        for pos in positions:
-            pos_pnl = float(pos.get("realized_pnl") or 0.0)
-            # Use closed_at for closed positions so P&L lands in the day it was realized,
-            # not the day the position was opened. Fall back to created_at for open positions.
-            ts_str = pos.get("closed_at") or pos.get("created_at")
-            if ts_str:
-                ts = datetime.fromisoformat(ts_str)
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
 
-                if ts >= today_start:
-                    today_pnl += pos_pnl
-                if ts >= seven_days_ago:
-                    seven_day_pnl += pos_pnl
-                if ts >= thirty_days_ago:
-                    thirty_day_pnl += pos_pnl
+        for fill in closing_fills:
+            fpnl = float(fill.get("realized_pnl") or 0.0)
+            ts_str = fill.get("created_at")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+
+            # Cumulative windows (today ⊂ 7d ⊂ 30d), matching the prior semantics.
+            if ts >= thirty_days_ago:
+                thirty_day_pnl += fpnl
+            if ts >= seven_days_ago:
+                seven_day_pnl += fpnl
+            if ts >= today_start:
+                today_pnl += fpnl
 
         # 4. Status recommendation model
         status_recommendation = "WATCH"
