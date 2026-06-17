@@ -11005,10 +11005,36 @@ def _assert_position_source_order_doc(order_doc: Dict[str, Any], *, expected_mod
         )
 
 
+def _core_engine_owns_paper() -> bool:
+    """True when the canonical core engine (ExecutionRouter→PortfolioLedger) owns
+    paper execution. In that mode the legacy `_apply_paper_fill_to_position`
+    engine must NOT write money state — paper fills flow through process_fill.
+    Mirrors the use_core_engine gate inside _place_order_core."""
+    return (
+        os.environ.get("CORE_ENGINE_ENABLED", "false").lower() == "true"
+        and os.environ.get("CORE_ENGINE_PAPER_ENABLED", "false").lower() == "true"
+    )
+
+
 async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: float) -> Dict[str, Any]:
-    """Apply a paper fill exactly once and write immutable fill/trade records."""
+    """Apply a paper fill exactly once and write immutable fill/trade records.
+
+    LEGACY paper fill engine. When the core engine owns paper execution
+    (_core_engine_owns_paper), paper fills are booked by PortfolioLedger via
+    ExecutionRouter and this path is not used. The dead `_place_order_core`
+    legacy branch and crash recovery are fenced off elsewhere; this tripwire
+    surfaces any unexpected invocation so a divergent second writer can't return
+    silently.
+    """
     if order_doc.get("mode") != "paper":
         raise RuntimeError("CRITICAL ERROR: Attempted to apply simulated paper fill to a LIVE order.")
+    if _core_engine_owns_paper():
+        logger.critical(
+            "LEGACY paper fill engine invoked for order=%s while core engine owns paper "
+            "execution — this should never happen; canonical ledger should have booked it. "
+            "Proceeding, but investigate the caller (possible second-writer regression).",
+            order_doc.get("id"),
+        )
 
     order_id = order_doc["id"]
     user_id = order_doc["user_id"]
@@ -11403,7 +11429,24 @@ async def _fill_ledger_summary(
 
 
 async def _recover_pending_paper_fills(limit: int = 500) -> int:
-    """Finish paper fills that were persisted before a restart/crash."""
+    """Finish paper fills that were persisted before a restart/crash.
+
+    Only meaningful for LEGACY-path orders (the legacy branch inserts
+    paper_fill_applied=False). When the core engine owns paper execution, every
+    paper order is booked synchronously via PortfolioLedger and inserted with
+    paper_fill_applied=True; a failed fill is marked REJECTED, not left pending.
+    So under the core engine there is nothing legitimate to recover here, and
+    finishing a stale `paper_fill_applied!=True` order through the legacy applier
+    would reintroduce the divergent second writer (db.positions instead of
+    strategy_positions). Fence it off — leave any stale order visibly pending
+    rather than book it through the wrong engine.
+    """
+    if _core_engine_owns_paper():
+        logger.info(
+            "paper fill recovery skipped: core engine owns paper execution "
+            "(canonical ledger books fills synchronously; no legacy recovery needed)."
+        )
+        return 0
     rows = await db.orders.find(
         {
             "mode": "paper",
