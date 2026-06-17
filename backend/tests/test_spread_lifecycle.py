@@ -87,6 +87,7 @@ class _DB:
         self.strategy_positions = _Coll()
         self.orders = _Coll()
         self.trades = _Coll()
+        self.trade_fills = _Coll(unique_field="id")
         self.strategies = _Coll()
         self.positions = _Coll()
         self.paper_wallets = _Coll(unique_field="user_id")
@@ -222,6 +223,34 @@ def test_open_idempotent():
 
     r1, r2, n = asyncio.run(run())
     assert r1["ok"] and not r2["ok"] and r2["status"] == "SKIPPED" and n == 1
+
+
+def test_close_writes_canonical_trade_fills_row():
+    """Stage 4: spread close must write a db.trade_fills CLOSE row so spread P&L is
+    visible to the single source of truth (get_strategy_pnl_today and every reader
+    converged onto trade_fills)."""
+    db = _DB()
+
+    async def run():
+        await db.paper_wallets.insert_one({"user_id": "u1", "balance": 500000.0,
+                                           "initial_balance": 500000.0, "total_debited": 0, "total_credited": 0})
+        res = await open_credit_spread(db, user_id="u1", strategy_id="s1", underlying="NIFTY",
+                                       spread=_spread(), lots=1, lot_size=50, mode="paper",
+                                       idempotency_key="spread:s1:0915")
+        pos = await db.strategy_positions.find_one({"id": res["id"]})
+        closed = await close_credit_spread(db, pos, reason="spread-tp", short_ltp=20.0, long_ltp=8.0)
+        return closed
+
+    closed = asyncio.run(run())
+    fills = db.trade_fills.docs
+    assert len(fills) == 1, "spread close must write exactly one trade_fills row"
+    row = fills[0]
+    assert row["action"] == "CLOSE"
+    assert row["strategy_id"] == "s1" and row["user_id"] == "u1"
+    assert abs(row["realized_pnl"] - closed["realized_pnl"]) < 0.01
+    assert row["created_at"] and row["charges"] >= 0
+    # gross = net + charges must reconcile (what _load_day_realized_pnl reconstructs).
+    assert abs((row["realized_pnl"] + row["charges"]) - row["gross_pnl"]) < 0.01
 
 
 def test_double_close_skips():

@@ -305,6 +305,46 @@ async def close_credit_spread(
         "exit_time": closed_at,
         "created_at": closed_at,
     })
+
+    # Canonical ledger row (db.trade_fills) so spread P&L is visible to the SINGLE
+    # source of truth — get_strategy_pnl_today and every reader converged onto
+    # trade_fills (dashboard summary, leaderboard time-brackets, scorecard). Those
+    # readers filter on action in {CLOSE, REDUCE} + created_at and sum realized_pnl
+    # (+ charges). Without this row, credit-spread P&L was invisible to all of them.
+    # Idempotent: the close is already claimed atomically above (OPEN/EXITING →
+    # CLOSED), so this runs at most once per spread; id is deterministic regardless.
+    try:
+        await db.trade_fills.insert_one({
+            "id": f"tf_spread_{pos_id}",
+            "fill_id": f"tf_spread_{pos_id}",
+            "position_id": pos_id,
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "symbol": position.get("symbol"),
+            "target_symbol": position.get("target_symbol"),
+            "trading_symbol": position.get("target_symbol"),
+            "underlying": position.get("underlying"),
+            "asset_type": "option_spread",
+            "structure": "credit_spread",
+            "side": "BUY",  # buy-to-close the net credit spread
+            "qty": qty,
+            "price": close_value,
+            "charges": round(entry_charges + exit_charges, 2),
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
+            "realized_pnl": net_pnl,
+            "mode": position.get("mode"),
+            "action": "CLOSE",
+            "exit_reason": reason,
+            "created_at": closed_at,
+        })
+    except Exception as exc:  # audit row must never break the close/accounting
+        logger.error("Spread close trade_fills insert failed for %s: %s", pos_id, exc)
+
+    # strategy.today_pnl / total_pnl is a CACHE field maintained identically by
+    # PortfolioLedger on every full close (each writer counts its own trades once,
+    # so no double-count). The source of truth for P&L readers is db.trade_fills
+    # above; this $inc only feeds the risk/throttle gates that read strategy.today_pnl.
     await db.strategies.update_one(
         {"id": strategy_id, "user_id": user_id},
         {"$set": {"last_pnl": net_pnl},

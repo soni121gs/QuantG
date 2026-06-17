@@ -6,16 +6,28 @@ for today/7d/30d. The legacy paper fill engine (_apply_paper_fill_to_position)
 never writes strategy_positions, so legacy-filled trades were silently missing.
 This test asserts the scorecard reads trade_fills, honours the CLOSE/REDUCE
 action filter and the 30-day window, and buckets cumulatively (today ⊂ 7d ⊂ 30d).
+
+The clock is pinned (mid-day IST) so the today/7d/30d windows are deterministic
+and the test can't flake near the IST midnight boundary.
 """
 import asyncio
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.performance_tracker import PerformanceTracker
+
+# Pinned "now" — 11:30 IST on a normal weekday, far from any day boundary.
+FIXED_NOW = datetime(2026, 6, 18, 6, 0, 0, tzinfo=timezone.utc)
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FIXED_NOW.astimezone(tz) if tz else FIXED_NOW
 
 
 class _Cursor:
@@ -23,7 +35,7 @@ class _Cursor:
         self._docs = docs
 
     async def to_list(self, length=None):
-        return list(self._docs[: length] if length else self._docs)
+        return list(self._docs[:length] if length else self._docs)
 
 
 class _FillsColl:
@@ -68,7 +80,7 @@ class _FakeDB:
 
 
 def _iso(days_ago=0, hours_ago=0):
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago, hours=hours_ago)).isoformat()
+    return (FIXED_NOW - timedelta(days=days_ago, hours=hours_ago)).isoformat()
 
 
 def test_time_bracket_pnl_reads_trade_fills_with_action_and_window_filters():
@@ -80,7 +92,8 @@ def test_time_bracket_pnl_reads_trade_fills_with_action_and_window_filters():
         {"action": "OPEN", "realized_pnl": 777.0, "created_at": _iso(hours_ago=2)},     # wrong action (filtered)
     ]
     tracker = PerformanceTracker(_FakeDB(fills))
-    card = asyncio.run(tracker.compile_strategy_scorecard("s1", "u1"))
+    with patch("core.performance_tracker.datetime", _FixedDatetime):
+        card = asyncio.run(tracker.compile_strategy_scorecard("s1", "u1"))
 
     assert card["today_pnl"] == 500.0
     assert card["seven_day_pnl"] == 700.0        # 500 + 200
@@ -89,7 +102,8 @@ def test_time_bracket_pnl_reads_trade_fills_with_action_and_window_filters():
 
 def test_no_closing_fills_yields_zero_brackets():
     tracker = PerformanceTracker(_FakeDB([]))
-    card = asyncio.run(tracker.compile_strategy_scorecard("s1", "u1"))
+    with patch("core.performance_tracker.datetime", _FixedDatetime):
+        card = asyncio.run(tracker.compile_strategy_scorecard("s1", "u1"))
     assert card["today_pnl"] == 0.0
     assert card["seven_day_pnl"] == 0.0
     assert card["thirty_day_pnl"] == 0.0
