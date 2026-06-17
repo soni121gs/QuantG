@@ -7044,6 +7044,40 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         if not sym or qty_net <= 0:
             continue
 
+        # Phase 2 #5: credit spreads MUST close atomically via the two-leg lifecycle,
+        # never through the single-leg/equity order path below. Their synthetic
+        # trading_symbol ("<UND>-bullish-spread") is not a tradeable instrument: routing
+        # it through _place_order_core re-resolves it as NFO/<underlying>, re-applies
+        # lot_size to the already-expanded qty, and books a phantom EQUITY position
+        # (the 2026-06-17 −16.5k loss). close_credit_spread claims OPEN/EXITING→CLOSED
+        # itself, so we close here BEFORE the generic EXITING mark below.
+        if str(pos.get("structure")) == "credit_spread":
+            from core.spread_lifecycle import close_credit_spread
+            legs = pos.get("legs") or []
+            short_leg = next((l for l in legs if l.get("role") == "short"), None)
+            long_leg = next((l for l in legs if l.get("role") == "long"), None)
+            if not short_leg or not long_leg:
+                logger.warning(
+                    "spread close: pos=%s missing legs — skipping generic close to avoid phantom", pos.get("id"),
+                )
+                results.append({"symbol": sym, "qty": qty_net, "status": "skipped", "reason": "spread-missing-legs"})
+                continue
+            short_ltp = await _quote_upstox_instrument_key(user_id, short_leg.get("instrument_key"))
+            long_ltp = await _quote_upstox_instrument_key(user_id, long_leg.get("instrument_key"))
+            # Forced close (squareoff/manual/SL-TP/strategy exit): if a leg quote is
+            # missing, fall back to entry premiums (value≈net_credit → gross pnl≈0)
+            # rather than leave the spread open or route it generically.
+            if short_ltp is None:
+                short_ltp = float(short_leg.get("entry_price") or short_leg.get("premium") or 0)
+            if long_ltp is None:
+                long_ltp = float(long_leg.get("entry_price") or long_leg.get("premium") or 0)
+            spread_res = await close_credit_spread(
+                db, pos, reason=reason, short_ltp=float(short_ltp), long_ltp=float(long_ltp),
+            )
+            results.append({"symbol": sym, "qty": qty_net, "status": "spread-closed",
+                            "spread_status": spread_res.get("status"), "realized_pnl": spread_res.get("realized_pnl")})
+            continue
+
         # FIX 4: Smart circuit breaker — only counts genuine ORDER_REJECTED failures.
         # Data failures (LTP_UNAVAILABLE, PRICE_BELOW_MINIMUM) do NOT count because
         # they are transient feed issues, not real order rejections. We track them
