@@ -11148,6 +11148,18 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
             "status": "POSITION_OPENED",
         })
 
+    # Stamp the canonical `action` + `created_at` so these legacy-path fills are
+    # visible to portfolio_ledger.get_strategy_pnl_today (the single P&L reader),
+    # which filters trade_fills on action in {CLOSE, REDUCE} and created_at.
+    # Without these, P&L from this code path is invisible to the canonical reader
+    # while still landing in db.positions/orders — the phantom-number seam.
+    if qty_closed:
+        fill_action = "CLOSE" if after_qty == 0 else "REDUCE"
+    elif before_qty == 0:
+        fill_action = "OPEN"
+    else:
+        fill_action = "ADD"
+
     fill_doc = {
         "id": str(uuid.uuid4()),
         "order_id": order_id,
@@ -11168,7 +11180,9 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         "position_after_qty": after_qty,
         "avg_price_before": before_avg,
         "avg_price_after": round(after_avg, 2),
+        "action": fill_action,
         "filled_at": now,
+        "created_at": now,
         "mode": "paper",
     }
     logger.info(

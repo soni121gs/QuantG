@@ -115,6 +115,43 @@ class ExecutionStateManager:
                     order["strategy_name"] = name_by_id[sid]
         return orders
 
+    async def _load_day_realized_pnl(self, user_id: str) -> Dict[str, float]:
+        """Canonical realized P&L for today, sourced from db.trade_fills.
+
+        This is the SAME source and trading-day window as
+        portfolio_ledger.get_strategy_pnl_today — the single source of truth.
+        We deliberately do NOT recompute P&L by summing order docs (which used
+        gross_pnl/realized_pnl/pnl fallback chains that produced phantom
+        numbers when different fill engines populated different fields).
+
+        Both fill engines (PortfolioLedger and the legacy paper applier) write
+        `realized_pnl`, `charges`, `action` and `created_at` to trade_fills, so
+        a single aggregation here is complete and consistent.
+        """
+        from core.portfolio_ledger import _trading_day_window_utc
+
+        start, end = _trading_day_window_utc()
+        fills = await self._db.trade_fills.find(
+            {
+                "user_id": user_id,
+                "action": {"$in": ["CLOSE", "REDUCE"]},
+                "created_at": {"$gte": start, "$lt": end},
+            },
+            {"_id": 0, "realized_pnl": 1, "charges": 1, "brokerage": 1},
+        ).to_list(2000)
+
+        net_realized = round(sum(float(f.get("realized_pnl") or 0) for f in fills), 2)
+        charges = round(
+            sum(float(f.get("charges") if f.get("charges") is not None else f.get("brokerage") or 0) for f in fills),
+            2,
+        )
+        return {
+            "realized_pnl": net_realized,
+            "net_pnl": net_realized,
+            "charges": charges,
+            "gross_pnl": round(net_realized + charges, 2),
+        }
+
     async def _load_skipped_signals(self, user_id: str) -> List[Dict[str, Any]]:
         rows = await self._db.skipped_signals.find(
             {"user_id": user_id, "visibility": {"$ne": "hidden"}},
@@ -416,6 +453,7 @@ class ExecutionStateManager:
             active_count,
             total_count,
             scanning_count,
+            day_pnl,
         ) = await asyncio.gather(
             self._fetch_positions(user, settings),
             self._load_strategy_positions(user_id),
@@ -431,6 +469,7 @@ class ExecutionStateManager:
             self._db.strategies.count_documents({"user_id": user_id, "status": "live"}),
             self._db.strategies.count_documents({"user_id": user_id}),
             self._db.signals.count_documents({"user_id": user_id, "status": "PENDING"}),
+            self._load_day_realized_pnl(user_id),
         )
         wallet_row = wallet_row_raw or {}
         feed_state = feed_state_raw or {}
@@ -510,9 +549,13 @@ class ExecutionStateManager:
                 "failed_orders": len(failed_orders),
                 "skipped_signals": sum(int(row.get("count") or 1) for row in skipped_signals),
                 "total_unrealized_pnl": round(sum(float(p.get("pnl") or 0) for p in positions), 2),
-                "gross_pnl": round(sum(float((o.get("gross_pnl") if o.get("gross_pnl") is not None else o.get("realized_pnl") or o.get("pnl") or 0)) for o in orders), 2),
-                "charges": round(sum(float(o.get("charges") or o.get("brokerage") or 0) for o in orders), 2),
-                "net_pnl": round(sum(float((o.get("net_pnl") if o.get("net_pnl") is not None else o.get("realized_pnl") or o.get("pnl") or 0)) for o in orders), 2),
+                # Canonical realized P&L from db.trade_fills (single source of truth).
+                # NOT recomputed by summing order docs — that produced phantom
+                # numbers via gross_pnl/realized_pnl/pnl fallback chains.
+                "gross_pnl": day_pnl["gross_pnl"],
+                "charges": day_pnl["charges"],
+                "net_pnl": day_pnl["net_pnl"],
+                "realized_pnl": day_pnl["realized_pnl"],
                 "position_integrity": {
                     "orphans": orphan_positions_count,
                     "missing_sl": missing_sl_count,
