@@ -180,8 +180,14 @@ async def test_orders_api_handler_returns_skipped_for_paper_price_unavailable():
 
 
 @pytest.mark.anyio
-async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
+async def test_core_paper_option_simulated_contract_rejected_by_phantom_guard():
+    """Simulated paper option contracts (PAPER_ key / no broker instrument_key) are
+    rejected by the phantom-order guard. Simulated paper trading is DISABLED — paper
+    trades only on real NSE_FO|<token> contracts, so a synthetic/mis-routed key can
+    never fill as a phantom position. The order must be rejected before it can route.
+    """
     import server
+    from fastapi import HTTPException
 
     mock_db = MagicMock()
     mock_db.strategies.find_one = AsyncMock(return_value={"id": "nifty-strategy", "mode": "paper", "status": "live"})
@@ -201,45 +207,27 @@ async def test_core_paper_option_order_converts_lots_to_shares_and_routes():
         "simulated": True,
         "source": "PAPER_SIMULATED_CONTRACT",
     }
-    captured = {}
 
-    async def fake_evaluate_order(self, **kwargs):
-        captured["risk_kwargs"] = kwargs
-        return {"ok": True, "status": "APPROVED", "reason": "ok", "quantity": kwargs["requested_qty"]}
-
-    async def fake_route_intent(self, user_id, intent_doc):
-        captured["route_user_id"] = user_id
-        captured["intent_doc"] = intent_doc
-        return {
-            "id": "paper-order-1",
-            "status": "FILLED",
-            "mode": "paper",
-            "qty": intent_doc["qty"],
-            "requested_price": intent_doc["requested_price"],
-        }
+    async def fail_route_intent(self, user_id, intent_doc):
+        raise AssertionError("simulated contract must be rejected before routing")
 
     with patch("server.db", mock_db), \
          patch.dict(os.environ, {"CORE_ENGINE_ENABLED": "true", "CORE_ENGINE_PAPER_ENABLED": "true"}), \
          patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True, "allow_simulated_prices": True}), \
-         patch("core.risk_manager.RiskManager.evaluate_order", new=fake_evaluate_order), \
-         patch("core.execution_router.ExecutionRouter.route_intent", new=fake_route_intent):
-        result = await server._place_order_core(
-            user_id="user-123",
-            symbol="NIFTY",
-            side="BUY",
-            qty=1,
-            source="strategy:nifty-strategy",
-            option_contract=option_contract,
-            signal_id="signal-1",
-        )
+         patch("core.execution_router.ExecutionRouter.route_intent", new=fail_route_intent):
+        with pytest.raises(HTTPException) as exc_info:
+            await server._place_order_core(
+                user_id="user-123",
+                symbol="NIFTY",
+                side="BUY",
+                qty=1,
+                source="strategy:nifty-strategy",
+                option_contract=option_contract,
+                signal_id="signal-1",
+            )
 
-    assert result["status"] == "FILLED"
-    assert captured["risk_kwargs"]["requested_qty"] == 65
-    assert captured["risk_kwargs"]["lot_size"] == 65
-    assert captured["risk_kwargs"]["price"] == 125.0
-    assert captured["intent_doc"]["qty"] == 65
-    assert captured["intent_doc"]["target_symbol"] == "NIFTY26060524900CE"
-    assert captured["route_user_id"] == "user-123"
+    assert exc_info.value.status_code == 400
+    assert "instrument_key" in str(exc_info.value.detail).lower()
 
 
 @pytest.mark.anyio
@@ -251,7 +239,7 @@ async def test_core_paper_option_entry_blocks_same_strategy_same_instrument_befo
     mock_db.strategy_positions.find_one = AsyncMock(return_value={
         "id": "existing-pos",
         "strategy_id": "nifty-strategy",
-        "instrument_key": "PAPER_NIFTY_CE_24900",
+        "instrument_key": "NSE_FO|42285",
         "position_side": "LONG",
         "status": "OPEN",
     })
@@ -266,17 +254,19 @@ async def test_core_paper_option_entry_blocks_same_strategy_same_instrument_befo
         "filled_qty": 0,
     })
 
+    # Real broker instrument_key (NSE_FO|<token>) — the per-strategy duplicate guard
+    # runs before the market-data/quality gates, so this exercises dup-blocking on a
+    # real contract (simulated PAPER_ contracts are rejected earlier by the phantom
+    # guard; see test_core_paper_option_simulated_contract_rejected_by_phantom_guard).
     option_contract = {
         "tradingsymbol": "NIFTY26060524900CE",
         "exchange": "NFO",
-        "instrument_token": "PAPER_NIFTY_CE_24900",
-        "instrument_key": "PAPER_NIFTY_CE_24900",
+        "instrument_token": "NSE_FO|42285",
+        "instrument_key": "NSE_FO|42285",
         "lot_size": 65,
         "underlying": "NIFTY",
         "option_type": "CE",
         "ltp": 125.0,
-        "simulated": True,
-        "source": "PAPER_SIMULATED_CONTRACT",
     }
 
     async def fake_route_intent(self, user_id, intent_doc):

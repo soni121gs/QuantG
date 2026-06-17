@@ -6025,6 +6025,19 @@ _seed_templates_by_name = {
 }
 DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
+# Safety invariant: every seeded default strategy must carry an explicit protective
+# exit_mode so none is seeded unprotected. The upgraded-template loop sets this for
+# the option strategies; the equity strategies (RELIANCE, SBIN, …) have no inline
+# risk block, so default it here on the FINAL rebuilt list. setdefault preserves any
+# strategy that already set its own exit_mode. Enforced by
+# test_seeded_strategy_exit_mode_matrix.
+for _template in DEFAULT_OPTION_STRATEGIES:
+    _risk = _template.get("risk")
+    if not isinstance(_risk, dict):
+        _risk = {}
+        _template["risk"] = _risk
+    _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
+
 LEGACY_DEFAULT_STRATEGY_NAMES = {
     "NIFTY Intraday Theta Straddle",
     "BANKNIFTY Weekly Income Strangle",
