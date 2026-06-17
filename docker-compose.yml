@@ -54,9 +54,15 @@ services:
       ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-true}"
       ORDERFLOW_GATE_SHADOW: "${ORDERFLOW_GATE_SHADOW:-false}"
       ORDERFLOW_MIN_IMBALANCE: "${ORDERFLOW_MIN_IMBALANCE:-0.15}"
-      # #5 defined-risk credit spreads (ON): per-strategy opt-in via
-      # visual_config.options.structure == "credit_spread". Sized by max-loss.
-      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-true}"
+      # #5 defined-risk credit spreads: DISABLED 2026-06-17 — double-execution bug.
+      # The spread signal was executed twice: once correctly via open_credit_spread
+      # (symbol=BANKNIFTY, asset_class=OPTION_SPREAD), and once through the generic
+      # fill->PortfolioLedger path which created a phantom EQUITY position using the
+      # synthetic trading_symbol "<UND>-bullish-spread" as the instrument and
+      # re-multiplied qty by lot_size (90->2700, 180->5400). The dedup guard closed
+      # the real spread at PnL 0 and kept the phantom, which bled -16.5k on 2026-06-17.
+      # Re-enable only after the generic path is blocked from routing spread symbols.
+      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-false}"
       CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
     volumes:
