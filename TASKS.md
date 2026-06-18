@@ -1408,7 +1408,8 @@ Files changed: backend/server.py, backend/routes/system.py, TASKS.md
 ---
 
 ### TASK-043 — Reconcile daily reports with canonical fill ledger
-- **Status**: `[~]` In progress by Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `1822d8a`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-042
@@ -1472,4 +1473,4 @@ Files changed: backend/core/portfolio_ledger.py, backend/position_monitor.py, ba
 
 *Last updated: 2026-06-19*
 *Total tasks: 43*
-*Open: 0 · In progress: 1 · Done: 42*
+*Open: 0 · In progress: 0 · Done: 43*
