@@ -205,7 +205,13 @@ async def upstox_option_chain(
         days_ahead = (expiry_weekday - today.weekday()) % 7
         nearest = today + _td(days=days_ahead)
         expiry_date = nearest.strftime("%Y-%m-%d")
-    chain = await asyncio.to_thread(gateway.get_option_chain, spot_key, expiry_date)
+    try:
+        chain = await asyncio.to_thread(gateway.get_option_chain, spot_key, expiry_date)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "401" in msg or "UDAPI100050" in msg:
+            raise HTTPException(status_code=400, detail="Reconnect Upstox before loading option chain.")
+        raise HTTPException(status_code=502, detail=f"Upstox option chain unavailable: {msg}")
     rows = (chain or {}).get("data") or []
     return {
         "ok": True,
