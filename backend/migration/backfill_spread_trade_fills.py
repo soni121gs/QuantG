@@ -77,6 +77,7 @@ def build_spread_trade_fill(pos: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": f"tf_spread_{pos_id}",
         "fill_id": f"tf_spread_{pos_id}",
+        "order_id": f"backfill:spread:{pos_id}",
         "position_id": pos_id,
         "user_id": pos.get("user_id"),
         "strategy_id": pos.get("strategy_id"),

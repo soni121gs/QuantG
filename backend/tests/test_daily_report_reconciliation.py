@@ -141,6 +141,7 @@ def test_spread_backfill_builds_canonical_close_fill_doc():
     )
 
     assert doc["id"] == "tf_spread_pos_1"
+    assert doc["order_id"] == "backfill:spread:pos_1"
     assert doc["action"] == "CLOSE"
     assert doc["asset_type"] == "option_spread"
     assert doc["realized_pnl"] == -752.92
