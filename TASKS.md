@@ -1284,7 +1284,8 @@ Files changed: backend/server.py, backend/routes/ops_runtime.py, TASKS.md
 ---
 
 ### TASK-040 — Extract core data and backtest routes from server.py
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `62466ef`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-039
@@ -1355,6 +1356,6 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 
 ---
 
-*Last updated: 2026-06-18*
+*Last updated: 2026-06-19*
 *Total tasks: 40*
-*Open: 0 · In progress: 1 · Done: 39*
+*Open: 0 · In progress: 0 · Done: 40*
