@@ -3,6 +3,7 @@ import "@/index.css";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { ExecutionStateProvider } from "./contexts/ExecutionStateContext";
 import Layout from "./components/Layout";
 import InstallPWA from "./components/InstallPWA";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -49,13 +50,14 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Toaster theme="system" position="top-right" />
-        <Suspense fallback={<LazySpinner />}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/login" element={<PublicOnly><Auth mode="login" /></PublicOnly>} />
-            <Route path="/signup" element={<PublicOnly><Auth mode="register" /></PublicOnly>} />
-            <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
+        <ExecutionStateProvider>
+          <Toaster theme="system" position="top-right" />
+          <Suspense fallback={<LazySpinner />}>
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/login" element={<PublicOnly><Auth mode="login" /></PublicOnly>} />
+              <Route path="/signup" element={<PublicOnly><Auth mode="register" /></PublicOnly>} />
+              <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/strategies" element={<Protected><Strategies /></Protected>} />
             <Route path="/python" element={<Protected><PythonEditor /></Protected>} />
             <Route path="/visual" element={<Protected><VisualBuilder /></Protected>} />
@@ -71,6 +73,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </Suspense>
+        </ExecutionStateProvider>
       </AuthProvider>
     </BrowserRouter>
   );

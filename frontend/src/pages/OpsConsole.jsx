@@ -8,6 +8,11 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
 import { useExecutionState } from "../hooks/useExecutionState";
+import MarginMeterPanel from "../components/ops/MarginMeterPanel";
+import UserReconciler from "../components/ops/UserReconciler";
+import BrokerStatusPanel from "../components/ops/BrokerStatusPanel";
+import IncidentRecoveryPanel from "../components/ops/IncidentRecoveryPanel";
+import OpsActionCard from "../components/ops/OpsActionCard";
 
 const fmt = (value) => {
   if (!value) return "-";
@@ -239,71 +244,12 @@ export default function OpsConsole() {
       </div>
 
       {/* OWNER APPROVALS DESK */}
-      {user?.role === "owner" && pendingUsers.length > 0 && (
-        <div className="qd-card p-6 border-[var(--qd-cyan)] bg-[var(--qd-surface)]/70 backdrop-blur-md space-y-4 shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-64 h-64 bg-[var(--qd-cyan)]/5 rounded-full blur-[100px] pointer-events-none" />
-          <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3 relative z-10">
-            <div className="flex items-center gap-2">
-              <Shield className="text-[var(--qd-cyan)] animate-pulse" size={20} />
-              <h2 className="text-lg font-head font-extrabold text-white">Owner's Registration Desk</h2>
-              <span className="text-xs font-mono bg-[var(--qd-cyan)]/15 border border-[var(--qd-cyan)]/30 text-[var(--qd-cyan)] px-2 py-0.5 rounded-full font-bold animate-pulse">
-                {pendingUsers.length} PENDING
-              </span>
-            </div>
-            <span className="text-xs font-mono text-[var(--qd-text-3)] uppercase tracking-wider">
-              Awaiting Verification
-            </span>
-          </div>
-
-          <div className="qd-table-wrap relative z-10">
-            <table className="w-full text-left text-xs font-mono border-collapse">
-              <thead>
-                <tr className="border-b border-[var(--qd-border)] text-[var(--qd-text-3)]">
-                  <th className="py-2.5">TRADER NAME</th>
-                  <th className="py-2.5">EMAIL ADDRESS</th>
-                  <th className="py-2.5">REQUEST DATE</th>
-                  <th className="py-2.5">ROLE</th>
-                  <th className="py-2.5 text-right">ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingUsers.map((p) => (
-                  <tr key={p.id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)] transition-colors">
-                    <td className="py-3 text-white font-semibold flex items-center gap-1.5">
-                      <User size={12} className="text-[var(--qd-text-3)]" />
-                      {p.name}
-                    </td>
-                    <td className="py-3 text-[var(--qd-text-2)]">{p.email}</td>
-                    <td className="py-3 text-[var(--qd-text-3)]">{fmt(p.created_at)}</td>
-                    <td className="py-3">
-                      <span className="px-1.5 py-0.5 text-[10px] bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 rounded uppercase font-bold">
-                        {p.role}
-                      </span>
-                    </td>
-                    <td className="py-3 text-right space-x-2">
-                      <button
-                        onClick={() => handleApprove(p.id, p.name)}
-                        disabled={userActionId === p.id}
-                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-60 text-emerald-950 font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all shadow-md shadow-emerald-500/10 flex items-center gap-1.5"
-                      >
-                        {userActionId === p.id ? <Loader2 size={11} className="animate-spin" /> : null}
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => handleReject(p.id, p.name)}
-                        disabled={userActionId === p.id}
-                        className="bg-red-500/15 border border-red-500/30 hover:bg-red-500 hover:text-white disabled:opacity-60 text-[var(--qd-loss)] font-bold px-3 py-1.5 rounded text-[11px] uppercase tracking-wider transition-all"
-                      >
-                        Reject
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      <UserReconciler
+        pendingUsers={pendingUsers}
+        userActionId={userActionId}
+        onApprove={handleApprove}
+        onReject={handleReject}
+      />
 
       {/* NEEDS REVIEW DESK */}
       {reconciliationNeedsAttention && (
@@ -439,167 +385,16 @@ export default function OpsConsole() {
         {/* LEFT PANEL: UPSTOX HFT & TELEMETRY */}
         <div className="lg:col-span-8 space-y-5">
           
-          {/* UPSTOX HFT & PERFORMANCE COCKPIT */}
-          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
-            {/* Top decorative gradient glow */}
-            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-600"></div>
-            
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--qd-border)] pb-4 mb-4 gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-md">
-                  <Zap size={18} className="animate-pulse" />
-                </div>
-                <div>
-                  <h2 className="font-head text-base font-bold text-white">Upstox API v2 HFT & Telemetry</h2>
-                  <p className="text-[11px] text-[var(--qd-text-3)] font-mono">High-Frequency Order Routing Engine</p>
-                </div>
-              </div>
+          <BrokerStatusPanel
+            data={data}
+            busy={busy}
+            onUpstoxLogin={handleUpstoxLogin}
+            simulatedLatency={simulatedLatency}
+          />
 
-              {upstox.connected ? (
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono font-semibold text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)] border border-[var(--qd-profit)]/30 rounded-full">
-                    <CheckCircle2 size={12} /> {upstox.feed_running ? "HFT READY" : "AUTH OK / FEED STOPPED"}
-                  </span>
-                  <button 
-                    onClick={handleUpstoxLogin}
-                    disabled={busy === "upstox-login"}
-                    className="px-3 py-1.5 bg-[var(--qd-surface-3)] hover:bg-[var(--qd-surface-2)] text-white rounded border border-[var(--qd-border)] text-xs font-mono transition-all"
-                  >
-                    Re-Auth
-                  </button>
-                </div>
-              ) : (
-                <button 
-                  onClick={handleUpstoxLogin}
-                  disabled={busy === "upstox-login"}
-                  className="px-4 py-2 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-[var(--qd-accent-contrast)] text-xs font-bold font-mono uppercase tracking-wider rounded-md border border-[var(--qd-border-strong)] transition-all flex items-center gap-2 active:scale-95"
-                >
-                  <Key size={14} /> Authorize Upstox
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-              <TelemetryMetric 
-                label="OAuth Integration" 
-                value={upstox.keys_saved ? (upstox.connected ? "Authorized" : "Ready / Need Login") : "Not configured"} 
-                desc={upstox.connected ? `Last auth: ${fmt(upstox.last_auth_time)}` : (upstox.message || "Reconnect Upstox required")}
-                status={upstox.connected ? "success" : upstox.keys_saved ? "warn" : "error"}
-              />
-              <TelemetryMetric 
-                label="HFT Dispatcher" 
-                value={upstox.feed_running ? "ACTIVE PULSE" : "STOPPED"} 
-                desc={feedState.last_error || upstox.reason || "Websocket feed state"}
-                status={upstox.feed_running ? "success" : "error"}
-                isPulse={upstox.feed_running}
-              />
-              <TelemetryMetric 
-                label="SQLite DB Engine" 
-                value="Ledger Hooked" 
-                desc="runtime_state.sqlite3 pool"
-                status="success"
-              />
-              <TelemetryMetric 
-                label="Order Latency (API)" 
-                value={upstox.connected ? `${simulatedLatency}ms` : "-"} 
-                desc="Simulated dispatch round-trip"
-                status={upstox.connected ? "success" : "idle"}
-              />
-            </div>
-
-            {/* Performance Telemetry Detail */}
-            <div className="mt-5 p-3.5 bg-[var(--qd-elevated)] border border-[var(--qd-border)] rounded-md space-y-2.5 font-mono text-xs">
-              <div className="flex justify-between items-center text-[var(--qd-text-3)] border-b border-[var(--qd-border)] pb-1">
-                <span>Telemetry Parameter</span>
-                <span>Registry State</span>
-              </div>
-              <div className="flex justify-between items-center text-[var(--qd-text-2)]">
-                <span>Broker Gateway Provider</span>
-                <span className="text-white">Upstox API v2 REST/WS Gateway</span>
-              </div>
-              <div className="flex justify-between items-center text-[var(--qd-text-2)]">
-                <span>API Endpoint Gateway</span>
-                <span className="text-blue-400 select-all font-semibold">https://api-hft.upstox.com</span>
-              </div>
-              <div className="flex justify-between items-center text-[var(--qd-text-2)]">
-                <span>Encrypted Access Token</span>
-                <span className="text-white select-all">{upstox.token_present ? `${upstox.token_state || "present"} / ${upstox.token_valid ? "valid" : "not valid"}` : "missing"}</span>
-              </div>
-              <div className="flex justify-between items-center text-[var(--qd-text-2)]">
-                <span>WebSocket Tick Dispatcher</span>
-                <span className="text-white">{upstox.feed_running ? "running" : "stopped"}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* MARGIN DESK COCKPIT */}
-          <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg p-5 relative overflow-hidden shadow-xl">
-            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-emerald-500 to-green-400"></div>
-
-            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-4 mb-5">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-md">
-                  <CircleDollarSign size={18} />
-                </div>
-                <div>
-                  <h2 className="font-head text-base font-bold text-white">Live Margin Desk Meter</h2>
-                  <p className="text-[11px] text-[var(--qd-text-3)] font-mono">Live Broker Balance and Utilization Monitor</p>
-                </div>
-              </div>
-              
-              <span className="font-mono text-xs font-semibold px-2 py-1 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-white rounded">
-                Active Source: {fundsData?.source?.toUpperCase() || "PAPER"}
-              </span>
-            </div>
-
-            {/* Cash Progress Bar */}
-            <div className="space-y-2 mb-6">
-              <div className="flex justify-between text-xs font-mono">
-                <span className="text-[var(--qd-text-2)] font-semibold flex items-center gap-1"><ArrowUpRight size={14} className="text-emerald-400" /> Cash Used Utilization</span>
-                <span className="text-white font-bold">{utilPercent}% Used / {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })} Avail</span>
-              </div>
-              <div className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-full h-3 overflow-hidden p-[1px]">
-                <div 
-                  className={`h-full rounded-full transition-all duration-700 ${getUtilColor(utilPercent)}`}
-                  style={{ width: `${Math.min(utilPercent || 1, 100)}%` }}
-                ></div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
-                <div className="text-sm sm:text-base font-bold text-white font-mono mt-1 truncate">
-                  {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
-                </div>
-                <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Execution limit</div>
-              </div>
-
-              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
-                <div className="text-sm sm:text-base font-bold text-[var(--qd-loss)] font-mono mt-1 truncate">
-                  {usedMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
-                </div>
-                <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Current block</div>
-              </div>
-
-              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
-                <div className="text-sm sm:text-base font-bold text-[var(--qd-warn)] font-mono mt-1 truncate">
-                  {spanMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
-                </div>
-                <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Underlying hedge margin</div>
-              </div>
-
-              <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
-                <div className="text-sm sm:text-base font-bold text-blue-400 font-mono mt-1 truncate">
-                  {fundsData?.source === "paper" ? "5.0x MIS" : "1.0x NRML"}
-                </div>
-                <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Daily leverage capacity</div>
-              </div>
-            </div>
-          </div>
+          <MarginMeterPanel
+            fundsData={fundsData}
+          />
 
         </div>
 
@@ -701,7 +496,7 @@ export default function OpsConsole() {
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <ActionCard
+          <OpsActionCard
             icon={AlertTriangle}
             title="Emergency Kill Switch"
             text="Toggle PAPER mode, suspend order placement, and pause ALL strategies instantly."
@@ -709,7 +504,7 @@ export default function OpsConsole() {
             busy={busy === "stop"}
             onClick={() => run("stop", "/ops/emergency-stop", "CRITICAL WARNING: This switch will halt all active trades, transition execution settings to PAPER, and pause every automated system in MongoDB. Proceed?")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={SquareArrowOutUpRight}
             title="Emergency Square Off"
             text="Close all live open positions immediately on the active execution broker."
@@ -717,42 +512,42 @@ export default function OpsConsole() {
             busy={busy === "squareoff"}
             onClick={() => run("squareoff", "/ops/squareoff-all", "CRITICAL WARNING: This will immediately dispatch CLOSE orders for all positions recorded in the SQLite Options ledger. Trigger emergency square-off?")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={Pause}
             title="Pause All Systems"
             text="Force all strategy modules to pause execution without changing the global mode."
             busy={busy === "pause"}
             onClick={() => run("pause", "/ops/strategies/pause-all", "Temporarily freeze all strategies?")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={Play}
             title="Resume All Systems"
             text="Re-enable execution routes, resume options ledger gateways, and unpause strategies."
             busy={busy === "enable"}
             onClick={() => run("enable", "/ops/strategies/enable-all")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={Wifi}
             title="Restart Upstox Feed"
             text="Flush active websocket subscriptions and perform full telemetry handshake."
             busy={busy === "ticker"}
             onClick={() => run("ticker", "/ops/ticker/restart")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={RefreshCw}
             title="Auto Recover Tickers"
             text="Deploy background daemon script to repair ticker connections and synchronize positions."
             busy={busy === "recover"}
             onClick={() => run("recover", "/ops/auto-recover")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={RefreshCw}
             title="Reconcile Orders"
             text="Fetch live Upstox order book and synchronize local order lifecycle states."
             busy={busy === "reconcile"}
             onClick={() => run("reconcile", "/ops/orders/sync")}
           />
-          <ActionCard
+          <OpsActionCard
             icon={Trash2}
             title="Clear Stale Paper Orders"
             text="Instantly clean up all local pending paper orders and release position locks."
@@ -763,59 +558,11 @@ export default function OpsConsole() {
       </div>
 
       {/* SYSTEMS RECOVERY ENGINE */}
-      <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
-        <div className="border-b border-[var(--qd-border)] px-5 py-4 flex items-center justify-between bg-[var(--qd-surface)]">
-          <div>
-            <h2 className="font-head text-base font-bold text-white">Advanced Recovery Engine</h2>
-            <p className="text-xs text-[var(--qd-text-3)] font-mono">Automated incident resolution and compliance metrics</p>
-          </div>
-          <span className={`font-mono text-xs font-semibold px-3 py-1.5 rounded border ${
-            data?.recovery_plan?.status === "READY" 
-              ? "text-[var(--qd-profit)] bg-[rgba(0,230,118,0.05)] border-[var(--qd-profit)]/30" 
-              : "text-[var(--qd-warn)] bg-[rgba(255,159,10,0.05)] border-[var(--qd-warn)]/30"
-          }`}>
-            RECOVERY COMPLIANCE: {data?.recovery_plan?.status || "HEALTHY"} · {data?.recovery_plan?.score ?? 100}/100
-          </span>
-        </div>
-        
-        {!data?.recovery_plan?.issues?.length ? (
-          <div className="p-6 text-sm text-[var(--qd-profit)] font-mono flex items-center gap-2">
-            <CheckCircle2 size={16} /> All systems operational. Zero blocking issues detected by Risk engine.
-          </div>
-        ) : (
-          <div className="divide-y divide-[rgba(255,255,255,0.05)]">
-            {data.recovery_plan.issues.map((item, idx) => (
-              <div key={`${item.title}-${idx}`} className="p-4 grid grid-cols-1 md:grid-cols-[120px_1fr_auto] gap-4 items-center">
-                <span className={`font-mono text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded inline-block text-center ${
-                  item.severity === "critical" 
-                    ? "text-[var(--qd-loss)] bg-red-500/10 border border-red-500/20" 
-                    : item.severity === "warning" 
-                      ? "text-[var(--qd-warn)] bg-orange-500/10 border border-orange-500/20" 
-                      : "text-[var(--qd-text-3)] bg-[var(--qd-surface-2)] border border-[var(--qd-border)]"
-                }`}>
-                  {item.severity}
-                </span>
-                <div>
-                  <div className="text-white font-semibold text-sm">{item.title}</div>
-                  <div className="text-xs text-[var(--qd-text-2)] mt-0.5">{item.detail}</div>
-                  <div className="text-xs font-mono text-indigo-400 mt-1.5 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-ping"></span> Suggested Action: {item.action}
-                  </div>
-                </div>
-                {item.endpoint && (
-                  <button 
-                    onClick={() => run(`plan-${idx}`, item.endpoint)} 
-                    disabled={busy === `plan-${idx}`}
-                    className="border border-indigo-500/40 hover:border-indigo-400 hover:bg-indigo-500/10 px-4 py-2 rounded text-xs font-mono uppercase text-white shadow-md transition-all active:scale-95"
-                  >
-                    {busy === `plan-${idx}` ? "Deploying..." : "Auto Fix"}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <IncidentRecoveryPanel
+        data={data}
+        busy={busy}
+        run={run}
+      />
 
       {/* BLOCKED/ERRORED STRATEGIES */}
       <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
@@ -943,23 +690,4 @@ const ChecklistItem = ({ label, checked, details }) => (
   </div>
 );
 
-// Sleek Action Button Card
-const ActionCard = ({ icon: Icon, title, text, onClick, busy, danger }) => (
-  <button
-    onClick={onClick}
-    disabled={busy}
-    className={`w-full text-left border rounded-md p-4 flex gap-3.5 transition-all duration-200 hover:-translate-y-[1px] disabled:opacity-60 disabled:pointer-events-none ${
-      danger
-        ? "border-[rgba(255,59,48,0.3)] bg-red-950/10 text-[var(--qd-loss)] hover:bg-red-500/10 hover:border-red-500 hover:shadow-lg hover:shadow-red-500/5"
-        : "border-[var(--qd-border)] bg-[var(--qd-surface)] text-white hover:border-[var(--qd-border-strong)] hover:bg-[var(--qd-surface-2)] hover:shadow-lg hover:shadow-black/20"
-    }`}
-  >
-    <div className={`p-2 rounded-lg flex-shrink-0 ${danger ? "bg-red-500/10 text-[var(--qd-loss)]" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]"}`}>
-      <Icon size={18} />
-    </div>
-    <span className="flex-1 min-w-0">
-      <span className="block text-xs uppercase tracking-wide font-bold font-mono">{busy ? "Transmitting..." : title}</span>
-      <span className="block text-[11px] text-[var(--qd-text-3)] leading-relaxed mt-1">{text}</span>
-    </span>
-  </button>
-);
+

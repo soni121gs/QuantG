@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api, formatINR } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
@@ -12,6 +12,26 @@ const statusTone = (status) => {
   if (s === "FAILED" || s === "REJECTED" || s === "ORPHAN" || s === "STALE") return "text-[var(--qd-loss)]";
   return "text-[var(--qd-text-2)]";
 };
+
+function FlashingValue({ value, children }) {
+  const prevValueRef = useRef(value);
+  const [flashClass, setFlashClass] = useState("");
+
+  useEffect(() => {
+    if (prevValueRef.current !== undefined && prevValueRef.current !== value) {
+      const isUp = Number(value) > Number(prevValueRef.current);
+      setFlashClass(isUp ? "qd-blink-up" : "qd-blink-dn");
+      prevValueRef.current = value;
+      
+      const t = setTimeout(() => {
+        setFlashClass("");
+      }, 700);
+      return () => clearTimeout(t);
+    }
+  }, [value]);
+
+  return <span className={`inline-block px-1 rounded transition-colors ${flashClass}`}>{children}</span>;
+}
 
 export default function Positions() {
   const { positions, summary, loading, error, refresh, paperMode, executionBroker } = useExecutionState({ pollMs: 15000 });
@@ -132,11 +152,19 @@ export default function Positions() {
                       </td>
                       <td className={`px-4 py-2.5 ${isSpread ? "text-[var(--qd-text-2)]" : longPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{isSpread ? qty : `${longPos ? "+" : ""}${qty}`}</td>
                       <td className="px-4 py-2.5">{formatINR(p.avg_price)}</td>
-                      <td className="px-4 py-2.5">{formatINR(p.ltp)}</td>
+                      <td className="px-4 py-2.5">
+                        <FlashingValue value={p.ltp}>
+                          {formatINR(p.ltp)}
+                        </FlashingValue>
+                      </td>
                       <td className="px-4 py-2.5 text-[var(--qd-profit)]">{p.take_profit != null ? formatINR(p.take_profit) : "—"}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-loss)]">{p.stop_loss != null ? formatINR(p.stop_loss) : "—"}</td>
                       <td className={`px-4 py-2.5 text-[10px] uppercase ${statusTone(p.execution_status || p.ledger_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
-                      <td className={`px-4 py-2.5 text-right ${pnlTone}`}>{(p.pnl || 0) >= 0 ? "+" : ""}₹{formatINR(p.pnl)}</td>
+                      <td className={`px-4 py-2.5 text-right ${pnlTone}`}>
+                        <FlashingValue value={p.pnl}>
+                          {(p.pnl || 0) >= 0 ? "+" : ""}₹{formatINR(p.pnl)}
+                        </FlashingValue>
+                      </td>
                       <td className="px-4 py-2.5 text-right">
                         <span className={`text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${
                           p.mode === "live" ? "bg-[rgba(255,59,48,0.12)] text-[var(--qd-loss)]" : "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)]"

@@ -3,17 +3,11 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   Bot,
   Layers,
-  LineChart,
   PieChart,
-  Play,
-  Pause,
-  Power,
   RefreshCw,
   Shield,
-  Target,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -21,11 +15,16 @@ import {
 } from "lucide-react";
 import { api, formatINR, pctFmt } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
+import { KpiCard } from "../components/dashboard/KpiCard";
+import { NiftyPulseChart } from "../components/dashboard/NiftyPulseChart";
+import { StrategyPerformanceTable } from "../components/dashboard/StrategyPerformanceTable";
+import { StrategyLedgerRow, Field, StatusPill } from "../components/dashboard/StrategyLedgerRow";
+import { HealthScoreList } from "../components/dashboard/HealthScoreList";
+import { AllocationList } from "../components/dashboard/AllocationList";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
 const toneClass = (value) => ((value ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]");
-const filledOrder = (status) => ["FILLED", "CLOSED", "COMPLETE"].includes((status || "").toUpperCase());
 const ACTIVE_POSITION_STATES = ["OPEN", "FILLED"];
 const PENDING_POSITION_STATES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "EXITING"];
 const BROKER_OPEN_ORDER_STATES = ["NEW", "PLACED", "OPEN", "PARTIAL_FILL", "PENDING", "PENDING_BROKER", "TRIGGER PENDING", "MODIFY PENDING", "VALIDATION PENDING", "EXIT_PENDING"];
@@ -34,19 +33,6 @@ const PROBLEM_ORDER_STATES = ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"]
 const asStatus = (value) => String(value || "").toUpperCase();
 const hasQty = (value) => Math.abs(parseInt(value || 0, 10)) > 0;
 
-const statusTone = (status) => {
-  const s = asStatus(status);
-  if (ACTIVE_POSITION_STATES.includes(s)) return "good";
-  if (PENDING_POSITION_STATES.includes(s)) return "warn";
-  if (["FAILED", "REJECTED", "BROKER_NOT_FOUND", "ORPHAN", "STALE"].includes(s)) return "bad";
-  return "neutral";
-};
-
-const shortId = (value) => {
-  const text = String(value || "");
-  return text.length > 10 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text;
-};
-
 const quoteTime = (value) => {
   if (!value) return "-";
   const date = new Date(value);
@@ -54,230 +40,6 @@ const quoteTime = (value) => {
 };
 
 const quoteAge = (value) => (value == null ? "-" : `${Math.round(Number(value) || 0)}s`);
-
-const Field = ({ label, value, tone }) => (
-  <div className="min-w-0">
-    <div className="qd-section-title text-[9px]">{label}</div>
-    <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || "text-white"}`}>{value}</div>
-  </div>
-);
-
-const KpiCard = ({ label, value, sub, icon: Icon, tone, testid }) => (
-  <div className="qd-stat-panel p-4" data-testid={testid || `kpi-${label.replace(/\s+/g, "-").toLowerCase()}`}>
-    <div className="flex items-center justify-between gap-3">
-      <span className="qd-section-title">{label}</span>
-      <Icon size={16} className="text-[var(--qd-text-3)]" strokeWidth={1.5} />
-    </div>
-    <div className={`mt-3 font-mono text-2xl font-bold tracking-tight ${tone || "text-white"}`}>{value}</div>
-    {sub && <div className="mt-2 text-xs text-[var(--qd-text-2)]">{sub}</div>}
-  </div>
-);
-
-const buildSparkPath = (series, w, h, pad = 6) => {
-  if (!series || series.length < 2) return "";
-  const min = Math.min(...series);
-  const max = Math.max(...series);
-  const span = max - min || 1;
-  const innerW = w - pad * 2;
-  const innerH = h - pad * 2;
-  const step = innerW / (series.length - 1);
-  return series
-    .map((v, i) => {
-      const x = pad + i * step;
-      const y = pad + innerH - ((v - min) / span) * innerH;
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
-};
-
-// Real NIFTY widget: live LTP + period change from genuine candle data, with a
-// graceful stats-only fallback when candles are unavailable (e.g. analytics
-// token not configured or market closed). Replaces the old decorative SVG.
-const NiftyPulseChart = ({ niftyLtp, sensexLtp, candles = [], marketOpen, label, feedLabel }) => {
-  const series = (candles || []).map((c) => Number(c.close ?? c.c)).filter((n) => Number.isFinite(n));
-  const hasChart = series.length >= 2;
-  const first = series[0];
-  const last = series[series.length - 1];
-  const liveLtp = Number(niftyLtp) || last || 0;
-  const change = hasChart ? last - first : 0;
-  const pct = hasChart && first ? (change / first) * 100 : 0;
-  const positive = change >= 0;
-  const W = 360;
-  const H = 96;
-  const PAD = 6;
-  const line = buildSparkPath(series, W, H, PAD);
-  const step = series.length > 1 ? (W - PAD * 2) / (series.length - 1) : 0;
-  const lastX = PAD + (series.length - 1) * step;
-  const area = hasChart ? `${line} L${lastX.toFixed(1)} ${H} L${PAD} ${H} Z` : "";
-
-  return (
-    <div className="qd-market-pulse" data-testid="nifty-pulse">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="qd-section-title">NIFTY 50</div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="font-mono text-2xl font-bold tracking-tight text-[var(--qd-text)]">{liveLtp ? formatINR(liveLtp) : "—"}</span>
-            {hasChart && (
-              <span className={`font-mono text-xs font-bold ${positive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
-                {positive ? "▲" : "▼"} {Math.abs(pct).toFixed(2)}%
-              </span>
-            )}
-          </div>
-        </div>
-        <span className={`qd-pulse-status ${marketOpen ? "is-open" : "is-closed"}`}>{marketOpen ? "Live" : "Closed"}</span>
-      </div>
-
-      {hasChart ? (
-        <svg viewBox={`0 0 ${W} ${H}`} className="mt-3 h-24 w-full" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="niftyPulseLine" x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0%" stopColor="var(--qd-accent)" />
-              <stop offset="100%" stopColor={positive ? "var(--qd-profit)" : "var(--qd-loss)"} />
-            </linearGradient>
-          </defs>
-          <path d={area} fill="var(--qd-accent)" opacity="0.08" />
-          <path d={line} fill="none" stroke="url(#niftyPulseLine)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-        </svg>
-      ) : (
-        <div className="mt-3 flex h-24 items-center justify-center rounded-[var(--qd-radius-sm)] border border-dashed border-[var(--qd-border)] px-3 text-center text-[11px] text-[var(--qd-text-3)]">
-          {marketOpen ? "Waiting for NIFTY candles…" : "Intraday chart unavailable (market closed or analytics token not set)"}
-        </div>
-      )}
-
-      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--qd-border)] pt-3">
-        <div>
-          <div className="qd-section-title text-[9px]">SENSEX</div>
-          <div className="mt-1 font-mono text-sm font-semibold text-[var(--qd-text)]">{sensexLtp ? formatINR(sensexLtp) : "—"}</div>
-        </div>
-        <div className="text-right">
-          <div className="qd-section-title text-[9px]">Feed</div>
-          <div className="mt-1 truncate font-mono text-xs text-[var(--qd-text-2)]" title={feedLabel || label}>{feedLabel || label || "—"}</div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const QualityPill = ({ score, readiness }) => {
-  const n = Number(score || 0);
-  const tone = readiness === "PASS" || n >= 70
-    ? "border-[rgba(0,230,118,0.38)] bg-[rgba(0,230,118,0.1)] text-[var(--qd-profit)]"
-    : readiness === "BLOCK" || n < 45
-      ? "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
-      : "border-[rgba(255,209,102,0.38)] bg-[rgba(255,209,102,0.1)] text-[var(--qd-warn)]";
-  return <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${tone}`}>Q {n}</span>;
-};
-
-const metric = (row, path, fallback = 0) => {
-  const value = path.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), row);
-  return value ?? fallback;
-};
-
-const profitFactorLabel = (value) => (value == null ? "No losses" : Number(value).toFixed(2));
-
-const StrategyPerformanceTable = ({ rows }) => (
-  <div className="overflow-x-auto">
-    <table className="w-full text-left text-xs">
-      <thead className="bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] uppercase font-mono">
-        <tr>
-          <th className="px-4 py-3">Rank</th>
-          <th className="px-4 py-3">Strategy</th>
-          <th className="px-4 py-3 text-right">Trades</th>
-          <th className="px-4 py-3 text-right">Win</th>
-          <th className="px-4 py-3 text-right">7D</th>
-          <th className="px-4 py-3 text-right">30D</th>
-          <th className="px-4 py-3 text-right">Net P&L</th>
-          <th className="px-4 py-3 text-right">PF</th>
-          <th className="px-4 py-3 text-right">Risk Adj</th>
-          <th className="px-4 py-3 text-right">DD</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-[var(--qd-border)]">
-        {rows.length === 0 ? (
-          <tr><td colSpan="10" className="px-4 py-8 text-center text-[var(--qd-text-3)]">No closed strategy trades yet.</td></tr>
-        ) : rows.map((row) => {
-          const lifetime = row.lifetime || {};
-          const last7 = row.last_7_days || {};
-          const last30 = row.last_30_days || {};
-          return (
-            <tr key={row.strategy_id} className="hover:bg-[var(--qd-surface)]/30">
-              <td className="px-4 py-3 font-mono text-[var(--qd-text-2)]">#{row.rank}</td>
-              <td className="px-4 py-3">
-                <div className="font-semibold text-white">{row.strategy_name}</div>
-                <div className="mt-1 font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{row.recommendation || "NO_DATA"}</div>
-              </td>
-              <td className="px-4 py-3 text-right font-mono text-white">{lifetime.total_trades || 0}</td>
-              <td className="px-4 py-3 text-right font-mono text-white">{Number(lifetime.win_rate || 0).toFixed(1)}%</td>
-              <td className={`px-4 py-3 text-right font-mono ${toneClass(last7.net_pnl)}`}>{money(last7.net_pnl)}</td>
-              <td className={`px-4 py-3 text-right font-mono ${toneClass(last30.net_pnl)}`}>{money(last30.net_pnl)}</td>
-              <td className={`px-4 py-3 text-right font-mono font-bold ${toneClass(lifetime.net_pnl)}`}>{money(lifetime.net_pnl)}</td>
-              <td className="px-4 py-3 text-right font-mono text-white">{profitFactorLabel(lifetime.profit_factor)}</td>
-              <td className={`px-4 py-3 text-right font-mono ${toneClass(row.risk_adjusted_return)}`}>{Number(row.risk_adjusted_return || 0).toFixed(2)}</td>
-              <td className="px-4 py-3 text-right font-mono text-[var(--qd-loss)]">{money(lifetime.max_drawdown)}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  </div>
-);
-
-const HealthScoreList = ({ rows }) => (
-  <div className="space-y-3">
-    {rows.length === 0 ? (
-      <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">No health scores yet.</div>
-    ) : rows.slice(0, 8).map((row) => {
-      const score = Number(row.health_score || 0);
-      const tone = score >= 70 ? "bg-[var(--qd-profit)]" : score >= 45 ? "bg-[var(--qd-warn)]" : "bg-[var(--qd-loss)]";
-      return (
-        <div key={row.strategy_id}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-white">{row.strategy_name}</div>
-              <div className="font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{row.recommendation}</div>
-            </div>
-            <div className="font-mono text-lg font-bold text-white">{score}</div>
-          </div>
-          <div className="mt-2 h-2 rounded bg-[var(--qd-surface-2)]">
-            <div className={`h-2 rounded ${tone}`} style={{ width: `${Math.min(100, Math.max(0, score))}%` }} />
-          </div>
-        </div>
-      );
-    })}
-  </div>
-);
-
-const AllocationList = ({ rows }) => (
-  <div className="space-y-3">
-    {rows.length === 0 ? (
-      <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">No capital increase recommended from current closed-trade history.</div>
-    ) : rows.map((row) => (
-      <div key={row.strategy_id}>
-        <div className="flex items-center justify-between gap-3">
-          <div className="truncate text-sm font-semibold text-white">{row.strategy_name}</div>
-          <div className="font-mono text-lg font-bold text-[var(--qd-profit)]">{row.recommended_percent}%</div>
-        </div>
-        <div className="mt-2 h-2 rounded bg-[var(--qd-surface-2)]">
-          <div className="h-2 rounded bg-[var(--qd-profit)]" style={{ width: `${Math.min(100, Math.max(0, row.recommended_percent))}%` }} />
-        </div>
-      </div>
-    ))}
-  </div>
-);
-
-const StatusPill = ({ children, tone = "neutral" }) => {
-  const tones = {
-    good: "border-[rgba(0,230,118,0.38)] bg-[rgba(0,230,118,0.1)] text-[var(--qd-profit)]",
-    bad: "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]",
-    warn: "border-[rgba(255,159,10,0.4)] bg-[rgba(255,159,10,0.1)] text-[var(--qd-warn)]",
-    neutral: "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]",
-  };
-  return (
-    <span className={`inline-flex items-center rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${tones[tone]}`}>
-      {children}
-    </span>
-  );
-};
 
 const MarketRow = ({ item }) => (
   <div className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 hover:bg-[var(--qd-surface-2)]">
@@ -293,81 +55,6 @@ const MarketRow = ({ item }) => (
     </div>
   </div>
 );
-
-const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
-  const position = row.position;
-  const pendingOrder = row.pendingOrder;
-  const failedOrder = row.failedOrder;
-  const quality = pendingOrder?.quality_score ?? failedOrder?.quality_score ?? position?.quality_score;
-  const qualityReadiness = pendingOrder?.quality_readiness ?? failedOrder?.quality_readiness ?? position?.quality_readiness;
-  const status = position?.execution_status || position?.ledger_status || (pendingOrder ? pendingOrder.status : row.state || "FLAT");
-  const positionOpen = position && hasQty(position.qty);
-  const problem = failedOrder || asStatus(position?.execution_status) === "BROKER_NOT_FOUND";
-  const warning = !problem && (pendingOrder || PENDING_POSITION_STATES.includes(asStatus(status)));
-  const tone = problem ? "bad" : warning ? "warn" : positionOpen ? "good" : row.status === "live" ? "neutral" : "neutral";
-  const pnl = position?.pnl ?? row.active_position?.unrealized_pnl ?? row.daily_pnl?.realized_pnl ?? 0;
-  const slMissing = positionOpen && position?.stop_loss == null;
-  const tpMissing = positionOpen && position?.take_profit == null;
-  const live = row.status === "live";
-  const idleLabel = live ? (row.state === "SCANNING" ? "Scanning" : row.state || "Live") : "Flat";
-  const telemetry = row.telemetry || {};
-  const detail = problem
-    ? failedOrder?.status_message || telemetry.last_error
-    : pendingOrder
-      ? pendingOrder.status_message || "Waiting for broker order book sync"
-      : telemetry.last_error || telemetry.last_filter_reason || telemetry.last_data_reason || telemetry.last_data_source;
-
-  return (
-    <div className="grid gap-3 border-t border-[var(--qd-border)] px-4 py-3 lg:grid-cols-[minmax(220px,1.1fr)_minmax(260px,1.35fr)_minmax(180px,0.9fr)_auto] lg:items-center">
-      <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-white">{row.name}</div>
-        <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Field label="Position" value={positionOpen ? position.symbol : "Flat"} tone={positionOpen ? "text-white" : "text-[var(--qd-text-3)]"} />
-        <Field label="Qty" value={positionOpen ? position.qty : "0"} tone={positionOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"} />
-        <Field label="SL" value={position?.stop_loss != null ? money(position.stop_loss) : "-"} tone={slMissing ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"} />
-        <Field label="TP" value={position?.take_profit != null ? money(position.take_profit) : "-"} tone={tpMissing ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-2)]"} />
-      </div>
-
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusPill tone={tone}>{positionOpen ? status : pendingOrder ? "Order pending" : problem ? "Needs check" : idleLabel}</StatusPill>
-          {quality != null && <QualityPill score={quality} readiness={qualityReadiness} />}
-          {slMissing && <StatusPill tone="bad">No SL</StatusPill>}
-          {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
-        </div>
-        <div className={`mt-2 font-mono text-xs font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
-        {detail && <div className="mt-1 max-w-[260px] truncate text-[10px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
-      </div>
-
-      <div className="flex items-center justify-end gap-2">
-        <button
-          onClick={() => onToggle(row.strategy_id)}
-          className={`flex h-11 w-11 items-center justify-center rounded border transition-all ${
-            live
-              ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
-              : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
-          }`}
-          title={live ? "Pause Strategy" : "Resume Strategy"}
-          data-testid={`dashboard-toggle-${row.strategy_id}`}
-        >
-          {live ? <Pause size={13} /> : <Play size={13} />}
-        </button>
-        <button
-          onClick={() => onExit(row.strategy_id)}
-          disabled={!positionOpen}
-          className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
-          title={positionOpen ? "Square Off Strategy Positions" : "No open position for this strategy"}
-          data-testid={`dashboard-exit-${row.strategy_id}`}
-        >
-          <Shield size={13} />
-        </button>
-      </div>
-    </div>
-  );
-};
 export default function Dashboard() {
   const {
     positions: execPositions,
