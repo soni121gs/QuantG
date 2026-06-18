@@ -1151,7 +1151,8 @@ Files changed: backend/server.py, backend/routes/broker.py, TASKS.md
 ---
 
 ### TASK-037 — Extract profile, portfolio, funds, and paper wallet routes
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `60f0678`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-036
@@ -1224,4 +1225,4 @@ Files changed: backend/server.py, backend/routes/profile.py, TASKS.md
 
 *Last updated: 2026-06-18*
 *Total tasks: 37*
-*Open: 0 · In progress: 1 · Done: 36*
+*Open: 0 · In progress: 0 · Done: 37*
