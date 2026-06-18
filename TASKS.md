@@ -1085,7 +1085,8 @@ Files changed: backend/server.py, backend/routes/market.py, TASKS.md
 ---
 
 ### TASK-036 — Extract broker and Upstox routes from server.py
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `5287022`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~3 hours
 - **Prerequisite**: TASK-035
@@ -1177,4 +1178,4 @@ Files changed: backend/server.py, backend/routes/broker.py, TASKS.md
 
 *Last updated: 2026-06-18*
 *Total tasks: 36*
-*Open: 0 · In progress: 1 · Done: 35*
+*Open: 0 · In progress: 0 · Done: 36*
