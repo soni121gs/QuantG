@@ -14,6 +14,7 @@ import socket
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
+from core.event_store import CoreEventStore
 from pymongo import ReturnDocument
 
 logger = logging.getLogger("quantg.signal_manager")
@@ -561,6 +562,30 @@ def _positive_float(*values: Any) -> Optional[float]:
     return None
 
 
+async def _publish_signal_event(
+    db,
+    event_type: str,
+    sig: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
+    causation_id: Optional[str] = None,
+) -> None:
+    try:
+        await CoreEventStore(db).log_signal_event(
+            event_type,
+            sig,
+            payload=payload,
+            causation_id=causation_id,
+            source_module="signal_manager",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Signal event publish failed type=%s sig=%s: %s",
+            event_type,
+            sig.get("id"),
+            exc,
+        )
+
+
 async def _dispatch_signal_via_unified_engine(
     db,
     user_id: str,
@@ -568,7 +593,6 @@ async def _dispatch_signal_via_unified_engine(
     strategy: Dict[str, Any],
     place_order_fn=None,
 ) -> Dict[str, Any]:
-    from core.event_store import CoreEventStore
     from core.execution_router import ExecutionRouter
     from core.market_domains import resolve_domain_by_underlying
     from core.order_manager import OrderManager
@@ -854,6 +878,14 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                 await asyncio.sleep(TICK_SECONDS)
                 continue
 
+            for sig in pending:
+                await _publish_signal_event(
+                    db,
+                    "SIGNAL_QUEUED",
+                    sig,
+                    {"signal_status": "PENDING"},
+                )
+
             # Group signals by user_id
             by_user: Dict[str, List[Dict[str, Any]]] = {}
             for sig in pending:
@@ -893,6 +925,17 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     "processed_at": now_str,
                                 }}
                             )
+                            await _publish_signal_event(
+                                db,
+                                "SIGNAL_VALIDATION_FAILED",
+                                {**sig, "status": "FILTERED"},
+                                {
+                                    "signal_status": "FILTERED",
+                                    "reason_code": validation["reason_code"],
+                                    "human_reason": validation.get("human_reason"),
+                                    "detail": validation,
+                                },
+                            )
                             continue
 
                         ok, limit_reason, alloc_mult = await SignalManager.validate_strategy_limits(
@@ -912,6 +955,17 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             )
                             sig["status"] = "FILTERED"
                             sig["rejection_reason"] = limit_reason
+                            await _publish_signal_event(
+                                db,
+                                "SIGNAL_VALIDATION_FAILED",
+                                sig,
+                                {
+                                    "signal_status": "FILTERED",
+                                    "reason_code": validation["reason_code"],
+                                    "human_reason": validation.get("human_reason"),
+                                    "detail": validation,
+                                },
+                            )
                         else:
                             # Apply loss-streak allocation multiplier by scaling down lot count
                             if alloc_mult < 1.0:
@@ -955,6 +1009,22 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 )
                                 sig["status"] = "FILTERED"
                                 sig["rejection_reason"] = "OPTION_QUALITY_LOW"
+                                await _publish_signal_event(
+                                    db,
+                                    "SIGNAL_VALIDATION_FAILED",
+                                    sig,
+                                    {
+                                        "signal_status": "FILTERED",
+                                        "reason_code": "OPTION_QUALITY_LOW",
+                                        "human_reason": quality_block_reason,
+                                        "detail": {
+                                            "reason": quality_block_reason,
+                                            "score": quality_score,
+                                            "readiness": quality_readiness,
+                                            "min_score": min_score,
+                                        },
+                                    },
+                                )
                             else:
                                 pre_validated.append(sig)
 
@@ -992,6 +1062,19 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     "processed_at": datetime.now(timezone.utc).isoformat()
                                 }}
                             )
+                            await _publish_signal_event(
+                                db,
+                                "SIGNAL_PRIORITY_SKIPPED",
+                                {**sig, "status": "SKIPPED_SIGNAL"},
+                                {
+                                    "signal_status": "SKIPPED_SIGNAL",
+                                    "reason_code": str(sig["rejection_reason"]).upper().replace("-", "_"),
+                                    "human_reason": sig["rejection_reason"],
+                                    "priority_score": sig.get("priority_score", 0.0),
+                                    "competing_signal_ids": sig.get("competing_signal_ids") or [],
+                                    "selected_signal_id": sig.get("selected_signal_id"),
+                                },
+                            )
 
                         # Dispatch approved signals
                         for sig in approved:
@@ -1024,6 +1107,19 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     {"id": sig["id"]},
                                     {"$set": signal_update}
                                 )
+                                event_payload = {
+                                    "signal_status": final_signal_status,
+                                    "reason_code": signal_update.get("rejection_reason"),
+                                    "order_id": signal_update.get("order_id"),
+                                    "skipped_signal_id": signal_update.get("skipped_signal_id"),
+                                    "detail": signal_update.get("rejection_detail"),
+                                }
+                                await _publish_signal_event(
+                                    db,
+                                    "SIGNAL_EXECUTION_SKIPPED" if final_signal_status == "SKIPPED_SIGNAL" else "SIGNAL_PROCESSED",
+                                    {**sig, "status": final_signal_status},
+                                    event_payload,
+                                )
                                 if final_signal_status == "PROCESSED":
                                     await db.strategies.update_one(
                                         {"id": sig["strategy_id"], "user_id": user_id},
@@ -1042,6 +1138,16 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                         },
                                         "processed_at": datetime.now(timezone.utc).isoformat()
                                     }}
+                                )
+                                await _publish_signal_event(
+                                    db,
+                                    "SIGNAL_EXECUTION_SKIPPED",
+                                    {**sig, "status": "SKIPPED_SIGNAL"},
+                                    {
+                                        "signal_status": "SKIPPED_SIGNAL",
+                                        "reason_code": "EXECUTION_SKIPPED",
+                                        "human_reason": str(exec_err)[:500],
+                                    },
                                 )
                 except Exception as user_err:
                     logger.warning(f"Error processing sweep batch for user {user_id}: {user_err}")
