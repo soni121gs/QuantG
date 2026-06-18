@@ -1033,7 +1033,8 @@ Files changed: backend/core/event_store.py, backend/signal_manager.py, backend/t
 ---
 
 ### TASK-035 — Extract market routes from server.py into routes/market.py
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `116d7d8`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-034
@@ -1111,4 +1112,4 @@ Files changed: backend/server.py, backend/routes/market.py, TASKS.md
 
 *Last updated: 2026-06-18*
 *Total tasks: 35*
-*Open: 0 · In progress: 1 · Done: 34*
+*Open: 0 · In progress: 0 · Done: 35*
