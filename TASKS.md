@@ -1331,7 +1331,8 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 ---
 
 ### TASK-041 — Extract diagnostics route from server.py
-- **Status**: `[~]` In progress by Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `437bc1f`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~1 hour
 - **Prerequisite**: TASK-040
@@ -1367,7 +1368,7 @@ Files changed: backend/server.py, backend/routes/diagnostics.py, TASKS.md
 ---
 
 ### TASK-042 — Move system routes from server.py
-- **Status**: `[ ]` Open
+- **Status**: `[~]` In progress by Codex
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~1 hour
 - **Prerequisite**: TASK-041
@@ -1433,4 +1434,4 @@ Files changed: backend/server.py, backend/routes/system.py, TASKS.md
 
 *Last updated: 2026-06-19*
 *Total tasks: 42*
-*Open: 1 · In progress: 1 · Done: 40*
+*Open: 0 · In progress: 1 · Done: 41*
