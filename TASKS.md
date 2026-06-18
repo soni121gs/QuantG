@@ -1368,7 +1368,8 @@ Files changed: backend/server.py, backend/routes/diagnostics.py, TASKS.md
 ---
 
 ### TASK-042 — Move system routes from server.py
-- **Status**: `[~]` In progress by Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `158ff6c`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~1 hour
 - **Prerequisite**: TASK-041
@@ -1434,4 +1435,4 @@ Files changed: backend/server.py, backend/routes/system.py, TASKS.md
 
 *Last updated: 2026-06-19*
 *Total tasks: 42*
-*Open: 0 · In progress: 1 · Done: 41*
+*Open: 0 · In progress: 0 · Done: 42*
