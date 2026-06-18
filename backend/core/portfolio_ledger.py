@@ -23,7 +23,7 @@ can react — e.g. NOT credit the wallet for a rejected duplicate exit fill:
     }
 """
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import uuid
 import logging
 from pymongo.errors import DuplicateKeyError
@@ -32,11 +32,20 @@ from core.models import PositionDoc, FillDoc, StrategyDoc
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
-def _trading_day_window_utc() -> tuple:
-    """Return (start_iso, end_iso) for today's IST trading day expressed in UTC."""
-    now_utc = datetime.now(timezone.utc)
-    ist_now = now_utc + IST_OFFSET
-    ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+def _trading_day_window_utc(trading_date: Optional[str | date | datetime] = None) -> tuple:
+    """Return (start_iso, end_iso) for an IST trading day expressed in UTC."""
+    if trading_date is None:
+        now_utc = datetime.now(timezone.utc)
+        ist_now = now_utc + IST_OFFSET
+        ist_midnight = ist_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        if isinstance(trading_date, datetime):
+            day = trading_date.date()
+        elif isinstance(trading_date, date):
+            day = trading_date
+        else:
+            day = date.fromisoformat(str(trading_date))
+        ist_midnight = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     ist_midnight_utc = ist_midnight - IST_OFFSET
     return ist_midnight_utc.isoformat(), (ist_midnight_utc + timedelta(days=1)).isoformat()
 
@@ -633,8 +642,13 @@ class PortfolioLedger:
         return _result(True, action, pos["id"], qty_closed=exit_qty, realized_pnl=net_pnl, gross_pnl=gross_pnl)
 
 
-async def get_strategy_pnl_today(db, strategy_id: str, user_id: str) -> Dict[str, Any]:
-    """Canonical P&L source for one strategy today.
+async def get_strategy_pnl_today(
+    db,
+    strategy_id: str,
+    user_id: str,
+    trading_date: Optional[str | date | datetime] = None,
+) -> Dict[str, Any]:
+    """Canonical P&L source for one strategy on an IST trading day.
 
     Source of truth: db.trade_fills (immutable audit rows written by process_fill).
     All callers — dashboard, calendar, capital allocator, kill switch — must read
@@ -651,7 +665,7 @@ async def get_strategy_pnl_today(db, strategy_id: str, user_id: str) -> Dict[str
             last_updated:   str    — ISO timestamp
         }
     """
-    start, end = _trading_day_window_utc()
+    start, end = _trading_day_window_utc(trading_date)
 
     fills = await db.trade_fills.find(
         {

@@ -110,20 +110,20 @@ async def run_monitor_loop(
     logger.info("Position monitor stopped")
 
 
-async def _run_eod_aggregation(db) -> None:
-    """Aggregate today's P&L into daily_reports for every active user.
+async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
+    """Aggregate an IST trading day's P&L into daily_reports for every active user.
 
     Called once at 15:35 IST on market days. Upserts one document per user.
     """
     global _eod_aggregation_done_date
     ist = _ist_now()
-    today_str = ist.strftime("%Y-%m-%d")
+    today_str = report_date or ist.strftime("%Y-%m-%d")
 
-    if _eod_aggregation_done_date == today_str:
+    if report_date is None and _eod_aggregation_done_date == today_str:
         return  # already ran today
-    if ist.weekday() >= 5:
+    if report_date is None and ist.weekday() >= 5:
         return  # skip weekends
-    if ist.hour * 60 + ist.minute < _EOD_AGGREGATION_MINUTE_IST:
+    if report_date is None and ist.hour * 60 + ist.minute < _EOD_AGGREGATION_MINUTE_IST:
         return  # not yet 15:35
 
     logger.info("EOD aggregation starting for %s", today_str)
@@ -147,7 +147,7 @@ async def _run_eod_aggregation(db) -> None:
                 for strat in strategies:
                     sid = strat.get("id")
                     sname = strat.get("name", sid)
-                    pnl_data = await get_strategy_pnl_today(db, sid, user_id)
+                    pnl_data = await get_strategy_pnl_today(db, sid, user_id, trading_date=today_str)
                     r = pnl_data.get("realized_pnl", 0.0)
                     u = pnl_data.get("unrealized_pnl", 0.0)
                     t = pnl_data.get("trade_count", 0)
@@ -163,8 +163,9 @@ async def _run_eod_aggregation(db) -> None:
                     total_trades += t
 
                 # Signals stats for today
-                ist_start = ist.replace(hour=9, minute=15, second=0, microsecond=0)
-                ist_end   = ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                report_day = datetime.strptime(today_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                ist_start = report_day.replace(hour=9, minute=15, second=0, microsecond=0)
+                ist_end   = report_day.replace(hour=15, minute=30, second=0, microsecond=0)
                 utc_start = (ist_start - timedelta(hours=5, minutes=30)).isoformat()
                 utc_end   = (ist_end   - timedelta(hours=5, minutes=30)).isoformat()
                 signals_fired = await db.signals.count_documents({
@@ -208,7 +209,8 @@ async def _run_eod_aggregation(db) -> None:
             except Exception as user_exc:
                 logger.error("EOD aggregation failed for user=%s: %s", user_id, user_exc)
 
-        _eod_aggregation_done_date = today_str
+        if report_date is None:
+            _eod_aggregation_done_date = today_str
         logger.info("EOD aggregation complete for %s", today_str)
 
     except Exception as exc:

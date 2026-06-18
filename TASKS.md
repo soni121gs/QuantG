@@ -1407,6 +1407,43 @@ Files changed: backend/server.py, backend/routes/system.py, TASKS.md
 
 ---
 
+### TASK-043 — Reconcile daily reports with canonical fill ledger
+- **Status**: `[~]` In progress by Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-042
+
+**Problem**:
+The 2026-06-18 daily report and raw closed spread positions do not fully agree. Some historical credit-spread exits were closed before spread closes wrote canonical `trade_fills` rows, so daily report generation can miss P&L. The P&L helper also only reads the current trading day, which is unsafe for rebuilding or late-running reports.
+
+**Files to touch**: Edit `backend/core/portfolio_ledger.py`, `backend/position_monitor.py`, and `TASKS.md`. Create `backend/migration/backfill_spread_trade_fills.py`. Add focused tests under `backend/tests/`.
+
+**Exact steps**:
+1. Make `get_strategy_pnl_today()` accept an optional `trading_date` and compute the IST day window for that date.
+2. Make EOD aggregation pass the actual report date into the P&L helper.
+3. Add a dry-run/apply migration that backfills missing canonical `trade_fills` rows for closed credit-spread positions and rebuilds the selected daily report from `trade_fills`.
+4. Do not change order creation, live flags, wallet behavior, broker behavior, or position close math.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile core/portfolio_ledger.py position_monitor.py migration/backfill_spread_trade_fills.py
+python -m pytest tests/test_daily_report_reconciliation.py -v
+python -m pytest tests/test_spread_lifecycle.py -v
+python -m pytest tests/test_core_logic.py -v
+```
+
+**Commit format**:
+```
+fix: reconcile daily reports with canonical spread fill ledger
+
+Task: TASK-043
+Tier: 2
+Files changed: backend/core/portfolio_ledger.py, backend/position_monitor.py, backend/migration/backfill_spread_trade_fills.py, backend/tests/test_daily_report_reconciliation.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1434,5 +1471,5 @@ Files changed: backend/server.py, backend/routes/system.py, TASKS.md
 ---
 
 *Last updated: 2026-06-19*
-*Total tasks: 42*
-*Open: 0 · In progress: 0 · Done: 42*
+*Total tasks: 43*
+*Open: 0 · In progress: 1 · Done: 42*
