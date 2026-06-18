@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Mock server.db and get_user_upstox_status prior to importing server to bypass connection/env checks
-with patch("server.db", MagicMock()) as mock_db, \
+with patch("routes.broker.db", MagicMock()) as mock_db, \
      patch("server.get_user_upstox_status", AsyncMock()) as mock_upstox:
-    from server import diagnostics_health
+    from routes.broker import diagnostics_health
 
 
 @pytest.mark.anyio
@@ -41,7 +41,7 @@ async def test_diagnostics_health_endpoint():
         }
     }
     
-    with patch("server.db", mock_db), patch("server.get_user_upstox_status", mock_upstox):
+    with patch("routes.broker.db", mock_db), patch("server.get_user_upstox_status", mock_upstox):
         res = await diagnostics_health(user=mock_user)
         
     assert res["status"] == "healthy"

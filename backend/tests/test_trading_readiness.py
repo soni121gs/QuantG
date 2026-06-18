@@ -470,7 +470,7 @@ class TestUpstoxFeedAuthProductionFix(unittest.TestCase):
         """Verify that upstox_callback raises HTTP 400 when storing a mock token in live mode."""
         import asyncio
         from fastapi import HTTPException
-        from server import upstox_callback
+        from routes.broker import upstox_callback
         
         async def run_test():
             mock_db = MagicMock()
@@ -488,7 +488,7 @@ class TestUpstoxFeedAuthProductionFix(unittest.TestCase):
             mock_get_gw = AsyncMock(return_value=mock_gw)
             mock_settings = AsyncMock(return_value={"paper_mode": False})
             
-            with patch("server.db", mock_db), \
+            with patch("routes.broker.db", mock_db), \
                  patch("server.get_user_upstox_gateway", mock_get_gw), \
                  patch("server.get_user_settings", mock_settings):
                 
