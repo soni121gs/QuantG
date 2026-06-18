@@ -1050,31 +1050,7 @@ async def _fetch_strategy_history(
     return {"data": [], "source": "none", "is_live": False, "interval": interval, "paper_mode": allow_mock}
 
 
-# ============== Routes: Auth ==============
-@api.get("/")
-async def health():
-    return {"status": "ok", "service": "QuantG API", "version": APP_VERSION}
-
-
-@api.get("/health")
-async def health_check():
-    return await health()
-
-
-@api.get("/version")
-async def get_version():
-    commit, branch, dirty = get_git_info()
-    file_ver = get_file_version()
-    uptime_seconds = (datetime.now(timezone.utc) - START_TIME).total_seconds()
-    return {
-        "backend_version": APP_VERSION,
-        "file_version": file_ver,
-        "git_commit": commit,
-        "git_branch": branch,
-        "git_dirty": dirty,
-        "start_time": START_TIME.isoformat(),
-        "up_time_seconds": round(uptime_seconds, 2)
-    }
+# system routes moved to routes/system.py
 
 
 # ============== Routes: Auth (extracted to routes/auth.py) ==============
@@ -15141,6 +15117,7 @@ from routes.readiness import router as readiness_router
 from routes.ops_runtime import router as ops_runtime_router
 from routes.core_status import router as core_status_router
 from routes.diagnostics import router as diagnostics_router
+from routes.system import router as system_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15160,6 +15137,7 @@ api.include_router(readiness_router)
 api.include_router(ops_runtime_router)
 api.include_router(core_status_router)
 api.include_router(diagnostics_router)
+api.include_router(system_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
