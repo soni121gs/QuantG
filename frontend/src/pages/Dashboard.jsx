@@ -3,11 +3,14 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   Bot,
   Layers,
+  LineChart,
   PieChart,
   RefreshCw,
   Shield,
+  Target,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -41,6 +44,29 @@ const quoteTime = (value) => {
 };
 
 const quoteAge = (value) => (value == null ? "-" : `${Math.round(Number(value) || 0)}s`);
+
+const metric = (row, path) => {
+  const parts = path.split(".");
+  let cur = row;
+  for (const p of parts) {
+    if (cur == null) return 0;
+    cur = cur[p];
+  }
+  return cur ?? 0;
+};
+
+const statusTone = (status) => {
+  const s = String(status || "").toUpperCase();
+  if (["OPEN", "FILLED", "ACTIVE"].includes(s)) return "good";
+  if (["PENDING", "RESERVED", "PENDING_OPEN", "PENDING_BROKER", "EXITING"].includes(s)) return "warn";
+  if (["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE", "ERROR"].includes(s)) return "bad";
+  return "neutral";
+};
+
+const filledOrder = (status) => {
+  const s = String(status || "").toUpperCase();
+  return ["COMPLETE", "FILLED", "TRADED"].includes(s);
+};
 
 const MarketRow = ({ item }) => (
   <div className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 hover:bg-[var(--qd-surface-2)]">
