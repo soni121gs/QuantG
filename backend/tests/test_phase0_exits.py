@@ -183,13 +183,14 @@ async def test_gt3_guardian_closes_at_timeout():
     get_ltp_fn   = AsyncMock(return_value=None)
     get_settings_fn = AsyncMock(return_value={"allow_simulated_prices": True})
 
-    await _guard_one(
-        db, pos, in_hours=True, squareoff=False,
-        close_fn=close_fn,
-        quote_ltp_fn=quote_ltp_fn,
-        get_ltp_fn=get_ltp_fn,
-        get_settings_fn=get_settings_fn,
-    )
+    with patch("core.position_lifecycle.EXIT_THETA_AWARE_ENABLED", False):
+        await _guard_one(
+            db, pos, in_hours=True, squareoff=False,
+            close_fn=close_fn,
+            quote_ltp_fn=quote_ltp_fn,
+            get_ltp_fn=get_ltp_fn,
+            get_settings_fn=get_settings_fn,
+        )
 
     close_fn.assert_called_once()
     reason = close_fn.call_args[1].get("reason") or close_fn.call_args[0][2]

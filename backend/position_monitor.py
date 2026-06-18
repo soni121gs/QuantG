@@ -25,7 +25,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, Dict, Optional
 
-from ltp_cache import get_cached_ltp as _get_cached_ltp
+from ltp_resolver import resolve_position_ltp
 from core.position_lifecycle import (
     exit_reason,
     normalize_strategy_risk,
@@ -270,79 +270,9 @@ async def _resolve_ltp(
     Returns (ltp, source) where source is one of the LTP_* constants.
     NEVER returns None — falls back to entry_price if all live sources fail.
     """
-    user_id = pos.get("user_id")
-    symbol  = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
-    ikey    = pos.get("instrument_key") or pos.get("instrument_token")
-
-    # ── Source 1: V3 WS cache → REST (via quote_ltp_fn), with shared TTL cache ─
-    # The TTL cache ensures position_monitor and position_guardian share one
-    # REST fetch per instrument per 2.5 s, staying inside Upstox rate limits.
-    #
-    # SKIP for cash-equity keys (NSE_EQ|… / BSE_EQ|…): equities are never
-    # subscribed to the V3 options feed, so this cache returns a wrong/garbage
-    # LTP for them — which trips SL/TP and books phantom P&L (e.g. TCS priced at
-    # ₹2205 vs ~₹4100). Equity positions fall through to the symbol-LTP source.
-    is_cash_equity = "_EQ|" in str(ikey or "")
-    if ikey and not is_cash_equity:
-        cache_key = f"ltp:{user_id}:{ikey}"
-        ltp = await _get_cached_ltp(cache_key, quote_ltp_fn, user_id, ikey)
-        if ltp is not None:
-            return float(ltp), LTP_WS_CACHE
-
-    # ── Source 2: Symbol-based get_ltp ────────────────────────────────────────
-    try:
-        settings = await get_settings_fn(user_id)
-        is_paper = pos.get("mode") == "paper"
-        allow_sim = (
-            bool(settings.get("allow_simulated_prices"))
-            or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
-        )
-        ltp = await get_ltp_fn(
-            user_id, symbol,
-            pos.get("exchange") or "NSE",
-            allow_mock=is_paper and allow_sim,
-            execution_broker="upstox",
-        )
-        if ltp is not None:
-            return float(ltp), LTP_SYMBOL
-    except Exception as e:
-        logger.debug("position_monitor: get_ltp_fn failed for %s: %s", symbol, e)
-
-    # ── Source 3: paper_quote_cache (REST snapshot keyed by instrument_key) ───
-    if pos.get("mode") == "paper":
-        cache_key = ikey
-        if not cache_key:
-            trading_sym = pos.get("trading_symbol") or pos.get("target_symbol")
-            if trading_sym:
-                inst_doc = await db.upstox_instruments.find_one(
-                    {"tradingsymbol": trading_sym}, {"instrument_key": 1, "_id": 0}
-                )
-                if inst_doc:
-                    cache_key = inst_doc.get("instrument_key")
-        if cache_key:
-            cache_doc = await db.paper_quote_cache.find_one({"instrument_key": cache_key})
-            if cache_doc and cache_doc.get("ltp") is not None:
-                try:
-                    ltp = float(cache_doc["ltp"])
-                    return ltp, LTP_PAPER_CACHE
-                except (TypeError, ValueError):
-                    pass
-
-    # ── Source 4: Entry price fallback (safe last resort) ─────────────────────
-    # Using entry price means no false SL/TP triggers (pnl = 0 when ltp == entry).
-    # The exit logic downstream knows to use MARKET order when ltp_source is this.
-    entry_price = float(
-        pos.get("average_buy_price") or pos.get("average_price") or pos.get("avg_price") or 0
+    return await resolve_position_ltp(
+        db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn, allow_entry_fallback=True
     )
-    if entry_price > 0:
-        logger.warning(
-            "position_monitor: LTP unavailable for %s pos=%s ikey=%s — "
-            "using ENTRY_PRICE_FALLBACK=%.2f. Exit will use MARKET order.",
-            symbol, pos.get("id"), ikey, entry_price,
-        )
-        return entry_price, LTP_ENTRY_PRICE
-
-    return None, "NONE"
 
 
 async def _leg_ltp(user_id, leg, quote_ltp_fn) -> Optional[float]:

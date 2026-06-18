@@ -28,7 +28,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, Dict, Optional
 
-from ltp_cache import get_cached_ltp as _get_cached_ltp
+from ltp_resolver import resolve_position_ltp
 from core.position_lifecycle import (
     exit_reason,
     normalize_strategy_risk,
@@ -289,63 +289,6 @@ async def _resolve_ltp_guardian(
     get_ltp_fn,
     get_settings_fn,
 ) -> tuple[Optional[float], str]:
-    user_id = pos.get("user_id")
-    symbol  = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
-    ikey    = pos.get("instrument_key") or pos.get("instrument_token")
-
-    # SKIP the WS cache for cash-equity keys (NSE_EQ|… / BSE_EQ|…): equities are
-    # never subscribed to the V3 options feed, so this cache returns a
-    # wrong/garbage LTP that trips SL/TP and books phantom P&L (e.g. TCS priced
-    # at ₹2205 vs ~₹4100). Mirrors the same guard in position_monitor._resolve_ltp
-    # (added 06-16 there, but this guardian path was missed). Equity positions
-    # fall through to the symbol-LTP source below.
-    is_cash_equity = "_EQ|" in str(ikey or "")
-    if ikey and not is_cash_equity:
-        try:
-            cache_key = f"ltp:{user_id}:{ikey}"
-            ltp = await _get_cached_ltp(cache_key, quote_ltp_fn, user_id, ikey)
-            if ltp is not None:
-                return float(ltp), _LTP_WS
-        except Exception:
-            pass
-
-    try:
-        settings = await get_settings_fn(user_id)
-        is_paper = pos.get("mode") == "paper"
-        allow_sim = (
-            bool(settings.get("allow_simulated_prices"))
-            or os.environ.get("QUANTG_ALLOW_SIMULATED_PRICES", "").lower() == "true"
-        )
-        ltp = await get_ltp_fn(
-            user_id, symbol,
-            pos.get("exchange") or "NSE",
-            allow_mock=is_paper and allow_sim,
-            execution_broker="upstox",
-        )
-        if ltp is not None:
-            return float(ltp), _LTP_SYM
-    except Exception as e:
-        logger.debug("PositionGuardian: get_ltp_fn failed for %s: %s", symbol, e)
-
-    if pos.get("mode") == "paper":
-        cache_key = ikey
-        if not cache_key:
-            trading_sym = pos.get("trading_symbol") or pos.get("target_symbol")
-            if trading_sym:
-                try:
-                    inst_doc = await db.upstox_instruments.find_one(
-                        {"tradingsymbol": trading_sym}, {"instrument_key": 1, "_id": 0}
-                    )
-                    if inst_doc:
-                        cache_key = inst_doc.get("instrument_key")
-                except Exception:
-                    pass
-        if cache_key:
-            try:
-                cache_doc = await db.paper_quote_cache.find_one({"instrument_key": cache_key})
-                if cache_doc and cache_doc.get("ltp") is not None:
-                    return float(cache_doc["ltp"]), _LTP_PCACHE
-            except Exception:
-                pass
-
-    return None, "NONE"
+    return await resolve_position_ltp(
+        db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn, allow_entry_fallback=False
+    )

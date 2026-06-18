@@ -611,5 +611,113 @@ class TestPart1StrategiesArmed(unittest.TestCase):
 
 
 
+class TestPart2LTPResolver(unittest.TestCase):
+    def test_eq_key_never_returns_ws_cache(self):
+        import asyncio
+        from ltp_resolver import resolve_position_ltp
+        
+        async def run_test():
+            db = MagicMock()
+            pos = {
+                "user_id": "user-1",
+                "target_symbol": "TCS",
+                "instrument_key": "NSE_EQ|INE018A01030",
+                "mode": "paper",
+                "average_buy_price": 4000.0,
+            }
+            mock_quote_ltp = AsyncMock(return_value=4000.0)
+            mock_get_ltp = AsyncMock(return_value=None)
+            mock_settings = AsyncMock(return_value={})
+            
+            with patch("ltp_resolver._get_cached_ltp", AsyncMock(return_value=4000.0)):
+                ltp, source = await resolve_position_ltp(
+                    db, pos, mock_quote_ltp, mock_get_ltp, mock_settings, allow_entry_fallback=False
+                )
+                self.assertNotEqual(source, "WS_CACHE")
+            
+        asyncio.run(run_test())
+
+    def test_options_key_uses_ws_cache_when_cached(self):
+        import asyncio
+        from ltp_resolver import resolve_position_ltp
+        
+        async def run_test():
+            db = MagicMock()
+            pos = {
+                "user_id": "user-1",
+                "target_symbol": "NIFTY24JUN24800CE",
+                "instrument_key": "NSE_FO|12345",
+                "mode": "paper",
+            }
+            mock_quote_ltp = AsyncMock(return_value=150.0)
+            mock_get_ltp = AsyncMock(return_value=None)
+            mock_settings = AsyncMock(return_value={})
+            
+            with patch("ltp_resolver._get_cached_ltp", AsyncMock(return_value=150.0)):
+                ltp, source = await resolve_position_ltp(
+                    db, pos, mock_quote_ltp, mock_get_ltp, mock_settings, allow_entry_fallback=False
+                )
+                self.assertEqual(ltp, 150.0)
+                self.assertEqual(source, "WS_CACHE")
+                
+        asyncio.run(run_test())
+
+    def test_allow_entry_fallback_true(self):
+        import asyncio
+        from ltp_resolver import resolve_position_ltp
+        
+        async def run_test():
+            db = MagicMock()
+            pos = {
+                "user_id": "user-1",
+                "target_symbol": "NIFTY24JUN24800CE",
+                "instrument_key": "NSE_FO|12345",
+                "mode": "paper",
+                "average_buy_price": 120.0,
+            }
+            mock_quote_ltp = AsyncMock(return_value=None)
+            mock_get_ltp = AsyncMock(return_value=None)
+            mock_settings = AsyncMock(return_value={})
+            
+            with patch("ltp_resolver._get_cached_ltp", AsyncMock(return_value=None)):
+                ltp, source = await resolve_position_ltp(
+                    db, pos, mock_quote_ltp, mock_get_ltp, mock_settings, allow_entry_fallback=True
+                )
+                self.assertEqual(ltp, 120.0)
+                self.assertEqual(source, "ENTRY_PRICE_FALLBACK")
+                
+        asyncio.run(run_test())
+
+    def test_allow_entry_fallback_false(self):
+        import asyncio
+        from ltp_resolver import resolve_position_ltp
+        
+        async def run_test():
+            db = MagicMock()
+            pos = {
+                "user_id": "user-1",
+                "target_symbol": "NIFTY24JUN24800CE",
+                "instrument_key": "NSE_FO|12345",
+                "mode": "paper",
+                "average_buy_price": 120.0,
+            }
+            mock_quote_ltp = AsyncMock(return_value=None)
+            mock_get_ltp = AsyncMock(return_value=None)
+            mock_settings = AsyncMock(return_value={})
+            
+            with patch("ltp_resolver._get_cached_ltp", AsyncMock(return_value=None)):
+                ltp, source = await resolve_position_ltp(
+                    db, pos, mock_quote_ltp, mock_get_ltp, mock_settings, allow_entry_fallback=False
+                )
+                self.assertIsNone(ltp)
+                self.assertEqual(source, "NONE")
+                
+        asyncio.run(run_test())
+
+
+
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
