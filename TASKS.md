@@ -1084,6 +1084,71 @@ Files changed: backend/server.py, backend/routes/market.py, TASKS.md
 
 ---
 
+### TASK-036 — Extract broker and Upstox routes from server.py
+- **Status**: `[~]` Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~3 hours
+- **Prerequisite**: TASK-035
+
+**Problem**:
+`server.py` still owns broker key, Upstox OAuth/status/control, Upstox quality, gateway, webhook, and legacy Zerodha HTTP routes. This keeps broker UI/API work tied to the giant startup file.
+
+**Files to touch**: Create `backend/routes/broker.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only broker/upstox/gateway HTTP endpoints into `backend/routes/broker.py`:
+   - `/broker/keys`
+   - `/broker/keys/{key_id}`
+   - `/upstox/data-health`
+   - `/upstox/instruments/sync`
+   - `/upstox/quality-system/migrate`
+   - `/upstox/option-chain`
+   - `/upstox/webhook`
+   - `/upstox/reconciliation`
+   - `/upstox/exit-all`
+   - `/zerodha/login-url`
+   - `/zerodha/exchange`
+   - `/zerodha/status`
+   - `/zerodha/disconnect`
+   - `/broker/upstox/config`
+   - `/broker/upstox/login`
+   - `/broker/upstox/callback`
+   - `/broker/upstox/order/test`
+   - `/broker/upstox/positions`
+   - `/broker/upstox/orders`
+   - `/broker/upstox/quote`
+   - `/broker/upstox/market-data/start`
+   - `/upstox/status`
+   - `/broker/upstox/status`
+   - `/brokers/status`
+   - `/diagnostics/health`
+   - `/broker/health`
+   - `/gateway/check-all`
+   - `/gateway/status`
+   - `/webhook/upstox/token/{user_id}`
+2. Register the new broker router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, broker execution behavior, wallet, P&L, positions, or live flags.
+4. Keep `server.py` as the startup authority and keep Upstox feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/broker.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract broker and upstox routes from server.py
+
+Task: TASK-036
+Tier: 2
+Files changed: backend/server.py, backend/routes/broker.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1111,5 +1176,5 @@ Files changed: backend/server.py, backend/routes/market.py, TASKS.md
 ---
 
 *Last updated: 2026-06-18*
-*Total tasks: 35*
-*Open: 0 · In progress: 0 · Done: 35*
+*Total tasks: 36*
+*Open: 0 · In progress: 1 · Done: 35*
