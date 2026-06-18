@@ -25,6 +25,21 @@ def _pnl_expr() -> Dict[str, Any]:
 async def build_scorecard(db, *, days: int = 7, user_id: Optional[str] = None) -> Dict[str, Any]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
+    # Honor a declared clean-measurement baseline: never count trades/signals
+    # from before it. This excludes since-fixed-bug history (pre-baseline
+    # oversizing blowups, equity-phantom losses) from the alpha verdict without
+    # deleting the raw records (audit trail preserved). Config doc is optional —
+    # absent it, behaviour is the plain rolling window (back-compat).
+    baseline_used: Optional[str] = None
+    try:
+        base_doc = await db.app_config.find_one({"_id": "research_baseline"})
+        baseline = (base_doc or {}).get("baseline_date")
+        if baseline and str(baseline) > cutoff:
+            cutoff = str(baseline)
+            baseline_used = str(baseline)
+    except Exception:
+        pass
+
     strat_filter: Dict[str, Any] = {}
     if user_id:
         strat_filter["user_id"] = user_id
@@ -133,6 +148,7 @@ async def build_scorecard(db, *, days: int = 7, user_id: Optional[str] = None) -
     summary = {
         "window_days": days,
         "since": cutoff,
+        "baseline_date": baseline_used,
         "strategies": len(cards),
         "by_health": {},
         "net_pnl": round(sum(c["total_pnl"] for c in cards), 2),
