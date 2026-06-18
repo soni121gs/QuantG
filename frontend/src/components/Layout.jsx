@@ -30,6 +30,7 @@ import {
   AlertTriangle,
   PanelRight,
   PanelRightClose,
+  BookOpen,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -55,6 +56,7 @@ const NAV_GROUPS = [
     items: [
       { to: "/market-hub", icon: HeartPulse, label: "Markets", id: "nav-market-hub" },
       { to: "/calendar", icon: Calendar, label: "Calendar", id: "nav-calendar" },
+      { to: "/wiki", icon: BookOpen, label: "Wiki & Notes", id: "nav-wiki" },
       { to: "/ops", icon: ShieldAlert, label: "Risk Ops", id: "nav-ops" },
       { to: "/ai-bot", icon: Bot, label: "Ask Agent", id: "nav-aibot" },
     ],

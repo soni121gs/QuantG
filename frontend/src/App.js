@@ -22,6 +22,7 @@ const Profile = React.lazy(() => import("./pages/Profile"));
 const OpsConsole = React.lazy(() => import("./pages/OpsConsole"));
 const MarketHub = React.lazy(() => import("./pages/MarketHub"));
 const Calendar = React.lazy(() => import("./pages/Calendar"));
+const Wiki = React.lazy(() => import("./pages/Wiki"));
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -66,6 +67,7 @@ export default function App() {
             <Route path="/profile" element={<Protected><Profile /></Protected>} />
             <Route path="/ops" element={<Protected><OpsConsole /></Protected>} />
             <Route path="/calendar" element={<Protected><Calendar /></Protected>} />
+            <Route path="/wiki" element={<Protected><Wiki /></Protected>} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </Suspense>

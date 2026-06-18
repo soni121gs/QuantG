@@ -15118,6 +15118,7 @@ from routes.ops_runtime import router as ops_runtime_router
 from routes.core_status import router as core_status_router
 from routes.diagnostics import router as diagnostics_router
 from routes.system import router as system_router
+from routes.wiki import router as wiki_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15138,6 +15139,7 @@ api.include_router(ops_runtime_router)
 api.include_router(core_status_router)
 api.include_router(diagnostics_router)
 api.include_router(system_router)
+api.include_router(wiki_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)

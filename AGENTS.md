@@ -239,3 +239,20 @@ works this program the same way.
 
 *Last updated: 2026-06-18*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
+
+---
+
+## 12. Wiki & Auto-Memory Rules
+
+- A central Knowledge Hub is stored under the `wiki/` directory in the repository root.
+- **Topics**: Subdirectories (`YouTube transcripts/`, `Meeting transcripts/`, `Decisions/`, `Projects/`, `Trading Rules/`) organize context files.
+- **Wikilinks**: Always use double-bracket links `[[Page Title]]` to cross-link concepts.
+- **Auto-Memory Ledger**: The file `wiki/memory.md` is the system auto-memory record.
+- **Agent Rule**:
+  1. **At Startup**: Read `wiki/memory.md` and check recent summaries to understand context.
+  2. **At Session Close**: You MUST append a row to the "Session Logs" table in `wiki/memory.md` with:
+     - Date, model name.
+     - Summary of changes and decisions made.
+     - Challenges faced and how you fixed them.
+  Never delete or overwrite past rows in `wiki/memory.md`; always append.
+

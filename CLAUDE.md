@@ -622,3 +622,21 @@ gives deterministic replay for tests; multiple agents work different cells witho
 Ordering is deliberate: money-correctness steps (0–2) come before concurrency steps (3–6),
 so the race-bug class is fixed before more concurrency is added. **Next concrete step is
 Stage 0** (event catalog + collection ownership map) — pure documentation, zero code risk.
+
+---
+
+## 12. Knowledge Hub (Obsidian Wiki & Auto-Memory)
+
+QuantG features a bidirectional Knowledge Hub synchronizing markdown files with MongoDB.
+
+- **Directories**: Subdirectories under `wiki/` at root group notes:
+  - `wiki/YouTube transcripts/` - Video transcripts/summaries.
+  - `wiki/Meeting transcripts/` - Sync calls and project requirements.
+  - `wiki/Decisions/` - Key architectural and strategy choices.
+  - `wiki/Projects/` - Feature maps and specs.
+  - `wiki/Trading Rules/` - Setup logic, risk policies, and broker specs.
+- **Auto-Memory**: `wiki/memory.md` tracks agent summaries across sessions.
+- **Frontmatter**: Markdown files contain YAML metadata mapping `topic`, `tags`, `url`, and `date`.
+- **Wikilinks**: Standard double-bracket `[[Page Title]]` references are parsed to calculate backlinks dynamically (backlinks populate under "See Also" sections).
+- **Disk Sync**: The edge container mounts the host `./wiki` folder so Obsidian edits are synchronized live.
+
