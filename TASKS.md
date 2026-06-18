@@ -1150,6 +1150,52 @@ Files changed: backend/server.py, backend/routes/broker.py, TASKS.md
 
 ---
 
+### TASK-037 — Extract profile, portfolio, funds, and paper wallet routes
+- **Status**: `[~]` Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-036
+
+**Problem**:
+`server.py` still owns profile/account, portfolio/funds, paper-wallet, and paper recovery/reset HTTP routes. These are user/account surfaces and should not stay coupled to the giant startup file.
+
+**Files to touch**: Create `backend/routes/profile.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only account/profile and wallet query/recovery endpoints into `backend/routes/profile.py`:
+   - `/portfolio/holdings`
+   - `/portfolio`
+   - `/funds`
+   - `/profile/paper-trading-stats`
+   - `/profile`
+   - `/profile/reset-paper`
+   - `/profile/recover-paper-contract-halts`
+   - `/paper-wallet`
+   - `/profile/change-password`
+2. Register the new profile router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, wallet math, P&L, positions, broker behavior, or live flags.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/profile.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_audit_fixes.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract profile and wallet routes from server.py
+
+Task: TASK-037
+Tier: 2
+Files changed: backend/server.py, backend/routes/profile.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1177,5 +1223,5 @@ Files changed: backend/server.py, backend/routes/broker.py, TASKS.md
 ---
 
 *Last updated: 2026-06-18*
-*Total tasks: 36*
-*Open: 0 · In progress: 0 · Done: 36*
+*Total tasks: 37*
+*Open: 0 · In progress: 1 · Done: 36*
