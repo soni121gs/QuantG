@@ -211,5 +211,31 @@ Always include `Task: TASK-<ID>` in the commit body.
 
 ---
 
-*Last updated: 2026-06-11*
+## 11. Active Program — Architecture Redesign (read CLAUDE.md §11)
+
+The current major initiative is the **brain / event-bus redesign** mapped in **CLAUDE.md §11**.
+That section is the single source of truth. Every agent (Claude, Codex, Antigravity, GPT, Gemini)
+works this program the same way.
+
+**Execution rules**
+- Work the §11.10 migration ladder **one rung per PR** (0→6). Do not batch rungs.
+- **Money-correctness rungs (Stages 0–2) ship before concurrency rungs (3–6).** Never reorder.
+- Each stage is first written into TASKS.md as `TASK-###` entries (Tier, Files, Steps, Verify) **before** any code is written, and the breakdown is approved by the founder.
+- Honor the five invariants in §11.8 — especially **single-writer per state slice**. Never add a second writer to a collection (see the §11.4 writer heat map).
+
+**Stop-and-ask triggers (do NOT assume — ask the founder first)**
+- Event names, payload schemas, or correlation/causation id format.
+- Which module becomes the single owner of a contested collection (esp. `strategy_positions`, `strategies.today_pnl`).
+- Deleting vs. deprecating any legacy path (legacy fill engine, `_mongo_position_monitor_loop`, SQLite `option_state_ledger`).
+- ANY change to fill / P&L / wallet math.
+- Introducing new infra (Redis, event-store technology).
+- Before every VPS deploy of a stage.
+
+**Deploy gate**
+- Deploy per §4 of this file **only after the founder approves that stage's PR.** Tests pass first; tail logs after; report results.
+- `CORE_ENGINE_LIVE_ENABLED` stays `false` — Stage 5 (live) is founder-gated, never agent-initiated.
+
+---
+
+*Last updated: 2026-06-18*
 *Maintained by: platform owner. Update this file when new patterns emerge.*

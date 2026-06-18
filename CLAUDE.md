@@ -471,3 +471,154 @@ The current QuantG platform is a **personal trading terminal**. The roadmap requ
 6. **AIF/PMS client reporting** — SEBI-compliant NAV reports, audit trail, investor dashboard
 7. **Stat arb strategies** — cash-futures arbitrage, calendar spread automation
 8. **GIFT City integration** — separate execution path for IFSCA-regulated fund
+
+---
+
+## 11. Architecture Evolution — Brain / Event-Bus Redesign (Design Map)
+
+**Status: DESIGN ONLY — nothing below is implemented yet. Captured 2026-06-18.**
+
+This is the complete system map produced from a live read of the codebase. It is the
+reference for the planned evolution from a modular monolith to an event-driven,
+agent-workable, market-grade platform. **One-sentence thesis: QuantG's problems are not in
+its logic — they are in its ownership.** The fix is drawing clear boundaries (one writer per
+state slice, one event bus, one event log), not a rewrite.
+
+### 11.1 Current state (as-is, verified)
+
+One Python process, one asyncio loop, fronted by Caddy, backed by Mongo + a parallel SQLite
+option ledger. **No message broker, no Redis, no pub/sub exists.** Modules are coupled three
+ways, and all three are the problem:
+
+| Coupling today | What it causes |
+|---|---|
+| Shared Mongo collections ("blackboard") | Multiple writers to one slice → phantom-position / P&L-cache / over-credit bugs |
+| Injected callbacks (`place_order_fn`) | Direct point-to-point calls — brittle chains, hard to test in isolation |
+| Polling (15s/30s/180s loops, frontend snapshot) | Timer-driven, not event-driven; a fill can wait tens of seconds before anything reacts |
+
+Note the seams already exist: `position_monitor.py` / `position_guardian.py` take injected
+deps and refuse to import `server.py`; `trade_fills` and `paper_wallets` are already
+single-owned. The architecture is **unfinished, not broken**.
+
+### 11.2 Module inventory (real files, grouped)
+
+- **Edge / API** — `server.py` (18,484 lines), `routes/*`. **151 endpoints total: 80 still inline in `server.py`, 71 extracted.**
+- **Loops (9, all one process)** — `strategy_runner`, `signal_manager`, `position_monitor`, `position_guardian`, `position_reconciler` + 4 inline in `server.py` (`_strategy_health_loop`, `_option_engine_monitor_loop`, `_broker_reconciliation_loop`, `_daily_scheduler_loop`).
+- **Execution** — `core/execution_router`, `core/paper_broker`, `core/order_manager`, `brokers/upstox_gateway`, `brokers/upstox_market_data_v3`.
+- **Risk / sizing** — `core/risk_manager`, `risk_controls`, `core/live_entry_preflight`, `core/readiness_checker`.
+- **State / ledger** — `core/portfolio_ledger`, `core/position_lifecycle`, `core/position_manager`, `core/spread_lifecycle`, `option_state_ledger` (SQLite — parallel to Mongo), `execution_state`, `execution_bridge`.
+- **Selection / market** — `core/option_selector_v2`, `core/instrument_resolver`, `core/quote_service`, `core/market_domains`, `market_regime`, `market_protection`, `upstox_trading_quality`, `trade_frequency`.
+- **Reporting / AI** — `daily_strategy_reporter`, `core/strategy_leaderboard`, `core/backtest_engine`, `backtrader_runner`, `routes/ai`.
+
+### 11.3 Loop cadences (verified, not docs)
+
+| Loop | Cadence | Source |
+|---|---|---|
+| Signal manager | 2 s | `SIGNAL_MANAGER_TICK_SECONDS=2` |
+| Position guardian | 5 s | `GUARDIAN_POLL_SECONDS=5` |
+| Daily scheduler | 10 s tick | `server.py` |
+| Strategy runner | 15 s | `STRATEGY_RUNNER_TICK_SECONDS=15` |
+| Strategy health | 30 s | `server.py` |
+| Position monitor | ~30 s in-hours poll | `position_monitor.py` |
+| Broker reconciliation | 180 s | `RECONCILIATION_INTERVAL=180` |
+| EXITING auto-revert | 300 s | `config.py` |
+
+### 11.4 Collection writer heat map (THE bug-zone evidence)
+
+Runtime writers per core collection (excludes one-off scratch/migration/reset scripts):
+
+| Collection | Writers | Risk |
+|---|---|---|
+| `strategy_positions` | **6** — server, runner, monitor, guardian, reconciler, spread | 🔴 bug zone |
+| `strategies` (`today_pnl` cache) | **6** — server, runner, signal_mgr, trade_freq, reconciler, spread | 🔴 bug zone |
+| `orders` | 3 — server, upstox_quality, spread | 🟠 |
+| `signals` | 3 — runner inserts, signal_mgr updates, server | 🟠 |
+| `positions` (UI mirror) | 2 — server, reconciler | 🟠 |
+| `risk_state` | 2 — server, reconciler | 🟠 |
+| `trade_fills` | converged — server fill-path, spread (single logical source) | 🟢 safe |
+| `paper_wallets` | 1 — `core/paper_broker` only | 🟢 safe |
+
+The two truth-bearing collections are the **least**-owned. `trade_fills` + `paper_wallets`
+prove the single-writer cure works — they are the template for the rest.
+
+### 11.5 Trade lifecycle today (each hop writes a collection the next polls)
+
+```
+strategy_runner (15s)  → writes signals, strategies
+   ↓
+signal_manager (2s)    → calls place_order
+   ↓
+place_order (server.py)→ writes orders, risk_reservations   [idempotency + risk reserve]
+   ↓
+execution_router → paper_broker → writes paper_wallets       [simulate fill]
+   ↓
+fill handler + portfolio_ledger → writes trade_fills, positions, strategy_positions
+   ↓
+position_monitor (~30s) + guardian (5s) → exit → writes strategy_positions
+   ↓
+execution_state snapshot → UI (polled); P&L derived from trade_fills
+```
+
+No event records *who caused what* — the debugging gap and the SEBI audit gap.
+
+### 11.6 Key findings
+
+1. `server.py` (18.5k lines) is the gravity well: 80/151 endpoints, 4/9 loops, the fill/exit engine. Not agent-loadable.
+2. Schema sprawl: ~45 collections actually touched (only 13 documented in §7). No registry.
+3. The truth-bearing collections (`strategy_positions`, `strategies.today_pnl`) have 6 writers each — structural root of the phantom-P&L bug class.
+4. `trade_fills` + `paper_wallets` are single-owned and bug-free — the proof and the template.
+5. Hand-rolled DB locks (`runner_locks`, `strategy_position_locks`, `risk_reservation_locks`) exist only to stop writers racing. Single-writer + event bus would delete the need for most of them.
+6. Timer-driven, not event-driven: runner 15s → signal 2s → fill → monitor ~30s. Reaction lags.
+7. Dual-source remnants: legacy fill engine (fenced), `_mongo_position_monitor_loop` (superseded), SQLite `option_state_ledger` parallel to Mongo `strategy_positions`.
+
+### 11.7 Target blueprint (layered, one deployable process first)
+
+```
+External:   Market (Upstox feed/orders)        Users & clients (web, future portal/api)
+Edge:       Caddy · auth · multi-tenant · rate-limit
+Perceive/   Feed handler · Quote service · Strategy runner · Risk manager   (teal)
+decide
+====================  EVENT BUS  ====================   (pub/sub; every event carries
+                                                         correlation id + causation id)
+Act/        Order router · Broker adapters · Position ledger · P&L + reconcile  (purple)
+remember
+Memory:     MongoDB (system of record) · Redis (working mem + bus bridge) · Event store (log+audit)
+Cross-cut:  Observability/tracing · Audit/compliance · Agent workspace
+```
+
+It stays a **modular monolith** at first — microservices are explicitly rejected for a
+single ₹5K VPS / solo founder. A module is peeled into its own Redis-backed worker only when
+a real bottleneck forces it, using the same event contracts.
+
+### 11.8 The five invariants (this IS the design)
+
+1. **Single-writer per state slice.** Only the ledger writes positions; only the P&L engine derives realized P&L from `trade_fills`.
+2. **Broadcast freely, mutate narrowly.** Many readers, one writer. Multidimensional *reads*, never multidimensional *writes*.
+3. **Every event carries correlation + causation ids** — the replacement for the stack trace you lose going event-driven; also the audit trail.
+4. **Idempotency everywhere money moves** (already done on order keys — extend to every consumer).
+5. **Paper and live share one execution port** — identical event flow, only the adapter differs.
+
+### 11.9 Agent-workability
+
+Each module becomes a self-contained cell: `handler.py` + `contract.md` (events in/out, state
+owned) + `tests/` (replayed-event fixtures) + `manifest.yaml`. An agent loads one cell
+(~500 lines), not 18.5k. The event contract is the API across boundaries; the event store
+gives deterministic replay for tests; multiple agents work different cells without collision.
+
+### 11.10 Migration ladder (you-are-here → market). Each rung ships independently.
+
+```
+[Market-grade fund platform — live · multi-tenant · auditable · agent-ready]   (goal)
+ 6  Scale-out — Redis workers + new lobes            (roadmap Phase 2-4, only when needed)
+ 5  Live-trading hardening + audit trail             (roadmap Phase 1, founder gate)
+ 4  Event store + tracing                            (replay + audit = your stack trace)
+ 3  Carve server.py into module cells                (agent-sized, thin server.py)
+ 2  Single-writer ownership per slice                (kills the phantom-money bug class)
+ 1  In-process event bus + correlation ids           (convert one loop first)
+ 0  Event catalog + ownership map                    (DOC ONLY · zero risk · START HERE)
+[Today — modular monolith · blackboard · ~30s latency]   (you are here)
+```
+
+Ordering is deliberate: money-correctness steps (0–2) come before concurrency steps (3–6),
+so the race-bug class is fixed before more concurrency is added. **Next concrete step is
+Stage 0** (event catalog + collection ownership map) — pure documentation, zero code risk.
