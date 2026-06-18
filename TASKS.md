@@ -984,6 +984,54 @@ Files changed: docs/architecture/STAGE_1_APPROVAL_MEMO.md
 
 ---
 
+## PRIORITY 8 — Architecture Redesign Stage 1 (Publish-Only Event Bus)
+
+Context: Founder approved Stage 1A defaults on 2026-06-18: UPPER_SNAKE_CASE event names, Pydantic payload contracts, `corr:<signal_id>` correlation ids, causation id as previous event id or source record id, existing Mongo `core_events` storage, and signal manager as the first publish-only slice.
+
+### TASK-034 — Stage 1A: Publish-only signal lifecycle events
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `cebefca`
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-033 and founder approval
+
+**Problem**:
+Signals move through `PENDING`, `FILTERED`, `SKIPPED_SIGNAL`, and `PROCESSED`, but there is no structured event trail tying the transitions together. Debugging "why didn't it trade?" still depends on mutable signal rows and logs.
+
+**Files to touch**: `backend/core/event_store.py`, `backend/signal_manager.py`, tests under `backend/tests/` if needed.
+
+**Exact steps**:
+1. Add a small Pydantic-backed signal event publishing helper using existing Mongo `core_events`.
+2. Publish events without changing existing signal/order behavior:
+   - `SIGNAL_QUEUED` when the signal manager observes a pending signal for processing
+   - `SIGNAL_VALIDATION_FAILED` when validation/limits/quality filtering sets `FILTERED`
+   - `SIGNAL_PRIORITY_SKIPPED` when conflict resolution sets `SKIPPED_SIGNAL`
+   - `SIGNAL_PROCESSED` when dispatch succeeds and links an order id
+   - `SIGNAL_EXECUTION_SKIPPED` when dispatch returns a skipped signal or raises at the execution boundary
+3. Use correlation id `corr:<signal_id>`.
+4. Use causation id `record:signals:<signal_id>` unless a previous event id is available.
+5. Make event persistence best-effort: failure to write `core_events` must never block signal processing.
+6. Do not change order creation, fills, wallet, P&L, positions, broker behavior, or live flags.
+
+**How to verify**:
+```bash
+cd backend
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_audit_fixes.py -v
+python -m py_compile core/event_store.py signal_manager.py
+```
+
+**Commit format**:
+```
+feat: publish signal lifecycle audit events without changing trading behavior
+
+Task: TASK-034
+Tier: 2
+Files changed: backend/core/event_store.py, backend/signal_manager.py, backend/tests/<test-file-if-added>
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1011,5 +1059,5 @@ Files changed: docs/architecture/STAGE_1_APPROVAL_MEMO.md
 ---
 
 *Last updated: 2026-06-18*
-*Total tasks: 33*
-*Open: 0 · In progress: 0 · Done: 33*
+*Total tasks: 34*
+*Open: 0 · In progress: 0 · Done: 34*
