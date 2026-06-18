@@ -54,15 +54,16 @@ services:
       ORDERFLOW_GATE_ENABLED: "${ORDERFLOW_GATE_ENABLED:-true}"
       ORDERFLOW_GATE_SHADOW: "${ORDERFLOW_GATE_SHADOW:-false}"
       ORDERFLOW_MIN_IMBALANCE: "${ORDERFLOW_MIN_IMBALANCE:-0.15}"
-      # #5 defined-risk credit spreads: DISABLED 2026-06-17 — double-execution bug.
-      # The spread signal was executed twice: once correctly via open_credit_spread
-      # (symbol=BANKNIFTY, asset_class=OPTION_SPREAD), and once through the generic
-      # fill->PortfolioLedger path which created a phantom EQUITY position using the
-      # synthetic trading_symbol "<UND>-bullish-spread" as the instrument and
-      # re-multiplied qty by lot_size (90->2700, 180->5400). The dedup guard closed
-      # the real spread at PnL 0 and kept the phantom, which bled -16.5k on 2026-06-17.
-      # Re-enable only after the generic path is blocked from routing spread symbols.
-      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-false}"
+      # #5 defined-risk credit spreads (option SELLING — theta-positive, fires in
+      # low-vol where buyers can't). DISABLED 2026-06-17 after a double-execution
+      # phantom (synthetic "<UND>-bullish-spread" routed through the generic
+      # fill->PortfolioLedger path as a phantom EQUITY position, bled -16.5k).
+      # RE-ENABLED 2026-06-18: precondition met — commit 7e2921a Guard 1 rejects any
+      # NSE_FO/BSE_FO order lacking a pipe broker instrument_key, so the synthetic
+      # spread label can no longer reach the generic path; spread router returns
+      # early (signal_manager:743, no fall-through); Stages 3/4 fixed spread P&L;
+      # strategy_runner exempts credit_spread from the theta guard. Paper only.
+      CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-true}"
       CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
     volumes:

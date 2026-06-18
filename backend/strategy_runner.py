@@ -858,7 +858,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
 
                 # ── Phase 4: Theta guard + ATR-based ExitPolicy ───────────────
                 # Only applies to option-buying entries (not exits/time-exits).
-                if option_buying_mode and _is_entry and option_contract:
+                # Credit spreads are EXEMPT: they are net-credit (option SELLING),
+                # so low vol / theta works in their favour — they have their own
+                # TP/SL via spread_lifecycle and must not be theta-blocked.
+                _is_credit_spread = str((option_contract or {}).get("structure")) == "credit_spread"
+                if option_buying_mode and _is_entry and option_contract and not _is_credit_spread:
                     try:
                         from exit_policy import attach_exit_policy_to_signal
                         _opt_ltp = float(
