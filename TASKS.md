@@ -844,6 +844,146 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 
 ---
 
+## PRIORITY 7 — Architecture Redesign Stage 0 (Event Catalog + Ownership Map)
+
+Context: CLAUDE.md §11 is now the active architecture program. Stage 0 is documentation only: no runtime code, no fill/P&L/wallet math changes, no new infra, no deployment. The goal is to make the event-bus redesign concrete enough for founder approval before Stage 1.
+
+### TASK-031 — Stage 0A: Create event catalog draft
+- **Status**: `[x]` commit this session
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: Founder approval to start Stage 0 task breakdown
+
+**Problem**:
+The architecture map identifies the need for an event bus, but the actual events are not named or cataloged. Without a catalog, agents may invent incompatible event names and payloads.
+
+**Files to touch**: Create `docs/architecture/EVENT_CATALOG.md` only.
+
+**Exact steps**:
+1. Read AGENTS.md, TASKS.md, and CLAUDE.md §11 first.
+2. Inspect the current trade lifecycle only enough to document existing transitions; do not edit code.
+3. Draft event families for the current monolith:
+   - Strategy lifecycle events
+   - Signal lifecycle events
+   - Order lifecycle events
+   - Fill lifecycle events
+   - Position lifecycle events
+   - Risk/readiness events
+   - Broker/feed events
+   - P&L/reporting events
+4. For each event, document:
+   - Event name
+   - Producer today
+   - Consumers today
+   - Current collection writes caused by the transition
+   - Proposed owner module
+   - Idempotency key or natural dedupe key
+   - Required correlation/causation fields, marked TBD where founder decision is needed
+5. Add a "Founder decisions required" section for event naming style, payload schema style, and correlation id format.
+
+**How to verify**:
+```bash
+git diff -- docs/architecture/EVENT_CATALOG.md
+```
+Confirm the file is documentation only and contains no implementation instructions that change fill, P&L, wallet, or live-trading behavior.
+
+**Commit format**:
+```
+docs: draft Stage 0 event catalog for architecture redesign
+
+Task: TASK-031
+Tier: 2
+Files changed: docs/architecture/EVENT_CATALOG.md
+```
+
+---
+
+### TASK-032 — Stage 0B: Create collection ownership map
+- **Status**: `[x]` commit this session
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-031
+
+**Problem**:
+CLAUDE.md §11 identifies `strategy_positions` and `strategies.today_pnl` as the highest-risk multi-writer zones. The app needs an explicit ownership map before any single-writer refactor starts.
+
+**Files to touch**: Create `docs/architecture/COLLECTION_OWNERSHIP.md` only.
+
+**Exact steps**:
+1. Read CLAUDE.md §11.4 and §11.8.
+2. Document every core collection currently named in CLAUDE.md §7 and §11:
+   - Current purpose
+   - Current runtime writers
+   - Current readers, where obvious
+   - Risk level
+   - Proposed single owner
+   - Allowed readers
+   - Open founder decision, if ownership is contested
+3. Mark these as contested until founder approval:
+   - `strategy_positions`
+   - `strategies.today_pnl`
+   - `positions` UI mirror
+   - SQLite `option_state_ledger`
+4. Explicitly document that `trade_fills` and `paper_wallets` are the safe templates for single ownership.
+
+**How to verify**:
+```bash
+git diff -- docs/architecture/COLLECTION_OWNERSHIP.md
+```
+Confirm this task does not change runtime code or database schema.
+
+**Commit format**:
+```
+docs: map collection ownership for Stage 0 architecture redesign
+
+Task: TASK-032
+Tier: 2
+Files changed: docs/architecture/COLLECTION_OWNERSHIP.md
+```
+
+---
+
+### TASK-033 — Stage 0C: Founder approval memo for Stage 1
+- **Status**: `[ ]`
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~1 hour
+- **Prerequisite**: TASK-031, TASK-032
+
+**Problem**:
+Stage 1 introduces the first in-process event bus and correlation ids. AGENTS.md says event names, payload schemas, correlation id format, and contested owners are stop-and-ask decisions.
+
+**Files to touch**: Create `docs/architecture/STAGE_1_APPROVAL_MEMO.md` only.
+
+**Exact steps**:
+1. Summarize the Stage 0 event catalog and ownership map.
+2. List the exact founder decisions required before Stage 1:
+   - Event naming convention
+   - Payload schema convention
+   - Correlation id and causation id format
+   - First loop to convert
+   - Single owner for `strategy_positions`
+   - Single owner for `strategies.today_pnl`
+   - Deprecate vs delete stance for legacy fill path, `_mongo_position_monitor_loop`, and SQLite `option_state_ledger`
+3. Recommend the lowest-risk Stage 1 slice, but do not implement it.
+4. Include a clear "Do not deploy" note: Stage 0 is docs-only and does not require VPS deployment.
+
+**How to verify**:
+```bash
+git diff -- docs/architecture/STAGE_1_APPROVAL_MEMO.md
+```
+Confirm the memo is readable by the founder without opening code.
+
+**Commit format**:
+```
+docs: add Stage 1 approval memo after architecture Stage 0
+
+Task: TASK-033
+Tier: 2
+Files changed: docs/architecture/STAGE_1_APPROVAL_MEMO.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -870,6 +1010,6 @@ Context: Phase 2 (theta-aware exits, delta strikes, IV-rank gate, order-flow gat
 
 ---
 
-*Last updated: 2026-06-15*
-*Total tasks: 22 (17 active + 3 backlog + 1 audit + 1 UI)*
-*Open: 13 · In progress: 0 · Done: 9*
+*Last updated: 2026-06-18*
+*Total tasks: 33*
+*Open: 1 · In progress: 0 · Done: 32*
