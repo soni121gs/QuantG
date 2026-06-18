@@ -13553,81 +13553,7 @@ async def _build_strategy_readiness_rows(user_id: str) -> List[Dict[str, Any]]:
 # readiness routes moved to routes/readiness.py
 
 
-@api.get("/debug/position-integrity")
-async def position_integrity_report(user=Depends(get_current_user)):
-    user_id = user["id"]
-    settings = await get_user_settings(user_id)
-    
-    # 1. Fetch broker/paper positions
-    broker_positions = await _fetch_broker_positions_for_user(user, settings)
-    broker_active = [p for p in broker_positions if int(p.get("qty") or p.get("quantity") or 0) != 0]
-    
-    # 2. Fetch strategy positions
-    active_sp = await db.strategy_positions.find({
-        "user_id": user_id,
-        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]}
-    }).to_list(1000)
-    
-    active_sp_symbols = {str(sp.get("symbol")).upper(): sp for sp in active_sp if sp.get("symbol")}
-    active_sp_strategy_ids = {str(sp.get("strategy_id")) for sp in active_sp if sp.get("strategy_id")}
-    
-    # Counts
-    orphan_positions = 0
-    missing_sl = 0
-    missing_tp = 0
-    strategy_mismatches = 0
-    
-    # Detect orphans
-    for bp in broker_active:
-        symbol = str(bp.get("symbol") or "").upper()
-        strategy_id = bp.get("strategy_id")
-        
-        is_orphan = True
-        if strategy_id and str(strategy_id) in active_sp_strategy_ids:
-            is_orphan = False
-        elif symbol in active_sp_symbols:
-            is_orphan = False
-            
-        if is_orphan:
-            orphan_positions += 1
-            
-    # Detect missing SL/TP and mismatches
-    for sp in active_sp:
-        symbol = str(sp.get("symbol") or "").upper()
-        tp_sl = sp.get("tp_sl_tsl_config") or {}
-        
-        has_sl = tp_sl.get("stop_loss") is not None or tp_sl.get("stoploss_price") is not None
-        has_tp = tp_sl.get("take_profit") is not None or tp_sl.get("target_price") is not None
-        
-        if not has_sl:
-            missing_sl += 1
-        if not has_tp:
-            missing_tp += 1
-            
-        # Detect mismatch
-        bp_match = next((p for p in broker_active if str(p.get("symbol")).upper() == symbol), None)
-        if not bp_match:
-            strategy_mismatches += 1
-        else:
-            bp_qty = abs(int(bp_match.get("qty") or bp_match.get("quantity") or 0))
-            sp_qty = int(sp.get("open_quantity") or sp.get("quantity") or 0)
-            if bp_qty != sp_qty:
-                strategy_mismatches += 1
-                
-    # Detect failed orders
-    failed_orders_count = await db.orders.count_documents({
-        "user_id": user_id,
-        "status": "FAILED"
-    })
-    
-    return {
-        "total_positions": len(broker_active),
-        "orphan_positions": orphan_positions,
-        "missing_sl": missing_sl,
-        "missing_tp": missing_tp,
-        "strategy_mismatches": strategy_mismatches,
-        "failed_orders": failed_orders_count
-    }
+# diagnostics routes moved to routes/diagnostics.py
 
 
 
@@ -15214,6 +15140,7 @@ from routes.profile import router as profile_router
 from routes.readiness import router as readiness_router
 from routes.ops_runtime import router as ops_runtime_router
 from routes.core_status import router as core_status_router
+from routes.diagnostics import router as diagnostics_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15232,6 +15159,7 @@ api.include_router(profile_router)
 api.include_router(readiness_router)
 api.include_router(ops_runtime_router)
 api.include_router(core_status_router)
+api.include_router(diagnostics_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)

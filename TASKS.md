@@ -1330,6 +1330,81 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 
 ---
 
+### TASK-041 — Extract diagnostics route from server.py
+- **Status**: `[~]` In progress by Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~1 hour
+- **Prerequisite**: TASK-040
+
+**Problem**:
+`server.py` still owns the position-integrity diagnostic endpoint. Moving it into a diagnostics route module keeps operational troubleshooting APIs separate from startup/runtime wiring.
+
+**Files to touch**: Create `backend/routes/diagnostics.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only `/debug/position-integrity` into `backend/routes/diagnostics.py`.
+2. Register the diagnostics router in `server.py`.
+3. Do not change endpoint URL, auth, response shape, broker position fetching, strategy position checks, wallet, P&L, or order behavior.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/diagnostics.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract diagnostics route from server.py
+
+Task: TASK-041
+Tier: 2
+Files changed: backend/server.py, backend/routes/diagnostics.py, TASKS.md
+```
+
+---
+
+### TASK-042 — Move system routes from server.py
+- **Status**: `[ ]` Open
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~1 hour
+- **Prerequisite**: TASK-041
+
+**Problem**:
+`server.py` still owns the root, health, and version probes. Moving these into a system route module removes the final simple HTTP route definitions from the startup file without changing public checks.
+
+**Files to touch**: Create `backend/routes/system.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only these endpoints into `backend/routes/system.py`:
+   - `/`
+   - `/health`
+   - `/version`
+2. Register the system router in `server.py`.
+3. Do not change endpoint URLs, response shapes, version fields, git metadata logic, startup time, live flags, wallet, P&L, or order behavior.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/system.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract system routes from server.py
+
+Task: TASK-042
+Tier: 2
+Files changed: backend/server.py, backend/routes/system.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1357,5 +1432,5 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 ---
 
 *Last updated: 2026-06-19*
-*Total tasks: 40*
-*Open: 0 · In progress: 0 · Done: 40*
+*Total tasks: 42*
+*Open: 1 · In progress: 1 · Done: 40*
