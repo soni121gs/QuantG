@@ -500,5 +500,116 @@ class TestUpstoxFeedAuthProductionFix(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TestPart1StrategiesArmed(unittest.TestCase):
+    def test_strategies_armed_zero_live(self):
+        import asyncio
+        from routes.ops_runtime import trading_ready_check
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_strategies = MagicMock()
+            
+            # 0 live strategies, 2 paused/draft
+            async def mock_count_documents(query):
+                if query.get("status") == "live":
+                    return 0
+                return 2
+                
+            mock_strategies.count_documents = AsyncMock(side_effect=mock_count_documents)
+            mock_db.strategies = mock_strategies
+            
+            # Other mocks needed by trading_ready_check
+            mock_settings = AsyncMock(return_value={"paper_mode": True})
+            mock_status = AsyncMock(return_value={"token_valid": True, "token_state": "active"})
+            mock_gw = MagicMock()
+            mock_gw.connected = True
+            mock_gw.get_historical_candles = MagicMock(return_value=[{"close": 100}, {"close": 101}, {"close": 102}])
+            mock_get_gw = AsyncMock(return_value=mock_gw)
+            mock_open = MagicMock(return_value=True)
+            mock_freshness = MagicMock(return_value={"fresh": True})
+            
+            with patch("routes.ops_runtime.db", mock_db), \
+                 patch("server.get_user_settings", mock_settings), \
+                 patch("server.get_user_upstox_status", mock_status), \
+                 patch("server.get_user_upstox_gateway", mock_get_gw), \
+                 patch("server._is_order_market_open", mock_open), \
+                 patch("server._latest_candle_fresh_for_live", mock_freshness):
+                
+                res = await trading_ready_check(user={"id": "test-user"})
+                
+                # Check target output structure
+                self.assertIn("strategies_armed", res["checks"])
+                self.assertFalse(res["checks"]["strategies_armed"]["ok"])
+                self.assertEqual(res["checks"]["strategies_armed"]["live_count"], 0)
+                self.assertEqual(res["checks"]["strategies_armed"]["paused_or_draft_count"], 2)
+                self.assertEqual(res["checks"]["strategies_armed"]["critical"], False)
+                self.assertEqual(res["checks"]["strategies_armed"]["detail"], "0 live; 2 paused/draft won't auto-arm at 9AM")
+                
+                # Check warnings list has the expected string
+                self.assertIn("warnings", res)
+                self.assertEqual(len(res["warnings"]), 1)
+                self.assertEqual(res["warnings"][0], "No strategies armed — arm at least one strategy to trade today.")
+                
+                # Check that ready is still True (because critical checks like broker_auth, gateway_connected are ok)
+                self.assertTrue(res["ready"])
+                
+        asyncio.run(run_test())
+
+    def test_strategies_armed_three_live(self):
+        import asyncio
+        from routes.ops_runtime import trading_ready_check
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_strategies = MagicMock()
+            
+            # 3 live strategies, 1 paused/draft
+            async def mock_count_documents(query):
+                if query.get("status") == "live":
+                    return 3
+                return 1
+                
+            mock_strategies.count_documents = AsyncMock(side_effect=mock_count_documents)
+            mock_db.strategies = mock_strategies
+            
+            # Other mocks needed by trading_ready_check
+            mock_settings = AsyncMock(return_value={"paper_mode": True})
+            mock_status = AsyncMock(return_value={"token_valid": True, "token_state": "active"})
+            mock_gw = MagicMock()
+            mock_gw.connected = True
+            mock_gw.get_historical_candles = MagicMock(return_value=[{"close": 100}, {"close": 101}, {"close": 102}])
+            mock_get_gw = AsyncMock(return_value=mock_gw)
+            mock_open = MagicMock(return_value=True)
+            mock_freshness = MagicMock(return_value={"fresh": True})
+            
+            with patch("routes.ops_runtime.db", mock_db), \
+                 patch("server.get_user_settings", mock_settings), \
+                 patch("server.get_user_upstox_status", mock_status), \
+                 patch("server.get_user_upstox_gateway", mock_get_gw), \
+                 patch("server._is_order_market_open", mock_open), \
+                 patch("server._latest_candle_fresh_for_live", mock_freshness):
+                
+                res = await trading_ready_check(user={"id": "test-user"})
+                
+                self.assertIn("strategies_armed", res["checks"])
+                self.assertTrue(res["checks"]["strategies_armed"]["ok"])
+                self.assertEqual(res["checks"]["strategies_armed"]["live_count"], 3)
+                self.assertEqual(res["checks"]["strategies_armed"]["paused_or_draft_count"], 1)
+                self.assertEqual(res["checks"]["strategies_armed"]["critical"], False)
+                self.assertEqual(res["checks"]["strategies_armed"]["detail"], "3 live; 1 paused/draft won't auto-arm at 9AM")
+                
+                # Check warnings list is empty
+                self.assertIn("warnings", res)
+                self.assertEqual(len(res["warnings"]), 0)
+                
+                self.assertTrue(res["ready"])
+                
+        asyncio.run(run_test())
+
+
+
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -218,13 +218,30 @@ async def trading_ready_check(user=Depends(get_current_user)):
     all_critical_ok = all(c["ok"] for c in critical_checks)
     ready = all_critical_ok
 
+    # Fetch strategy counts for strategies_armed check (additive, read-only)
+    live_count = await db.strategies.count_documents({"user_id": user_id, "status": "live"})
+    not_auto_arming = await db.strategies.count_documents({"user_id": user_id, "status": {"$in": ["paused", "draft"]}})
+
+    checks["strategies_armed"] = {
+        "ok": live_count > 0,
+        "detail": f"{live_count} live; {not_auto_arming} paused/draft won't auto-arm at 9AM",
+        "live_count": live_count,
+        "paused_or_draft_count": not_auto_arming,
+        "critical": False,
+    }
+
+    warnings = []
+    if live_count == 0:
+        warnings.append("No strategies armed — arm at least one strategy to trade today.")
+
     return {
         "ready": ready,
         "trading_mode": "paper" if paper_mode else "live",
         "market_open": market_open,
         "checks": checks,
+        "warnings": warnings,
         "summary": (
-            "All systems go \u2014 ready to trade."
+            "All systems go — ready to trade."
             if ready
             else "One or more critical checks failed. See checks for details."
         ),
