@@ -1198,7 +1198,8 @@ Files changed: backend/server.py, backend/routes/profile.py, TASKS.md
 ---
 
 ### TASK-038 — Extract readiness and core health routes from server.py
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `457a43f`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-037
@@ -1242,7 +1243,7 @@ Files changed: backend/server.py, backend/routes/readiness.py, TASKS.md
 ---
 
 ### TASK-039 — Extract remaining ops runtime routes from server.py
-- **Status**: `[ ]`
+- **Status**: `[~]` Codex
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-038
@@ -1355,4 +1356,4 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 
 *Last updated: 2026-06-18*
 *Total tasks: 40*
-*Open: 2 · In progress: 1 · Done: 37*
+*Open: 1 · In progress: 1 · Done: 38*

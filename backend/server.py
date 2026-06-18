@@ -7989,25 +7989,7 @@ async def seed_default_strategies(user=Depends(get_current_user)):
     }
 
 
-@api.post("/ops/v12/upstox-retailer/activate")
-async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
-    inserted = await seed_default_strategies_for_user(user["id"])
-    migrated = await migrate_user_to_v12_upstox(user["id"])
-    await db.strategies.update_many(
-        {"user_id": user["id"], "status": {"$nin": ["live", "paused"]}},
-        {"$set": {"status": "live", "broker": "upstox", "mode": "live"}},
-    )
-    strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
-    for row in strategies:
-        _sync_option_ledger_strategy(row)
-    return {
-        "ok": True,
-        "version": APP_VERSION,
-        "inserted": inserted,
-        "migrated": migrated,
-        "live_strategies": sum(1 for s in strategies if s.get("status") == "live"),
-        "message": "QuantG v12 Upstox retailer profile is active for NSE/NFO/BSE/BFO.",
-    }
+# ops runtime route moved to routes/ops_runtime.py
 
 
 # moved to routes/strategies.py
@@ -12506,73 +12488,7 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
     )
 
 
-@api.post("/ops/squareoff-all")
-async def squareoff_all_positions(user=Depends(get_current_user)):
-    settings = await get_user_settings(user["id"])
-    positions = await list_positions(user)
-    if not positions:
-        return {"ok": True, "closed": [], "failed": []}
-
-    closed, failed = [], []
-    now = datetime.now(timezone.utc).isoformat()
-    paper = settings.get("paper_mode", True)
-    if not paper:
-        gateway = await get_user_upstox_gateway(user["id"])
-        if not gateway or not gateway.connected:
-            raise HTTPException(status_code=400, detail="auth failed: Upstox is not connected.")
-
-    for p in positions:
-        symbol = p.get("symbol")
-        qty = int(p.get("qty") or 0)
-        if not symbol or qty == 0:
-            continue
-        side = "SELL" if qty > 0 else "BUY"
-        abs_qty = abs(qty)
-        try:
-            if paper:
-                res = await _place_order_core(
-                    user_id=user["id"],
-                    symbol=symbol,
-                    side=side,
-                    qty=abs_qty,
-                    order_type="MARKET",
-                    product=p.get("product") or settings.get("default_product", "MIS"),
-                    source="squareoff-all",
-                    exchange=p.get("exchange") or "NSE",
-                    idempotency_key=f"squareoff-all:{symbol}:{now}",
-                )
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
-            else:
-                exchange = p.get("exchange") or ("NFO" if str(symbol).upper().endswith(("CE", "PE")) else "NSE")
-                option_contract = None
-                if exchange in {"NFO", "BFO", "MCX"} or str(symbol).upper().endswith(("CE", "PE")):
-                    token = str(p.get("instrument_token") or "").strip()
-                    if "|" not in token:
-                        failed.append({"symbol": symbol, "error": "Upstox instrument_key missing. Exit this position in Upstox, then sync broker state."})
-                        continue
-                    option_contract = {
-                        "tradingsymbol": str(symbol).upper(),
-                        "exchange": exchange,
-                        "instrument_token": token,
-                        "lot_size": max(1, abs_qty),
-                        "transaction_type": side,
-                    }
-                res = await _place_order_core(
-                    user_id=user["id"],
-                    symbol=str(symbol).upper(),
-                    side=side,
-                    qty=1 if option_contract else abs_qty,
-                    order_type="MARKET",
-                    product=p.get("product") or settings.get("default_product", "MIS"),
-                    source="squareoff",
-                    exchange=exchange,
-                    option_contract=option_contract,
-                    idempotency_key=f"squareoff-live:{symbol}:{now}",
-                )
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
-        except Exception as e:
-            failed.append({"symbol": symbol, "error": str(e)})
-    return {"ok": not failed, "closed": closed, "failed": failed}
+# squareoff ops route moved to routes/ops_runtime.py
 
 
 def _broker_order_row(o: Dict[str, Any]) -> Dict[str, Any]:
@@ -15296,6 +15212,7 @@ from routes.market import router as market_router
 from routes.broker import router as broker_router
 from routes.profile import router as profile_router
 from routes.readiness import router as readiness_router
+from routes.ops_runtime import router as ops_runtime_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15312,6 +15229,7 @@ api.include_router(market_router)
 api.include_router(broker_router)
 api.include_router(profile_router)
 api.include_router(readiness_router)
+api.include_router(ops_runtime_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
@@ -16601,7 +16519,7 @@ async def shutdown():
 
 # ============== Routes: Trading-Ready Check ==============
 
-@api.get("/ops/trading-ready")
+# moved to routes/ops_runtime.py
 async def trading_ready_check(user=Depends(get_current_user)):
     """Holistic trading-readiness check.
 
