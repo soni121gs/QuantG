@@ -1032,6 +1032,57 @@ Files changed: backend/core/event_store.py, backend/signal_manager.py, backend/t
 
 ---
 
+### TASK-035 — Extract market routes from server.py into routes/market.py
+- **Status**: `[~]` Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-034
+
+**Problem**:
+`server.py` still owns market-data and option-preview HTTP endpoints even after earlier route extraction. This keeps market UI/API work tied to the giant startup file.
+
+**Files to touch**: Create `backend/routes/market.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only market/query endpoints into `backend/routes/market.py`:
+   - `/market/watchlist`
+   - `/market/iv-rank`
+   - `/market/candles/{instrument_key:path}`
+   - `/market/analytics/option-chain`
+   - `/market/analytics/expiry-dates`
+   - `/market/commodities`
+   - `/market/quote/{symbol}`
+   - `/market/feed-comparison`
+   - `/market/auto-data-broker`
+   - `/market/indicators/{symbol}`
+   - `/market/session-status`
+   - `/market/session`
+   - `/market/regime`
+   - `/option-chain/{underlying}`
+   - `/options/preview`
+2. Register the new market router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, trading execution, broker execution, wallet, P&L, positions, or live flags.
+4. Keep `server.py` as the startup authority.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/market.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract market routes from server.py
+
+Task: TASK-035
+Tier: 2
+Files changed: backend/server.py, backend/routes/market.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1059,5 +1110,5 @@ Files changed: backend/core/event_store.py, backend/signal_manager.py, backend/t
 ---
 
 *Last updated: 2026-06-18*
-*Total tasks: 34*
-*Open: 0 · In progress: 0 · Done: 34*
+*Total tasks: 35*
+*Open: 0 · In progress: 1 · Done: 34*
