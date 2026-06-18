@@ -1243,7 +1243,8 @@ Files changed: backend/server.py, backend/routes/readiness.py, TASKS.md
 ---
 
 ### TASK-039 — Extract remaining ops runtime routes from server.py
-- **Status**: `[~]` Codex
+- **Status**: `[x]` Completed by Codex
+- **Commit**: `943cd05`
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-038
@@ -1283,7 +1284,7 @@ Files changed: backend/server.py, backend/routes/ops_runtime.py, TASKS.md
 ---
 
 ### TASK-040 — Extract core data and backtest routes from server.py
-- **Status**: `[ ]`
+- **Status**: `[~]` Codex
 - **Tier**: 2 (Codex / Sonnet / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: TASK-039
@@ -1356,4 +1357,4 @@ Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
 
 *Last updated: 2026-06-18*
 *Total tasks: 40*
-*Open: 1 · In progress: 1 · Done: 38*
+*Open: 0 · In progress: 1 · Done: 39*

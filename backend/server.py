@@ -15213,6 +15213,7 @@ from routes.broker import router as broker_router
 from routes.profile import router as profile_router
 from routes.readiness import router as readiness_router
 from routes.ops_runtime import router as ops_runtime_router
+from routes.core_status import router as core_status_router
 
 api.include_router(auth_router)
 api.include_router(ai_router)
@@ -15230,6 +15231,7 @@ api.include_router(broker_router)
 api.include_router(profile_router)
 api.include_router(readiness_router)
 api.include_router(ops_runtime_router)
+api.include_router(core_status_router)
 
 # ============== Boot ==============
 # (app.include_router(api) moved to the bottom of the file after all routes are registered)
@@ -16660,91 +16662,14 @@ from core.performance_tracker import PerformanceTracker
 
 # core health/feed readiness routes moved to routes/readiness.py
 
-@api.get("/core/strategies")
-async def get_core_strategies(user=Depends(get_current_user)):
-    user_id = user["id"]
-    return await db.strategies.find({"user_id": user_id}).to_list(length=200)
-
-@api.get("/core/orders")
-async def get_core_orders(user=Depends(get_current_user)):
-    user_id = user["id"]
-    return await db.orders.find({"user_id": user_id}).sort("created_at", -1).to_list(length=200)
-
-@api.get("/core/positions")
-async def get_core_positions(user=Depends(get_current_user)):
-    user_id = user["id"]
-    return await db.strategy_positions.find({"user_id": user_id}).to_list(length=200)
-
-@api.get("/core/performance")
-async def get_core_performance(user=Depends(get_current_user)):
-    user_id = user["id"]
-    tracker = PerformanceTracker(db)
-    return await tracker.rebuild_leaderboard(user_id)
-
-@api.get("/core/backtests")
-async def get_core_backtests(user=Depends(get_current_user)):
-    user_id = user["id"]
-    return await db.backtest_runs.find().sort("created_at", -1).to_list(length=100)
-
-@api.post("/core/backtests/run")
-async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
-    user_id = user["id"]
-    strategy_id = req.strategy_id
-    if not strategy_id:
-        raise HTTPException(status_code=400, detail="strategy_id is required.")
-        
-    strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id})
-    if not strat:
-        raise HTTPException(status_code=404, detail="Strategy not found.")
-        
-    try:
-        # Generate 250 test intraday candles
-        raw_candles = intraday_series(100.0, 250)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed generating backtest historical bars: {e}")
-        
-    engine = BacktestEngine(db)
-    result = await engine.run_backtest(
-        strategy_id=strategy_id,
-        python_code=strat.get("python_code") or "",
-        candles=raw_candles,
-        strategy_metadata=strat
-    )
-    return result
+# core data and backtest routes moved to routes/core_status.py
 
 # trading live-readiness route moved to routes/readiness.py
 
 
 # core live-readiness route moved to routes/readiness.py
 
-@api.post("/core/live/arm")
-async def post_core_live_arm(user=Depends(get_current_user)):
-    user_id = user["id"]
-    await db.live_arm_state.update_one(
-        {"user_id": user_id},
-        {"$set": {"armed": True, "global_live_enabled": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True
-    )
-    return {"ok": True, "status": "ARMED"}
-
-@api.post("/core/live/disarm")
-async def post_core_live_disarm(user=Depends(get_current_user)):
-    user_id = user["id"]
-    await db.live_arm_state.update_one(
-        {"user_id": user_id},
-        {"$set": {"armed": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True
-    )
-    return {"ok": True, "status": "DISARMED"}
-
-@api.post("/core/kill-switch")
-async def post_core_kill_switch(user=Depends(get_current_user)):
-    await db.risk_state.update_one(
-        {"_id": "global_kill_switch"},
-        {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True
-    )
-    return {"ok": True, "status": "KILL_SWITCH_ACTIVE"}
+# core live control routes moved to routes/core_status.py
 
 # ============== Register Router ==============
 app.include_router(api)
