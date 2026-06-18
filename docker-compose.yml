@@ -68,6 +68,7 @@ services:
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
     volumes:
       - backend-state:/data
+      - ./wiki:/app/wiki
     depends_on:
       mongo:
         condition: service_healthy
