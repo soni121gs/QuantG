@@ -12,6 +12,7 @@ import {
   TrendingUp,
   Wallet,
   Zap,
+  Power,
 } from "lucide-react";
 import { api, formatINR, pctFmt } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
