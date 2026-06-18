@@ -22,7 +22,7 @@ Do not open `server.py` or any other file until you have read all three.
 QuantG is an NSE options algo-trading platform running on a VPS (82.180.145.183).
 
 - **Backend**: FastAPI + Motor (async MongoDB). Main logic in `backend/server.py` (~15k lines) plus modules in `backend/core/`, `backend/routes/`, `backend/brokers/`.
-- **Frontend**: React + Tailwind. Pages in `frontend/src/pages/`.
+- **Frontend**: React + Tailwind. Modular architecture: thin page orchestrators in `frontend/src/pages/`, presenter components in `frontend/src/components/{dashboard,strategies,ops,wiki,aibot}/`, centralized state via `frontend/src/contexts/ExecutionStateContext.jsx`.
 - **Broker**: Upstox V3 only. WebSocket feed + REST orders.
 - **Mode right now**: Paper trading. Live trading is disabled (`CORE_ENGINE_LIVE_ENABLED=false`).
 - **Database**: MongoDB at `mongodb://mongo:27017`, db name `quantg`.
@@ -154,7 +154,15 @@ price = pos.get("average_price") or pos.get("average_buy_price") or 0
 | An order routing bug | `backend/core/execution_router.py` |
 | A P&L display bug | `backend/server.py` → search `pnl` |
 | A frontend positions issue | `frontend/src/pages/Positions.jsx` |
-| A frontend dashboard issue | `frontend/src/pages/Dashboard.jsx` |
+| A frontend dashboard issue | `frontend/src/pages/Dashboard.jsx` + `components/dashboard/` |
+| A frontend strategies issue | `frontend/src/pages/Strategies.jsx` + `components/strategies/` |
+| A frontend ops/risk issue | `frontend/src/pages/OpsConsole.jsx` + `components/ops/` |
+| A frontend wiki issue | `frontend/src/pages/Wiki.jsx` + `components/wiki/` |
+| A frontend AI bot issue | `frontend/src/pages/AIBot.jsx` + `components/aibot/` |
+| A frontend global state issue | `frontend/src/contexts/ExecutionStateContext.jsx` |
+| A frontend data polling issue | `frontend/src/hooks/useExecutionState.js` |
+| A frontend layout / sidebar | `frontend/src/components/Layout.jsx` |
+| A frontend CSS / theme issue | `frontend/src/index.css` |
 | An ops / kill-switch issue | `backend/routes/ops.py` |
 | Option selection / strike picking | `backend/core/option_selector_v2.py` |
 | Config values (lot sizes, limits) | `backend/core/market_domains.py` |
@@ -237,7 +245,7 @@ works this program the same way.
 
 ---
 
-*Last updated: 2026-06-18*
+*Last updated: 2026-06-19*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
 
 ---

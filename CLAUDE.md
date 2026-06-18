@@ -10,7 +10,7 @@ This is the canonical reference for all AI agents working on the QuantG algo-tra
 
 QuantG is an NSE/BSE options algo-trading platform.
 - **Backend**: FastAPI + Motor (MongoDB) + asyncio loops. Single file: `backend/server.py` (~15k lines). Additional routes in `backend/routes/`.
-- **Frontend**: React (CRA) + Tailwind. Pages in `frontend/src/pages/`. No SSR.
+- **Frontend**: React (CRA) + Tailwind. Modular architecture: pages in `frontend/src/pages/`, presenter components in `frontend/src/components/`, centralized state in `frontend/src/contexts/`. No SSR.
 - **Infra**: Docker Compose on VPS. Four containers: `quantg-backend`, `quantg-frontend`, `quantg-mongo`, `quantg-caddy`.
 - **Broker**: Upstox (V3 WebSocket feed + REST orders). No Zerodha, no MCX, no Kite.
 - **Domain**: quantgtrade.com → VPS 82.180.145.183
@@ -46,7 +46,19 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Frontend orders page | `frontend/src/pages/Orders.jsx` |
 | Frontend strategies page | `frontend/src/pages/Strategies.jsx` |
 | Frontend ops/risk page | `frontend/src/pages/OpsConsole.jsx` |
-| Frontend execution data hook (polls /execution/snapshot) | `frontend/src/hooks/useExecutionState.js` |
+| Frontend dashboard page | `frontend/src/pages/Dashboard.jsx` |
+| Frontend wiki / knowledge hub | `frontend/src/pages/Wiki.jsx` |
+| Frontend AI bot page | `frontend/src/pages/AIBot.jsx` |
+| Frontend market hub page | `frontend/src/pages/MarketHub.jsx` |
+| Frontend global state provider | `frontend/src/contexts/ExecutionStateContext.jsx` |
+| Frontend execution data hook | `frontend/src/hooks/useExecutionState.js` |
+| Frontend dashboard components | `frontend/src/components/dashboard/` (KpiCard, NiftyPulseChart, StrategyPerformanceTable, StrategyLedgerRow, HealthScoreList, AllocationList) |
+| Frontend strategy components | `frontend/src/components/strategies/` (StrategyCard, RuntimeSettingsForm, AboutStrategyModal) |
+| Frontend ops components | `frontend/src/components/ops/` (MarginMeterPanel, UserReconciler, BrokerStatusPanel, IncidentRecoveryPanel, OpsActionCard) |
+| Frontend wiki components | `frontend/src/components/wiki/` (MarkdownRenderer, PhysicsGraphCanvas, WikiTreeSidebar) |
+| Frontend AI bot components | `frontend/src/components/aibot/` (ChatFeed, SessionHistorySidebar, PromptSuggestionsPanel) |
+| Frontend app shell / layout | `frontend/src/components/Layout.jsx`, `frontend/src/components/ui/` |
+| Frontend CSS design system | `frontend/src/index.css` (HSL variables, Sora/Inter/Mono fonts, blink keyframe animations) |
 | Docker build/env config | `docker-compose.yml`, `backend/.env` |
 | Reverse proxy config | `Caddyfile` |
 
