@@ -293,7 +293,14 @@ async def _resolve_ltp_guardian(
     symbol  = pos.get("target_symbol") or pos.get("trading_symbol") or pos.get("symbol")
     ikey    = pos.get("instrument_key") or pos.get("instrument_token")
 
-    if ikey:
+    # SKIP the WS cache for cash-equity keys (NSE_EQ|… / BSE_EQ|…): equities are
+    # never subscribed to the V3 options feed, so this cache returns a
+    # wrong/garbage LTP that trips SL/TP and books phantom P&L (e.g. TCS priced
+    # at ₹2205 vs ~₹4100). Mirrors the same guard in position_monitor._resolve_ltp
+    # (added 06-16 there, but this guardian path was missed). Equity positions
+    # fall through to the symbol-LTP source below.
+    is_cash_equity = "_EQ|" in str(ikey or "")
+    if ikey and not is_cash_equity:
         try:
             cache_key = f"ltp:{user_id}:{ikey}"
             ltp = await _get_cached_ltp(cache_key, quote_ltp_fn, user_id, ikey)
