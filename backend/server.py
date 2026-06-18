@@ -15113,7 +15113,7 @@ from routes.notifications import router as notifications_router
 from routes.market import router as market_router
 from routes.broker import router as broker_router
 from routes.profile import router as profile_router
-from routes.readiness import router as readiness_router
+from routes.readiness import router as readiness_router, live_readiness
 from routes.ops_runtime import router as ops_runtime_router
 from routes.core_status import router as core_status_router
 from routes.diagnostics import router as diagnostics_router
