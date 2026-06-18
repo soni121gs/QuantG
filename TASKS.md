@@ -1197,6 +1197,136 @@ Files changed: backend/server.py, backend/routes/profile.py, TASKS.md
 
 ---
 
+### TASK-038 — Extract readiness and core health routes from server.py
+- **Status**: `[~]` Codex
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-037
+
+**Problem**:
+`server.py` still owns readiness and health endpoints even though they are mostly read-only API surfaces. Keeping them inline makes status/readiness work depend on the startup file.
+
+**Files to touch**: Create `backend/routes/readiness.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only readiness/status endpoints into `backend/routes/readiness.py`:
+   - `/strategy-readiness`
+   - `/paper-readiness`
+   - `/live/readiness`
+   - `/trading/live-readiness`
+   - `/core/live/readiness`
+   - `/core/health`
+   - `/core/market-status`
+   - `/core/feed-status`
+2. Register the new readiness router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, readiness logic, live flags, broker behavior, wallet, P&L, or positions.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/readiness.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract readiness routes from server.py
+
+Task: TASK-038
+Tier: 2
+Files changed: backend/server.py, backend/routes/readiness.py, TASKS.md
+```
+
+---
+
+### TASK-039 — Extract remaining ops runtime routes from server.py
+- **Status**: `[ ]`
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-038
+
+**Problem**:
+`server.py` still owns a few operational HTTP routes. Moving them into a small ops-runtime module reduces route coupling without touching startup loops.
+
+**Files to touch**: Create `backend/routes/ops_runtime.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only these ops endpoints into `backend/routes/ops_runtime.py`:
+   - `/ops/v12/upstox-retailer/activate`
+   - `/ops/squareoff-all`
+   - `/ops/trading-ready`
+2. Register the new ops-runtime router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, order behavior, live flags, wallet, P&L, or positions.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/ops_runtime.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_audit_fixes.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract ops runtime routes from server.py
+
+Task: TASK-039
+Tier: 2
+Files changed: backend/server.py, backend/routes/ops_runtime.py, TASKS.md
+```
+
+---
+
+### TASK-040 — Extract core data and backtest routes from server.py
+- **Status**: `[ ]`
+- **Tier**: 2 (Codex / Sonnet / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: TASK-039
+
+**Problem**:
+`server.py` still owns core read-only data routes and the core backtest runner endpoint. These should live beside the other route modules so the startup file can keep shrinking.
+
+**Files to touch**: Create `backend/routes/core_status.py`. Edit `backend/server.py` and `TASKS.md`.
+
+**Exact steps**:
+1. Move only these core data/backtest endpoints into `backend/routes/core_status.py`:
+   - `/core/strategies`
+   - `/core/orders`
+   - `/core/positions`
+   - `/core/performance`
+   - `/core/backtests`
+   - `/core/backtests/run`
+   - `/core/live/arm`
+   - `/core/live/disarm`
+   - `/core/kill-switch`
+2. Register the new core-status router in `server.py`.
+3. Do not change endpoint URLs, auth, request parameters, response shapes, order behavior, live flags, wallet, P&L, or positions.
+4. Keep `server.py` as the startup authority and keep execution/feed/runtime wiring there.
+
+**How to verify**:
+```bash
+cd backend
+python -m py_compile server.py routes/core_status.py
+python -m pytest tests/test_core_logic.py -v
+python -m pytest tests/test_audit_fixes.py -v
+python -m pytest tests/test_signal_events.py -v
+```
+
+**Commit format**:
+```
+refactor: extract core status routes from server.py
+
+Task: TASK-040
+Tier: 2
+Files changed: backend/server.py, backend/routes/core_status.py, TASKS.md
+```
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1224,5 +1354,5 @@ Files changed: backend/server.py, backend/routes/profile.py, TASKS.md
 ---
 
 *Last updated: 2026-06-18*
-*Total tasks: 37*
-*Open: 0 · In progress: 0 · Done: 37*
+*Total tasks: 40*
+*Open: 2 · In progress: 1 · Done: 37*
