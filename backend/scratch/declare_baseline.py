@@ -11,14 +11,7 @@ from pymongo import MongoClient
 
 def main():
     url = os.environ.get("MONGO_URL") or os.environ.get("MONGODB_URI") or "mongodb://localhost:27017"
-    if "mongo:" in url or "@mongo" in url:
-         # running inside docker, localhost may not resolve to mongodb container
-         pass
-    else:
-         # fallback / default to container name if running in production docker environment
-         # but let's default to standard localhost unless overridden by env.
-         pass
-
+    
     # Try connecting
     print(f"Connecting to MongoDB at: {url}")
     client = MongoClient(url)
@@ -38,25 +31,40 @@ def main():
 
     # 2. Pause/trim the three underperforming single-leg buyer strategies
     to_pause = [
-        "UPSTOX NIFTY ATM Momentum",
-        "NIFTY Quick EMA",
-        "UPSTOX BANKNIFTY ATM Breakout"
+        "UPSTOX NIFTY ATM Option Momentum Buyer",
+        "NIFTY Quick EMA Scalper",
+        "UPSTOX BANKNIFTY ATM Option Breakout Buyer"
     ]
     
     print("\n2. Pausing underperforming single-leg buyer strategies:")
     for name in to_pause:
-        strategy = db.strategies.find_one({"name": name})
-        if not strategy:
+        # Find all documents with this name (could be multiple if drafts exist)
+        strategies = list(db.strategies.find({"name": name}))
+        if not strategies:
             print(f"   [WARNING] Strategy not found by name: '{name}'")
             continue
         
-        # Pause the strategy
-        db.strategies.update_one(
-            {"id": strategy["id"]},
-            {"$set": {"status": "paused", "updated_at": datetime.utcnow().isoformat()}}
-        )
-        updated = db.strategies.find_one({"id": strategy["id"]})
-        print(f"   Updated status of '{name}' (id={strategy['id']}) to: '{updated.get('status')}'")
+        for strategy in strategies:
+            # Set structure to debit_spread for the NIFTY Momentum Buyer as part of TASK-048
+            if name == "UPSTOX NIFTY ATM Option Momentum Buyer":
+                db.strategies.update_one(
+                    {"id": strategy["id"]},
+                    {"$set": {
+                        "status": "paused",
+                        "visual_config.options.structure": "debit_spread",
+                        "updated_at": datetime.utcnow().isoformat()
+                    }}
+                )
+                print(f"   Converted '{name}' (id={strategy['id']}) to debit_spread and paused.")
+            else:
+                db.strategies.update_one(
+                    {"id": strategy["id"]},
+                    {"$set": {
+                        "status": "paused",
+                        "updated_at": datetime.utcnow().isoformat()
+                    }}
+                )
+                print(f"   Paused '{name}' (id={strategy['id']}).")
 
     print("\nBaseline epoch and strategy trims declared successfully!")
 
