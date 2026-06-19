@@ -1618,21 +1618,21 @@ Context: Hermes becomes a QuantG operator/research assistant, NOT the trading br
 ### Stage 2 — Read-Only Tool Gateway (extend existing agent — START HERE for code)
 
 ### TASK-H005 — Finalize read-only tool schema (envelope + stale/confidence/warnings)
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H001
 
 **Problem**: the current `_run_agent_tool` envelope (`routes/ai.py:62`) carries name/status/timestamps but not the roadmap-required `source`, `stale`, `confidence`, `warnings`, `user/account`. **Steps**: add those fields to every tool response; document the final schema in the design doc. Additive, read-only, no behavior change.
 
 ### TASK-H006 — Wire the missing Stage-2 read-only tools into READ_ONLY_AGENT_TOOLS
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H005
 
 **Problem**: roadmap wants 12 tools; 8 exist. Most missing ones just WRAP endpoints/functions that already exist. **Add**: `get_live_readiness` (→ `/ops/live-readiness` ops.py:1091), `get_strategy_scorecard` (→ `/ops/risk-scorecard` ops.py:131), `get_backtest_summary` (→ `/ops/options-backtest` ops.py:147), `get_today_fills` (→ `db.trade_fills`), `get_skipped_signals` (→ `db.signals` FILTERED/SKIPPED), `get_daily_report` (→ `daily_strategy_reporter`), `search_wiki` (→ Knowledge Hub collection), `get_recent_alerts` (→ `notifications`), and alias `get_feed_status`/`get_token_status` to the existing `get_market_data_status`/`get_upstox_status`. **Verify**: each new tool returns a proper envelope; no mutating tool added; agent answers cite the new sources.
 
 ### TASK-H007 — Agent tool audit log (`agent_tool_audit` collection)
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
@@ -1681,14 +1681,14 @@ End-of-day P&L, per-strategy performance, no-trade/abnormal-loss flags. Reuse `d
 ### Stage 4 — In-App Hermes Analyst (extend existing AIBot UI)
 
 ### TASK-H011 — Add "Hermes mode" to Ask QuantG Agent
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
 Label/brand the existing agent as Hermes; system prompt enforces "cite tool output or say unsure". UI surface = existing `AIBot.jsx` + `components/aibot/`.
 
 ### TASK-H012 — Source cards on agent answers (cited tool outputs)
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H011
 
@@ -1817,10 +1817,15 @@ Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
 | TASK-053 | Analytics dashboard UI (scorecard + equity curves) + frontend data-theater fixes | baaef5c | 2026-06-19 |
 | TASK-H001 | Hermes integration design doc + safety policy (wiki) | (wiki) | 2026-06-20 |
 | TASK-H002 | Hermes safety policy (folded into H001 §5) | (wiki) | 2026-06-20 |
+| TASK-H005 | Finalize read-only tool schema (envelope + stale/confidence/warnings) | 0b29554 | 2026-06-20 |
+| TASK-H006 | Wire the missing Stage-2 read-only tools into READ_ONLY_AGENT_TOOLS | 0b29554 | 2026-06-20 |
+| TASK-H007 | Agent tool audit log (agent_tool_audit collection) | 0b29554 | 2026-06-20 |
+| TASK-H011 | Add "Hermes mode" branding and updated system prompt rules in ai.py and AIBot.jsx | 0b29554 | 2026-06-20 |
+| TASK-H012 | Save expanded tool metrics in ai.py and render cited tool source cards in ChatFeed.jsx | 0b29554 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 22 Hermes (H001–H022)*
-*Open: 18 · Blocked: 1 (TASK-H003) · In progress: 0 · Done: 56 (53 + H001/H002)*
-*Hermes next code task: TASK-H005 → TASK-H006 (extend the existing read-only agent in backend/routes/ai.py)*
+*Open: 13 · Blocked: 1 (TASK-H003) · In progress: 0 · Done: 61 (53 + H001/H002/H005/H006/H007/H011/H012)*
+*Hermes next code task: TASK-H008 / H010 (readiness and EOD reports)*

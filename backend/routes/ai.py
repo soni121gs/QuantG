@@ -35,12 +35,24 @@ class ActionDecisionReq(BaseModel):
 READ_ONLY_AGENT_TOOLS = [
     "get_execution_snapshot",
     "get_orders",
+    "get_today_orders",
     "get_positions",
+    "get_open_positions",
     "get_active_strategies",
     "get_upstox_status",
+    "get_token_status",
     "get_market_data_status",
+    "get_feed_status",
     "get_logs_errors",
     "get_risk_snapshot",
+    "get_live_readiness",
+    "get_today_fills",
+    "get_skipped_signals",
+    "get_strategy_scorecard",
+    "get_daily_report",
+    "get_recent_alerts",
+    "search_wiki",
+    "get_backtest_summary",
 ]
 
 
@@ -59,18 +71,33 @@ def _clip_json(value: Any, limit: int = 24000) -> Any:
     }
 
 
-async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
+async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     started = _utc_now()
+    source = "mongodb"
+    stale = False
+    confidence = 1.0
+    warnings = []
+    
     try:
         if name == "get_execution_snapshot":
             from server import execution_state_manager
             data = await execution_state_manager.build_snapshot(user, sync=False)
+            source = "execution_state_manager"
         elif name == "get_orders":
             data = await db.orders.find(
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
             ).sort("created_at", -1).to_list(15)
-        elif name == "get_positions":
+            source = "db.orders"
+        elif name == "get_today_orders":
+            from server import get_trading_day_window_ist
+            start, end = get_trading_day_window_ist()
+            data = await db.orders.find(
+                {"user_id": user["id"], "created_at": {"$gte": start, "$lt": end}},
+                {"_id": 0, "user_id": 0},
+            ).sort("created_at", -1).to_list(100)
+            source = "db.orders"
+        elif name in ("get_positions", "get_open_positions"):
             local_positions = await db.positions.find(
                 {"user_id": user["id"]},
                 {"_id": 0, "user_id": 0},
@@ -83,6 +110,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 "local_positions": local_positions,
                 "strategy_positions": strategy_positions,
             }
+            source = "db.positions / db.strategy_positions"
         elif name == "get_active_strategies":
             rows = await db.strategies.find(
                 {"user_id": user["id"]},
@@ -96,10 +124,16 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 row for row in rows
                 if str(row.get("status") or "").lower() in {"live", "active", "running", "paused"}
             ]
-        elif name == "get_upstox_status":
+            source = "db.strategies"
+        elif name in ("get_upstox_status", "get_token_status"):
             from server import get_user_upstox_status
             data = await get_user_upstox_status(user["id"])
-        elif name == "get_market_data_status":
+            source = "upstox_gateway"
+            if not data.get("connected") or not data.get("token_valid"):
+                stale = True
+                confidence = 0.0
+                warnings.append("Upstox API token is missing, invalid, or expired.")
+        elif name in ("get_market_data_status", "get_feed_status"):
             from server import _UPSTOX_GATEWAYS, _is_nse_market_open, option_ledger
             gateway = _UPSTOX_GATEWAYS.get(user["id"])
             gateway_status = gateway.status() if gateway else {"connected": False, "last_error": "Upstox gateway not initialized"}
@@ -109,6 +143,29 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 "upstox_gateway": gateway_status,
                 "latest_ticks": latest_ticks,
             }
+            source = "upstox_gateway / option_ledger"
+            market_open = bool(data.get("market_open", False))
+            feed_connected = bool(gateway_status.get("feed_running") or gateway_status.get("ws_running") or gateway_status.get("connected"))
+            if not feed_connected:
+                confidence = 0.0
+                warnings.append("Upstox market data feed is not connected.")
+            elif market_open:
+                last_tick = gateway_status.get("last_tick_time") or gateway_status.get("last_tick_at")
+                if not last_tick:
+                    stale = True
+                    confidence = 0.5
+                    warnings.append("No market feed ticks received yet today.")
+                else:
+                    try:
+                        lt = datetime.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+                        lt_utc = lt if lt.tzinfo else lt.replace(tzinfo=timezone.utc)
+                        age = (datetime.now(timezone.utc) - lt_utc.astimezone(timezone.utc)).total_seconds()
+                        if age > 180:
+                            stale = True
+                            confidence = 0.5
+                            warnings.append(f"Market feed ticks are stale by {round(age)} seconds.")
+                    except Exception:
+                        pass
         elif name == "get_logs_errors":
             strategy_errors = await db.strategies.find(
                 {"user_id": user["id"], "last_error": {"$nin": [None, ""]}},
@@ -127,6 +184,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 "position_errors": position_errors,
                 "recent_rejected_orders": rejected_orders,
             }
+            source = "db.strategies / db.strategy_positions / db.orders"
         elif name == "get_risk_snapshot":
             from server import get_user_settings
             settings = await get_user_settings(user["id"])
@@ -155,21 +213,158 @@ async def _run_agent_tool(name: str, user: Dict[str, Any]) -> Dict[str, Any]:
                 "per_strategy_capital": settings.get("per_strategy_capital"),
                 "max_position_size": settings.get("max_position_size"),
             }
+            source = "db.orders / db.positions / user_settings"
+        elif name == "get_live_readiness":
+            from routes.ops import ops_live_readiness
+            data = await ops_live_readiness(user=user)
+            source = "routes.ops.ops_live_readiness"
+            if isinstance(data, dict):
+                if data.get("status") == "NOT_READY":
+                    confidence = 0.5
+                    warnings.extend(data.get("reasons") or [])
+        elif name == "get_strategy_scorecard":
+            from routes.ops import ops_risk_scorecard
+            data = await ops_risk_scorecard(user=user)
+            source = "routes.ops.ops_risk_scorecard"
+        elif name == "get_backtest_summary":
+            from routes.ops import ops_options_backtest
+            data = await ops_options_backtest(user=user)
+            source = "routes.ops.ops_options_backtest"
+        elif name == "get_today_fills":
+            from server import get_trading_day_window_ist
+            start, end = get_trading_day_window_ist()
+            data = await db.trade_fills.find({
+                "user_id": user["id"],
+                "created_at": {"$gte": start, "$lt": end},
+            }, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(100)
+            source = "db.trade_fills"
+        elif name == "get_skipped_signals":
+            signals_skips = await db.signals.find({
+                "user_id": user["id"],
+                "status": {"$in": ["FILTERED", "REJECTED", "SKIPPED_SIGNAL", "BLOCKED", "skipped", "filtered", "rejected"]}
+            }, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
+            agg_skips = await db.skipped_signals.find({
+                "user_id": user["id"]
+            }, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(50)
+            data = {
+                "signals_skipped": signals_skips,
+                "aggregated_skipped_signals": agg_skips
+            }
+            source = "db.signals / db.skipped_signals"
+        elif name == "search_wiki":
+            import re
+            match_query = {"user_id": user["id"]}
+            if query:
+                words = [w.strip() for w in re.split(r'\s+', query) if len(w.strip()) > 2]
+                if words:
+                    clauses = []
+                    for word in words:
+                        escaped = re.escape(word)
+                        clauses.append({
+                            "$or": [
+                                {"title": {"$regex": escaped, "$options": "i"}},
+                                {"topic": {"$regex": escaped, "$options": "i"}},
+                                {"content": {"$regex": escaped, "$options": "i"}},
+                                {"tags": {"$regex": escaped, "$options": "i"}},
+                            ]
+                        })
+                    match_query["$and"] = clauses
+            data = await db.wiki_docs.find(match_query, {"_id": 0, "user_id": 0}).to_list(15)
+            source = "db.wiki_docs"
+        elif name == "get_daily_report":
+            first_strat = await db.strategies.find_one(
+                {"user_id": user["id"], "status": {"$in": ["live", "active", "running"]}}
+            )
+            if not first_strat:
+                first_strat = await db.strategies.find_one({"user_id": user["id"]})
+            if first_strat:
+                from routes.strategies import strategy_daily_report
+                data = await strategy_daily_report(sid=first_strat["id"], user=user)
+            else:
+                data = {"error": "No strategies found to generate daily report."}
+            source = "routes.strategies.strategy_daily_report"
+        elif name == "get_recent_alerts":
+            data = await db.notifications.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "user_id": 0, "dedupe_key": 0}
+            ).sort("created_at", -1).to_list(20)
+            source = "db.notifications"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
+
+        finished_time = _utc_now()
+        # insert success into db.agent_tool_audit
+        try:
+            audit_entry = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "user_id": user.get("id"),
+                "status": "ok",
+                "timestamp": finished_time,
+                "duration_ms": round((datetime.fromisoformat(finished_time) - datetime.fromisoformat(started)).total_seconds() * 1000, 2),
+                "args": {
+                    "query": query,
+                    "kwargs": kwargs
+                },
+                "stale": stale,
+                "confidence": confidence,
+                "warnings": warnings,
+                "created_at": _utc_now()
+            }
+            asyncio.create_task(db.agent_tool_audit.insert_one(audit_entry))
+        except Exception as audit_exc:
+            logger.warning("Failed to write to agent_tool_audit: %s", audit_exc)
+
         return {
             "name": name,
             "status": "ok",
+            "source": source,
+            "stale": stale,
+            "confidence": float(confidence),
+            "warnings": warnings,
+            "user": user.get("id"),
+            "account": user.get("id"),
+            "timestamp": finished_time,
             "started_at": started,
-            "finished_at": _utc_now(),
+            "finished_at": finished_time,
             "data": _clip_json(data),
         }
     except Exception as exc:
+        finished_time = _utc_now()
+        # insert error into db.agent_tool_audit
+        try:
+            audit_entry = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "user_id": user.get("id"),
+                "status": "error",
+                "timestamp": finished_time,
+                "duration_ms": round((datetime.fromisoformat(finished_time) - datetime.fromisoformat(started)).total_seconds() * 1000, 2),
+                "args": {
+                    "query": query,
+                    "kwargs": kwargs
+                },
+                "stale": True,
+                "confidence": 0.0,
+                "warnings": [f"Execution failed: {exc}"],
+                "created_at": _utc_now()
+            }
+            asyncio.create_task(db.agent_tool_audit.insert_one(audit_entry))
+        except Exception as audit_exc:
+            logger.warning("Failed to write to agent_tool_audit on error: %s", audit_exc)
+
         return {
             "name": name,
             "status": "error",
+            "source": source,
+            "stale": True,
+            "confidence": 0.0,
+            "warnings": [f"Execution failed: {exc}"],
+            "user": user.get("id"),
+            "account": user.get("id"),
+            "timestamp": finished_time,
             "started_at": started,
-            "finished_at": _utc_now(),
+            "finished_at": finished_time,
             "error": str(exc),
         }
 
@@ -268,7 +463,7 @@ def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], r
         for row in recent_messages[-8:]
     )
     prompt = f"""
-You are Ask QuantG Agent inside QuantG.
+You are Hermes, a trading operator and research assistant inside QuantG.
 
 STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2):
 - Although you cannot directly execute database changes, you can PROPOSE professional system actions for user approval.
@@ -284,7 +479,8 @@ PROPOSED_ACTION: {{"action": "update_profile", "params": {{"max_daily_loss": 500
 
 STRICT READ-ONLY DEFAULT RULES:
 - You must never place, cancel, modify, or exit trades directly.
-- If the data is missing, stale, failed, or insufficient, begin with "I am unsure" and explain exactly what data is missing.
+- Base your answers strictly on the provided read-only tool results. If the data is missing, stale, failed, or insufficient, begin with "I am unsure" and explain exactly what data is missing.
+- Cite the specific tool outputs, sources, and confidence scores in your response when explaining details so the user can verify them.
 - Keep the answer practical, concise, and grounded only in the tool data.
 - Mention which read-only tools you used when it helps the user trust the answer.
 
@@ -450,7 +646,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     ).sort("created_at", -1).to_list(8)
     recent_messages = list(reversed(recent_messages))
 
-    tool_results = await asyncio.gather(*[_run_agent_tool(name, user) for name in READ_ONLY_AGENT_TOOLS])
+    tool_results = await asyncio.gather(*[_run_agent_tool(name, user, query=content) for name in READ_ONLY_AGENT_TOOLS])
     reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
     
     # Parse and store proposed action
@@ -492,6 +688,19 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
             }
             for t in tool_results
         ],
+        "tools_used": [
+            {
+                "name": t["name"],
+                "status": t.get("status"),
+                "error": t.get("error"),
+                "source": t.get("source"),
+                "stale": t.get("stale"),
+                "confidence": t.get("confidence"),
+                "warnings": t.get("warnings"),
+                "timestamp": t.get("timestamp"),
+            }
+            for t in tool_results
+        ],
     }
     audit_doc = {
         "id": str(uuid.uuid4()),
@@ -523,14 +732,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
         "created_at": bot_msg["created_at"],
         "read_only": True,
         "pending_action": bot_msg["pending_action"],
-        "tools_used": [
-            {
-                "name": t["name"],
-                "status": t.get("status"),
-                "error": t.get("error"),
-            }
-            for t in tool_results
-        ],
+        "tools_used": bot_msg["tools_used"],
         "unavailable": unavailable,
     }
 

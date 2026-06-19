@@ -138,8 +138,8 @@ export default function AIBot() {
     <div className="space-y-5 pb-4" data-testid="ai-bot-page">
       <PageHeader
         eyebrow="Active Risk & Co-Pilot"
-        title="Ask QuantG Agent"
-        subtitle="Trading diagnostics and governed action proposals, grounded in your live account."
+        title="Hermes Analyst Co-Pilot"
+        subtitle="Governance-gated operations and deep research co-pilot, grounded in live terminal context."
         badge={<StatusBadge tone={profile?.paper_mode ? "paper" : "live"}>{profile?.paper_mode ? "Paper" : "Live"}</StatusBadge>}
       />
 

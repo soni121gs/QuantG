@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, User, ArrowRight, ShieldCheck, Sliders, CheckCircle2, XCircle, ShieldAlert, AlertCircle } from "lucide-react";
+import { Bot, User, ArrowRight, ShieldCheck, Sliders, CheckCircle2, XCircle, ShieldAlert, AlertCircle, Sparkles } from "lucide-react";
 import { Button } from "../ui/button";
 import { renderMarkdown } from "../../lib/markdown";
 
@@ -10,6 +10,72 @@ const FIELD_LABELS = {
   per_strategy_capital: { label: "Per-Strategy Capital", fmt: (v) => `${Number(v).toLocaleString()} INR` },
   max_trades_per_day: { label: "Max Trades / Day", fmt: (v) => `${v}` },
   default_qty: { label: "Default Quantity", fmt: (v) => `${v}` },
+};
+
+const ToolCitationCard = ({ tool }) => {
+  const [expanded, setExpanded] = React.useState(false);
+  const isOk = tool.status === "ok";
+  const hasWarnings = tool.warnings && tool.warnings.length > 0;
+  const isStale = tool.stale === true;
+  
+  const formatToolName = (name) => {
+    return name
+      .replace(/^get_/, "")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  const statusColorClass = !isOk 
+    ? "text-rose-400 bg-rose-950/20 border-rose-500/20" 
+    : isStale || hasWarnings
+      ? "text-amber-400 bg-amber-950/20 border-amber-500/20"
+      : "text-emerald-400 bg-emerald-950/20 border-emerald-500/20";
+
+  return (
+    <div className={`rounded border p-2 bg-[var(--qd-surface-3)]/35 hover:bg-[var(--qd-surface-3)]/60 transition-colors cursor-pointer text-xs space-y-1 min-w-[140px] flex-1 max-w-[220px] border-[var(--qd-border)]`} onClick={() => setExpanded(!expanded)}>
+      <div className="flex items-center justify-between gap-1">
+        <span className="font-semibold text-[var(--qd-text-2)] truncate text-[11px]" title={tool.name}>
+          {formatToolName(tool.name)}
+        </span>
+        <span className={`inline-flex items-center px-1 rounded-full font-mono text-[8px] border font-bold ${statusColorClass}`}>
+          {!isOk ? "Error" : isStale ? "Stale" : "Fresh"}
+        </span>
+      </div>
+      
+      <div className="flex flex-col text-[9px] text-[var(--qd-text-3)] font-mono leading-tight">
+        <div className="truncate">Src: <span className="text-[var(--qd-text-2)]">{tool.source || "unknown"}</span></div>
+        {tool.confidence !== undefined && (
+          <div>Conf: <span className={tool.confidence >= 0.8 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+            {Math.round(tool.confidence * 100)}%
+          </span></div>
+        )}
+        {tool.timestamp && (
+          <div className="truncate">Time: {new Date(tool.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</div>
+        )}
+      </div>
+
+      {hasWarnings && tool.warnings && (
+        <div className="space-y-0.5 mt-1 text-[8px] text-amber-300 font-mono bg-amber-500/5 p-1 rounded border border-amber-500/10 leading-tight">
+          {tool.warnings.map((w, idx) => (
+            <div key={idx} className="flex gap-0.5 items-start">
+              <span>•</span>
+              <span className="leading-none">{w}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-1.5 pt-1.5 border-t border-[var(--qd-border)]/50 font-mono text-[9px] text-[var(--qd-text-3)] max-h-32 overflow-y-auto whitespace-pre-wrap break-all bg-[var(--qd-bg)]/80 p-1 rounded" onClick={(e) => e.stopPropagation()}>
+          {!isOk ? (
+            <span className="text-[var(--qd-loss)]">{tool.error}</span>
+          ) : (
+            <span>Data source verified successfully. Status OK.</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
 const Message = ({ m, profile, onApprove, onReject }) => {
@@ -103,16 +169,12 @@ const Message = ({ m, profile, onApprove, onReject }) => {
 
         {!isUser && m.tools_used?.length > 0 && (
           <div className="mt-4 border-t border-[var(--qd-border)]/70 pt-2.5">
-            <div className="mb-1.5 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] font-semibold">Active context feed</div>
-            <div className="flex flex-wrap gap-1">
-              {m.tools_used.map((tool) => (
-                <span
-                  key={tool.name}
-                  className={`rounded border px-2 py-0.5 font-mono text-[9px] ${tool.status === "ok" ? "border-[var(--qd-border)] text-[var(--qd-text-3)]" : "border-[var(--qd-loss)] text-[var(--qd-loss)]"}`}
-                  title={tool.error || tool.name}
-                >
-                  {tool.name}
-                </span>
+            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] font-semibold flex items-center gap-1">
+              <Sparkles size={10} className="text-[var(--qd-accent)] animate-pulse" /> Hermes Data Citations
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {m.tools_used.map((tool, idx) => (
+                <ToolCitationCard key={tool.name || idx} tool={tool} />
               ))}
             </div>
           </div>

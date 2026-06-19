@@ -55,11 +55,42 @@ Target adds (most wrap endpoints that already exist):
 
 ## 4. Tool envelope contract (extend current envelope)
 
-Every tool response MUST carry: `source`, `timestamp`, `user`/`account`, `stale` flag,
-`confidence`, `warnings`. The current envelope has source/timestamps/status; **add
-`stale`, `confidence`, `warnings`** to `_run_agent_tool` (`routes/ai.py:62`). Rule that
-drives the whole design: **Wiki is context; DB/orders/fills/readiness are truth.** Answers
-must cite tool output or say "unsure".
+Every tool response MUST carry: `source`, `timestamp`, `user`/`account`, `stale` flag, `confidence`, `warnings`. The current envelope has source/timestamps/status; **add `stale`, `confidence`, `warnings`** to `_run_agent_tool` (`routes/ai.py:62`). Rule that drives the whole design: **Wiki is context; DB/orders/fills/readiness are truth.** Answers must cite tool output or say "unsure".
+
+### Final JSON Response Schema Envelope
+```json
+{
+  "name": "get_orders",
+  "status": "ok",
+  "source": "db.orders",
+  "stale": false,
+  "confidence": 1.0,
+  "warnings": [],
+  "user": "trader-id-123",
+  "account": "trader-id-123",
+  "timestamp": "2026-06-20T00:10:00.000Z",
+  "started_at": "2026-06-20T00:09:59.900Z",
+  "finished_at": "2026-06-20T00:10:00.000Z",
+  "data": { ... }
+}
+```
+If an exception occurs during tool execution, it returns:
+```json
+{
+  "name": "get_orders",
+  "status": "error",
+  "source": "db.orders",
+  "stale": true,
+  "confidence": 0.0,
+  "warnings": ["Execution failed: Connection timeout"],
+  "user": "trader-id-123",
+  "account": "trader-id-123",
+  "timestamp": "2026-06-20T00:10:00.000Z",
+  "started_at": "2026-06-20T00:09:59.900Z",
+  "finished_at": "2026-06-20T00:10:00.000Z",
+  "error": "Connection timeout"
+}
+```
 
 ## 5. Safety policy (TASK-H002, folded in)
 
