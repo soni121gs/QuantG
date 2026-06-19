@@ -1597,6 +1597,191 @@ Context: the bottleneck is no longer engineering — it's proving a strategy act
 
 ---
 
+## PRIORITY 11 — Hermes Agent Integration (Operator + Research Assistant)
+
+Context: Hermes becomes a QuantG operator/research assistant, NOT the trading brain. QuantG stays the source of truth for execution/P&L/readiness/broker/strategy state and all live gates. **Key fact (verified 2026-06-20):** the in-app read-only "Ask QuantG Agent" ALREADY EXISTS (`backend/routes/ai.py` — `agent_router`, `READ_ONLY_AGENT_TOOLS` 8 tools, `_run_agent_tool`, local fallback, `PROPOSED_ACTION` draft/approve seed; UI `frontend/src/pages/AIBot.jsx`). So Hermes is a **rebrand + extension**, not greenfield — Stages 2 & 4 are ~80% built. Founder decisions 2026-06-20: (1) **design-doc first**, then code; (2) **read-only now**, approval-gated **non-trading** writes later (Stage 7). Design + safety policy live in `wiki/Projects/Hermes Integration Design Doc.md` and `wiki/Projects/Hermes Agent Integration Roadmap.md`. Rule for every Hermes feature: **wiki = context; DB/orders/fills/readiness = truth.** Security boundary = the read-only tool allowlist — NEVER register a mutating tool. Permanently forbidden at all stages: place/cancel/modify/exit trades, enable live trading, change broker creds, change strategy/risk/capital settings, direct mutation of trading collections.
+
+### Stage 0 — Design & Safety Contract
+
+### TASK-H001 — Hermes integration design doc + safety policy
+- **Status**: `[x]` 2026-06-20 — `wiki/Projects/Hermes Integration Design Doc.md` (folds in TASK-H002 safety policy)
+- **Tier**: 2
+
+**Done**: design doc grounded in a live read of `routes/ai.py`; maps existing agent → roadmap stages; defines tool-envelope contract (+ stale/confidence/warnings), the read-only safety policy, and the Stage-7 approval-gated non-trading write end state. Folds in TASK-H002.
+
+### TASK-H002 — Hermes safety policy (allowed tools / forbidden actions / audit / rollout gates)
+- **Status**: `[x]` 2026-06-20 — folded into the TASK-H001 design doc (§5 Safety policy)
+- **Tier**: 2
+
+---
+
+### Stage 2 — Read-Only Tool Gateway (extend existing agent — START HERE for code)
+
+### TASK-H005 — Finalize read-only tool schema (envelope + stale/confidence/warnings)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H001
+
+**Problem**: the current `_run_agent_tool` envelope (`routes/ai.py:62`) carries name/status/timestamps but not the roadmap-required `source`, `stale`, `confidence`, `warnings`, `user/account`. **Steps**: add those fields to every tool response; document the final schema in the design doc. Additive, read-only, no behavior change.
+
+### TASK-H006 — Wire the missing Stage-2 read-only tools into READ_ONLY_AGENT_TOOLS
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H005
+
+**Problem**: roadmap wants 12 tools; 8 exist. Most missing ones just WRAP endpoints/functions that already exist. **Add**: `get_live_readiness` (→ `/ops/live-readiness` ops.py:1091), `get_strategy_scorecard` (→ `/ops/risk-scorecard` ops.py:131), `get_backtest_summary` (→ `/ops/options-backtest` ops.py:147), `get_today_fills` (→ `db.trade_fills`), `get_skipped_signals` (→ `db.signals` FILTERED/SKIPPED), `get_daily_report` (→ `daily_strategy_reporter`), `search_wiki` (→ Knowledge Hub collection), `get_recent_alerts` (→ `notifications`), and alias `get_feed_status`/`get_token_status` to the existing `get_market_data_status`/`get_upstox_status`. **Verify**: each new tool returns a proper envelope; no mutating tool added; agent answers cite the new sources.
+
+### TASK-H007 — Agent tool audit log (`agent_tool_audit` collection)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+**Problem**: tool calls aren't persistently audited (also the SEBI audit-trail seed). **Steps**: log every `_run_agent_tool` call — name, user, timestamp, args, status — to `agent_tool_audit`; best-effort (never block the agent). **Verify**: each agent question writes one audit row per tool used.
+
+---
+
+### Stage 1 / 3 — Sidecar & Runbook (infra; needs founder runtime/channel inputs)
+
+### TASK-H003 — Install Hermes in an isolated environment (sidecar)
+- **Status**: `⛔` blocked — pending founder inputs (runtime: same VPS / separate VPS / Windows-first; model/provider)
+- **Tier**: 3
+
+### TASK-H004 — Hermes deployment runbook
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H003
+
+---
+
+### Stage 3 — Daily Operator Reports
+
+### TASK-H008 — Market-Open Readiness Report
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+Identify token expiry, feed stalls, strategies-armed count, readiness changes at/just-before open. Reuses `get_live_readiness`/`get_token_status`/`get_feed_status`. Overlaps with TASK-024 ReadinessBanner + TASK-047 watchdog — reuse, don't duplicate.
+
+### TASK-H009 — Intraday Health Watch
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+Periodic check for feed stalls, no-trade drought, abnormal loss, stale positions. Reuse the TASK-047 watchdog signals.
+
+### TASK-H010 — EOD Trading Report
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+End-of-day P&L, per-strategy performance, no-trade/abnormal-loss flags. Reuse `daily_strategy_reporter` + `daily_reports` (TASK-012).
+
+---
+
+### Stage 4 — In-App Hermes Analyst (extend existing AIBot UI)
+
+### TASK-H011 — Add "Hermes mode" to Ask QuantG Agent
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+Label/brand the existing agent as Hermes; system prompt enforces "cite tool output or say unsure". UI surface = existing `AIBot.jsx` + `components/aibot/`.
+
+### TASK-H012 — Source cards on agent answers (cited tool outputs)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H011
+
+Render each cited tool's source, timestamp, stale-data warning, and confidence as a card under the answer.
+
+---
+
+### Stage 5 — QuantG Hermes Skill Pack
+
+### TASK-H013 — Create QuantG Hermes skill pack
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+Skills: `quantg-live-readiness`, `quantg-why-no-trade`, `quantg-strategy-loss-review`, `quantg-feed-token-diagnosis`, `quantg-eod-report`, `quantg-backtest-review`, `quantg-vps-deploy-check`, `quantg-incident-postmortem`. Each composes read-only tools; wiki=context, DB=truth.
+
+### TASK-H014 — Sync selected wiki context with Hermes
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H013
+
+Expose Knowledge Hub notes as retrievable context (`search_wiki`), clearly tagged context-not-truth.
+
+---
+
+### Stage 6 — Strategy Research Assistant
+
+### TASK-H015 — Weekly Strategy Ranking Report
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H006
+
+Reuse the existing scorecard + the scheduled `quantg-credit-spread-weekly-rank` agent (TASK-046).
+
+### TASK-H016 — Backtest Experiment Generator
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H015
+
+Propose backtest experiments over `POST /ops/options-backtest`; draft-only.
+
+### TASK-H017 — Strategy Experiment Ledger
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H016
+
+Track every hypothesis, version, clean baseline, result, decision, reason.
+
+---
+
+### Stage 7 — Approval-Gated Operations (NON-TRADING writes only — founder-approved end state)
+
+### TASK-H018 — Draft-only operations
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H007
+
+Extend the existing `PROPOSED_ACTION` path (`routes/ai.py:232`) so Hermes emits drafts that never auto-apply.
+
+### TASK-H019 — Founder approval queue
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H018
+
+In-app queue where the founder approves/rejects a pending Hermes draft before it applies.
+
+### TASK-H020 — Safe (non-trading) mutation framework
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H019
+
+Approved-only executors for: write wiki notes, create TASKS.md entries, create incident reports, draft PR summaries. STILL forbidden: live order place/cancel, live-mode enable, broker-cred changes, risk overrides.
+
+---
+
+### Stage 8 — Incident Commander
+
+### TASK-H021 — Automated incident timeline
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H007 (audit log), TASK-H009
+
+Reconstruct what happened/when/which strategies/whether trading stayed gated from `agent_tool_audit` + `core_events` + notifications.
+
+### TASK-H022 — Postmortem generator
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H021
+
+Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1630,9 +1815,12 @@ Context: the bottleneck is no longer engineering — it's proving a strategy act
 | TASK-051 | Option-priced backtester + risk-adjusted scorecard | (this session) | 2026-06-19 |
 | TASK-052 | Real underlying OHLC → options backtester (db.candles) + SENSEX collector | (this session) | 2026-06-19 |
 | TASK-053 | Analytics dashboard UI (scorecard + equity curves) + frontend data-theater fixes | baaef5c | 2026-06-19 |
+| TASK-H001 | Hermes integration design doc + safety policy (wiki) | (wiki) | 2026-06-20 |
+| TASK-H002 | Hermes safety policy (folded into H001 §5) | (wiki) | 2026-06-20 |
 
 ---
 
-*Last updated: 2026-06-19*
-*Total tasks: 53*
-*Open: 0 · In progress: 0 · Done: 53*
+*Last updated: 2026-06-20*
+*Total tasks: 53 + 22 Hermes (H001–H022)*
+*Open: 18 · Blocked: 1 (TASK-H003) · In progress: 0 · Done: 56 (53 + H001/H002)*
+*Hermes next code task: TASK-H005 → TASK-H006 (extend the existing read-only agent in backend/routes/ai.py)*
