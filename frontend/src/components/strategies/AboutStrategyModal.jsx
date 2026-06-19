@@ -29,7 +29,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 overflow-y-auto" onClick={onClose} data-testid="about-strategy-modal">
-      <div className="qd-card w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 md:p-8 flex flex-col gap-6" onClick={(e) => e.stopPropagation()}>
+      <div className="qd-card qd-modal-card w-full max-w-4xl max-h-[90vh] p-6 md:p-8 flex flex-col gap-6" onClick={(e) => e.stopPropagation()}>
         
         {/* Header */}
         <div className="flex items-start justify-between border-b border-[var(--qd-border)] pb-4">

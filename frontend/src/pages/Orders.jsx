@@ -229,7 +229,7 @@ export default function Orders() {
       {/* Emergency order entry is intentionally hidden in the Upstox-only algo flow. */}
       {open && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
-          <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="qd-card w-full max-w-md p-6 space-y-3" data-testid="order-modal">
+          <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="qd-card w-full max-w-md max-h-[90vh] qd-modal-card p-6 space-y-3" data-testid="order-modal">
             <h2 className="font-head text-xl text-white">Place Order</h2>
             <div className="grid grid-cols-2 gap-2">
               <div>

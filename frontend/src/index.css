@@ -441,6 +441,11 @@ a:focus-visible {
   overflow: hidden;
 }
 
+.qd-modal-card {
+  overflow-y: auto !important;
+  overflow-x: hidden;
+}
+
 .qd-card::before,
 .qd-card-tight::before,
 .glass-card::before,

@@ -275,7 +275,7 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
   if (isPaper === false) {
     return (
       <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
-        <div className="qd-card max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="qd-card max-w-md w-full max-h-[90vh] qd-modal-card p-6" onClick={(e) => e.stopPropagation()}>
           <h2 className="font-head text-xl text-white mb-2">Switch back to Paper?</h2>
           <p className="text-sm text-[var(--qd-text-2)] mb-4">Live strategies will continue running but orders will be simulated locally.</p>
           <div className="flex gap-2">
@@ -290,7 +290,7 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
   const allOk = data?.ready;
   return (
     <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="qd-card max-w-xl w-full p-6" onClick={(e) => e.stopPropagation()} data-testid="readiness-modal">
+      <div className="qd-card max-w-xl w-full max-h-[90vh] qd-modal-card p-6" onClick={(e) => e.stopPropagation()} data-testid="readiness-modal">
         <div className="flex items-center gap-2 mb-3">
           <Zap size={22} className="text-[var(--qd-loss)]" />
           <h2 className="font-head text-xl text-white">Go LIVE - Pre-flight Check</h2>
