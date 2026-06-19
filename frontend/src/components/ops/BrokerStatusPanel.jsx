@@ -30,8 +30,9 @@ const TelemetryMetric = ({ label, value, desc, status, isPulse }) => {
   );
 };
 
-export default function BrokerStatusPanel({ data, busy, onUpstoxLogin, simulatedLatency }) {
+export default function BrokerStatusPanel({ data, busy, onUpstoxLogin }) {
   const upstox = data?.upstox || {};
+  const ticker = data?.ticker || {};
   const feedState = upstox.feed_status || upstox.gateway?.feed_status || data?.ticker?.feed_status || {};
   const prefs = data?.broker_preferences || {};
   const isUpstoxActive = prefs.data_broker === "upstox" || prefs.execution_broker === "upstox";
@@ -96,11 +97,12 @@ export default function BrokerStatusPanel({ data, busy, onUpstoxLogin, simulated
           desc="runtime_state.sqlite3 pool"
           status="success"
         />
-        <TelemetryMetric 
-          label="Order Latency (API)" 
-          value={upstox.connected ? `${simulatedLatency}ms` : "-"} 
-          desc="Simulated dispatch round-trip"
-          status={upstox.connected ? "success" : "idle"}
+        <TelemetryMetric
+          label="Last Market Tick"
+          value={ticker.last_tick_at ? fmt(ticker.last_tick_at) : (upstox.feed_running ? "Awaiting tick" : "-")}
+          desc={`${ticker.subscribed_tokens ?? 0} tokens subscribed`}
+          status={ticker.last_tick_at ? "success" : (upstox.feed_running ? "warn" : "idle")}
+          isPulse={!!ticker.last_tick_at}
         />
       </div>
 

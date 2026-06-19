@@ -224,7 +224,14 @@ export default function Dashboard() {
   // Tab Filtering
   const equityPositions = useMemo(() => positions.filter((p) => p.asset_type === "equity" || p.exchange === "NSE"), [positions]);
   const equityOrders = useMemo(() => orders.filter((o) => o.exchange === "NSE"), [orders]);
-  const foPositions = useMemo(() => positions.filter((p) => p.option_type || p.symbol.endsWith("CE") || p.symbol.endsWith("PE") || p.exchange === "NFO" || p.exchange === "BFO"), [positions]);
+  // Verbose option symbols look like "NIFTY 23200 CE 09 JUN 26" — they contain a
+  // spaced CE/PE token and never end with "CE"/"PE", so endsWith misses every real
+  // option. Match the spaced token (and guard against missing symbols).
+  const isOptionSymbol = (sym) => {
+    const s = String(sym || "");
+    return s.includes(" CE ") || s.includes(" PE ") || /\bCE\b|\bPE\b/.test(s);
+  };
+  const foPositions = useMemo(() => positions.filter((p) => p.option_type || p.exchange === "NFO" || p.exchange === "BFO" || isOptionSymbol(p.symbol)), [positions]);
   const foStrategies = useMemo(() => strategies.filter((s) => s.asset_class === "option" || s.strategy_id.includes("Straddle") || s.strategy_id.includes("Scalper") || s.name.includes("Option")), [strategies]);
   const leaderboardRows = useMemo(() => strategyAnalytics?.leaderboard || [], [strategyAnalytics]);
   const bestStrategy = strategyAnalytics?.best_strategy;

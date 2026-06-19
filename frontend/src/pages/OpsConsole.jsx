@@ -41,7 +41,6 @@ export default function OpsConsole() {
   const [data, setData] = useState(null);
   const [fundsData, setFundsData] = useState(null);
   const [busy, setBusy] = useState("");
-  const [simulatedLatency, setSimulatedLatency] = useState(12);
   const [pendingUsers, setPendingUsers] = useState([]);
   const [needsReviewOrders, setNeedsReviewOrders] = useState([]);
   const [reconciliationBreaks, setReconciliationBreaks] = useState(null);
@@ -105,9 +104,6 @@ export default function OpsConsole() {
 
       const ff = await api.get("/ops/feature-flags").catch(() => ({ data: { features: [] } }));
       setFeatureFlags(ff.data?.features || []);
-
-      // Jitter latency slightly to reflect actual HFT dispatcher round-trips
-      setSimulatedLatency(Math.floor(10 + Math.random() * 8));
     } catch (e) {
       console.error("Ops diagnostics loading failed", e);
     }
@@ -230,7 +226,7 @@ export default function OpsConsole() {
         <div className="flex items-center gap-3">
           <div className="hidden lg:block text-right pr-2">
             <div className="text-[10px] text-[var(--qd-text-3)] uppercase font-mono">Telemetry Feed</div>
-            <div className="text-xs text-[var(--qd-text-2)] font-mono">Sync Interval: 4.0s</div>
+            <div className="text-xs text-[var(--qd-text-2)] font-mono">Sync Interval: 15s</div>
           </div>
           
           <button 
@@ -389,7 +385,6 @@ export default function OpsConsole() {
             data={data}
             busy={busy}
             onUpstoxLogin={handleUpstoxLogin}
-            simulatedLatency={simulatedLatency}
           />
 
           <MarginMeterPanel
@@ -653,27 +648,6 @@ const DiagRow = ({ k, v }) => (
     <span className="text-white text-right font-medium truncate select-all flex-1 min-w-0">{v}</span>
   </div>
 );
-
-// Performance Telemetry Metric
-const TelemetryMetric = ({ label, value, desc, status, isPulse }) => {
-  const getStatusColor = () => {
-    if (status === "success") return "text-[var(--qd-profit)]";
-    if (status === "warn") return "text-[var(--qd-warn)]";
-    if (status === "error") return "text-[var(--qd-loss)]";
-    return "text-[var(--qd-text-3)]";
-  };
-  
-  return (
-    <div className="bg-[var(--qd-surface)] border border-[rgba(255,255,255,0.04)] rounded-md p-3">
-      <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">{label}</div>
-      <div className="flex items-center gap-1.5 mt-1">
-        {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
-        <div className={`font-head text-xs sm:text-sm font-bold ${getStatusColor()}`}>{value}</div>
-      </div>
-      <div className="text-[9px] text-[var(--qd-text-3)] mt-0.5 font-mono">{desc}</div>
-    </div>
-  );
-};
 
 // Checklist Item
 const ChecklistItem = ({ label, checked, details }) => (

@@ -15,6 +15,7 @@ import {
   X,
   UserCircle,
   TrendingUp,
+  TrendingDown,
   ShieldAlert,
   HeartPulse,
   RefreshCw,
@@ -31,6 +32,7 @@ import {
   PanelRight,
   PanelRightClose,
   BookOpen,
+  BarChart3,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -49,6 +51,7 @@ const NAV_GROUPS = [
       { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
       { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
       { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
+      { to: "/analytics", icon: BarChart3, label: "Analytics", id: "nav-analytics" },
     ],
   },
   {
@@ -95,18 +98,18 @@ const MOBILE_NAV = [
   { to: "/ops", icon: ShieldAlert, label: "Risk", id: "mnav-ops" },
 ];
 
-const Sparkline = ({ positive = true }) => (
-  <svg viewBox="0 0 92 30" className="h-8 w-24" aria-hidden="true">
-    <path
-      d={positive ? "M2 22 L16 18 L28 20 L42 12 L56 15 L70 7 L90 10" : "M2 8 L16 12 L28 10 L42 18 L56 15 L70 24 L90 20"}
-      fill="none"
-      stroke={positive ? "var(--qd-profit)" : "var(--qd-loss)"}
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+// Honest P&L direction glyph. (A real sparkline needs an intraday equity series,
+// which the shell doesn't carry — a hardcoded fake line would be data-theater.)
+const PnlTrend = ({ positive = true }) => {
+  const Icon = positive ? TrendingUp : TrendingDown;
+  return (
+    <Icon
+      size={16}
+      className={positive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}
+      aria-hidden="true"
     />
-  </svg>
-);
+  );
+};
 
 const getSeverityTone = (severity) => {
   switch (severity) {
@@ -193,7 +196,7 @@ const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
             <div className="font-mono text-xs text-[var(--qd-text-2)]">{pnlPositive ? "Positive" : "Negative"} session</div>
           </div>
-          <Sparkline positive={pnlPositive} />
+          <PnlTrend positive={pnlPositive} />
         </div>
         <div>
           <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">
@@ -472,7 +475,7 @@ export default function Layout({ children }) {
               >
                 P&L
               </span>
-              <Sparkline positive={(executionSummary?.net_pnl ?? 0) >= 0} />
+              <PnlTrend positive={(executionSummary?.net_pnl ?? 0) >= 0} />
               <span
                 className={`font-mono text-xs md:text-sm font-bold ${
                   (executionSummary?.net_pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
