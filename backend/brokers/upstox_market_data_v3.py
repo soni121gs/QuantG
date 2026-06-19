@@ -254,8 +254,13 @@ def build_subscription_payload(instrument_keys: Iterable[str], mode: str = "ltpc
     final_mode = "option_greeks" if mode == "option_chain" else (mode or "ltpc")
     if final_mode not in SUPPORTED_MODES:
         raise ValueError(f"Unsupported Upstox feed mode: {mode}")
-    if final_mode == "full":
-        final_mode = "full_d5"
+    # Send the documented subscription mode string VERBATIM. Upstox's subscribe API
+    # expects "full" (it echoes it back as requestMode="full_d5" in *responses*, but
+    # sending "full_d5" as the SUBSCRIBE mode is silently rejected — the connection and
+    # market_info handshake still succeed, yet ZERO data frames ever stream, so
+    # latest_tick() stays empty and everything falls back to lagging historical REST.
+    # This was the root cause of "first tick received = 0" all session. Verified by
+    # live frame capture 2026-06-19 (mode="full" -> 8 data frames; "full_d5" -> 0).
     payload = {
         "guid": uuid.uuid4().hex,
         "method": method,
