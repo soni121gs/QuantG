@@ -128,6 +128,49 @@ async def ops_scorecard(days: int = 7, scope: str = "me", user=Depends(get_curre
     return await build_scorecard(db, days=days, user_id=uid)
 
 
+@router.get("/risk-scorecard")
+async def ops_risk_scorecard(since: Optional[str] = None, scope: str = "me", user=Depends(get_current_user)):
+    """Risk-adjusted scorecard from REALIZED trades (db.trades): Sharpe, Sortino,
+    profit-factor, expectancy, max-drawdown and an A–F grade per strategy — ranks
+    strategies by EDGE, not raw P&L. `since` (ISO) scores only a clean window;
+    scope=all is owner-only."""
+    from core.strategy_scorecard import build_scorecard as build_risk_scorecard, summarize_by_structure
+    uid: Optional[str] = user["id"]
+    if scope == "all":
+        if user.get("role") != "owner":
+            raise HTTPException(status_code=403, detail="scope=all requires owner role")
+        uid = None
+    rows = await build_risk_scorecard(db, user_id=uid, since_iso=since)
+    return {"rows": rows, "by_structure": summarize_by_structure(rows)}
+
+
+@router.post("/options-backtest")
+async def ops_options_backtest(
+    strategy_id: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    """Option-priced backtest over db.historical_chains (real CE/PE premiums incl.
+    theta + spread cost), supporting single_leg / credit_spread / debit_spread.
+    Omit strategy_id to run all the caller's option strategies. Returns metrics
+    per strategy; per-trade detail only when a single strategy_id is given."""
+    from core.options_backtest import OptionsBacktestEngine
+    engine = OptionsBacktestEngine(db)
+    query: Dict[str, Any] = {"user_id": user["id"], "visual_config.options.enabled": True}
+    if strategy_id:
+        query["id"] = strategy_id
+    results: List[Dict[str, Any]] = []
+    async for strat in db.strategies.find(query):
+        res = await engine.run(strat, start_date=start, end_date=end)
+        if not strategy_id:
+            res.pop("trades", None)
+            res.pop("equity_curve", None)
+        results.append(res)
+    results.sort(key=lambda r: r.get("sharpe", -999), reverse=True)
+    return {"count": len(results), "results": results}
+
+
 @router.get("/feature-flags")
 async def ops_feature_flags(user=Depends(get_current_user)):
     """Read-only state of the Phase 2 options-alpha features (env-driven).
