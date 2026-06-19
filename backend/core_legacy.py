@@ -171,3 +171,7 @@ class StrategyRuntimeSettingsReq(BaseModel):
     target_r_multiple: Optional[float] = None
     broker: Optional[str] = None
     mode: Optional[str] = None
+    structure: Optional[str] = None
+    spread_width: Optional[int] = None
+    short_delta: Optional[float] = None
+    product: Optional[str] = None

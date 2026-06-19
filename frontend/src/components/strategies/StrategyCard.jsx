@@ -54,7 +54,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
   const paused = s.status === "paused";
   const cardOpts = s.visual_config?.options || {};
   const isOptionStrat = !!cardOpts.enabled;
-  const isSpreadCard = cardOpts.structure === "credit_spread";
+  const isSpreadCard = cardOpts.structure === "credit_spread" || cardOpts.structure === "debit_spread";
   const maxTd = s.visual_config?.risk?.max_trades_day;
   const tradesToday = s.order_count_today ?? 0;
   const atCap = maxTd != null && tradesToday >= maxTd;
@@ -130,7 +130,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
             </span>
             {isOptionStrat && (
               <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
-                {isSpreadCard ? "SPREAD" : "SINGLE-LEG"}
+                {cardOpts.structure === "debit_spread" ? "DEBIT SPREAD" : cardOpts.structure === "credit_spread" ? "CREDIT SPREAD" : "SINGLE-LEG"}
               </span>
             )}
             {maxTd != null && (

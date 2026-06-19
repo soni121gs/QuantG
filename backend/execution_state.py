@@ -209,12 +209,11 @@ class ExecutionStateManager:
             except (TypeError, ValueError):
                 db_ltp = None
             db_pnl = float(row.get("unrealized_pnl") or 0) if row.get("unrealized_pnl") is not None else None
-            # Phase 2 #5: credit spreads are one position with two legs. The value
-            # to close is short_ltp - long_ltp (stored as spread_value); avg_price
-            # already holds the net credit. Map TP/SL to the spread value levels so
-            # the existing Positions table renders sensibly, and expose the extras.
+            # Phase 2 #5: credit/debit spreads are one position with two legs. The value
+            # to close is short_ltp - long_ltp or long_ltp - short_ltp (stored as spread_value);
+            # Map TP/SL to the spread value levels so the existing Positions table renders sensibly.
             structure = row.get("structure")
-            is_spread = structure == "credit_spread"
+            is_spread = structure in ("credit_spread", "debit_spread")
             # Phase 2 #4/#2: surface entry greeks (δ/θ/IV) + the delta target the
             # selector aimed for, so the UI can show "δ 0.46 (target 0.45)".
             g_entry = row.get("greeks_at_entry") or {}
@@ -248,12 +247,13 @@ class ExecutionStateManager:
             }
             if is_spread:
                 pos_out.update({
-                    "structure": "credit_spread",
+                    "structure": structure,
                     "symbol": row.get("target_symbol") or pos_out["symbol"],
                     "last_ltp": row.get("spread_value") if row.get("spread_value") is not None else db_ltp,
                     "take_profit": row.get("spread_tp_value"),
                     "stop_loss": row.get("spread_sl_value"),
                     "net_credit": row.get("net_credit"),
+                    "net_debit": row.get("net_debit"),
                     "max_loss": row.get("max_loss"),
                     "max_loss_total": row.get("max_loss_total"),
                     "legs": row.get("legs") or [],

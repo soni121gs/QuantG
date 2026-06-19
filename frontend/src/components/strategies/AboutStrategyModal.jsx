@@ -174,13 +174,17 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                   <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
                     <div>
                       <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Structure</span>
-                      <strong className="block text-white font-mono mt-0.5">{options.structure === "credit_spread" ? "Credit Spread" : "Single Leg"}</strong>
+                      <strong className="block text-white font-mono mt-0.5">
+                        {options.structure === "debit_spread" ? "Debit Spread" : options.structure === "credit_spread" ? "Credit Spread" : "Single Leg"}
+                      </strong>
                     </div>
-                    {options.structure === "credit_spread" && (
+                    {(options.structure === "credit_spread" || options.structure === "debit_spread") && (
                       <>
                         <div>
-                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Short Δ</span>
-                          <strong className="block text-white font-mono mt-0.5">{options.short_delta ?? 0.3}</strong>
+                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">
+                            {options.structure === "debit_spread" ? "Long Δ" : "Short Δ"}
+                          </span>
+                          <strong className="block text-white font-mono mt-0.5">{options.short_delta ?? (options.structure === "credit_spread" ? 0.3 : 0.5)}</strong>
                         </div>
                         <div>
                           <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Width (Strikes)</span>

@@ -294,12 +294,15 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
             >
               <option value="single_leg">Single Leg</option>
               <option value="credit_spread">Credit Spread</option>
+              <option value="debit_spread">Debit Spread</option>
             </select>
           </div>
-          {form.structure === "credit_spread" && (
+          {(form.structure === "credit_spread" || form.structure === "debit_spread") && (
             <>
               <div>
-                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Short Δ</label>
+                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">
+                  {form.structure === "debit_spread" ? "Long Δ" : "Short Δ"}
+                </label>
                 <input
                   type="number" step="0.05" min="0.05" max="0.95"
                   value={form.short_delta}

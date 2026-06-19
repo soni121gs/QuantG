@@ -115,7 +115,7 @@ export default function Positions() {
                   const qty = intQty(p.qty);
                   const pnlTone = (p.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]";
                   const longPos = qty > 0;
-                  const isSpread = p.structure === "credit_spread";
+                  const isSpread = p.structure === "credit_spread" || p.structure === "debit_spread";
                   const maxLossTotal = p.max_loss_total ?? (p.max_loss != null ? p.max_loss * Math.abs(qty) : null);
                   const stableKey = `${p.symbol}-${p.strategy_id || ""}`;
                   const legs = p.legs || [];
@@ -138,7 +138,7 @@ export default function Positions() {
                         )}
                         {isSpread && (
                           <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
-                            credit ₹{formatINR(p.net_credit)}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
+                            {p.structure === "debit_spread" ? `debit ₹${formatINR(p.net_debit)}` : `credit ₹${formatINR(p.net_credit)}`}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
                           </div>
                         )}
                         {!isSpread && p.greeks && p.greeks.delta != null && (
@@ -198,7 +198,11 @@ export default function Positions() {
                             const long = legs.find((l) => l.role === "long");
                             const netDelta = short?.delta != null && long?.delta != null ? -Number(short.delta) + Number(long.delta) : null;
                             const netTheta = short?.theta != null && long?.theta != null ? -Number(short.theta) + Number(long.theta) : null;
-                            const maxProfitTotal = p.net_credit != null ? p.net_credit * Math.abs(qty) : null;
+                            const isDebit = p.structure === "debit_spread";
+                            const width = short && long ? Math.abs(long.strike - short.strike) : 0;
+                            const maxProfitTotal = isDebit
+                              ? (p.net_debit != null ? (width - p.net_debit) * Math.abs(qty) : null)
+                              : (p.net_credit != null ? p.net_credit * Math.abs(qty) : null);
                             const pnl = Number(p.pnl || 0);
                             let markerPct = 50;
                             if (maxProfitTotal != null && maxLossTotal != null && maxProfitTotal + maxLossTotal > 0) {
@@ -219,7 +223,7 @@ export default function Positions() {
                                 {legRow(short)}
                                 {legRow(long)}
                                 <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-[11px] text-[var(--qd-text-2)]">
-                                  <span>Net credit ₹{formatINR(p.net_credit)}</span>
+                                  <span>{isDebit ? `Net debit ₹${formatINR(p.net_debit)}` : `Net credit ₹${formatINR(p.net_credit)}`}</span>
                                   {maxLossTotal != null && <span>Max loss ₹{formatINR(maxLossTotal)}</span>}
                                   {netDelta != null && <span>Net δ {netDelta.toFixed(2)}</span>}
                                   {netTheta != null && <span>Net θ {netTheta.toFixed(1)}</span>}

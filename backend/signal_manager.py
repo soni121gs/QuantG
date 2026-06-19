@@ -770,6 +770,25 @@ async def _dispatch_signal_via_unified_engine(
             idempotency_key=idem_key, signal_id=sig["id"],
         )
 
+    if _oc.get("structure") == "debit_spread" and _oc.get("spread"):
+        from core.spread_builder import DEBIT_SPREADS_ENABLED, lots_for_risk
+        from core.spread_lifecycle import open_debit_spread
+        if not DEBIT_SPREADS_ENABLED:
+            return {"ok": False, "status": "SKIPPED", "reason": "debit spreads disabled",
+                    "reason_code": "DEBIT_SPREADS_DISABLED"}
+        _spread = _oc["spread"]
+        _risk_budget = float(
+            visual_risk.get("required_capital")
+            or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
+            or 15000.0
+        )
+        _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        return await open_debit_spread(
+            db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
+            spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
+            idempotency_key=idem_key, signal_id=sig["id"],
+        )
+
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
     product = (
         sig.get("product")

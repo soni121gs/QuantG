@@ -28,8 +28,9 @@ from core.paper_broker import PaperWallet
 
 logger = logging.getLogger("quantg.spread_lifecycle")
 
-SPREAD_TP_FRAC = float(os.environ.get("CREDIT_SPREAD_TP_FRAC", "0.5"))   # capture 50% of credit
+SPREAD_TP_FRAC = float(os.environ.get("CREDIT_SPREAD_TP_FRAC", "0.5"))   # capture 50% of credit/profit
 SPREAD_SL_MULT = float(os.environ.get("CREDIT_SPREAD_SL_MULT", "2.0"))   # stop at 2x credit loss
+DEBIT_SPREAD_SL_FRAC = float(os.environ.get("DEBIT_SPREAD_SL_FRAC", "0.5"))  # exit once 50% of debit is lost
 
 
 def _leg_charges(side: str, price: float, qty: int) -> float:
@@ -354,6 +355,300 @@ async def close_credit_spread(
 
     logger.info(
         "Spread CLOSE %s reason=%s close_value=%.2f gross=%.2f net=%.2f",
+        pos_id, reason, close_value, gross_pnl, net_pnl,
+    )
+    return {"ok": True, "status": "CLOSED", "id": pos_id, "realized_pnl": net_pnl,
+            "gross_pnl": gross_pnl, "exit_value": close_value}
+
+
+def value_debit_spread(position: Dict[str, Any], short_ltp: float, long_ltp: float) -> Dict[str, float]:
+    """Current spread value (net credit to close, meaning sell the long and buy back the short) and unrealized P&L."""
+    qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    net_debit = float(position.get("net_debit") or position.get("average_buy_price") or 0.0)
+    value = round(float(long_ltp) - float(short_ltp), 2)
+    pnl = round((value - net_debit) * qty, 2)
+    return {"value": value, "pnl": pnl, "net_debit": net_debit}
+
+
+def debit_spread_exit_reason(position: Dict[str, Any], value: float) -> Optional[str]:
+    """TP/SL on the spread value for debit spread. Returns reason or None."""
+    tp_value = position.get("spread_tp_value")
+    sl_value = position.get("spread_sl_value")
+    if tp_value is not None and value >= float(tp_value):
+        return "spread-tp"
+    if sl_value is not None and value <= float(sl_value):
+        return "spread-sl"
+    return None
+
+
+def compute_debit_exit_levels(net_debit: float, width: float) -> Dict[str, float]:
+    tp_value = round(net_debit + (width - net_debit) * SPREAD_TP_FRAC, 2)
+    sl_value = round(max(0.0, net_debit * (1.0 - DEBIT_SPREAD_SL_FRAC)), 2)
+    return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
+
+
+async def open_debit_spread(
+    db,
+    *,
+    user_id: str,
+    strategy_id: str,
+    underlying: str,
+    spread: Dict[str, Any],
+    lots: int,
+    lot_size: int,
+    mode: str = "paper",
+    idempotency_key: str,
+    signal_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Open a debit spread as one position with embedded legs (paper only)."""
+    if mode != "paper":
+        return {"ok": False, "status": "SKIPPED", "reason": "debit spreads are paper-only for now"}
+    if not spread.get("ok"):
+        return {"ok": False, "status": "SKIPPED", "reason": spread.get("reason") or "invalid spread"}
+
+    # Idempotency
+    existing = await db.strategy_positions.find_one(
+        {"user_id": user_id, "idempotency_key": idempotency_key,
+         "status": {"$in": ["OPEN", "EXITING", "CLOSED"]}},
+        {"_id": 0, "id": 1},
+    )
+    if existing:
+        return {"ok": False, "status": "SKIPPED", "reason": "duplicate spread idempotency", "id": existing["id"]}
+
+    qty = max(1, int(lots)) * max(1, int(lot_size))
+    short = dict(spread["short_leg"])
+    long = dict(spread["long_leg"])
+    net_debit = float(spread["net_debit"])
+    width = float(spread["width_points"])
+    max_loss = float(spread["max_loss"])
+
+    wallet = PaperWallet(db)
+    pos_id = f"pos_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    short_charges = _leg_charges("SELL", short["premium"], qty)
+    long_charges = _leg_charges("BUY", long["premium"], qty)
+    long_cost = round(long["premium"] * qty + long_charges, 2)
+    short_proceeds = round(short["premium"] * qty - short_charges, 2)
+
+    # Debit wallet by long_cost, credit by short_proceeds
+    funded = await wallet.debit(user_id, long_cost, f"{pos_id}:long:open")
+    if not funded:
+        return {"ok": False, "status": "SKIPPED", "reason": "insufficient paper funds for spread long leg"}
+    await wallet.credit(user_id, short_proceeds, f"{pos_id}:short:open")
+
+    entry_charges = round(short_charges + long_charges, 2)
+    levels = compute_debit_exit_levels(net_debit, width)
+
+    for leg, side in ((short, "SELL"), (long, "BUY")):
+        leg["qty"] = qty
+        leg["entry_price"] = leg["premium"]
+
+    position_doc = {
+        "id": pos_id,
+        "user_id": user_id,
+        "strategy_id": strategy_id,
+        "symbol": underlying,
+        "target_symbol": f"{underlying} {long.get('strike')}/{short.get('strike')} {spread.get('option_type')} DEBIT",
+        "trading_symbol": f"{underlying}-{spread.get('direction')}-debit-spread",
+        "mode": mode,
+        "structure": "debit_spread",
+        "direction": spread.get("direction"),
+        "option_type": spread.get("option_type"),
+        "underlying": underlying,
+        "symbol_group": underlying,
+        "expiry": long.get("expiry"),
+        "asset_type": "option_spread",
+        "asset_class": "OPTION_SPREAD",
+        "position_side": "LONG",    # net long option premium
+        "status": "OPEN",
+        "legs": [short, long],
+        "quantity": qty,
+        "open_quantity": qty,
+        "qty": qty,
+        "lots": max(1, int(lots)),
+        "lot_size": int(lot_size),
+        "net_debit": round(net_debit, 2),
+        "average_buy_price": round(net_debit, 2),  # entry "price" = net debit paid
+        "average_price": round(net_debit, 2),
+        "entry_price": round(net_debit, 2),
+        "max_loss": round(max_loss, 2),
+        "max_loss_total": round(max_loss * qty, 2),
+        "spread_tp_value": levels["spread_tp_value"],
+        "spread_sl_value": levels["spread_sl_value"],
+        "net_delta": spread.get("net_delta"),
+        "net_theta": spread.get("net_theta"),
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 0.0,
+        "pnl": 0.0,
+        "entry_charges": entry_charges,
+        "brokerage": entry_charges,
+        "idempotency_key": idempotency_key,
+        "signal_id": signal_id,
+        "created_at": now,
+        "updated_at": now,
+        "entry_time": now,
+    }
+    await db.strategy_positions.insert_one(position_doc)
+
+    for leg in (short, long):
+        await db.orders.insert_one({
+            "id": f"ord_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "position_id": pos_id,
+            "symbol": underlying,
+            "target_symbol": leg.get("tradingsymbol") or f"{underlying} {leg.get('strike')} {leg.get('option_type')}",
+            "instrument_key": leg.get("instrument_key"),
+            "side": leg["side"],
+            "qty": qty,
+            "lot_size": int(lot_size),
+            "filled_qty": qty,
+            "price": leg["premium"],
+            "requested_price": leg["premium"],
+            "status": "FILLED",
+            "execution_status": "FILLED",
+            "mode": mode,
+            "broker": "paper",
+            "structure": "debit_spread",
+            "spread_role": leg["role"],
+            "idempotency_key": f"{idempotency_key}:{leg['role']}",
+            "created_at": now,
+            "updated_at": now,
+        })
+
+    logger.info(
+        "Spread (debit) OPEN %s %s %s debit=%.2f max_loss=%.2f qty=%d tp_val=%.2f sl_val=%.2f",
+        underlying, spread.get("direction"), spread.get("option_type"),
+        net_debit, max_loss, qty, levels["spread_tp_value"], levels["spread_sl_value"],
+    )
+    return {"ok": True, "status": "FILLED", "id": pos_id, "position_id": pos_id,
+            "net_debit": net_debit, "max_loss": max_loss}
+
+
+async def close_debit_spread(
+    db,
+    position: Dict[str, Any],
+    *,
+    reason: str,
+    short_ltp: float,
+    long_ltp: float,
+) -> Dict[str, Any]:
+    """Close both legs of a debit spread atomically and realize P&L."""
+    pos_id = position["id"]
+    user_id = position["user_id"]
+    strategy_id = position["strategy_id"]
+    qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    net_debit = float(position.get("net_debit") or position.get("average_buy_price") or 0.0)
+
+    # Claim close
+    now = datetime.now(timezone.utc).isoformat()
+    claim = await db.strategy_positions.update_one(
+        {"id": pos_id, "user_id": user_id, "status": {"$in": ["OPEN", "EXITING"]}},
+        {"$set": {"status": "EXITING", "updated_at": now}},
+    )
+    if claim.modified_count == 0:
+        return {"ok": False, "status": "SKIPPED", "reason": "spread already closing/closed"}
+
+    short_ltp = float(short_ltp)
+    long_ltp = float(long_ltp)
+    close_value = round(long_ltp - short_ltp, 2)
+
+    wallet = PaperWallet(db)
+    buyback_charges = _leg_charges("BUY", short_ltp, qty)
+    sell_charges = _leg_charges("SELL", long_ltp, qty)
+    exit_charges = round(buyback_charges + sell_charges, 2)
+
+    # Wallet updates
+    await wallet.debit(user_id, round(short_ltp * qty + buyback_charges, 2), f"{pos_id}:short:close")
+    await wallet.credit(user_id, max(0.0, round(long_ltp * qty - sell_charges, 2)), f"{pos_id}:long:close")
+
+    gross_pnl = round((close_value - net_debit) * qty, 2)
+    entry_charges = float(position.get("entry_charges") or 0.0)
+    net_pnl = round(gross_pnl - exit_charges - entry_charges, 2)
+
+    closed_at = datetime.now(timezone.utc).isoformat()
+    await db.strategy_positions.update_one(
+        {"id": pos_id, "user_id": user_id},
+        {"$set": {
+            "status": "CLOSED",
+            "closed_at": closed_at,
+            "updated_at": closed_at,
+            "open_quantity": 0,
+            "exit_reason": reason,
+            "exit_value": close_value,
+            "realized_pnl": net_pnl,
+            "pnl": net_pnl,
+            "gross_pnl": gross_pnl,
+            "unrealized_pnl": 0.0,
+        }},
+    )
+
+    await db.trades.insert_one({
+        "id": f"trade_{uuid.uuid4().hex[:12]}",
+        "position_id": pos_id,
+        "user_id": user_id,
+        "strategy_id": strategy_id,
+        "symbol": position.get("symbol"),
+        "target_symbol": position.get("target_symbol"),
+        "underlying": position.get("underlying"),
+        "asset_type": "option_spread",
+        "structure": "debit_spread",
+        "mode": position.get("mode"),
+        "position_side": "LONG",
+        "quantity": qty,
+        "qty": qty,
+        "entry_price": net_debit,
+        "exit_price": close_value,
+        "gross_pnl": gross_pnl,
+        "charges": round(entry_charges + exit_charges, 2),
+        "net_pnl": net_pnl,
+        "pnl": net_pnl,
+        "realized_pnl": net_pnl,
+        "is_win": net_pnl > 0,
+        "exit_reason": reason,
+        "entry_time": position.get("entry_time"),
+        "exit_time": closed_at,
+        "created_at": closed_at,
+    })
+
+    try:
+        await db.trade_fills.insert_one({
+            "id": f"tf_spread_{pos_id}",
+            "fill_id": f"tf_spread_{pos_id}",
+            "position_id": pos_id,
+            "user_id": user_id,
+            "strategy_id": strategy_id,
+            "symbol": position.get("symbol"),
+            "target_symbol": position.get("target_symbol"),
+            "trading_symbol": position.get("target_symbol"),
+            "underlying": position.get("underlying"),
+            "asset_type": "option_spread",
+            "structure": "debit_spread",
+            "side": "SELL",  # sell-to-close the net debit spread
+            "qty": qty,
+            "price": close_value,
+            "charges": round(entry_charges + exit_charges, 2),
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
+            "realized_pnl": net_pnl,
+            "mode": position.get("mode"),
+            "action": "CLOSE",
+            "exit_reason": reason,
+            "created_at": closed_at,
+        })
+    except Exception as exc:
+        logger.error("Spread close trade_fills insert failed for %s: %s", pos_id, exc)
+
+    await db.strategies.update_one(
+        {"id": strategy_id, "user_id": user_id},
+        {"$set": {"last_pnl": net_pnl},
+         "$inc": {"today_pnl": net_pnl, "total_pnl": net_pnl, "total_trades": 1,
+                  "wins": 1 if net_pnl > 0 else 0, "losses": 1 if net_pnl < 0 else 0}},
+    )
+
+    logger.info(
+        "Spread (debit) CLOSE %s reason=%s close_value=%.2f gross=%.2f net=%.2f",
         pos_id, reason, close_value, gross_pnl, net_pnl,
     )
     return {"ok": True, "status": "CLOSED", "id": pos_id, "realized_pnl": net_pnl,

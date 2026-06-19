@@ -154,6 +154,84 @@ def build_credit_spread(
     }
 
 
+DEBIT_SPREADS_ENABLED = os.environ.get("DEBIT_SPREADS_ENABLED", "true").strip().lower() == "true"
+DEBIT_SPREAD_LONG_DELTA = float(os.environ.get("DEBIT_SPREAD_LONG_DELTA", "0.50"))
+
+
+def build_debit_spread(
+    *,
+    chain_nodes: List[Dict[str, Any]],
+    direction: str,
+    width_points: float,
+    long_delta: float = DEBIT_SPREAD_LONG_DELTA,
+) -> Dict[str, Any]:
+    """Build a vertical debit spread.
+
+    direction: "bullish" → bull call spread (BUY near-ATM CE, SELL further-OTM CE);
+               "bearish" → bear put spread (BUY near-ATM PE, SELL further-OTM PE).
+    width_points: absolute strike distance between long and short legs.
+
+    Returns {ok, reason, structure, direction, option_type, short_leg, long_leg,
+    net_debit, max_loss, max_profit, width_points, net_delta, net_theta}.
+    All money figures are PER UNIT (premium points); caller multiplies by
+    lot_size * lots.
+    """
+    direction = str(direction or "").lower()
+    if direction not in ("bullish", "bearish"):
+        return {"ok": False, "reason": "direction must be bullish or bearish"}
+    option_type = "CE" if direction == "bullish" else "PE"
+
+    long_pick = pick_delta_strike(chain_nodes, option_type, long_delta)
+    if not long_pick or long_pick.get("strike") is None:
+        return {"ok": False, "reason": "no long-leg strike near target delta"}
+    long_strike = float(long_pick["strike"])
+
+    # Bull call: short strike ABOVE long. Bear put: short strike BELOW long.
+    short_strike = long_strike + width_points if direction == "bullish" else long_strike - width_points
+
+    long_node = _find_node_by_strike(chain_nodes, long_strike, option_type)
+    short_node = _find_node_by_strike(chain_nodes, short_strike, option_type)
+    if not short_node or not long_node:
+        return {"ok": False, "reason": "could not locate both spread legs in chain"}
+
+    long_leg = _leg_from_node(long_node, option_type, "BUY")
+    short_leg = _leg_from_node(short_node, option_type, "SELL")
+    if not short_leg or not long_leg:
+        return {"ok": False, "reason": "spread leg missing instrument_key or premium"}
+    if short_leg["strike"] == long_leg["strike"]:
+        return {"ok": False, "reason": "short and long legs resolved to the same strike"}
+
+    net_debit = round(long_leg["premium"] - short_leg["premium"], 2)
+    if net_debit <= 0:
+        return {"ok": False, "reason": f"non-positive net debit ({net_debit})"}
+
+    actual_width = abs(short_leg["strike"] - long_leg["strike"])
+    max_profit = round(actual_width - net_debit, 2)
+    if max_profit <= 0:
+        return {"ok": False, "reason": f"non-positive max profit ({max_profit})"}
+
+    sd = short_leg.get("delta") or 0.0
+    ld = long_leg.get("delta") or 0.0
+    st = short_leg.get("theta") or 0.0
+    lt = long_leg.get("theta") or 0.0
+    return {
+        "ok": True,
+        "reason": "ok",
+        "structure": "debit_spread",
+        "direction": direction,
+        "option_type": option_type,
+        "short_leg": short_leg,
+        "long_leg": long_leg,
+        "net_debit": net_debit,          # net cost per unit
+        "max_profit": max_profit,
+        "max_loss": net_debit,           # defined risk per unit
+        "width_points": actual_width,
+        # Net greeks: short leg is sold (-), long leg is bought (+)
+        "net_delta": round(ld - sd, 4),
+        "net_theta": round(lt - st, 4),
+    }
+
+
 def lots_for_risk(max_loss_per_unit: float, lot_size: int, risk_budget: float) -> int:
     """Number of lots whose total defined risk stays within risk_budget."""
     per_lot = float(max_loss_per_unit) * int(lot_size)

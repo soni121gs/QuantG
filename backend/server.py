@@ -16242,35 +16242,53 @@ async def startup():
                                 float((_delta_pick or {}).get("delta") or 0), int(float(instrument.strike)),
                             )
 
-                    # Phase 2 #5: build a credit spread when this strategy opts in.
+                    # Phase 2 #5: build a credit or debit spread when this strategy opts in.
                     try:
                         from core.spread_builder import (
                             build_credit_spread, CREDIT_SPREADS_ENABLED,
                             CREDIT_SPREAD_SHORT_DELTA, CREDIT_SPREAD_WIDTH_STRIKES,
+                            build_debit_spread, DEBIT_SPREADS_ENABLED,
                         )
                         _opts_cfg = ((strategy or {}).get("visual_config") or {}).get("options", {}) or {}
                         _struct = str(_opts_cfg.get("structure") or (strategy or {}).get("structure") or "single_leg")
-                        if CREDIT_SPREADS_ENABLED and _struct == "credit_spread" and _nodes:
+                        if _struct in ("credit_spread", "debit_spread") and _nodes:
                             _intervals = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50,
                                           "MIDCPNIFTY": 75, "SENSEX": 100, "BANKEX": 100}
                             _u = str(instrument.underlying or underlying).upper()
                             _wstrikes = int(_opts_cfg.get("spread_width") or CREDIT_SPREAD_WIDTH_STRIKES)
-                            _sdelta = float(_opts_cfg.get("short_delta") or CREDIT_SPREAD_SHORT_DELTA)
+                            _sdelta = float(_opts_cfg.get("short_delta") or (CREDIT_SPREAD_SHORT_DELTA if _struct == "credit_spread" else 0.50))
                             _direction = "bullish" if action_u == "BUY" else "bearish"
-                            _spread = build_credit_spread(
-                                chain_nodes=_nodes, direction=_direction,
-                                width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
-                            )
-                            if _spread.get("ok"):
-                                contract_payload["structure"] = "credit_spread"
-                                contract_payload["spread"] = _spread
-                                logger.info(
-                                    "spread-build: %s %s credit=%.2f max_loss=%.2f short=%s long=%s",
-                                    _u, _direction, _spread["net_credit"], _spread["max_loss"],
-                                    _spread["short_leg"]["strike"], _spread["long_leg"]["strike"],
+                            
+                            if _struct == "credit_spread" and CREDIT_SPREADS_ENABLED:
+                                _spread = build_credit_spread(
+                                    chain_nodes=_nodes, direction=_direction,
+                                    width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
                                 )
-                            else:
-                                logger.info("spread-build skipped (%s): %s", _u, _spread.get("reason"))
+                                if _spread.get("ok"):
+                                    contract_payload["structure"] = "credit_spread"
+                                    contract_payload["spread"] = _spread
+                                    logger.info(
+                                        "spread-build (credit): %s %s credit=%.2f max_loss=%.2f short=%s long=%s",
+                                        _u, _direction, _spread["net_credit"], _spread["max_loss"],
+                                        _spread["short_leg"]["strike"], _spread["long_leg"]["strike"],
+                                    )
+                                else:
+                                    logger.info("spread-build (credit) skipped (%s): %s", _u, _spread.get("reason"))
+                            elif _struct == "debit_spread" and DEBIT_SPREADS_ENABLED:
+                                _spread = build_debit_spread(
+                                    chain_nodes=_nodes, direction=_direction,
+                                    width_points=_intervals.get(_u, 50) * _wstrikes, long_delta=_sdelta,
+                                )
+                                if _spread.get("ok"):
+                                    contract_payload["structure"] = "debit_spread"
+                                    contract_payload["spread"] = _spread
+                                    logger.info(
+                                        "spread-build (debit): %s %s debit=%.2f max_loss=%.2f short=%s long=%s",
+                                        _u, _direction, _spread["net_debit"], _spread["max_loss"],
+                                        _spread["short_leg"]["strike"], _spread["long_leg"]["strike"],
+                                    )
+                                else:
+                                    logger.info("spread-build (debit) skipped (%s): %s", _u, _spread.get("reason"))
                     except Exception as _spx:
                         logger.debug("spread build failed: %s", _spx)
         except Exception as _gexc:

@@ -32,7 +32,10 @@ from core.position_lifecycle import (
     position_risk_prices,
 )
 from core.portfolio_ledger import get_strategy_pnl_today
-from core.spread_lifecycle import value_credit_spread, spread_exit_reason, close_credit_spread
+from core.spread_lifecycle import (
+    value_credit_spread, spread_exit_reason, close_credit_spread,
+    value_debit_spread, debit_spread_exit_reason, close_debit_spread,
+)
 
 logger = logging.getLogger("quantg.position_monitor")
 
@@ -288,7 +291,7 @@ async def _leg_ltp(user_id, leg, quote_ltp_fn) -> Optional[float]:
 
 
 async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -> None:
-    """Value and exit a credit-spread position (two legs, one doc). Closes both
+    """Value and exit a credit/debit spread position (two legs, one doc). Closes both
     legs atomically via spread_lifecycle. Falls back to entry premiums for the
     value update when a leg LTP is unavailable (no false exit in that case)."""
     user_id = pos.get("user_id")
@@ -307,7 +310,12 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     if long_ltp is None:
         long_ltp = float(long_leg.get("entry_price") or long_leg.get("premium") or 0)
 
-    v = value_credit_spread(pos, short_ltp, long_ltp)
+    structure = str(pos.get("structure"))
+    if structure == "debit_spread":
+        v = value_debit_spread(pos, short_ltp, long_ltp)
+    else:
+        v = value_credit_spread(pos, short_ltp, long_ltp)
+
     now_str = datetime.now(timezone.utc).isoformat()
     await db.strategy_positions.update_one(
         {"id": pos["id"], "user_id": user_id},
@@ -318,18 +326,28 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # Spreads are intraday — 15:10 IST force-close.
     if squareoff:
         logger.info("spread monitor: squareoff-1510 closing pos=%s", pos.get("id"))
-        await close_credit_spread(db, pos, reason="intraday-squareoff-1510",
-                                  short_ltp=short_ltp, long_ltp=long_ltp)
+        if structure == "debit_spread":
+            await close_debit_spread(db, pos, reason="intraday-squareoff-1510",
+                                     short_ltp=short_ltp, long_ltp=long_ltp)
+        else:
+            await close_credit_spread(db, pos, reason="intraday-squareoff-1510",
+                                      short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
-    # No exit on entry-premium fallback (value≈credit → no false trigger).
+    # No exit on entry-premium fallback (value≈credit/debit → no false trigger).
     if not in_hours or not have_live:
         return
 
-    reason = spread_exit_reason(pos, v["value"])
-    if reason:
-        logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
-        await close_credit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
+    if structure == "debit_spread":
+        reason = debit_spread_exit_reason(pos, v["value"])
+        if reason:
+            logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
+            await close_debit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
+    else:
+        reason = spread_exit_reason(pos, v["value"])
+        if reason:
+            logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
+            await close_credit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
 
 
 async def _process_one_position(
@@ -341,8 +359,8 @@ async def _process_one_position(
     if not user_id or not sid or not symbol:
         return
 
-    # Phase 2 #5: credit spreads have two legs and their own value/exit path.
-    if str(pos.get("structure")) == "credit_spread":
+    # Phase 2 #5: credit/debit spreads have two legs and their own value/exit path.
+    if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
         await _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn)
         return
 

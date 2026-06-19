@@ -689,8 +689,8 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
             visual_config["options"] = {}
         if req.structure is not None:
             structure = str(req.structure).strip().lower()
-            if structure not in ("single_leg", "credit_spread"):
-                raise HTTPException(status_code=400, detail="structure must be single_leg or credit_spread")
+            if structure not in ("single_leg", "credit_spread", "debit_spread"):
+                raise HTTPException(status_code=400, detail="structure must be single_leg, credit_spread, or debit_spread")
             visual_config["options"]["structure"] = structure
         if req.spread_width is not None:
             visual_config["options"]["spread_width"] = max(1, int(req.spread_width))
