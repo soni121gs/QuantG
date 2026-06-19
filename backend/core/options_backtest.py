@@ -16,11 +16,13 @@ Honest limitations (v1):
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from safe_exec import safe_run_strategy
 from core.metrics import compute_metrics, grade
+from core.candle_store import load_candles
 
 logger = logging.getLogger("quantg.options_backtest")
 
@@ -28,6 +30,8 @@ IST = timedelta(hours=5, minutes=30)
 LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 65, "MIDCPNIFTY": 120}
 BROKERAGE_PER_LEG = 20.0  # INR per leg, charged on the round trip
 EOD_SQUAREOFF = "15:20"
+# How stale a chain snapshot may be (vs the signal candle) and still price a leg.
+PRICE_TOLERANCE_MIN = 10
 
 
 def _ist_str(ts: str) -> str:
@@ -41,6 +45,29 @@ def _ist_str(ts: str) -> str:
 def _mins(date_str: str) -> int:
     hh, mm = date_str[11:16].split(":")
     return int(hh) * 60 + int(mm)
+
+
+def _to_dt(minute: str) -> datetime:
+    return datetime.strptime(minute[:16], "%Y-%m-%d %H:%M")
+
+
+def _nearest_snap(
+    snap_mins: List[str],
+    snap_by_min: Dict[str, Dict[str, Any]],
+    date: str,
+    tol_min: int = PRICE_TOLERANCE_MIN,
+) -> Optional[Dict[str, Any]]:
+    """Most recent chain snapshot at or before `date` (no look-ahead), same trading
+    day, within `tol_min`. Returns None when nothing priceable is close enough."""
+    pos = bisect_right(snap_mins, date)
+    if pos == 0:
+        return None
+    cand = snap_mins[pos - 1]
+    if cand[:10] != date[:10]:
+        return None
+    if (_to_dt(date) - _to_dt(cand)).total_seconds() > tol_min * 60:
+        return None
+    return snap_by_min[cand]
 
 
 def _strike_interval(strikes: List[Dict[str, Any]]) -> float:
@@ -123,16 +150,25 @@ class OptionsBacktestEngine:
             return {"error": f"insufficient chain data for {underlying} ({len(snaps)} snaps)",
                     "underlying": underlying, "structure": structure}
 
-        # Build candle timeline + snapshot index keyed by IST minute (same keys as signal dates)
-        candles: List[Dict[str, Any]] = []
-        snap_by_date: Dict[str, Dict[str, Any]] = {}
+        # Chain snapshot index keyed by IST minute — the option PRICING source.
+        snap_by_min: Dict[str, Dict[str, Any]] = {}
         for s in snaps:
             d = _ist_str(s["ts"])
-            if d in snap_by_date:
-                continue  # de-dupe same-minute snapshots
-            snap_by_date[d] = s
-            spot = float(s.get("spot") or 0)
-            candles.append({"date": d, "open": spot, "high": spot, "low": spot, "close": spot, "volume": 0})
+            snap_by_min.setdefault(d, s)  # de-dupe same-minute snapshots
+        snap_mins = sorted(snap_by_min.keys())
+        chain_start, chain_end = snap_mins[0], snap_mins[-1]
+
+        # SIGNAL series: real underlying OHLC from db.candles (TASK-052). Falls back
+        # to flat chain-spot candles when no real OHLC is stored, so breakout/range
+        # strategies stop silently scoring 0 trades on a dotted series.
+        candles = await load_candles(db=self.db, underlying=underlying, interval=5,
+                                     start_minute=start_date, end_minute=end_date)
+        candle_source = "real_ohlc"
+        if not candles:
+            candle_source = "chain_spot"
+            for m in snap_mins:
+                spot = float(snap_by_min[m].get("spot") or 0)
+                candles.append({"date": m, "open": spot, "high": spot, "low": spot, "close": spot, "volume": 0})
 
         code = strategy.get("python_code")
         if not code:
@@ -154,7 +190,9 @@ class OptionsBacktestEngine:
         for c in candles:
             date = c["date"]
             day = date[:10]
-            snap = snap_by_date[date]
+            snap = _nearest_snap(snap_mins, snap_by_min, date)
+            if snap is None:
+                continue  # no priceable chain near this candle (outside chain window)
             spot = float(snap.get("spot") or 0)
 
             # ---- manage open position ----
@@ -194,11 +232,13 @@ class OptionsBacktestEngine:
 
         # close hanging at last snapshot
         if active:
-            last = candles[-1]
-            val = self._value(active, snap_by_date[last["date"]])
+            last_snap = snap_by_min[chain_end]
+            val = self._value(active, last_snap)
             if val is not None:
-                self._close(active, snap_by_date[last["date"]], last["date"], val, lot, "FORCE_CLOSE_END", trades)
+                self._close(active, last_snap, chain_end, val, lot, "FORCE_CLOSE_END", trades)
 
+        # Signals that landed inside the priceable chain window (the comparable count)
+        sig_in_window = sum(1 for d in sig_by_date if chain_start <= d <= chain_end)
         pnls = [t["pnl"] for t in trades]
         metrics = compute_metrics(pnls, starting_capital=starting_capital)
         return {
@@ -206,7 +246,14 @@ class OptionsBacktestEngine:
             "name": strategy.get("name"),
             "underlying": underlying,
             "structure": structure,
-            "window": {"start": candles[0]["date"], "end": candles[-1]["date"], "snapshots": len(candles)},
+            "candle_source": candle_source,
+            "signals": len(sig_by_date),
+            "signals_in_window": sig_in_window,
+            "window": {
+                "candles_start": candles[0]["date"], "candles_end": candles[-1]["date"],
+                "n_candles": len(candles), "price_start": chain_start, "price_end": chain_end,
+                "snapshots": len(snap_mins),
+            },
             "grade": grade(metrics),
             **metrics,
             "trades": trades,

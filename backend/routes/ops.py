@@ -171,6 +171,28 @@ async def ops_options_backtest(
     return {"count": len(results), "results": results}
 
 
+@router.post("/backfill-candles")
+async def ops_backfill_candles(
+    days: int = 30,
+    underlyings: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    """Backfill real 5-min underlying OHLC into db.candles (TASK-052) so the
+    options backtester evaluates breakout/range/VWAP strategies on real high/low,
+    not flat chain-spot dots. Uses the caller's connected Upstox gateway. Pass
+    `underlyings` as a comma list (default NIFTY,BANKNIFTY,SENSEX)."""
+    from server import get_user_upstox_gateway
+    from core.candle_store import backfill_underlying_candles, DEFAULT_UNDERLYINGS
+
+    gw = await get_user_upstox_gateway(user["id"])
+    if not gw or not getattr(gw, "connected", False):
+        raise HTTPException(status_code=400, detail="Upstox gateway not connected — reconnect token first")
+    uls = [u.strip().upper() for u in underlyings.split(",")] if underlyings else list(DEFAULT_UNDERLYINGS)
+    days = max(1, min(int(days or 30), 30))
+    summary = await backfill_underlying_candles(db, gw, underlyings=uls, days=days)
+    return {"days": days, "underlyings": uls, "result": summary}
+
+
 @router.get("/feature-flags")
 async def ops_feature_flags(user=Depends(get_current_user)):
     """Read-only state of the Phase 2 options-alpha features (env-driven).

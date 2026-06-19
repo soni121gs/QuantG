@@ -1549,6 +1549,53 @@ Context: 2026-06-19 session. Root-caused why the book barely traded for days —
 
 ---
 
+## PRIORITY 10 — Prove Alpha (measure edge with data)
+
+Context: the bottleneck is no longer engineering — it's proving a strategy actually has edge. Built the toolkit to measure it; remaining items feed it better data and surface it.
+
+### TASK-051 — Option-priced backtester + risk-adjusted scorecard
+- **Status**: `[x]` commit (this session) · 2026-06-19
+- **Tier**: 3 (Opus / Claude)
+
+**Problem**: the old `core/backtest_engine.py` prices trades on the UNDERLYING index — it ignores option premium, theta, and spreads, overstating option P&L by ~1/delta. And there was no risk-adjusted view (Sharpe/Sortino/expectancy) of realized trades. So "does this strategy have edge?" was unanswerable.
+
+**Done**: `core/metrics.py` (pure metrics, 8 unit tests pass), `core/options_backtest.py` (option-PRICED backtest over `db.historical_chains`, real CE/PE bid/ask incl. theta + spread cost, supports single_leg/credit_spread/debit_spread), `core/strategy_scorecard.py` (risk-adjusted ranking from real `db.trades`). Endpoints `GET /ops/risk-scorecard`, `POST /ops/options-backtest`. Runner `backend/scratch/analyze_strategies.py`. **Finding**: options buyers are negative-edge grade F; only equity momentum (LT, AXISBANK) score A/B (small samples); no robust positive edge yet.
+
+**Files**: backend/core/metrics.py, backend/core/options_backtest.py, backend/core/strategy_scorecard.py, backend/routes/ops.py, backend/tests/test_metrics.py
+
+---
+
+### TASK-052 — Feed real underlying OHLC to the options backtester
+- **Status**: `[x]` DONE (this session) · 2026-06-19
+- **Tier**: 2
+- **Prerequisite**: TASK-051
+
+**Problem**: the backtester derives its candle series from chain-snapshot `spot` (flat o=h=l=c, ~5min), so breakout/range strategies under-fire (0 trades) and signal fidelity is low.
+
+**Done**: new `core/candle_store.py` backfills REAL 5-min underlying OHLC (Upstox V3 historical + intraday, index keys) into `db.candles` keyed by IST minute; `OptionsBacktestEngine.run` now loads `db.candles` for SIGNALS and prices legs from the nearest `historical_chains` snapshot (`_nearest_snap`, ≤10-min, no look-ahead), falling back to flat chain-spot when no real OHLC. SENSEX added to the chain collector + daily 16:00 IST candle backfill in the scheduler. `POST /ops/backfill-candles` route. Backfilled NIFTY/BANKNIFTY/SENSEX 30d (1650 bars each).
+
+**Verify (passed)**: breakout fires **10 trades** (was 0 on flat candles); `candle_source=real_ohlc`; signals_in_window reported. **Data constraint**: option pricing is still bounded by live chain history = 3 days (06-17..06-19); the Upstox expired-instrument historical-candle API is unavailable on this account (all 404, `expired_instrument_key` null), so no real option premiums beyond the live snapshots.
+
+**Search result (next-step ask)**: with real OHLC, EMA-cross and breakout momentum on NIFTY/BANKNIFTY grade **A** on the real chain-priced sample — most credible: NIFTY breakout SL11/7 te30 (10 tr, PF 3.07, +₹3.5k) and the EXISTING live **NIFTY Quick EMA Scalper** (11 tr, A, PF 2.75). Caveat: only ~3 priceable days → promising, NOT proven; option SELLERS (theta credit spreads) graded F over this trending window. The binding constraint is chain history, which the daily collector now accumulates.
+
+**Files**: backend/core/candle_store.py, backend/core/options_backtest.py, backend/routes/ops.py, backend/server.py, backend/scratch/search_strategies.py
+
+---
+
+### TASK-053 — Analytics dashboard UI (scorecard + equity curves)
+- **Status**: `[ ]` OPEN
+- **Tier**: 2 (frontend)
+- **Session size**: ~3 hours
+- **Prerequisite**: TASK-051
+
+**Problem**: the risk-adjusted scorecard + backtest results are API-only; no UI. The founder can't see Sharpe/Sortino/expectancy/equity-curve per strategy at a glance.
+
+**Exact steps**: a frontend page (or OpsConsole panel) that calls `GET /ops/risk-scorecard` and `POST /ops/options-backtest` — sortable table with grade chips + per-strategy equity curve sparkline + the sellers-vs-buyers structure summary. Rebuild frontend image to deploy.
+
+**Verify**: page shows ranked strategies with grades and equity curves matching the API.
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1579,9 +1626,11 @@ Context: 2026-06-19 session. Root-caused why the book barely traded for days —
 | TASK-048 | Build `debit_spread` structure support, then convert one ATM buyer | 85a81ce | 2026-06-19 |
 | TASK-049 | Verify live-tick trade frequency + declare clean measurement epoch | 85a81ce | 2026-06-19 |
 | TASK-050 | Post-ranking: trim losers, promote winners | 85a81ce | 2026-06-19 |
+| TASK-051 | Option-priced backtester + risk-adjusted scorecard | (this session) | 2026-06-19 |
+| TASK-052 | Real underlying OHLC → options backtester (db.candles) + SENSEX collector | (this session) | 2026-06-19 |
 
 ---
 
 *Last updated: 2026-06-19*
-*Total tasks: 50*
-*Open: 0 · In progress: 0 · Done: 50*
+*Total tasks: 53*
+*Open: 1 (TASK-053 analytics dashboard UI) · In progress: 0 · Done: 52*

@@ -15405,7 +15405,11 @@ async def _snapshot_option_chains(db) -> int:
     db.historical_chains (one doc per underlying per call). Captures the real
     per-strike ltp/greeks/OI/bid-ask so future walk-forward backtests run on
     actual option data, not mock candles. Best-effort; never raises."""
-    spot_keys = {"NIFTY": "NSE_INDEX|Nifty 50", "BANKNIFTY": "NSE_INDEX|Nifty Bank"}
+    spot_keys = {
+        "NIFTY": "NSE_INDEX|Nifty 50",
+        "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+        "SENSEX": "BSE_INDEX|SENSEX",
+    }
     gw = None
     for row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
         g = await get_user_upstox_gateway(row["id"])
@@ -15476,6 +15480,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _squareoff_done_date: Optional[str] = None
     _vix_last_snapshot_minute: Optional[str] = None
     _chain_last_snapshot_minute: Optional[str] = None
+    _candle_backfill_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
@@ -15556,6 +15561,25 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Chain snapshot: wrote %d underlying chains to historical_chains", _n_chains)
                 except Exception as _chain_err:
                     logger.debug("Chain snapshot failed: %s", _chain_err)
+
+            # 16:00 IST — backfill real 5-min underlying OHLC into db.candles so the
+            # options backtester scores breakout/range/VWAP on real high/low, not flat
+            # chain-spot dots (TASK-052). Once a day, after close; best-effort.
+            if hour == 16 and minute == 0 and _candle_backfill_done_date != today:
+                _candle_backfill_done_date = today
+                try:
+                    from core.candle_store import backfill_underlying_candles
+                    _cgw = None
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
+                        _g = await get_user_upstox_gateway(_row["id"])
+                        if _g and getattr(_g, "connected", False):
+                            _cgw = _g
+                            break
+                    if _cgw:
+                        _cres = await backfill_underlying_candles(db, _cgw, days=30)
+                        logger.info("Candle backfill: %s", _cres)
+                except Exception as _cb_err:
+                    logger.debug("Candle backfill failed: %s", _cb_err)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
