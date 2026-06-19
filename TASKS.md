@@ -1583,16 +1583,17 @@ Context: the bottleneck is no longer engineering — it's proving a strategy act
 ---
 
 ### TASK-053 — Analytics dashboard UI (scorecard + equity curves)
-- **Status**: `[ ]` OPEN
+- **Status**: `[x]` DONE (this session) · 2026-06-19
 - **Tier**: 2 (frontend)
-- **Session size**: ~3 hours
 - **Prerequisite**: TASK-051
 
 **Problem**: the risk-adjusted scorecard + backtest results are API-only; no UI. The founder can't see Sharpe/Sortino/expectancy/equity-curve per strategy at a glance.
 
-**Exact steps**: a frontend page (or OpsConsole panel) that calls `GET /ops/risk-scorecard` and `POST /ops/options-backtest` — sortable table with grade chips + per-strategy equity curve sparkline + the sellers-vs-buyers structure summary. Rebuild frontend image to deploy.
+**Done**: new `frontend/src/pages/Analytics.jsx` at `/analytics` (nav "Analytics" under Trading). Two tabs — Realized (`GET /ops/risk-scorecard`) and Option-priced backtest (`POST /ops/options-backtest`). Sortable scorecard table (grade chips A–F, Sharpe/Sortino/PF/expectancy/maxDD/trades/win%/P&L), REAL equity-curve sparklines from each strategy's equity_curve, and buyers-vs-sellers structure summary cards. Deployed + verified (bundle chunk 749 contains the page, nav present, endpoint live, site 200).
 
-**Verify**: page shows ranked strategies with grades and equity curves matching the API.
+**Also (frontend "fix everything" pass)**: audited every page; removed data-theater — Layout fake hardcoded Sparkline → honest P&L trend glyph; OpsConsole/BrokerStatusPanel fabricated `Math.random` "Order Latency" → real last-tick metric; hardcoded "Sync Interval 4.0s" → 15s; deleted dead `TelemetryMetric`; Dashboard `endsWith("CE")` option-detection bug → robust spaced-token/exchange check.
+
+**Files**: frontend/src/pages/Analytics.jsx, frontend/src/App.js, frontend/src/components/Layout.jsx, frontend/src/pages/Dashboard.jsx, frontend/src/pages/OpsConsole.jsx, frontend/src/components/ops/BrokerStatusPanel.jsx
 
 ---
 
@@ -1628,9 +1629,10 @@ Context: the bottleneck is no longer engineering — it's proving a strategy act
 | TASK-050 | Post-ranking: trim losers, promote winners | 85a81ce | 2026-06-19 |
 | TASK-051 | Option-priced backtester + risk-adjusted scorecard | (this session) | 2026-06-19 |
 | TASK-052 | Real underlying OHLC → options backtester (db.candles) + SENSEX collector | (this session) | 2026-06-19 |
+| TASK-053 | Analytics dashboard UI (scorecard + equity curves) + frontend data-theater fixes | baaef5c | 2026-06-19 |
 
 ---
 
 *Last updated: 2026-06-19*
 *Total tasks: 53*
-*Open: 1 (TASK-053 analytics dashboard UI) · In progress: 0 · Done: 52*
+*Open: 0 · In progress: 0 · Done: 53*
