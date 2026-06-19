@@ -41,6 +41,12 @@ services:
       EXIT_THETA_AWARE_ENABLED: "${EXIT_THETA_AWARE_ENABLED:-true}"
       EXIT_THETA_NOPROGRESS_MIN: "${EXIT_THETA_NOPROGRESS_MIN:-8}"
       EXIT_THETA_MIN_PROGRESS_R: "${EXIT_THETA_MIN_PROGRESS_R:-0.3}"
+      # Theta entry guard: skip option-BUYS when underlying intraday ATR% is below
+      # this floor (not enough expected movement to overcome theta). Lowered from the
+      # code default 0.08 to 0.05 on 2026-06-19 so the book still trades on quiet,
+      # low-vol days (today's NIFTY/BANKNIFTY ATR% ran 0.054–0.079, just under 0.08,
+      # which blocked ~40+ signals). Revert to 0.08 to restore the stricter floor.
+      EXIT_THETA_GUARD_ATR_PCT: "${EXIT_THETA_GUARD_ATR_PCT:-0.05}"
       # #2 delta-based strike selection (ON): pick strike by target delta.
       OPTION_DELTA_SELECTION_ENABLED: "${OPTION_DELTA_SELECTION_ENABLED:-true}"
       # #1 IV-rank gate (ON): block option BUYS only when IV is richly priced
