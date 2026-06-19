@@ -719,5 +719,137 @@ class TestPart2LTPResolver(unittest.TestCase):
 
 
 
+class TestFeedAndTokenHealthWatchdog(unittest.TestCase):
+
+    def test_in_market_hours_helper(self):
+        """Verify _in_market_hours behaves correctly during different days/hours."""
+        from server import _in_market_hours
+        
+        # Test weekend: Saturday
+        sat = datetime(2026, 6, 20, 10, 0, 0, tzinfo=timezone.utc) # Saturday 15:30 IST is 10:00 UTC
+        with patch("server.datetime") as mock_dt:
+            mock_dt.now.return_value = sat
+            self.assertFalse(_in_market_hours())
+            
+        # Test weekday outside hours (e.g. 8:00 IST)
+        weekday_early = datetime(2026, 6, 19, 2, 30, 0, tzinfo=timezone.utc) # Friday 8:00 IST
+        with patch("server.datetime") as mock_dt:
+            mock_dt.now.return_value = weekday_early
+            self.assertFalse(_in_market_hours())
+            
+        # Test weekday inside hours (e.g. 10:00 IST)
+        weekday_in = datetime(2026, 6, 19, 4, 30, 0, tzinfo=timezone.utc) # Friday 10:00 IST
+        with patch("server.datetime") as mock_dt:
+            mock_dt.now.return_value = weekday_in
+            self.assertTrue(_in_market_hours())
+
+    def test_get_user_upstox_status_stalled_disconnected(self):
+        """Verify get_user_upstox_status flags feed_stalled = True when feed is disconnected during market hours."""
+        import asyncio
+        from server import get_user_upstox_status
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_keys = MagicMock()
+            mock_keys.find_one = AsyncMock(return_value={
+                "user_id": "test-user",
+                "api_key": "enc_api",
+                "api_secret": "enc_sec",
+                "access_token": "enc_token",
+            })
+            mock_db.broker_keys = mock_keys
+            
+            with patch("server.db", mock_db), \
+                 patch("server.decrypt_secret", lambda val: val.replace("enc_", "") if val else None), \
+                 patch("server._UPSTOX_GATEWAYS", {}), \
+                 patch("server._UPSTOX_TOKEN_VALIDATION_CACHE", {"test-user": {"valid": True, "state": "valid", "validated_at": datetime.now(timezone.utc).isoformat()}}), \
+                 patch("server._in_market_hours", return_value=True):
+                 
+                status = await get_user_upstox_status("test-user")
+                # Since token is valid but gateway is absent, feed_stalled should be True
+                self.assertTrue(status.get("feed_stalled"))
+                self.assertEqual(status.get("feed_stalled_reason"), "feed_disconnected")
+                
+        asyncio.run(run_test())
+
+    def test_get_user_upstox_status_stalled_zero_ticks(self):
+        """Verify get_user_upstox_status flags feed_stalled = True when connected with 0 ticks for >3 minutes."""
+        import asyncio
+        from server import get_user_upstox_status
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_keys = MagicMock()
+            mock_keys.find_one = AsyncMock(return_value={
+                "user_id": "test-user",
+                "api_key": "enc_api",
+                "api_secret": "enc_sec",
+                "access_token": "enc_token",
+            })
+            mock_db.broker_keys = mock_keys
+            
+            mock_gw = MagicMock()
+            # Feed connected, but 0 ticks
+            mock_gw.status.return_value = {
+                "connected": True,
+                "connected_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+                "snapshot_received": False,
+            }
+            mock_gw.connected = True
+            
+            with patch("server.db", mock_db), \
+                 patch("server.decrypt_secret", lambda val: val.replace("enc_", "") if val else None), \
+                 patch("server._UPSTOX_GATEWAYS", {"test-user": mock_gw}), \
+                 patch("server._UPSTOX_TOKEN_VALIDATION_CACHE", {"test-user": {"valid": True, "state": "valid", "validated_at": datetime.now(timezone.utc).isoformat()}}), \
+                 patch("server._in_market_hours", return_value=True):
+                 
+                status = await get_user_upstox_status("test-user")
+                self.assertTrue(status.get("feed_stalled"))
+                self.assertEqual(status.get("feed_stalled_reason"), "connected_but_zero_ticks")
+                
+        asyncio.run(run_test())
+
+    def test_get_user_upstox_status_stalled_index_ticks(self):
+        """Verify get_user_upstox_status flags feed_stalled = True when index ticks are stale."""
+        import asyncio
+        from server import get_user_upstox_status
+        
+        async def run_test():
+            mock_db = MagicMock()
+            mock_keys = MagicMock()
+            mock_keys.find_one = AsyncMock(return_value={
+                "user_id": "test-user",
+                "api_key": "enc_api",
+                "api_secret": "enc_sec",
+                "access_token": "enc_token",
+            })
+            mock_db.broker_keys = mock_keys
+            
+            mock_gw = MagicMock()
+            # Feed connected and got some ticks, but indices are stale
+            mock_gw.status.return_value = {
+                "connected": True,
+                "connected_at": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+                "snapshot_received": True,
+            }
+            mock_gw.connected = True
+            
+            # mock latest_tick for index keys to return stale received_at
+            stale_tick = {"received_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}
+            mock_gw.latest_tick.return_value = stale_tick
+            
+            with patch("server.db", mock_db), \
+                 patch("server.decrypt_secret", lambda val: val.replace("enc_", "") if val else None), \
+                 patch("server._UPSTOX_GATEWAYS", {"test-user": mock_gw}), \
+                 patch("server._UPSTOX_TOKEN_VALIDATION_CACHE", {"test-user": {"valid": True, "state": "valid", "validated_at": datetime.now(timezone.utc).isoformat()}}), \
+                 patch("server._in_market_hours", return_value=True):
+                 
+                status = await get_user_upstox_status("test-user")
+                self.assertTrue(status.get("feed_stalled"))
+                self.assertIn("index_ticks_stale", status.get("feed_stalled_reason", ""))
+                
+        asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

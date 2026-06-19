@@ -9,6 +9,7 @@ import { AlertTriangle, X, KeyRound, Play } from "lucide-react";
 // Hidden entirely when both are satisfied. Dismissible for the session.
 export default function ReadinessBanner() {
   const [connected, setConnected] = useState(true);
+  const [feedStalled, setFeedStalled] = useState(false);
   const [liveCount, setLiveCount] = useState(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -16,11 +17,12 @@ export default function ReadinessBanner() {
     let active = true;
     const load = async () => {
       const [u, s] = await Promise.all([
-        api.get("/upstox/status").catch(() => ({ data: { connected: false } })),
+        api.get("/upstox/status").catch(() => ({ data: { connected: false, feed_stalled: false } })),
         api.get("/strategies").catch(() => ({ data: [] })),
       ]);
       if (!active) return;
       setConnected(!!u.data?.connected);
+      setFeedStalled(!!u.data?.feed_stalled);
       const list = Array.isArray(s.data) ? s.data : s.data?.strategies || [];
       setLiveCount(list.filter((x) => x.status === "live").length);
     };
@@ -34,8 +36,9 @@ export default function ReadinessBanner() {
 
   if (dismissed || liveCount === null) return null;
   const needsToken = !connected;
+  const needsFeed = feedStalled;
   const needsArm = liveCount === 0;
-  if (!needsToken && !needsArm) return null;
+  if (!needsToken && !needsFeed && !needsArm) return null;
 
   return (
     <div
@@ -48,9 +51,17 @@ export default function ReadinessBanner() {
         <div className="mt-1 space-y-1 text-xs text-[var(--qd-text-2)]">
           {needsToken && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span>Upstox token disconnected or expired — no live feed or orders until it's reconnected.</span>
+              <span>Upstox token expired — reconnect.</span>
               <Link to="/broker-keys" className="inline-flex items-center gap-1 font-semibold text-[var(--qd-accent)] hover:underline">
                 <KeyRound size={12} /> Reconnect
+              </Link>
+            </div>
+          )}
+          {needsFeed && !needsToken && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>Live feed stalled — 0 ticks.</span>
+              <Link to="/ops" className="inline-flex items-center gap-1 font-semibold text-[var(--qd-accent)] hover:underline">
+                <AlertTriangle size={12} /> View status
               </Link>
             </div>
           )}

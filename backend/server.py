@@ -7860,6 +7860,46 @@ async def _strategy_health_loop(stop_event: asyncio.Event):
     logger.info("Strategy health monitor starting")
     while not stop_event.is_set():
         try:
+            # Run feed + token health watchdog for all users
+            try:
+                users = await db.users.find({}, {"id": 1}).to_list(100)
+                for user_row in users:
+                    if stop_event.is_set():
+                        break
+                    uid = user_row["id"]
+                    ustatus = await get_user_upstox_status(uid)
+                    if ustatus.get("feed_stalled"):
+                        reason = ustatus.get("feed_stalled_reason") or "unknown"
+                        from notifications import create_notification_once
+                        if reason == "token_invalid":
+                            await create_notification_once(
+                                db,
+                                user_id=uid,
+                                type="token_expired",
+                                severity="critical",
+                                title="Upstox token expired",
+                                message="Your Upstox token has expired or is invalid. Please reconnect.",
+                                dedupe_key=f"token_expired:{uid}:{datetime.now().strftime('%Y-%m-%d')}",
+                                browser_alert=True,
+                                action_url="/broker-keys"
+                            )
+                        else:
+                            title_msg = "Live feed stalled — 0 ticks" if reason == "connected_but_zero_ticks" else "Live feed stalled"
+                            detail_msg = "Websocket connected but 0 ticks received." if reason == "connected_but_zero_ticks" else f"Realtime index ticks are stale or disconnected: {reason}"
+                            await create_notification_once(
+                                db,
+                                user_id=uid,
+                                type="feed_stalled",
+                                severity="critical",
+                                title=title_msg,
+                                message=detail_msg,
+                                dedupe_key=f"feed_stalled:{uid}:{datetime.now().strftime('%Y-%m-%d')}",
+                                browser_alert=True,
+                                action_url="/ops"
+                            )
+            except Exception as health_exc:
+                logger.warning(f"feed/token health watchdog failed: {health_exc}")
+
             strategies = await db.strategies.find({"status": "live"}).to_list(500)
             for s in strategies:
                 if stop_event.is_set():
@@ -14197,6 +14237,14 @@ async def get_user_kotak_gateway(user_id: str):
     return None
 
 
+def _in_market_hours() -> bool:
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    if ist_now.weekday() >= 5:
+        return False
+    m = ist_now.hour * 60 + ist_now.minute
+    return 9 * 60 + 15 <= m <= 15 * 60 + 30
+
+
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
@@ -14294,6 +14342,56 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "Save Upstox credentials and connect Upstox"
     )
 
+    # Feed stalled watchdog check
+    feed_stalled = False
+    feed_stalled_reason = None
+
+    if _in_market_hours():
+        if not token_valid:
+            feed_stalled = True
+            feed_stalled_reason = "token_invalid"
+        elif not gateway or not gateway_status.get("connected"):
+            feed_stalled = True
+            feed_stalled_reason = "feed_disconnected"
+        else:
+            connected_at_str = gateway_status.get("connected_at")
+            snapshot_received = gateway_status.get("snapshot_received", False)
+            
+            # Check 1: Connected but 0 ticks received since connect
+            if connected_at_str and not snapshot_received:
+                try:
+                    conn_dt = datetime.fromisoformat(connected_at_str.replace("Z", "+00:00"))
+                    conn_age = (datetime.now(timezone.utc) - conn_dt).total_seconds()
+                    if conn_age > 180:
+                        feed_stalled = True
+                        feed_stalled_reason = "connected_but_zero_ticks"
+                except Exception:
+                    pass
+            
+            # Check 2: Index ticks stale > 3 min
+            if not feed_stalled and snapshot_received:
+                index_keys = ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"]
+                stale_indices = []
+                for key in index_keys:
+                    tick = gateway.latest_tick(key)
+                    if tick:
+                        rec_at = tick.get("received_at")
+                        if rec_at:
+                            try:
+                                last_dt = datetime.fromisoformat(rec_at.replace("Z", "+00:00"))
+                                age = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                                if age > 180:
+                                    stale_indices.append(f"{key.split('|')[-1]} ({int(age)}s)")
+                            except Exception:
+                                pass
+                        else:
+                            stale_indices.append(f"{key.split('|')[-1]} (no_ts)")
+                    else:
+                        stale_indices.append(f"{key.split('|')[-1]} (no_tick)")
+                if stale_indices:
+                    feed_stalled = True
+                    feed_stalled_reason = f"index_ticks_stale:{','.join(stale_indices)}"
+
     status.update({
         "connected": bool(token_valid),
         "authenticated": bool(token_valid),
@@ -14329,6 +14427,8 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
             "Upstox connected. Upstox requires a fresh login daily before market hours."
             if token_valid else reconnect_message
         ),
+        "feed_stalled": feed_stalled,
+        "feed_stalled_reason": feed_stalled_reason,
     })
     return status
 

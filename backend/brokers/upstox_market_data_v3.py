@@ -442,6 +442,7 @@ class UpstoxMarketDataFeedV3:
         self._reconnects = 0
         self._consecutive_failures = 0
         self._first_tick_logged = False
+        self._connected_at = None
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -450,9 +451,11 @@ class UpstoxMarketDataFeedV3:
                 modes[mode] = modes.get(mode, 0) + 1
             return {
                 "connected": self._connected,
+                "connected_at": self._connected_at.isoformat() if self._connected_at else None,
+                "first_tick_logged": self._first_tick_logged,
                 "state": self._state,
                 "last_error": self._last_error,
-                "last_tick_time": self._last_tick_time,
+                "last_tick_at": self._last_tick_time,
                 "snapshot_received": self._snapshot_received,
                 "latest_tick_time": self._last_tick_time,
                 "market_status": dict(self._market_status),
@@ -514,6 +517,7 @@ class UpstoxMarketDataFeedV3:
         with self._lock:
             self._running = False
             self._state = "disconnected"
+            self._connected_at = None
             self._subscribed.clear()
             self._ticks.clear()
             app = self._ws_app
@@ -591,6 +595,7 @@ class UpstoxMarketDataFeedV3:
                 with self._lock:
                     self._last_error = str(exc)[:1000]
                     self._connected = False
+                    self._connected_at = None
                     self._state = "reconnecting"
                     self._consecutive_failures += 1
                 logger.warning("Upstox V3 feed connection failed attempt=%s error=%s consecutive_failures=%s", self._reconnects, exc, self._consecutive_failures)
@@ -620,6 +625,7 @@ class UpstoxMarketDataFeedV3:
     def _on_open(self, ws: Any) -> None:
         with self._lock:
             self._connected = True
+            self._connected_at = datetime.now(timezone.utc)
             self._state = "connected"
             self._last_error = None
             self._consecutive_failures = 0
@@ -718,11 +724,13 @@ class UpstoxMarketDataFeedV3:
     def _on_error(self, ws: Any, error: Any) -> None:
         with self._lock:
             self._last_error = str(error)[:1000]
+            self._connected_at = None
             self._state = "reconnecting" if self._running else "disconnected"
         logger.warning("Upstox V3 feed websocket error: %s", error)
 
     def _on_close(self, ws: Any, status_code: Any, msg: Any) -> None:
         with self._lock:
             self._connected = False
+            self._connected_at = None
             self._state = "reconnecting" if self._running else "disconnected"
         logger.info("Upstox V3 feed closed status=%s msg=%s", status_code, msg)

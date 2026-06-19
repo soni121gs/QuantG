@@ -72,6 +72,8 @@ async def paper_readiness(user=Depends(get_current_user)):
             "token_valid": bool(upstox.get("token_valid") or upstox.get("authenticated")),
             "last_tick_at": feed.get("last_tick_at"),
             "ticks": feed.get("ticks", 0),
+            "feed_stalled": bool(upstox.get("feed_stalled")),
+            "feed_stalled_reason": upstox.get("feed_stalled_reason"),
         },
         "feed_status": "READY" if feed.get("last_tick_at") else "WARNING",
         "active_strategy_count": active_strategy_count,
@@ -191,6 +193,8 @@ async def get_core_feed_status(user=Depends(get_current_user)):
     return {
         "connected": status.get("connected", False),
         "token_valid": status.get("token_valid", False),
+        "feed_stalled": status.get("feed_stalled", False),
+        "feed_stalled_reason": status.get("feed_stalled_reason"),
         "feed_source": "upstox_websocket_v3",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }

@@ -1486,7 +1486,7 @@ Context: 2026-06-19 session. Root-caused why the book barely traded for days —
 ---
 
 ### TASK-047 — Feed + token health watchdog/alert
-- **Status**: `[ ]` OPEN
+- **Status**: `[x]` · 2026-06-19
 - **Tier**: 2 (Sonnet / Codex / GPT-4o)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -1575,9 +1575,10 @@ Context: 2026-06-19 session. Root-caused why the book barely traded for days —
 | TASK-044 | Fix Upstox V3 feed mode full_d5→full (live ticks finally stream) | 5b026bb | 2026-06-19 |
 | TASK-045 | Lower theta entry-guard floor 0.08→0.05 | 5f6089d | 2026-06-19 |
 | TASK-046 | Add 4 theta-positive credit spreads + baseline + scheduled rank | (db ops) | 2026-06-19 |
+| TASK-047 | Feed + token health watchdog/alert | (multiple) | 2026-06-19 |
 
 ---
 
 *Last updated: 2026-06-19*
 *Total tasks: 50*
-*Open: 4 (TASK-047 feed/token health · TASK-048 debit_spread · TASK-049 clean epoch · TASK-050 post-rank trim) · In progress: 0 · Done: 46*
+*Open: 3 (TASK-048 debit_spread · TASK-049 clean epoch · TASK-050 post-rank trim) · In progress: 0 · Done: 47*
