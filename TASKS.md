@@ -1445,6 +1445,110 @@ Files changed: backend/core/portfolio_ledger.py, backend/position_monitor.py, ba
 
 ---
 
+## PRIORITY 9 — Live-Data Unlock & Strategy Diversification (2026-06-19)
+
+Context: 2026-06-19 session. Root-caused why the book barely traded for days — the Upstox V3 WS feed silently streamed ZERO ticks (wrong subscription mode), so candles ran on lagging REST and the staleness guard blocked nearly every signal. Fixed + verified live. Also diagnosed that all 8 prior live strategies were the same ATM-buy single-leg bet, and added theta-positive credit spreads. Remaining open items below are the "what to do next".
+
+### TASK-044 — Fix Upstox V3 feed subscription mode (full_d5 → full)
+- **Status**: `[x]` commit 5b026bb · 2026-06-19
+- **Tier**: 3 (Opus / Claude)
+
+**Problem**: `build_subscription_payload` converted feed mode `"full"` → `"full_d5"` before sending the WS subscription. Upstox does not accept `full_d5` as a subscribe mode string — it silently dropped every subscription (connection + `market_info` handshake still succeed, but ZERO data frames stream). Result: `latest_tick()` always empty → `first tick received = 0` for the whole session → candles/ATR fell back to lagging historical REST → staleness guard blocked signals. The ENTIRE live tick feed had been dead for days.
+
+**Fix**: send the documented mode string verbatim (delete the full→full_d5 conversion). Proven by live frame capture (`backend/scratch/capture_feed_frames.py`): `mode="full"` → 8 data frames decode; old `full_d5` → 0. Deployed + verified in prod (`first tick received` fired, `tick cache empty` stopped, strategies now `last_data_reason="websocket tick"`). The decoder was always fine.
+
+**Files changed**: `backend/brokers/upstox_market_data_v3.py`
+
+---
+
+### TASK-045 — Lower theta entry-guard floor 0.08 → 0.05
+- **Status**: `[x]` commit 5f6089d · 2026-06-19
+- **Tier**: 2
+
+**Problem**: theta entry-guard blocked ~40+ signals on a quiet day (NIFTY/BANKNIFTY ATR% ran 0.054–0.079, just under the 0.08 floor) → only one trade all session.
+
+**Fix**: added `EXIT_THETA_GUARD_ATR_PCT: "${EXIT_THETA_GUARD_ATR_PCT:-0.05}"` to docker-compose.yml. Revert to 0.08 to restore the stricter floor. Trade-off: 0.05 buys options into lower-movement conditions.
+
+**Files changed**: `docker-compose.yml`
+
+---
+
+### TASK-046 — Add theta-positive credit-spread strategies + eval baseline + scheduled rank
+- **Status**: `[x]` · 2026-06-19 (DB ops + scheduled agent; no code commit)
+- **Tier**: 3
+
+**Problem**: all 8 prior live strategies were `ATM_BUY` + `single_leg` directional BUYING — max theta, low probability-of-profit, 100% correlated, and they sit out range days.
+
+**Done**: created (live, paper) **NIFTY Range Credit Spread** (mean-reversion, EMA-flatness gated so it only fades ranges, not trends), **BANKNIFTY Theta Credit Spread**, **SENSEX Theta Credit Spread**; re-activated **NIFTY Theta Credit Spread**. Each `python_code` validated through the real `safe_run_strategy` sandbox before insert. Stamped `app_config.credit_spread_eval_baseline`; scheduled agent `quantg-credit-spread-weekly-rank` fires **2026-06-26 09:00 IST** to rank sellers vs buyers.
+
+**Artifacts**: `backend/scratch/create_credit_spread_strategies.py`, `backend/scratch/fix_range_strategy.py`
+
+---
+
+### TASK-047 — Feed + token health watchdog/alert
+- **Status**: `[ ]` OPEN
+- **Tier**: 2 (Sonnet / Codex / GPT-4o)
+- **Session size**: ~2 hours
+- **Prerequisite**: None
+
+**Problem**: both failure modes that caused this week's outage are SILENT — (a) feed connected-but-no-ticks (the full_d5 bug, hidden for days) and (b) the daily Upstox token expiry. Nothing alerts; you only find out by noticing "no trades".
+
+**Exact steps**:
+1. Add a health check (extend a health loop, e.g. `backend/position_guardian.py` or the strategy-health loop) that during market hours flags: `latest_tick()` stale > 3 min for index keys, OR `first tick received` never fired since connect, OR Upstox token invalid.
+2. Raise a notification (`notifications` collection) and expose the state via `routes/readiness.py`.
+3. Wire it into the existing `ReadinessBanner` (TASK-024) so the UI shows "Live feed stalled — 0 ticks" / "Upstox token expired — reconnect".
+
+**How to verify**: during market hours, force a stale feed (or expired token) → alert fires within a few minutes and the banner shows it.
+
+---
+
+### TASK-048 — Build `debit_spread` structure support, then convert one ATM buyer
+- **Status**: `[ ]` OPEN
+- **Tier**: 3 (Opus / Claude — touches execution path)
+- **Session size**: ~4 hours
+- **Prerequisite**: None (do with tests, off-hours)
+
+**Problem**: the engine only supports `single_leg` + `credit_spread`. A debit spread (buy ATM + sell further-OTM) cuts cost basis ~40% and theta bleed while keeping the directional view — but it isn't built, so you can't do the "convert an ATM buyer → debit spread, compare before/after" experiment.
+
+**Exact steps**:
+1. Mirror the credit-spread machinery: add `build_debit_spread()` in `core/spread_builder.py`, `value/open/close_debit_spread()` in `core/spread_lifecycle.py`, and `structure == "debit_spread"` handling in `execution_state.py` + `position_monitor.py`.
+2. Add `structure: "debit_spread"` support in the strategy `visual_config` path (server.py ~447).
+3. Add tests under `backend/tests/` (replay-style, no broker).
+4. Convert one ATM buyer (e.g. UPSTOX NIFTY ATM Momentum) to a debit spread and run side-by-side on paper.
+
+**How to verify**: a `debit_spread` strategy opens two legs, values + exits correctly in paper; tests pass.
+
+---
+
+### TASK-049 — Verify live-tick trade frequency + declare clean measurement epoch
+- **Status**: `[ ]` OPEN
+- **Tier**: 2
+- **Session size**: ~1 hour (over 1–2 sessions)
+- **Prerequisite**: TASK-044 (done)
+
+**Problem**: all prior P&L is corrupted by the dead feed + old bugs. Now that ticks stream, establish the first trustworthy paper-forward window so ranking/alpha decisions use clean data.
+
+**Exact steps**:
+1. Over the next 1–2 full sessions, confirm orders/day rises materially above the pre-fix ~1/day and that the 4 credit spreads actually fire and fill.
+2. Set an `app_config` `research_baseline` marker dated to the first full live-tick session (same pattern as the clean-epoch reset).
+3. Ensure the 2026-06-26 ranking (TASK-046) measures from this clean window.
+
+**How to verify**: orders/day clearly > pre-fix; baseline recorded; no staleness-guard rejections from feed lag.
+
+---
+
+### TASK-050 — Post-ranking: trim losers, promote winners
+- **Status**: `[ ]` OPEN ⛔ blocked on the 2026-06-26 ranking
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Prerequisite**: TASK-046 (scheduled rank), TASK-049
+
+**Problem**: the live set is buyer-heavy and several buyers are deep losers (cumulative, pre-clean-epoch): UPSTOX NIFTY ATM Momentum −9.7k, NIFTY Quick EMA −5.7k, UPSTOX BANKNIFTY ATM Breakout −4.1k.
+
+**Exact steps**: after the ranking runs, pause/trim the worst single-leg buyers if the credit spreads outperform on clean-window realized P&L + win-rate; keep the live set small and focused; do NOT enable real-money live (`CORE_ENGINE_LIVE_ENABLED`) until ≥1 strategy shows out-of-sample edge.
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -1468,9 +1572,12 @@ Files changed: backend/core/portfolio_ledger.py, backend/position_monitor.py, ba
 | TASK-028 | Structure badge on strategy cards | 63b9829 | 2026-06-16 |
 | TASK-029 | IV-regime visual gauge | 6c15010 | 2026-06-16 |
 | TASK-030 | Per-strategy trade-cap indicator | 63b9829 | 2026-06-16 |
+| TASK-044 | Fix Upstox V3 feed mode full_d5→full (live ticks finally stream) | 5b026bb | 2026-06-19 |
+| TASK-045 | Lower theta entry-guard floor 0.08→0.05 | 5f6089d | 2026-06-19 |
+| TASK-046 | Add 4 theta-positive credit spreads + baseline + scheduled rank | (db ops) | 2026-06-19 |
 
 ---
 
 *Last updated: 2026-06-19*
-*Total tasks: 43*
-*Open: 0 · In progress: 0 · Done: 43*
+*Total tasks: 50*
+*Open: 4 (TASK-047 feed/token health · TASK-048 debit_spread · TASK-049 clean epoch · TASK-050 post-rank trim) · In progress: 0 · Done: 46*
