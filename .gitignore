@@ -94,6 +94,7 @@ frontend/node_modules/.cache/default-development/0.pack
 # Allow the template — it contains no secrets
 !.env.example
 !backend/.env.example
+!.env.hermes.example
 credentials.json
 *.pem
 *.key

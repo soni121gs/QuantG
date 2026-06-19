@@ -1643,11 +1643,11 @@ Context: Hermes becomes a QuantG operator/research assistant, NOT the trading br
 ### Stage 1 / 3 — Sidecar & Runbook (infra; needs founder runtime/channel inputs)
 
 ### TASK-H003 — Install Hermes in an isolated environment (sidecar)
-- **Status**: `⛔` blocked — pending founder inputs (runtime: same VPS / separate VPS / Windows-first; model/provider)
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 3
 
 ### TASK-H004 — Hermes deployment runbook
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H003
 
@@ -1656,21 +1656,21 @@ Context: Hermes becomes a QuantG operator/research assistant, NOT the trading br
 ### Stage 3 — Daily Operator Reports
 
 ### TASK-H008 — Market-Open Readiness Report
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
 Identify token expiry, feed stalls, strategies-armed count, readiness changes at/just-before open. Reuses `get_live_readiness`/`get_token_status`/`get_feed_status`. Overlaps with TASK-024 ReadinessBanner + TASK-047 watchdog — reuse, don't duplicate.
 
 ### TASK-H009 — Intraday Health Watch
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
 Periodic check for feed stalls, no-trade drought, abnormal loss, stale positions. Reuse the TASK-047 watchdog signals.
 
 ### TASK-H010 — EOD Trading Report
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
@@ -1822,10 +1822,15 @@ Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
 | TASK-H007 | Agent tool audit log (agent_tool_audit collection) | 0b29554 | 2026-06-20 |
 | TASK-H011 | Add "Hermes mode" branding and updated system prompt rules in ai.py and AIBot.jsx | 0b29554 | 2026-06-20 |
 | TASK-H012 | Save expanded tool metrics in ai.py and render cited tool source cards in ChatFeed.jsx | 0b29554 | 2026-06-20 |
+| TASK-H003 | Install Hermes in an isolated environment (sidecar setup, agent client) | 8a4f501 | 2026-06-20 |
+| TASK-H004 | Hermes deployment runbook (docs/DEPLOY_HERMES.md) | 8a4f501 | 2026-06-20 |
+| TASK-H008 | Market-Open Readiness Report scheduler and messaging logic | 8a4f501 | 2026-06-20 |
+| TASK-H009 | Intraday Watchdog loop and alert rate-limiting | 8a4f501 | 2026-06-20 |
+| TASK-H010 | EOD Report scheduler and messaging logic | 8a4f501 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 22 Hermes (H001–H022)*
-*Open: 13 · Blocked: 1 (TASK-H003) · In progress: 0 · Done: 61 (53 + H001/H002/H005/H006/H007/H011/H012)*
-*Hermes next code task: TASK-H008 / H010 (readiness and EOD reports)*
+*Open: 9 · Blocked: 0 · In progress: 0 · Done: 66 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012)*
+*Hermes next code task: TASK-H013 / H014 (Hermes Skill Pack & Wiki Sync)*

@@ -131,6 +131,17 @@ services:
     networks:
       - quantg-network
 
+  hermes:
+    build: ./hermes
+    container_name: quantg-hermes
+    restart: unless-stopped
+    env_file: .env.hermes
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - quantg-network
+
 volumes:
   mongo-data:
   backend-state:
