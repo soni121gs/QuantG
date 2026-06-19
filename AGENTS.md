@@ -167,6 +167,9 @@ price = pos.get("average_price") or pos.get("average_buy_price") or 0
 | Option selection / strike picking | `backend/core/option_selector_v2.py` |
 | Config values (lot sizes, limits) | `backend/core/market_domains.py` |
 | Position monitor loop | `backend/position_monitor.py` |
+| AI / Hermes backend API routes | `backend/routes/ai.py` |
+| Hermes sidecar engine daemon | `hermes/agent.py` |
+| Hermes deployment runbook | `docs/DEPLOY_HERMES.md` |
 | Existing tests | `backend/tests/` |
 
 ---
@@ -245,7 +248,7 @@ works this program the same way.
 
 ---
 
-*Last updated: 2026-06-19*
+*Last updated: 2026-06-20*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
 
 ---

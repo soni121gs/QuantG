@@ -11,7 +11,7 @@ This is the canonical reference for all AI agents working on the QuantG algo-tra
 QuantG is an NSE/BSE options algo-trading platform.
 - **Backend**: FastAPI + Motor (MongoDB) + asyncio loops. Single file: `backend/server.py` (~15k lines). Additional routes in `backend/routes/`.
 - **Frontend**: React (CRA) + Tailwind. Modular architecture: pages in `frontend/src/pages/`, presenter components in `frontend/src/components/`, centralized state in `frontend/src/contexts/`. No SSR.
-- **Infra**: Docker Compose on VPS. Four containers: `quantg-backend`, `quantg-frontend`, `quantg-mongo`, `quantg-caddy`.
+- **Infra**: Docker Compose on VPS. Five containers: `quantg-backend`, `quantg-frontend`, `quantg-mongo`, `quantg-caddy`, `quantg-hermes`.
 - **Broker**: Upstox (V3 WebSocket feed + REST orders). No Zerodha, no MCX, no Kite.
 - **Domain**: quantgtrade.com → VPS 82.180.145.183
 
@@ -61,6 +61,8 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Frontend CSS design system | `frontend/src/index.css` (HSL variables, Sora/Inter/Mono fonts, blink keyframe animations) |
 | Docker build/env config | `docker-compose.yml`, `backend/.env` |
 | Reverse proxy config | `Caddyfile` |
+| Hermes sidecar engine | `hermes/agent.py` (watchdog alert loop, pre-market readiness, EOD report) |
+| Hermes deployment runbook | `docs/DEPLOY_HERMES.md` |
 
 ---
 
@@ -241,6 +243,9 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | `risk_reservations` | Pre-order capital reservations |
 | `trade_fills` | Fill records from paper broker / Upstox callbacks |
 | `processed_fill_ids` | Unique index on `fill_id` — prevents duplicate fill processing (DB-level idempotency) |
+| `agent_tool_audit` | Audit logs of all read-only tool executions run by Hermes |
+| `daily_reports` | End-of-day strategy performance aggregates (compiled at 15:35 IST) |
+| `ai_chats` | Chat session records, carrying the tools_used citation metadata envelopes |
 
 ---
 
