@@ -1699,14 +1699,14 @@ Render each cited tool's source, timestamp, stale-data warning, and confidence a
 ### Stage 5 — QuantG Hermes Skill Pack
 
 ### TASK-H013 — Create QuantG Hermes skill pack
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 5da3ca4 · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
 Skills: `quantg-live-readiness`, `quantg-why-no-trade`, `quantg-strategy-loss-review`, `quantg-feed-token-diagnosis`, `quantg-eod-report`, `quantg-backtest-review`, `quantg-vps-deploy-check`, `quantg-incident-postmortem`. Each composes read-only tools; wiki=context, DB=truth.
 
 ### TASK-H014 — Sync selected wiki context with Hermes
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 5da3ca4 · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H013
 
@@ -1717,21 +1717,21 @@ Expose Knowledge Hub notes as retrievable context (`search_wiki`), clearly tagge
 ### Stage 6 — Strategy Research Assistant
 
 ### TASK-H015 — Weekly Strategy Ranking Report
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 5da3ca4 · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H006
 
 Reuse the existing scorecard + the scheduled `quantg-credit-spread-weekly-rank` agent (TASK-046).
 
 ### TASK-H016 — Backtest Experiment Generator
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 5da3ca4 · 2026-06-20
 - **Tier**: 3
 - **Prerequisite**: TASK-H015
 
 Propose backtest experiments over `POST /ops/options-backtest`; draft-only.
 
 ### TASK-H017 — Strategy Experiment Ledger
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 5da3ca4 · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H016
 
@@ -1930,12 +1930,17 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H010 | EOD Report scheduler and messaging logic | 8a4f501 | 2026-06-20 |
 | TASK-H023 | Two-way Telegram command bridge in the Hermes sidecar daemon | 4ea022b | 2026-06-20 |
 | TASK-H025 | Document two-way Telegram command capabilities in DEPLOY_HERMES.md and .env.hermes.example | 4ea022b | 2026-06-20 |
+| TASK-H013 | Create QuantG Hermes skill pack defining 8 operator playbooks | 5da3ca4 | 2026-06-20 |
+| TASK-H014 | Sync selected wiki context dynamically prior to search_wiki query | 5da3ca4 | 2026-06-20 |
+| TASK-H015 | Weekly Strategy Scorecard Ranking Report scheduled trigger | 5da3ca4 | 2026-06-20 |
+| TASK-H016 | Parameterized Backtest Experiment query processor | 5da3ca4 | 2026-06-20 |
+| TASK-H017 | Seed the Strategy Experiment Ledger markdown page | 5da3ca4 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 25 Hermes (H001–H025)*
-*Open: 11 · Blocked: 0 · In progress: 0 · Done: 68 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H023/H025)*
-*Hermes open: H013, H014, H015, H016, H017, H018, H019, H020, H021, H022, H024*
+*Open: 6 · Blocked: 0 · In progress: 0 · Done: 73 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H023/H025)*
+*Hermes open: H018, H019, H020, H021, H022, H024*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
-*Recommended next build order: TASK-H023 (two-way Telegram) ‖ TASK-H018→H019→H020 (Stage 7 approval-gated writes) → TASK-H024 (proactive alerts) → Stage 5/6/8.*
+*Recommended next build order: TASK-H018→H019→H020 (Stage 7 approval-gated writes) → TASK-H024 (proactive alerts) → Stage 8.*
