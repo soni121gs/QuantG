@@ -1741,26 +1741,69 @@ Track every hypothesis, version, clean baseline, result, decision, reason.
 
 ### Stage 7 — Approval-Gated Operations (NON-TRADING writes only — founder-approved end state)
 
-### TASK-H018 — Draft-only operations
+**Founder GO 2026-06-20: Stage 7 is approved and is the recommended next code priority.** This is the highest-leverage Hermes work — the `PROPOSED_ACTION → approve/reject` machinery already half-exists (`routes/ai.py:740` `approve_agent_action`, but it only handles 6 *profile* fields). Stage 7 generalizes that into a typed draft → queue → approved-executor pipeline for **non-trading** writes. Permanently forbidden at every step: live order place/cancel/modify/exit, live-mode enable (`CORE_ENGINE_LIVE_ENABLED`), broker-credential changes, risk/capital overrides. The approval executor is an **allowlist of action_types**, never a denylist.
+
+### TASK-H018 — Draft-only operation framework (typed action proposals)
 - **Status**: `[ ]`
 - **Tier**: 3
 - **Prerequisite**: TASK-H007
+- **Session size**: ~2–3 hours
 
-Extend the existing `PROPOSED_ACTION` path (`routes/ai.py:232`) so Hermes emits drafts that never auto-apply.
+**Problem**: today the only proposable action is `update_profile` (6 risk/sizing fields) parsed from a `PROPOSED_ACTION:` JSON block (`_parse_and_store_pending_action`, `routes/ai.py:427`). Stage 7 needs Hermes to also draft **non-trading content writes** (wiki note, TASKS.md entry, incident report, PR summary) as pending drafts that never auto-apply.
 
-### TASK-H019 — Founder approval queue
+**Files to touch**: `backend/routes/ai.py`.
+
+**Exact steps**:
+1. Extend the Gemini system prompt (`_gemini_agent_reply_sync`, `routes/ai.py:465`) to allow these NEW `PROPOSED_ACTION` action_types alongside `update_profile`:
+   - `draft_wiki_note` — params: `{title, body_markdown, folder}` (folder ∈ existing `wiki/` subdirs)
+   - `draft_task_entry` — params: `{task_id, title, body_markdown}`
+   - `draft_incident_report` — params: `{title, body_markdown}`
+   - `draft_pr_summary` — params: `{title, body_markdown}`
+2. Keep the parse path generic: `_parse_and_store_pending_action` already stores `{action_type, params, status:"pending"}` in `db.pending_actions` — confirm it stores these new types unchanged (it should; it is action-type agnostic).
+3. Do NOT add an executor here — H018 only produces pending drafts. Approval/execution is H019/H020.
+4. Hard rule in the prompt: Hermes may NEVER propose a trading/broker/live/risk action; those stay in the deterministic app only.
+
+**Verify**: ask Hermes "draft a wiki note summarizing today's feed outage" → response stores a `db.pending_actions` row with `action_type:"draft_wiki_note"`, `status:"pending"`, and the chat returns a `pending_action` envelope. No file is written yet.
+
+### TASK-H019 — Founder approval queue (in-app)
 - **Status**: `[ ]`
 - **Tier**: 3
 - **Prerequisite**: TASK-H018
+- **Session size**: ~3 hours
 
-In-app queue where the founder approves/rejects a pending Hermes draft before it applies.
+**Problem**: pending drafts exist in `db.pending_actions` but there is no dedicated UI to review/approve/reject them — approval is currently inline per chat message only, and only for `update_profile`. A founder needs one queue showing all pending Hermes drafts.
 
-### TASK-H020 — Safe (non-trading) mutation framework
+**Files to touch**: `backend/routes/ai.py` (list endpoint), `frontend/src/pages/AIBot.jsx` + `frontend/src/components/aibot/` (queue panel).
+
+**Exact steps**:
+1. Add `GET /agent/actions/pending` → returns all `db.pending_actions` for the user with `status:"pending"` (newest first), projecting `action_id, action_type, params, created_at`.
+2. Reuse the existing `POST /agent/action/approve` and `/agent/action/reject` (`routes/ai.py:740/796`) — they already flip status; H020 adds the executor branch for the new action_types.
+3. Frontend: add an "Approvals" panel/tab in the Agent page listing pending drafts as cards (title, type chip, preview, Approve/Reject buttons). On approve/reject, call the existing endpoints and refresh.
+4. Show a badge count of pending drafts in the Agent nav.
+
+**Verify**: a drafted wiki note from H018 appears as a card in the Approvals panel; Reject sets `status:"rejected"`; the card disappears on refresh. (Approve wiring to an executor is H020.)
+
+### TASK-H020 — Safe (non-trading) mutation framework (approved-only executors)
 - **Status**: `[ ]`
 - **Tier**: 3
 - **Prerequisite**: TASK-H019
+- **Session size**: ~3–4 hours
 
-Approved-only executors for: write wiki notes, create TASKS.md entries, create incident reports, draft PR summaries. STILL forbidden: live order place/cancel, live-mode enable, broker-cred changes, risk overrides.
+**Problem**: approving a non-`update_profile` draft currently does nothing — `approve_agent_action` only has an `update_profile` branch. H020 adds the guarded executors.
+
+**Files to touch**: `backend/routes/ai.py` (executor branch), possibly a small `backend/core/hermes_writer.py` helper.
+
+**Exact steps**:
+1. In `approve_agent_action` (`routes/ai.py:740`), add a dispatch on `action_type` AFTER the existing `update_profile` branch:
+   - `draft_wiki_note` → write a markdown file under `wiki/<folder>/<slug>.md` with frontmatter (topic/tags/date) AND upsert the Knowledge Hub Mongo doc, so it syncs both ways (mirror how the Wiki feature writes).
+   - `draft_task_entry` → append a task block to `TASKS.md` (never rewrite existing tasks).
+   - `draft_incident_report` → write `wiki/Incidents/<date>-<slug>.md` + Hub doc.
+   - `draft_pr_summary` → store the summary text on the action doc (no git action; founder copies it).
+2. **Allowlist enforcement**: if `action_type` is not in the explicit approved set, raise 400 — never fall through to a generic write. Add an assert that the action_type is NOT any trading/broker/live/risk keyword.
+3. Audit: write each executed approval to `agent_tool_audit` (or a new `hermes_writes` collection) with who/what/when/the resulting path.
+4. STILL forbidden (must have no code path): live order place/cancel/modify/exit, `CORE_ENGINE_LIVE_ENABLED`, broker-cred changes, strategy/risk/capital mutation.
+
+**Verify**: approve a `draft_wiki_note` → the markdown file appears under `wiki/`, the Hub doc exists, and an audit row records the write. Approving an unknown action_type returns 400.
 
 ---
 
@@ -1779,6 +1822,62 @@ Reconstruct what happened/when/which strategies/whether trading stayed gated fro
 - **Prerequisite**: TASK-H021
 
 Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
+
+---
+
+### Stage 9 — Two-Way Telegram & Proactive Alerts (founder-chosen 2026-06-20)
+
+Context & founder decisions 2026-06-20: (1) **build a two-way Telegram system** — today the sidecar (`hermes/agent.py`) only PUSHES (watchdog/pre-market/EOD); founder wants to also ASK Hermes from Telegram. (2) **Stay on Gemini 2.5-flash for now** (`DEFAULT_GEMINI_MODEL`, `routes/ai.py:21`) — revisit model choice later; do NOT introduce a new provider in these tasks. These tasks close the two gaps the roadmap (H001–H022) never covered: the chat channel beyond in-app, and proactive (behavioral, not just plumbing) alerting. Same safety contract applies — Telegram is a READ-ONLY question channel; any write still goes through the Stage-7 approval queue in-app, never auto-applied from chat.
+
+### TASK-H023 — Two-way Telegram command bridge
+- **Status**: `[ ]`
+- **Tier**: 3
+- **Prerequisite**: TASK-H006 (read-only tools), TASK-H009 (sidecar loop)
+- **Session size**: ~3–4 hours
+
+**Problem**: `hermes/agent.py` is push-only. The founder reconnects Upstox every morning and wants to query state ("/status", "/pnl", "/why-no-trade", or free text) from the phone without opening the app.
+
+**Files to touch**: `hermes/agent.py` (Telegram long-poll + command router), reuse the in-app agent endpoint.
+
+**Exact steps**:
+1. Add a Telegram `getUpdates` long-poll loop (offset-tracked) alongside the existing time-based push loop in `run_loop()`. Keep it best-effort; never let a Telegram error kill the watchdog.
+2. Authorize ONLY the configured `TELEGRAM_CHAT_ID` — ignore messages from any other chat id (prevents strangers querying account state).
+3. Command router:
+   - `/status` → call `GET /core/feed-status` + `/trading/live-readiness`, format like the pre-market report.
+   - `/pnl` → call `GET /reports/daily/<today>` (or risk snapshot), format like the EOD summary.
+   - `/why` or free text → POST the text to `POST /agent/chat` (the existing Hermes read-only agent) and relay `content` back, including a one-line "sources: <tools_used>" footer.
+4. Reuse `QuantGClient` (already logs in as operator and auto-reauths). All queries are READ-ONLY — the bridge must NEVER call a mutating endpoint.
+5. If a reply would contain a `PROPOSED_ACTION`, strip it and tell the user "approve in-app" — Telegram cannot approve writes (keeps the Stage-7 gate in one place).
+
+**Verify**: send `/status` from the authorized chat → get a formatted readiness reply; send "why didn't NIFTY trade today" → get the agent's grounded answer with a sources footer; send from an unauthorized chat id → no reply.
+
+### TASK-H024 — Proactive behavioral alerts (drought / drawdown / loss-streak)
+- **Status**: `[ ]`
+- **Tier**: 2
+- **Prerequisite**: TASK-H009
+- **Session size**: ~2 hours
+
+**Problem**: the intraday watchdog (TASK-H009) only watches plumbing (feed/token). It never alerts on *trading behavior* — the trade-drought and oversizing/drawdown classes the founder has had to catch manually.
+
+**Files to touch**: `hermes/agent.py` (extend `run_watchdog` or add `run_behavior_watch`).
+
+**Exact steps**:
+1. During market hours, periodically pull read-only state (`/reports/daily/<today>` or risk snapshot + today's fills via the agent tools).
+2. Alert (rate-limited, one per type per cooldown, reuse `should_rate_limit`) on:
+   - **No-trade drought**: 0 fills by a configurable cutoff (e.g. 12:00 IST) while feed is healthy and ≥1 strategy armed.
+   - **Drawdown breach**: day P&L below a configurable fraction of `max_daily_loss`.
+   - **Loss streak**: any strategy hits N consecutive losing closes (reuse `strategy_loss_streaks` if exposed; else derive from fills).
+3. Thresholds via `.env.hermes` (e.g. `DROUGHT_CUTOFF_IST`, `DRAWDOWN_ALERT_FRAC`, `LOSS_STREAK_N`), with safe defaults.
+
+**Verify**: with 0 fills past the cutoff on a healthy feed, a single drought alert fires; it does not repeat within the cooldown.
+
+### TASK-H025 — Document two-way Telegram in DEPLOY_HERMES.md
+- **Status**: `[ ]`
+- **Tier**: 1
+- **Prerequisite**: TASK-H023
+- **Session size**: ~30 min
+
+Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (drought/drawdown thresholds), the authorized-chat-id requirement, and the supported `/status` `/pnl` `/why` commands. Do not create a new doc file.
 
 ---
 
@@ -1831,6 +1930,8 @@ Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
 ---
 
 *Last updated: 2026-06-20*
-*Total tasks: 53 + 22 Hermes (H001–H022)*
-*Open: 9 · Blocked: 0 · In progress: 0 · Done: 66 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012)*
-*Hermes next code task: TASK-H013 / H014 (Hermes Skill Pack & Wiki Sync)*
+*Total tasks: 53 + 25 Hermes (H001–H025)*
+*Open: 12 · Blocked: 0 · In progress: 0 · Done: 66 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012)*
+*Hermes open: H013, H014, H015, H016, H017, H018, H019, H020, H021, H022, H023, H024, H025*
+*Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
+*Recommended next build order: TASK-H023 (two-way Telegram) ‖ TASK-H018→H019→H020 (Stage 7 approval-gated writes) → TASK-H024 (proactive alerts) → Stage 5/6/8.*

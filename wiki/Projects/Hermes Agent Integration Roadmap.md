@@ -158,13 +158,22 @@ Hermes should answer what happened, when it started, which strategies were affec
 7. TASK-H010 EOD trading report.
 8. TASK-H011 Hermes mode inside Ask QuantG Agent.
 
-## Pending Founder Inputs
+## Founder Decisions (RESOLVED 2026-06-20)
 
-- Where should Hermes run: same VPS, separate VPS, or Windows first?
-- First chat channel: in-app, Telegram, WhatsApp, Slack, or CLI?
-- Model/provider: Nous Portal, OpenRouter, OpenAI, Anthropic, or local Ollama/vLLM?
-- Should the Hermes program be added into TASKS.md as official tasks?
-- Should Hermes remain permanently read-only or eventually allow approval-gated non-trading actions like writing wiki notes/tasks?
+These were the pending inputs; the founder has now settled them. Other agents: treat these as fixed.
+
+- **Where Hermes runs**: same VPS sidecar (`quantg-hermes` container). ✅ Done (TASK-H003).
+- **Chat channel**: in-app first (done), **plus a two-way Telegram bridge** — founder wants to query Hermes from the phone, not just receive pushes. → New tasks **TASK-H023** (command bridge), **TASK-H024** (proactive alerts), **TASK-H025** (docs) in TASKS.md.
+- **Model/provider**: **stay on Gemini 2.5-flash for now** (`DEFAULT_GEMINI_MODEL` in `routes/ai.py`). Revisit later; do NOT add a new provider in current tasks.
+- **Add Hermes program to TASKS.md as official tasks**: **Yes** — done; H001–H025 are tracked in TASKS.md (PRIORITY 11 + Stage 9).
+- **Permanent read-only vs approval-gated non-trading writes**: **proceed to Stage 7** — approval-gated *non-trading* writes (wiki notes, TASKS.md entries, incident reports, PR summaries). Trading/broker/live/risk writes remain forbidden at every stage. Stage 7 (H018→H019→H020) is the recommended next code priority.
+
+### Updated build order (post-decisions)
+
+1. **TASK-H023** — two-way Telegram command bridge (highest daily-use value).
+2. **TASK-H018 → H019 → H020** — Stage 7 approval-gated non-trading write pipeline.
+3. **TASK-H024** — proactive behavioral alerts (drought / drawdown / loss-streak).
+4. Stage 5 (skills H013/H014), Stage 6 (research H015–H017), Stage 8 (incident H021/H022).
 
 ## Related Concepts
 
