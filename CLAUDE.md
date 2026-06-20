@@ -223,6 +223,7 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | Restarting frontend container for UI changes | `docker-compose build frontend && docker-compose up -d frontend` |
 | Owner-role check on per-user account ops | Only use owner check for cross-account operations (user approval, full reset) |
 | Creating phantom SHORT from duplicate SELL fills | Check for CLOSED/EXITING LONG before creating new position from a SELL fill |
+| Mark-to-market `update_one` on `strategy_positions` with no status filter | Always filter the write on `status: {"$in": [...]}` matching what you queried — guardian (5s) and monitor (30s) run concurrently and can close a position mid-await; an unguarded `$set` will restamp stale ltp/pnl onto an already-CLOSED doc (fixed 2026-06-21 in `position_monitor.py`/`position_guardian.py`) |
 
 ---
 
@@ -587,6 +588,7 @@ No event records *who caused what* — the debugging gap and the SEBI audit gap.
 5. Hand-rolled DB locks (`runner_locks`, `strategy_position_locks`, `risk_reservation_locks`) exist only to stop writers racing. Single-writer + event bus would delete the need for most of them.
 6. Timer-driven, not event-driven: runner 15s → signal 2s → fill → monitor ~30s. Reaction lags.
 7. Dual-source remnants: legacy fill engine (fenced), `_mongo_position_monitor_loop` (superseded), SQLite `option_state_ledger` parallel to Mongo `strategy_positions`.
+8. **2026-06-21 correction to #3**: a code-level audit found `today_pnl` is NOT actually double-counted — `portfolio_ledger.py` (single-leg) and `spread_lifecycle.py` (spreads) write disjoint trade-type domains and are each independently idempotent (`processed_fill_ids` unique index / atomic OPEN→EXITING claim). The confirmed live race is on `strategy_positions` mark-to-market fields: `position_monitor.py` (30s) and `position_guardian.py` (5s) both await an LTP quote before writing `unrealized_pnl`/`last_ltp` with no status filter, so a concurrent close mid-await could get overwritten with stale data. Patched in both files by adding `status: {"$in": [...]}` to those `update_one` filters (4 sites) — same compare-and-swap pattern `spread_lifecycle.py` already used for its close claim. Remaining unaudited writers on `strategy_positions`: `position_reconciler.py` and the admin-route writes in `server.py`.
 
 ### 11.7 Target blueprint (layered, one deployable process first)
 

@@ -202,9 +202,12 @@ async def _guard_one(
                     if fresh_ltp is not None:
                         ltp = float(fresh_ltp)
                         ltp_source = "REST_FALLBACK"
-                        # Update DB to prevent immediate re-evaluation on next guardian poll
+                        # Update DB to prevent immediate re-evaluation on next guardian poll.
+                        # Status-guarded: position_monitor's close_fn may have closed this
+                        # position while we were awaiting the REST quote above — don't
+                        # restamp ltp fields onto an already CLOSED/EXITING doc.
                         await db.strategy_positions.update_one(
-                            {"id": pos_id, "user_id": user_id},
+                            {"id": pos_id, "user_id": user_id, "status": {"$in": ["OPEN", "FILLED"]}},
                             {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat(),
                                       "last_ltp": ltp,
                                       "ltp_source": ltp_source,
@@ -228,8 +231,9 @@ async def _guard_one(
             if last_fresh_dt and (datetime.now(timezone.utc) - last_fresh_dt).total_seconds() < 10:
                 should_update = False
         if should_update:
+            # Status-guarded for the same reason as above.
             await db.strategy_positions.update_one(
-                {"id": pos_id, "user_id": user_id},
+                {"id": pos_id, "user_id": user_id, "status": {"$in": ["OPEN", "FILLED"]}},
                 {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat()}}
             )
 

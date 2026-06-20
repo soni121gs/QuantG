@@ -317,8 +317,11 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         v = value_credit_spread(pos, short_ltp, long_ltp)
 
     now_str = datetime.now(timezone.utc).isoformat()
+    # Status-guarded: if this position was closed concurrently (e.g. by
+    # position_guardian) while we were awaiting leg LTPs above, this write
+    # must not resurrect stale mark-to-market fields onto a CLOSED/EXITING doc.
     await db.strategy_positions.update_one(
-        {"id": pos["id"], "user_id": user_id},
+        {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
         {"$set": {"spread_value": v["value"], "unrealized_pnl": v["pnl"],
                   "last_tick_at": now_str, "updated_at": now_str}},
     )
@@ -494,8 +497,12 @@ async def _process_one_position(
     if ltp_source not in ("ENTRY_PRICE_FALLBACK", "NONE"):
         set_fields["last_fresh_tick_at"] = now_str
 
+    # Status-guarded: same race as the spread mark-to-market write above — if
+    # close_fn (guardian or this same loop) already moved this position out of
+    # PENDING_BROKER/OPEN/FILLED while we awaited the LTP lookup, this becomes
+    # a no-op instead of stamping stale ltp/pnl onto a CLOSED/EXITING doc.
     await db.strategy_positions.update_one(
-        {"id": pos["id"], "user_id": user_id},
+        {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
         {
             "$set": set_fields,
             "$unset": {"last_error": ""},
