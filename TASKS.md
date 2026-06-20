@@ -1853,7 +1853,7 @@ Context & founder decisions 2026-06-20: (1) **build a two-way Telegram system** 
 **Verify**: send `/status` from the authorized chat → get a formatted readiness reply; send "why didn't NIFTY trade today" → get the agent's grounded answer with a sources footer; send from an unauthorized chat id → no reply.
 
 ### TASK-H024 — Proactive behavioral alerts (drought / drawdown / loss-streak)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit 1243636 · 2026-06-20
 - **Tier**: 2
 - **Prerequisite**: TASK-H009
 - **Session size**: ~2 hours
@@ -1938,12 +1938,13 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H018 | Draft-only operation framework (typed action proposals) | e8d20d7 | 2026-06-20 |
 | TASK-H019 | Founder approval queue (in-app) | e8d20d7 | 2026-06-20 |
 | TASK-H020 | Safe (non-trading) mutation framework (approved-only executors) | e8d20d7 | 2026-06-20 |
+| TASK-H024 | Proactive behavioral alerts (drought / drawdown / loss-streak) | 1243636 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 25 Hermes (H001–H025)*
-*Open: 3 · Blocked: 0 · In progress: 0 · Done: 76 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H023/H025)*
-*Hermes open: H021, H022, H024*
+*Open: 2 · Blocked: 0 · In progress: 0 · Done: 77 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H023/H024/H025)*
+*Hermes open: H021, H022*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
-*Recommended next build order: TASK-H024 (proactive alerts) → Stage 8.*
+*Recommended next build order: Stage 8.*
