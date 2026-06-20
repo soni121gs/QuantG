@@ -30,7 +30,7 @@ changes. P-EX05 is cleanup. After all five: run a clean paper-forward window →
 ---
 
 ### TASK-P-EX01 — Make the hard stop-loss an un-bypassable floor
-- **Status**: `[ ]` open
+- **Status**: `[~]` code shipped commit 6d598b3 (SL floor) · 2026-06-20 · PENDING live validation (Monday session)
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -59,7 +59,7 @@ configured `stop_loss_pct` would allow.
 ---
 
 ### TASK-P-EX02 — Close the staleness → EOD square-off gap
-- **Status**: `[ ]` open
+- **Status**: `[~]` code shipped commit 6d598b3 (stale-quote exit) · 2026-06-20 · PENDING live validation (Monday session)
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -84,7 +84,7 @@ stale-quote skip.
 ---
 
 ### TASK-P-EX03 — Stop capping winners (let trailing run)
-- **Status**: `[ ]` open
+- **Status**: `[~]` code shipped commit 6d598b3 (trailing TP suppression) · 2026-06-20 · PENDING live validation (Monday session)
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~1.5 hours
 - **Prerequisite**: P-EX01
@@ -103,7 +103,11 @@ TP. The R:R is inverted in *realized* terms even though configured TP > SL.
 ---
 
 ### TASK-P-EX04 — Rebalance from ATM-buying toward theta-positive spreads
-- **Status**: `[ ]` open
+- **Status**: `[~]` config done 2026-06-20 · PENDING live validation (Monday session)
+  - 4 credit-spread strategies confirmed armed (`schedule_paused=true` → auto-live Mon 9 AM): NIFTY Theta, NIFTY Range, BANKNIFTY Theta, SENSEX Theta. `CREDIT_SPREADS_ENABLED=true` verified on VPS.
+  - Worst ATM buyer (BANKNIFTY ATM Breakout Buyer, −15,181) converted `single_leg`→`debit_spread`. NIFTY ATM Momentum Buyer was already `debit_spread`. `DEBIT_SPREADS_ENABLED` defaults true.
+  - Monday-armed set is now balanced: 4 credit spreads + 2 debit spreads + 6 directional single-legs.
+  - REMAINING (optional): trim the two heavy single-leg losers still armed — BANKNIFTY HFT Momentum Scalper (−6,275), NIFTY Quick EMA Scalper (−5,741) — before the ranking window, or let them re-test under the new exit logic and rank them out.
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -2076,7 +2080,7 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 
 ---
 
-*Last updated: 2026-06-20 (added PRIORITY 0 Profitability Campaign: P-EX01–P-EX05; deleted 4 non-owner accounts + 76 dup strategies)*
+*Last updated: 2026-06-20 (Profitability Campaign: P-EX01/02/03 code shipped 6d598b3 pending live validation; P-EX04 rebalance done — 4 credit + 2 debit spreads armed for Monday; P-EX05 accounts purged)*
 *Total tasks: 53 + 25 Hermes (H001–H025) + 5 Profitability (P-EX01–P-EX05)*
 *Open: 0 · Blocked: 0 · In progress: 0 · Done: 79 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H021/H022/H023/H024/H025)*
 *Hermes open: none*
