@@ -50,7 +50,7 @@ export default function UserReconciler({ pendingUsers, userActionId, onApprove, 
                 <td className="py-3 text-[var(--qd-text-2)]">{p.email}</td>
                 <td className="py-3 text-[var(--qd-text-3)]">{fmt(p.created_at)}</td>
                 <td className="py-3">
-                  <span className="px-1.5 py-0.5 text-[10px] bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 rounded uppercase font-bold">
+                  <span className="px-1.5 py-0.5 text-[11px] bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 rounded uppercase font-bold">
                     {p.role}
                   </span>
                 </td>

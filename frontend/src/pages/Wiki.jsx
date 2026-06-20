@@ -293,7 +293,7 @@ export default function Wiki() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5 col-span-2">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Note Title</label>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Note Title</label>
                   <input
                     type="text"
                     required
@@ -305,7 +305,7 @@ export default function Wiki() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Topic Folder</label>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Topic Folder</label>
                   <select
                     value={editTopic}
                     onChange={(e) => setEditTopic(e.target.value)}
@@ -318,7 +318,7 @@ export default function Wiki() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Tags (comma separated)</label>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Tags (comma separated)</label>
                   <input
                     type="text"
                     placeholder="e.g. guide, upstox, keys"
@@ -329,7 +329,7 @@ export default function Wiki() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Reference URL (optional)</label>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Reference URL (optional)</label>
                   <input
                     type="url"
                     placeholder="e.g. http://youtube.com/..."
@@ -340,7 +340,7 @@ export default function Wiki() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Date (optional)</label>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Date (optional)</label>
                   <input
                     type="date"
                     value={editDate}
@@ -352,8 +352,8 @@ export default function Wiki() {
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Markdown Content</label>
-                  <span className="text-[9px] text-[var(--qd-text-3)] font-mono">Use [[Page Title]] to link pages</span>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)]">Markdown Content</label>
+                  <span className="text-[11px] text-[var(--qd-text-3)] font-mono">Use [[Page Title]] to link pages</span>
                 </div>
                 <textarea
                   rows={16}
@@ -369,7 +369,7 @@ export default function Wiki() {
             <div className="space-y-4">
               {/* Toolbar */}
               <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
-                <div className="flex items-center gap-1.5 bg-[var(--qd-surface-2)] px-2 py-1 rounded text-[10px] font-bold text-[var(--qd-accent)] uppercase font-mono tracking-wider">
+                <div className="flex items-center gap-1.5 bg-[var(--qd-surface-2)] px-2 py-1 rounded text-[11px] font-bold text-[var(--qd-accent)] uppercase font-mono tracking-wider">
                   <FolderOpen size={11} /> {selectedNote.topic}
                 </div>
                 <div className="flex gap-2">
@@ -408,7 +408,7 @@ export default function Wiki() {
                     <div className="flex items-center gap-1 flex-wrap">
                       <Tag size={13} />
                       {selectedNote.tags.map(tag => (
-                        <span key={tag} className="bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] text-[10px] px-1.5 py-0.5 rounded">
+                        <span key={tag} className="bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] text-[11px] px-1.5 py-0.5 rounded">
                           {tag}
                         </span>
                       ))}
@@ -425,7 +425,7 @@ export default function Wiki() {
               {/* Backlinks / "See Also" footer section */}
               {selectedNote.backlinks && selectedNote.backlinks.length > 0 && (
                 <div className="border-t border-[var(--qd-border)] pt-4 mt-6">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5 mb-2.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--qd-text-3)] flex items-center gap-1.5 mb-2.5">
                     <Share2 size={11} />
                     <span>See Also (Linked Mentions)</span>
                   </div>
@@ -467,10 +467,10 @@ export default function Wiki() {
 
           {/* Quick instructions panel */}
           <div className="qd-card p-3 space-y-2 bg-[var(--qd-surface)] border border-[var(--qd-border)]">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--qd-text-3)]">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--qd-text-3)]">
               Wiki Guidelines
             </div>
-            <ul className="text-[10px] leading-relaxed text-[var(--qd-text-2)] list-disc pl-4 space-y-1">
+            <ul className="text-[11px] leading-relaxed text-[var(--qd-text-2)] list-disc pl-4 space-y-1">
               <li>Organize transcripts and decisions by topic to help the AI contextualize.</li>
               <li>Always link concepts using double brackets like <code>[[Page Title]]</code> to automatically build relationship chains.</li>
               <li>Edits made outside this workspace inside Obsidian are fully synced using the <strong>Sync Obsidian</strong> button.</li>

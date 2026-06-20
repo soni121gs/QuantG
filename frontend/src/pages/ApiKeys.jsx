@@ -164,7 +164,7 @@ export default function ApiKeys() {
         ) : (
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
+              <tr className="text-left text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                 <th className="px-4 py-2">Broker</th><th className="px-4 py-2">API Key</th><th className="px-4 py-2">Client</th><th className="px-4 py-2">Linked</th><th className="px-4 py-2 text-right">Action</th>
               </tr>
             </thead>
@@ -190,7 +190,7 @@ export default function ApiKeys() {
 
 const Input = ({ label, value, onChange, type = "text", testid }) => (
   <div>
-    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
+    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
     <input
       data-testid={testid}
       type={type}

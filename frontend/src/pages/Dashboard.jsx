@@ -551,7 +551,7 @@ export default function Dashboard() {
               </div>
               <StrategyPerformanceTable rows={leaderboardRows} />
               {(strategyAnalytics?.data_quality?.excluded_missing_strategy || strategyAnalytics?.data_quality?.excluded_unknown_strategy || strategyAnalytics?.data_quality?.excluded_missing_close_time) ? (
-                <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-warn)]">
+                <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-warn)]">
                   Excluded rows: {strategyAnalytics?.data_quality?.excluded_missing_strategy || 0} missing strategy, {strategyAnalytics?.data_quality?.excluded_unknown_strategy || 0} unknown strategy, {strategyAnalytics?.data_quality?.excluded_missing_close_time || 0} missing close time.
                 </div>
               ) : null}
@@ -641,39 +641,39 @@ export default function Dashboard() {
             
             <div className="grid grid-cols-2 gap-4 mt-4 md:grid-cols-5 text-center font-mono">
               <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Orphans</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Orphans</div>
                 <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.orphans ?? 0}
                 </div>
-                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
               <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing SL</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing SL</div>
                 <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_sl ?? 0}
                 </div>
-                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
               <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing TP</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing TP</div>
                 <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_tp ?? 0}
                 </div>
-                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
               <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Ledger Mismatches</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Ledger Mismatches</div>
                 <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.strategy_mismatches ?? 0}
                 </div>
-                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
               <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[10px] text-[var(--qd-text-3)] uppercase tracking-wider">Failed Orders</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Failed Orders</div>
                 <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.failed_orders ?? 0}
                 </div>
-                <div className="text-[9px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
+                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
             </div>
           </div>
@@ -771,7 +771,7 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
                       <th className="px-4 py-3">Strategy</th>
                       <th className="px-4 py-3">Symbol</th>
                       <th className="px-4 py-3">Qty</th>
@@ -827,7 +827,7 @@ export default function Dashboard() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                      <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
                         <th className="px-3 py-2">Symbol</th>
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">LTP</th>
@@ -874,7 +874,7 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
                       <th className="px-3 py-2">Symbol</th>
                       <th className="px-3 py-2">Side</th>
                       <th className="px-3 py-2">Qty</th>
@@ -916,7 +916,7 @@ export default function Dashboard() {
                       <div className="font-head text-sm font-bold text-white">{row.name}</div>
                       <StatusPill tone={row.state === "OPEN" ? "good" : "neutral"}>{row.state}</StatusPill>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2 font-mono text-[10px] text-[var(--qd-text-2)]">
+                    <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2 font-mono text-[11px] text-[var(--qd-text-2)]">
                       <div>Target: {row.target_pct}%</div>
                       <div>Stoploss: {row.stoploss_pct}%</div>
                       <div>required cap: {money(row.required_capital)}</div>
@@ -940,7 +940,7 @@ export default function Dashboard() {
                   <div className="overflow-x-auto border-b border-[var(--qd-border)]">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
                           <th className="px-3 py-2">Strike</th>
                           <th className="px-3 py-2">Call</th>
                           <th className="px-3 py-2">Put</th>
@@ -966,7 +966,7 @@ export default function Dashboard() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
                           <th className="px-3 py-2">Symbol</th>
                           <th className="px-3 py-2">Qty</th>
                           <th className="px-3 py-2 text-right">PnL</th>

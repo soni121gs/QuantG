@@ -26,7 +26,7 @@ export default function IncidentRecoveryPanel({ data, busy, run }) {
         <div className="divide-y divide-[rgba(255,255,255,0.05)]">
           {data.recovery_plan.issues.map((item, idx) => (
             <div key={`${item.title}-${idx}`} className="p-4 grid grid-cols-1 md:grid-cols-[120px_1fr_auto] gap-4 items-center">
-              <span className={`font-mono text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded inline-block text-center ${
+              <span className={`font-mono text-[11px] uppercase font-bold tracking-wider px-2 py-1 rounded inline-block text-center ${
                 item.severity === "critical" 
                   ? "text-[var(--qd-loss)] bg-red-500/10 border border-red-500/20" 
                   : item.severity === "warning" 

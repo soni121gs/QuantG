@@ -32,17 +32,17 @@ const ToolCitationCard = ({ tool }) => {
       : "text-emerald-400 bg-emerald-950/20 border-emerald-500/20";
 
   return (
-    <div className={`rounded border p-2 bg-[var(--qd-surface-3)]/35 hover:bg-[var(--qd-surface-3)]/60 transition-colors cursor-pointer text-xs space-y-1 min-w-[140px] flex-1 max-w-[220px] border-[var(--qd-border)]`} onClick={() => setExpanded(!expanded)}>
-      <div className="flex items-center justify-between gap-1">
-        <span className="font-semibold text-[var(--qd-text-2)] truncate text-[11px]" title={tool.name}>
+    <div className={`cursor-pointer space-y-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-3)]/35 p-2.5 transition-colors hover:bg-[var(--qd-surface-3)]/60`} onClick={() => setExpanded(!expanded)}>
+      <div className="flex items-center justify-between gap-1.5">
+        <span className="t-label truncate font-semibold text-[var(--qd-text-2)]" title={tool.name}>
           {formatToolName(tool.name)}
         </span>
-        <span className={`inline-flex items-center px-1 rounded-full font-mono text-[8px] border font-bold ${statusColorClass}`}>
+        <span className={`t-meta inline-flex items-center rounded-full border px-1.5 font-mono font-bold ${statusColorClass}`}>
           {!isOk ? "Error" : isStale ? "Stale" : "Fresh"}
         </span>
       </div>
-      
-      <div className="flex flex-col text-[9px] text-[var(--qd-text-3)] font-mono leading-tight">
+
+      <div className="t-meta flex flex-col font-mono leading-snug text-[var(--qd-text-3)]">
         <div className="truncate">Src: <span className="text-[var(--qd-text-2)]">{tool.source || "unknown"}</span></div>
         {tool.confidence !== undefined && (
           <div>Conf: <span className={tool.confidence >= 0.8 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
@@ -55,18 +55,18 @@ const ToolCitationCard = ({ tool }) => {
       </div>
 
       {hasWarnings && tool.warnings && (
-        <div className="space-y-0.5 mt-1 text-[8px] text-amber-300 font-mono bg-amber-500/5 p-1 rounded border border-amber-500/10 leading-tight">
+        <div className="t-meta mt-1 space-y-0.5 rounded border border-amber-500/10 bg-amber-500/5 p-1.5 font-mono leading-snug text-amber-300">
           {tool.warnings.map((w, idx) => (
-            <div key={idx} className="flex gap-0.5 items-start">
+            <div key={idx} className="flex items-start gap-1">
               <span>•</span>
-              <span className="leading-none">{w}</span>
+              <span>{w}</span>
             </div>
           ))}
         </div>
       )}
 
       {expanded && (
-        <div className="mt-1.5 pt-1.5 border-t border-[var(--qd-border)]/50 font-mono text-[9px] text-[var(--qd-text-3)] max-h-32 overflow-y-auto whitespace-pre-wrap break-all bg-[var(--qd-bg)]/80 p-1 rounded" onClick={(e) => e.stopPropagation()}>
+        <div className="t-meta mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded border-t border-[var(--qd-border)]/50 bg-[var(--qd-bg)]/80 p-1.5 pt-1.5 font-mono text-[var(--qd-text-3)]" onClick={(e) => e.stopPropagation()}>
           {!isOk ? (
             <span className="text-[var(--qd-loss)]">{tool.error}</span>
           ) : (
@@ -84,15 +84,15 @@ const Message = ({ m, profile, onApprove, onReject }) => {
 
   const getActionBadge = (actionName, params) => {
     if (params?.paper_mode === true || actionName === "emergency_kill") {
-      return <span className="action-badge badge-kill inline-flex items-center gap-1 text-[10px] font-bold text-rose-400 bg-rose-950/30 border border-rose-500/20 px-2 py-0.5 rounded-full"><ShieldAlert size={11} /> Kill Switch</span>;
+      return <span className="action-badge badge-kill inline-flex items-center gap-1 text-[11px] font-bold text-rose-400 bg-rose-950/30 border border-rose-500/20 px-2 py-0.5 rounded-full"><ShieldAlert size={11} /> Kill Switch</span>;
     }
     if (params?.max_daily_loss !== undefined) {
-      return <span className="action-badge badge-drawdown inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-950/30 border border-amber-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Drawdown Control</span>;
+      return <span className="action-badge badge-drawdown inline-flex items-center gap-1 text-[11px] font-bold text-amber-400 bg-amber-950/30 border border-amber-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Drawdown Control</span>;
     }
     if (params?.max_position_size !== undefined || params?.per_strategy_capital !== undefined) {
-      return <span className="action-badge badge-size inline-flex items-center gap-1 text-[10px] font-bold text-blue-400 bg-blue-950/30 border border-blue-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Position Sizing</span>;
+      return <span className="action-badge badge-size inline-flex items-center gap-1 text-[11px] font-bold text-blue-400 bg-blue-950/30 border border-blue-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Position Sizing</span>;
     }
-    return <span className="action-badge badge-normal inline-flex items-center gap-1 text-[10px] font-bold text-indigo-400 bg-indigo-950/30 border border-indigo-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Parameter Adaptation</span>;
+    return <span className="action-badge badge-normal inline-flex items-center gap-1 text-[11px] font-bold text-indigo-400 bg-indigo-950/30 border border-indigo-500/20 px-2 py-0.5 rounded-full"><Sliders size={11} /> Parameter Adaptation</span>;
   };
 
   const changeRows = (params) => Object.keys(params || {})
@@ -103,7 +103,7 @@ const Message = ({ m, profile, onApprove, onReject }) => {
       const hasCurrent = current !== undefined && current !== null && current !== "";
       return (
         <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[var(--qd-border)]/30 last:border-0">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-[var(--qd-text-3)]">{cfg.label}</span>
+          <span className="font-mono text-[11px] uppercase tracking-wide text-[var(--qd-text-3)]">{cfg.label}</span>
           <span className="flex items-center gap-2 font-mono text-xs">
             {hasCurrent && <span className="text-[var(--qd-text-3)] line-through">{cfg.fmt(current)}</span>}
             <ArrowRight size={11} className="text-[var(--qd-accent)]" />
@@ -130,7 +130,7 @@ const Message = ({ m, profile, onApprove, onReject }) => {
         {hasAction && (
           <div className="mt-4 rounded-lg border border-[var(--qd-accent)]/40 bg-[var(--qd-bg)]/80 overflow-hidden">
             <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)]/40 px-3 py-2">
-              <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
+              <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
                 <ShieldCheck size={12} className="text-[var(--qd-accent)]" /> Action proposal · needs approval
               </div>
               {getActionBadge(m.pending_action.action, m.pending_action.params)}
@@ -169,10 +169,10 @@ const Message = ({ m, profile, onApprove, onReject }) => {
 
         {!isUser && m.tools_used?.length > 0 && (
           <div className="mt-4 border-t border-[var(--qd-border)]/70 pt-2.5">
-            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] font-semibold flex items-center gap-1">
-              <Sparkles size={10} className="text-[var(--qd-accent)] animate-pulse" /> Hermes Data Citations
+            <div className="t-meta mb-2 flex items-center gap-1 font-mono font-semibold uppercase tracking-widest text-[var(--qd-text-3)]">
+              <Sparkles size={11} className="text-[var(--qd-accent)]" /> Data Citations
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {m.tools_used.map((tool, idx) => (
                 <ToolCitationCard key={tool.name || idx} tool={tool} />
               ))}

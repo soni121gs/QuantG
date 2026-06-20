@@ -114,7 +114,7 @@ export default function VisualBuilder() {
           <h2 className="font-head text-lg text-white flex items-center gap-2">
             <TrendingUp size={18} className="text-[var(--qd-accent)]" />
             Options Mode
-            <span className="font-mono text-[10px] text-[var(--qd-text-3)] uppercase tracking-widest ml-2">// NIFTY / BANKNIFTY / SENSEX</span>
+            <span className="font-mono text-[11px] text-[var(--qd-text-3)] uppercase tracking-widest ml-2">// NIFTY / BANKNIFTY / SENSEX</span>
           </h2>
           <label className="flex items-center gap-2 cursor-pointer" data-testid="options-toggle-label">
             <input
@@ -134,7 +134,7 @@ export default function VisualBuilder() {
           <div className="space-y-4">
             {/* Underlying */}
             <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Underlying</label>
+              <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Underlying</label>
               <div className="flex gap-2 flex-wrap">
                 {UNDERLYINGS.map((u) => (
                   <button
@@ -155,7 +155,7 @@ export default function VisualBuilder() {
 
             {/* Strike mode */}
             <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Strike Selection</label>
+              <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Strike Selection</label>
               <div className="space-y-2">
                 {STRIKE_MODES.map((m) => (
                   <label
@@ -183,7 +183,7 @@ export default function VisualBuilder() {
 
             {/* Structure: single leg vs defined-risk credit spread (Phase 2 #5) */}
             <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Structure</label>
+              <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Structure</label>
               <div className="flex gap-2">
                 {[
                   { id: "single_leg", label: "Single Leg" },
@@ -207,7 +207,7 @@ export default function VisualBuilder() {
               {options.structure === "credit_spread" && (
                 <div className="grid grid-cols-2 gap-3 mt-3">
                   <div>
-                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Short Δ (target)</label>
+                    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Short Δ (target)</label>
                     <input
                       type="number" step="0.05" min="0.05" max="0.95"
                       value={options.short_delta ?? 0.30}
@@ -217,7 +217,7 @@ export default function VisualBuilder() {
                     />
                   </div>
                   <div>
-                    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Width (strikes)</label>
+                    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Width (strikes)</label>
                     <input
                       type="number" min="1" max="20"
                       value={options.spread_width ?? 2}
@@ -226,7 +226,7 @@ export default function VisualBuilder() {
                       data-testid="spread-width-input"
                     />
                   </div>
-                  <div className="col-span-2 text-[10px] text-[var(--qd-text-2)] font-mono leading-relaxed">
+                  <div className="col-span-2 text-[11px] text-[var(--qd-text-2)] font-mono leading-relaxed">
                     Bullish → bull-put · bearish → bear-call. Short leg ≈ {(options.short_delta ?? 0.30)}Δ, long leg {options.spread_width ?? 2} strike(s) further OTM. Defined risk; requires the platform-level credit-spreads switch.
                   </div>
                 </div>
@@ -236,7 +236,7 @@ export default function VisualBuilder() {
             {/* OTM points (only for OTM mode) */}
             {options.strike_mode === "OTM_BUY" && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">OTM Distance (points from ATM)</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">OTM Distance (points from ATM)</label>
                 <input
                   type="number"
                   value={options.otm_points}
@@ -250,7 +250,7 @@ export default function VisualBuilder() {
             {/* Lots & expiry */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Lots per Trade</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Lots per Trade</label>
                 <input
                   type="number"
                   min="1"
@@ -261,7 +261,7 @@ export default function VisualBuilder() {
                 />
               </div>
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Expiry</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] block mb-1">Expiry</label>
                 <select
                   value={options.expiry_offset}
                   onChange={(e) => setOptions({ ...options, expiry_offset: +e.target.value })}
@@ -277,7 +277,7 @@ export default function VisualBuilder() {
 
             {/* Preview box */}
             <div className="bg-[var(--qd-bg)] border border-[var(--qd-border)] rounded-sm p-3" data-testid="options-preview">
-              <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">// PREVIEW — what will trade right now</div>
+              <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">// PREVIEW — what will trade right now</div>
               {!preview ? (
                 <div className="text-xs text-[var(--qd-text-2)] font-mono">Loading preview…</div>
               ) : preview.available ? (
@@ -357,7 +357,7 @@ export default function VisualBuilder() {
 
 const Field = ({ label, value, onChange, testid }) => (
   <div className="qd-card p-3">
-    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
+    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
     <input data-testid={testid} value={value} onChange={(e) => onChange(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" />
   </div>
 );

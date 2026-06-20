@@ -13,7 +13,7 @@ export const HealthScoreList = ({ rows }) => (
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-white">{row.strategy_name}</div>
-                <div className="font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{row.recommendation}</div>
+                <div className="font-mono text-[11px] uppercase text-[var(--qd-text-3)]">{row.recommendation}</div>
               </div>
               <div className="font-mono text-lg font-bold text-white">{score}</div>
             </div>

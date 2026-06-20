@@ -217,7 +217,7 @@ export default function Profile() {
 
 const Input = ({ label, value, onChange, type = "text", testid, disabled }) => (
   <div>
-    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
+    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
     <input
       data-testid={testid}
       type={type}
@@ -231,7 +231,7 @@ const Input = ({ label, value, onChange, type = "text", testid, disabled }) => (
 
 const SelectIn = ({ label, value, onChange, options, testid }) => (
   <div>
-    <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
+    <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</label>
     <select data-testid={testid} value={value} onChange={(e) => onChange(e.target.value)} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-[var(--qd-text)] font-mono rounded-sm">
       {options.map((o) => <option key={o} value={o}>{o}</option>)}
     </select>
@@ -240,7 +240,7 @@ const SelectIn = ({ label, value, onChange, options, testid }) => (
 
 const Stat = ({ label, value, mono, tone }) => (
   <div>
-    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className={`mt-1 text-sm ${mono ? "font-mono" : ""} ${
       tone === "warn" ? "text-[var(--qd-warn)]" : tone === "loss" ? "text-[var(--qd-loss)]" : "text-[var(--qd-text)]"
     }`}>{value}</div>

@@ -36,7 +36,7 @@ const GradeChip = ({ grade }) => {
 // Real equity-curve sparkline driven by the strategy's actual cumulative P&L.
 const EquitySparkline = ({ curve }) => {
   if (!curve || curve.length < 2) {
-    return <span className="font-mono text-[10px] text-[var(--qd-text-3)]">—</span>;
+    return <span className="font-mono text-[11px] text-[var(--qd-text-3)]">—</span>;
   }
   const w = 96, h = 26, pad = 2;
   const min = Math.min(...curve);
@@ -68,7 +68,7 @@ const StructureCard = ({ name, agg }) => {
     <div className="qd-card p-4">
       <div className="flex items-center justify-between">
         <div className="qd-section-title flex items-center gap-1.5"><Icon size={13} /> {label}</div>
-        <span className="font-mono text-[10px] text-[var(--qd-text-3)]">{agg.strategies} strat · {agg.total_trades} tr</span>
+        <span className="font-mono text-[11px] text-[var(--qd-text-3)]">{agg.strategies} strat · {agg.total_trades} tr</span>
       </div>
       <div className={`mt-2 font-head text-2xl font-bold ${pnlPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(agg.total_pnl)}</div>
       <div className="mt-1 grid grid-cols-2 gap-2 font-mono text-[11px] text-[var(--qd-text-2)]">
@@ -84,7 +84,7 @@ const SortHeader = ({ label, col, sort, onSort, className = "" }) => (
     <button
       type="button"
       onClick={() => onSort(col)}
-      className={`inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-widest hover:text-[var(--qd-text)] ${
+      className={`inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-widest hover:text-[var(--qd-text)] ${
         sort.col === col ? "text-[var(--qd-accent)]" : "text-[var(--qd-text-3)]"
       }`}
     >
@@ -228,7 +228,7 @@ export default function Analytics() {
                 <div className="qd-section-title">// Per-strategy edge</div>
                 <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Risk-Adjusted Scorecard</h2>
               </div>
-              <span className="font-mono text-[10px] text-[var(--qd-text-3)]">{rows.length} strategies · base INR 100k</span>
+              <span className="font-mono text-[11px] text-[var(--qd-text-3)]">{rows.length} strategies · base INR 100k</span>
             </div>
 
             {loading && !scorecard ? (
@@ -253,7 +253,7 @@ export default function Analytics() {
                       <SortHeader label="Trades" col="total_trades" sort={sort} onSort={onSort} />
                       <SortHeader label="Win%" col="win_rate" sort={sort} onSort={onSort} />
                       <SortHeader label="Net P&L" col="total_pnl" sort={sort} onSort={onSort} className="text-right" />
-                      <th className="px-3 py-2.5 text-right font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">Equity</th>
+                      <th className="px-3 py-2.5 text-right font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Equity</th>
                     </tr>
                   </thead>
                   <tbody className="font-mono">
@@ -261,7 +261,7 @@ export default function Analytics() {
                       <tr key={r.strategy_id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
                         <td className="px-3 py-2.5">
                           <div className="font-semibold text-[var(--qd-text)]">{r.name}</div>
-                          <div className="text-[10px] text-[var(--qd-text-3)]">{r.structure}{r.underlying ? ` · ${r.underlying}` : ""}</div>
+                          <div className="text-[11px] text-[var(--qd-text-3)]">{r.structure}{r.underlying ? ` · ${r.underlying}` : ""}</div>
                         </td>
                         <td className="px-3 py-2.5"><GradeChip grade={r.grade} /></td>
                         <td className={`px-3 py-2.5 ${(r.sharpe ?? 0) >= 1 ? "text-[var(--qd-profit)]" : (r.sharpe ?? 0) < 0 ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}`}>{num(r.sharpe, 2)}</td>
@@ -300,7 +300,7 @@ export default function Analytics() {
             </button>
           </div>
 
-          <div className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-5 py-2 font-mono text-[10px] text-[var(--qd-text-3)]">
+          <div className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-5 py-2 font-mono text-[11px] text-[var(--qd-text-3)]">
             Signals come from real 5-min underlying OHLC; legs priced from real chain snapshots. Sample is bounded by collected chain history.
           </div>
 
@@ -312,7 +312,7 @@ export default function Analytics() {
             <div className="qd-table-wrap overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
-                  <tr className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                  <tr className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
                     <th className="px-3 py-2.5">Strategy</th>
                     <th className="px-3 py-2.5">Grade</th>
                     <th className="px-3 py-2.5">Sharpe</th>
@@ -329,7 +329,7 @@ export default function Analytics() {
                     <tr key={r.strategy_id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
                       <td className="px-3 py-2.5">
                         <div className="font-semibold text-[var(--qd-text)]">{r.name}</div>
-                        <div className="text-[10px] text-[var(--qd-text-3)]">{r.structure}{r.underlying ? ` · ${r.underlying}` : ""}</div>
+                        <div className="text-[11px] text-[var(--qd-text-3)]">{r.structure}{r.underlying ? ` · ${r.underlying}` : ""}</div>
                       </td>
                       <td className="px-3 py-2.5"><GradeChip grade={r.grade} /></td>
                       <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{num(r.sharpe, 2)}</td>
@@ -338,7 +338,7 @@ export default function Analytics() {
                       <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{r.total_trades}</td>
                       <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{Math.round((r.win_rate ?? 0) * 100)}%</td>
                       <td className="px-3 py-2.5">
-                        <span className={`text-[10px] ${r.candle_source === "real_ohlc" ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"}`}>
+                        <span className={`text-[11px] ${r.candle_source === "real_ohlc" ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"}`}>
                           {r.candle_source === "real_ohlc" ? "real OHLC" : (r.candle_source || "-")}
                         </span>
                       </td>
@@ -352,7 +352,7 @@ export default function Analytics() {
 
           {/* surface skipped strategies (e.g., no chain data) */}
           {(backtest?.results || []).some((r) => r.error) && (
-            <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[10px] text-[var(--qd-text-3)]">
+            <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[11px] text-[var(--qd-text-3)]">
               Skipped: {(backtest.results.filter((r) => r.error)).map((r) => `${r.name || r.underlying} (${r.error})`).join(" · ")}
             </div>
           )}

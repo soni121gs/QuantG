@@ -37,13 +37,13 @@ function StatusBadge({ status }) {
     : status === "paused"
       ? "border-[rgba(255,159,10,0.38)] bg-[rgba(255,159,10,0.1)] text-[var(--qd-warn)]"
       : "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]";
-  return <span className={`rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${tone}`}>{status || "draft"}</span>;
+  return <span className={`rounded border px-2 py-1 font-mono text-[11px] uppercase tracking-wider ${tone}`}>{status || "draft"}</span>;
 }
 
 function Metric({ label, value, tone, compact = false }) {
   return (
     <div className="min-w-0">
-      <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
+      <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
       <div className={`${compact ? "text-xs" : "text-sm"} mt-1 truncate font-mono font-semibold ${tone || "text-white"}`}>{value}</div>
     </div>
   );
@@ -111,7 +111,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
       <div className="flex flex-col gap-3 relative z-10 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           {isHft && (
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-[var(--qd-warn)] font-mono text-[9px] uppercase tracking-wider font-semibold mb-1 w-max">
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-[var(--qd-warn)] font-mono text-[11px] uppercase tracking-wider font-semibold mb-1 w-max">
               <Zap size={9} /> Upstox
             </div>
           )}
@@ -122,20 +122,20 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
           </div>
           <h2 className="mt-1 truncate font-head text-base font-semibold text-[var(--qd-text)]">{s.name}</h2>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)] animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
+            <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)] animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
               {s.mode === "live" ? "PRODUCTION LIVE" : "PAPER SIMULATED"}
             </span>
-            <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-[var(--qd-text)]">
+            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-[var(--qd-text)]">
               BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
             </span>
             {isOptionStrat && (
-              <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
+              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
                 {cardOpts.structure === "debit_spread" ? "DEBIT SPREAD" : cardOpts.structure === "credit_spread" ? "CREDIT SPREAD" : "SINGLE-LEG"}
               </span>
             )}
             {maxTd != null && (
               <span
-                className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider border ${atCap ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"}`}
+                className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider border ${atCap ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"}`}
                 title="Trades today / daily cap"
               >
                 {tradesToday} / {maxTd} today
@@ -153,10 +153,10 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           <StatusBadge status={s.status} />
-          <div className="flex items-center gap-1.5 font-mono text-[9px] text-[var(--qd-text-3)]">
+          <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--qd-text-3)]">
             <span>{broker.name}</span>
             <span className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${broker.connected ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] animate-pulse" : "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]"}`} />
-            <span className="text-[8px] tracking-wider uppercase">{broker.connected ? "online" : "offline"}</span>
+            <span className="text-[11px] tracking-wider uppercase">{broker.connected ? "online" : "offline"}</span>
           </div>
         </div>
       </div>
@@ -175,7 +175,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
       <div className="mt-2 border-t border-[var(--qd-border)] pt-2">
         <button 
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center justify-between py-1.5 px-2 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] rounded font-mono text-[10px] uppercase tracking-wide text-[var(--qd-text)] transition-all active:scale-[0.99]"
+          className="w-full flex items-center justify-between py-1.5 px-2 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] rounded font-mono text-[11px] uppercase tracking-wide text-[var(--qd-text)] transition-all active:scale-[0.99]"
           type="button"
         >
           <span className="flex items-center gap-1.5">

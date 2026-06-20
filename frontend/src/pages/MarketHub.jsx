@@ -187,7 +187,7 @@ export default function MarketHub() {
                     title={`Buy gate cap ${ivRank.buy_max}`}
                   />
                 </div>
-                <div className="mt-0.5 flex justify-between text-[9px] text-[var(--qd-text-3)]">
+                <div className="mt-0.5 flex justify-between text-[11px] text-[var(--qd-text-3)]">
                   <span>0 · cheap</span>
                   <span>cap {ivRank.buy_max}</span>
                   <span>100 · rich</span>
@@ -197,7 +197,7 @@ export default function MarketHub() {
               <Row k="India VIX" v={`${ivRank.current}`} />
               <Row k="52w range" v={`${ivRank.min} – ${ivRank.max}`} />
               <Row k="Buy gate" v={`${ivRank.gate_state} · cap ${ivRank.buy_max}`} />
-              <div className={`text-[10px] font-mono mt-1 ${ivRank.would_block_buys ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
+              <div className={`text-[11px] font-mono mt-1 ${ivRank.would_block_buys ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
                 {ivRank.would_block_buys
                   ? `IV rich — option-buying ${ivRank.blocking ? "BLOCKED" : "would block if gate enabled"}`
                   : "IV cheap — option-buying allowed"}
@@ -225,7 +225,7 @@ export default function MarketHub() {
             <Small label="Support" value={indicators?.indicators?.support ?? "-"} />
             <Small label="Resistance" value={indicators?.indicators?.resistance ?? "-"} />
           </div>
-          <div className="mt-3 text-[10px] font-mono text-[var(--qd-text-3)]">
+          <div className="mt-3 text-[11px] font-mono text-[var(--qd-text-3)]">
             {indicators?.available ? `${indicators.candles} candles · ${indicators.source} · ${indicators.is_live ? "REAL" : "not live"}` : indicators?.reason || "Loading indicators"}
           </div>
         </section>
@@ -244,7 +244,7 @@ export default function MarketHub() {
                   <span className="text-white font-mono">{o.symbol}</span>
                   <span className={o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{o.side}</span>
                 </div>
-                <div className="text-[10px] font-mono text-[var(--qd-text-3)] mt-1">{o.status} · {o.source || "manual"} · ₹{formatINR(o.price || 0)}</div>
+                <div className="text-[11px] font-mono text-[var(--qd-text-3)] mt-1">{o.status} · {o.source || "manual"} · ₹{formatINR(o.price || 0)}</div>
               </div>
             ))}
           </div>
@@ -281,7 +281,7 @@ export default function MarketHub() {
 
 const Metric = ({ label, value, tone }) => (
   <div className="qd-card p-3">
-    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className={`font-head text-xl mt-1 ${tone === "profit" ? "text-[var(--qd-profit)]" : tone === "loss" ? "text-[var(--qd-loss)]" : tone === "warn" ? "text-[var(--qd-warn)]" : "text-white"}`}>{value}</div>
   </div>
 );
@@ -290,11 +290,11 @@ const BrokerRow = ({ name, data, active }) => (
   <div className="border border-[var(--qd-border)] rounded-sm p-3">
     <div className="flex justify-between gap-2">
       <span className="text-white font-semibold flex items-center gap-2"><Activity size={14} /> {name}</span>
-      <span className={`font-mono text-[10px] uppercase ${data.connected ? "text-[var(--qd-profit)]" : data.keys_saved ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
+      <span className={`font-mono text-[11px] uppercase ${data.connected ? "text-[var(--qd-profit)]" : data.keys_saved ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
         {data.connected ? "connected" : data.keys_saved ? "keys saved" : "not setup"}
       </span>
     </div>
-    <div className="text-[10px] font-mono text-[var(--qd-text-3)] mt-1">{active ? "execution broker" : data.reason || "-"}</div>
+    <div className="text-[11px] font-mono text-[var(--qd-text-3)] mt-1">{active ? "execution broker" : data.reason || "-"}</div>
   </div>
 );
 
@@ -302,7 +302,7 @@ const FeedCard = ({ name, data }) => (
   <div className={`border rounded-sm p-3 ${data?.healthy ? "border-[var(--qd-profit)]" : "border-[var(--qd-border)]"}`}>
     <div className="flex items-center justify-between gap-2">
       <span className="text-white font-semibold">{name}</span>
-      <span className={`font-mono text-[10px] uppercase ${data?.healthy ? "text-[var(--qd-profit)]" : data?.connected ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
+      <span className={`font-mono text-[11px] uppercase ${data?.healthy ? "text-[var(--qd-profit)]" : data?.connected ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>
         {data?.healthy ? "fresh" : data?.connected ? "connected" : "offline"}
       </span>
     </div>
@@ -311,7 +311,7 @@ const FeedCard = ({ name, data }) => (
       <Small label="Tokens" value={data?.subscribed_tokens ?? 0} />
       <Small label="Ticks" value={data?.ticks ?? (data?.last_tick_at ? "live" : 0)} />
     </div>
-    <div className="text-[10px] font-mono text-[var(--qd-text-3)] mt-2 break-all">
+    <div className="text-[11px] font-mono text-[var(--qd-text-3)] mt-2 break-all">
       {data?.last_error || data?.last_tick_at || "-"}
     </div>
   </div>
@@ -319,14 +319,14 @@ const FeedCard = ({ name, data }) => (
 
 const Small = ({ label, value }) => (
   <div className="border border-[var(--qd-border)] p-2 rounded-sm">
-    <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className="text-sm text-white mt-1 break-all">{value}</div>
   </div>
 );
 
 const Row = ({ k, v }) => (
   <div className="flex justify-between gap-4 border-b border-[var(--qd-border)] pb-2">
-    <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{k}</span>
+    <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{k}</span>
     <span className="text-xs text-white text-right">{v}</span>
   </div>
 );

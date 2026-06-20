@@ -40,7 +40,7 @@ export default function WikiTreeSidebar({
                 <div className="flex items-center gap-1.5 font-sans">
                   <FolderOpen size={13} className="text-[var(--qd-accent)]" />
                   <span>{topic}</span>
-                  <span className="font-mono text-[9px] text-[var(--qd-text-3)] bg-[var(--qd-surface-2)] px-1 rounded font-bold">
+                  <span className="font-mono text-[11px] text-[var(--qd-text-3)] bg-[var(--qd-surface-2)] px-1 rounded font-bold">
                     {notesInTopic.length}
                   </span>
                 </div>
@@ -50,7 +50,7 @@ export default function WikiTreeSidebar({
               {isExpanded && (
                 <div className="mt-1 pl-3 space-y-1">
                   {notesInTopic.length === 0 ? (
-                    <div className="text-[10px] text-[var(--qd-text-3)] italic py-1">No notes</div>
+                    <div className="text-[11px] text-[var(--qd-text-3)] italic py-1">No notes</div>
                   ) : (
                     notesInTopic.map((note) => {
                       const isSelected = selectedNote?.id === note.id;

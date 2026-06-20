@@ -133,7 +133,7 @@ export default function Calendar() {
             {DAY_HEADERS.map((d) => (
               <div
                 key={d}
-                className="text-center text-[9px] font-mono uppercase tracking-widest text-[var(--qd-text-3)] py-1"
+                className="text-center text-[11px] font-mono uppercase tracking-widest text-[var(--qd-text-3)] py-1"
               >
                 {d}
               </div>
@@ -181,13 +181,13 @@ export default function Calendar() {
                   className={`relative flex flex-col items-center justify-start rounded-[var(--qd-radius-sm)] p-1.5 min-h-[52px] transition-colors ${bgClass} ${borderClass} ${clickable ? "cursor-pointer" : "cursor-default"}`}
                   aria-label={dateStr}
                 >
-                  <span className={`text-[10px] font-mono font-semibold mb-0.5 ${
+                  <span className={`text-[11px] font-mono font-semibold mb-0.5 ${
                     isToday ? "text-[var(--qd-accent)]" : weekend ? "text-[var(--qd-text-3)]" : "text-[var(--qd-text-2)]"
                   }`}>
                     {day}
                   </span>
                   {hasTrades && pnl !== null && (
-                    <span className={`text-[9px] font-mono font-bold leading-none ${
+                    <span className={`text-[11px] font-mono font-bold leading-none ${
                       pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"
                     }`}>
                       {pnl >= 0 ? "+" : ""}
@@ -208,15 +208,15 @@ export default function Calendar() {
           <div className="flex items-center gap-4 mt-4 pt-3 border-t border-[var(--qd-border)]">
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm bg-[rgba(52,199,89,0.25)]" />
-              <span className="text-[9px] font-mono text-[var(--qd-text-3)]">Profit day</span>
+              <span className="text-[11px] font-mono text-[var(--qd-text-3)]">Profit day</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm bg-[rgba(255,59,48,0.25)]" />
-              <span className="text-[9px] font-mono text-[var(--qd-text-3)]">Loss day</span>
+              <span className="text-[11px] font-mono text-[var(--qd-text-3)]">Loss day</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm bg-[var(--qd-surface)] border border-[var(--qd-border)]" />
-              <span className="text-[9px] font-mono text-[var(--qd-text-3)]">No trades</span>
+              <span className="text-[11px] font-mono text-[var(--qd-text-3)]">No trades</span>
             </div>
           </div>
         </div>
@@ -226,7 +226,7 @@ export default function Calendar() {
           <div className="lg:w-80 qd-card p-4 flex flex-col gap-4 animate-in slide-in-from-right-4 duration-200">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-[10px] font-mono text-[var(--qd-text-3)] uppercase tracking-widest mb-0.5">
+                <div className="text-[11px] font-mono text-[var(--qd-text-3)] uppercase tracking-widest mb-0.5">
                   {selected}
                 </div>
                 <div className="font-head font-bold text-[var(--qd-text)] text-sm">Day Summary</div>
@@ -260,8 +260,8 @@ export default function Calendar() {
                 {/* Market regime */}
                 {selectedReport.market_regime && (
                   <div className="flex items-center gap-2">
-                    <span className="text-[9px] font-mono text-[var(--qd-text-3)] uppercase">Regime</span>
-                    <span className="text-[10px] font-mono font-bold text-[var(--qd-accent)] px-2 py-0.5 rounded bg-[var(--qd-accent)]/10 border border-[var(--qd-accent)]/20">
+                    <span className="text-[11px] font-mono text-[var(--qd-text-3)] uppercase">Regime</span>
+                    <span className="text-[11px] font-mono font-bold text-[var(--qd-accent)] px-2 py-0.5 rounded bg-[var(--qd-accent)]/10 border border-[var(--qd-accent)]/20">
                       {selectedReport.market_regime}
                     </span>
                   </div>
@@ -275,7 +275,7 @@ export default function Calendar() {
                         <span className="flex items-center gap-1 text-[var(--qd-text-2)]">
                           <TrendingUp size={11} className="text-[var(--qd-profit)]" /> Best
                         </span>
-                        <span className="font-mono text-[var(--qd-profit)] text-[10px]">
+                        <span className="font-mono text-[var(--qd-profit)] text-[11px]">
                           {selectedReport.best_strategy.name} · +{fmt(selectedReport.best_strategy.pnl)}
                         </span>
                       </div>
@@ -285,7 +285,7 @@ export default function Calendar() {
                         <span className="flex items-center gap-1 text-[var(--qd-text-2)]">
                           <TrendingDown size={11} className="text-[var(--qd-loss)]" /> Worst
                         </span>
-                        <span className="font-mono text-[var(--qd-loss)] text-[10px]">
+                        <span className="font-mono text-[var(--qd-loss)] text-[11px]">
                           {selectedReport.worst_strategy.name} · {fmt(selectedReport.worst_strategy.pnl)}
                         </span>
                       </div>
@@ -296,7 +296,7 @@ export default function Calendar() {
                 {/* Per-strategy breakdown */}
                 {selectedReport.strategies?.length > 0 && (
                   <div>
-                    <div className="text-[9px] font-mono uppercase tracking-widest text-[var(--qd-text-3)] mb-2">
+                    <div className="text-[11px] font-mono uppercase tracking-widest text-[var(--qd-text-3)] mb-2">
                       Strategy Breakdown
                     </div>
                     <div className="space-y-1.5 max-h-64 overflow-y-auto">
@@ -305,10 +305,10 @@ export default function Calendar() {
                           key={s.strategy_id}
                           className="flex items-center justify-between px-2 py-1.5 rounded bg-[var(--qd-surface)] border border-[var(--qd-border)]"
                         >
-                          <span className="text-[10px] font-mono text-[var(--qd-text-2)] truncate max-w-[120px]" title={s.name}>
+                          <span className="text-[11px] font-mono text-[var(--qd-text-2)] truncate max-w-[120px]" title={s.name}>
                             {s.name}
                           </span>
-                          <div className="flex items-center gap-3 text-[10px] font-mono">
+                          <div className="flex items-center gap-3 text-[11px] font-mono">
                             <span className={s.realized_pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>
                               {s.realized_pnl >= 0 ? "+" : ""}{fmt(s.realized_pnl)}
                             </span>
@@ -321,13 +321,13 @@ export default function Calendar() {
                 )}
 
                 {selectedReport.trades_taken === 0 && (
-                  <p className="text-[10px] font-mono text-[var(--qd-text-3)] text-center py-4">
+                  <p className="text-[11px] font-mono text-[var(--qd-text-3)] text-center py-4">
                     No trades on this day.
                   </p>
                 )}
               </>
             ) : (
-              <p className="text-[10px] font-mono text-[var(--qd-text-3)] text-center py-6">
+              <p className="text-[11px] font-mono text-[var(--qd-text-3)] text-center py-6">
                 No report generated for this day yet.
               </p>
             )}
@@ -348,7 +348,7 @@ function PanelStat({ label, value, tone }) {
 
   return (
     <div className="flex flex-col gap-0.5 p-2 rounded bg-[var(--qd-surface)] border border-[var(--qd-border)]">
-      <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
+      <span className="text-[11px] font-mono uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
       <span className={`text-xs font-mono font-bold ${toneClass}`}>{value}</span>
     </div>
   );

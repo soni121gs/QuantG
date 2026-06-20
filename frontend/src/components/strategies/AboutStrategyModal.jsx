@@ -8,7 +8,7 @@ const money = (value) => `INR ${formatINR(value ?? 0)}`;
 function Metric({ label, value, tone, compact = false }) {
   return (
     <div className="min-w-0">
-      <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
+      <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
       <div className={`${compact ? "text-xs" : "text-sm"} mt-1 truncate font-mono font-semibold ${tone || "text-white"}`}>{value}</div>
     </div>
   );
@@ -41,10 +41,10 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
             </div>
             <h2 className="mt-1 font-head text-2xl font-bold text-white">{s.name}</h2>
             <div className="flex items-center gap-2 mt-2">
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)]" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
+              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)]" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
                 {s.mode === "live" ? "LIVE PRODUCTION" : "PAPER SIMULATED"}
               </span>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${live ? "bg-emerald-500/10 border border-emerald-500/30 text-[var(--qd-profit)]" : "bg-amber-500/10 border border-amber-500/30 text-[var(--qd-warn)]"}`}>
+              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider ${live ? "bg-emerald-500/10 border border-emerald-500/30 text-[var(--qd-profit)]" : "bg-amber-500/10 border border-amber-500/30 text-[var(--qd-warn)]"}`}>
                 {s.status?.toUpperCase() || "DRAFT"}
               </span>
             </div>
@@ -86,7 +86,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                   {/* Gauge */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="space-y-1">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">AI Confidence Score</span>
+                      <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">AI Confidence Score</span>
                       <div className="font-head text-3xl font-bold text-white flex items-baseline gap-1">
                         {aiScore}%
                         <span className="text-xs text-[var(--qd-text-3)] font-mono">confidence</span>
@@ -106,14 +106,14 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                   {/* Reasons split */}
                   {telemetryReasons.length > 0 && (
                     <div className="space-y-2">
-                      <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)]">Telemetry Signals Checked</div>
+                      <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">Telemetry Signals Checked</div>
                       <div className="flex flex-wrap gap-1.5">
                         {telemetryReasons.map((reasonText, idx) => {
                           const isWarning = reasonText.toLowerCase().includes("error") || reasonText.toLowerCase().includes("paused");
                           return (
                             <span 
                               key={idx} 
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
+                              className={`px-2 py-0.5 rounded text-[11px] font-mono flex items-center gap-1 border ${
                                 isWarning 
                                   ? "bg-rose-500/10 border-rose-500/30 text-[var(--qd-loss)]" 
                                   : "bg-emerald-500/10 border-emerald-500/30 text-[var(--qd-profit)]"
@@ -131,13 +131,13 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                   {marketInfo && (
                     <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-2 gap-2 text-xs">
                       <div>
-                        <span className="block font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">Spot Reference</span>
+                        <span className="block font-mono text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Spot Reference</span>
                         <span className="font-mono font-semibold text-white">
                           {score.symbol}: {money(marketInfo.price)}
                         </span>
                       </div>
                       <div>
-                        <span className="block font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">24h Change</span>
+                        <span className="block font-mono text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">24h Change</span>
                         <span className={`font-mono font-semibold ${marketInfo.pct >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                           {marketInfo.pct >= 0 ? "+" : ""}{marketInfo.pct?.toFixed(2)}%
                         </span>
@@ -161,11 +161,11 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
               <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-lg p-4 space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Allocated Capital</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Allocated Capital</span>
                     <strong className="block text-sm text-white font-mono mt-0.5">{money(s.required_capital)}</strong>
                   </div>
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Product / Class</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Product / Class</span>
                     <strong className="block text-sm text-white font-mono mt-0.5">{risk.product || s.product || "MIS"} / {s.asset_class?.toUpperCase() || "OPTIONS"}</strong>
                   </div>
                 </div>
@@ -173,7 +173,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                 {options.enabled && (
                   <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
                     <div>
-                      <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Structure</span>
+                      <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Structure</span>
                       <strong className="block text-white font-mono mt-0.5">
                         {options.structure === "debit_spread" ? "Debit Spread" : options.structure === "credit_spread" ? "Credit Spread" : "Single Leg"}
                       </strong>
@@ -181,13 +181,13 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                     {(options.structure === "credit_spread" || options.structure === "debit_spread") && (
                       <>
                         <div>
-                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">
+                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">
                             {options.structure === "debit_spread" ? "Long Δ" : "Short Δ"}
                           </span>
                           <strong className="block text-white font-mono mt-0.5">{options.short_delta ?? (options.structure === "credit_spread" ? 0.3 : 0.5)}</strong>
                         </div>
                         <div>
-                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Width (Strikes)</span>
+                          <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Width (Strikes)</span>
                           <strong className="block text-white font-mono mt-0.5">{options.spread_width ?? 2}</strong>
                         </div>
                       </>
@@ -197,30 +197,30 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
 
                 <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Target Profit</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Target Profit</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.target_pct != null ? `${risk.target_pct}%` : "None"}</strong>
                   </div>
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Stop Loss</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Stop Loss</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.stoploss_pct != null ? `${risk.stoploss_pct}%` : "None"}</strong>
                   </div>
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Trailing SL</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Trailing SL</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.trailing_sl_enabled ? `Yes (Trig: ${risk.trail_trigger_pct}%)` : "Disabled"}</strong>
                   </div>
                 </div>
 
                 <div className="border-t border-[var(--qd-border)] pt-2.5 grid grid-cols-3 gap-2">
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Cooldown</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Cooldown</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.cooldown_minutes ? `${risk.cooldown_minutes}m` : "None"}</strong>
                   </div>
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Max Trades/Day</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Max Trades/Day</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.max_trades_day ?? "None"}</strong>
                   </div>
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[9px]">Daily Loss Limit</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Daily Loss Limit</span>
                     <strong className="block text-white font-mono mt-0.5">{risk.daily_loss_limit ? money(risk.daily_loss_limit) : "None"}</strong>
                   </div>
                 </div>
@@ -277,7 +277,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                           <Metric label="Wins" value={testResult.summary?.wins || 0} tone="text-[var(--qd-profit)]" compact />
                           <Metric label="Losses" value={testResult.summary?.losses || 0} tone="text-[var(--qd-loss)]" compact />
                         </div>
-                        <div className="text-[10px] text-[var(--qd-text-3)] font-mono flex justify-between">
+                        <div className="text-[11px] text-[var(--qd-text-3)] font-mono flex justify-between">
                           <span>Data: {testResult.data_source || "-"}</span>
                           <span>Ref: {testResult.symbol_analysed || "-"}</span>
                         </div>

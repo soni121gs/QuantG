@@ -118,7 +118,7 @@ export default function Orders() {
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-sm ${
+              className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-widest rounded-sm ${
                 filter === f ? "qd-force-white bg-[var(--qd-accent)]" : "border border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
               }`}
               data-testid={`filter-${f.toLowerCase()}`}
@@ -127,7 +127,7 @@ export default function Orders() {
             </button>
           ))}
         </div>
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">
+        <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
           showing {filtered.length} of {filter === "SKIPPED" ? skippedSignals.length : visibleOrders.length}
         </span>
       </div>
@@ -148,7 +148,7 @@ export default function Orders() {
         ) : (
           <div className="qd-table-wrap"><table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
+              <tr className="text-left text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                 <th className="px-4 py-2">Time</th>
                 <th className="px-4 py-2">Strategy</th>
                 <th className="px-4 py-2">Symbol</th>
@@ -233,7 +233,7 @@ export default function Orders() {
             <h2 className="font-head text-xl text-white">Place Order</h2>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Exchange</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Exchange</label>
                 <select
                   value={form.exchange}
                   onChange={(e) => {
@@ -252,21 +252,21 @@ export default function Orders() {
                 </select>
               </div>
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Product</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Product</label>
                 <select value={form.product} onChange={(e) => setForm({ ...form, product: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-product">
                   {["MIS", "CNC", "NRML"].map((x) => <option key={x}>{x}</option>)}
                 </select>
               </div>
             </div>
             <div className={["NSE", "BSE"].includes(form.exchange) ? "" : "hidden"}>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
+              <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
               <select value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid={["NSE", "BSE"].includes(form.exchange) ? "order-symbol" : "order-symbol-watch-hidden"}>
                 {watch.map((s) => <option key={s.symbol} value={s.symbol}>{`${s.symbol} - INR ${formatINR(s.price)}`}</option>)}
               </select>
             </div>
             {!["NSE", "BSE"].includes(form.exchange) && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol</label>
                 <input
                   value={form.symbol}
                   onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })}
@@ -282,11 +282,11 @@ export default function Orders() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Qty</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Qty</label>
                 <input type="number" min="1" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-qty" />
               </div>
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Type</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Type</label>
                 <select value={form.order_type} onChange={(e) => setForm({ ...form, order_type: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-type">
                   <option>MARKET</option><option>LIMIT</option>
                 </select>
@@ -294,17 +294,17 @@ export default function Orders() {
             </div>
             {form.order_type === "LIMIT" && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Limit Price</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Limit Price</label>
                 <input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="order-price" />
               </div>
             )}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Stop loss (app)</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Stop loss (app)</label>
                 <input type="number" value={form.stop_loss} onChange={(e) => setForm({ ...form, stop_loss: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" />
               </div>
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Take profit (app)</label>
+                <label className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Take profit (app)</label>
                 <input type="number" value={form.take_profit} onChange={(e) => setForm({ ...form, take_profit: e.target.value })} className="w-full mt-1 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" />
               </div>
             </div>

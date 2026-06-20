@@ -214,7 +214,7 @@ export default function OpsConsole() {
             <ShieldAlert size={26} className="animate-pulse" />
           </div>
           <div>
-            <div className="font-mono text-[9px] tracking-widest uppercase text-[var(--qd-text-3)] flex items-center gap-1.5">
+            <div className="font-mono text-[11px] tracking-widest uppercase text-[var(--qd-text-3)] flex items-center gap-1.5">
               <span className="qd-live-dot"></span> RISK OPERATIONS CONTROL ROOM // v{data?.version || "12.0"} ({data?.git_commit?.slice(0, 7) || "unknown"}@{data?.git_branch || "main"}{data?.git_dirty ? "*" : ""})
             </div>
             <h1 className="font-head text-2xl font-extrabold text-white mt-0.5 tracking-tight flex items-center gap-2">
@@ -225,7 +225,7 @@ export default function OpsConsole() {
 
         <div className="flex items-center gap-3">
           <div className="hidden lg:block text-right pr-2">
-            <div className="text-[10px] text-[var(--qd-text-3)] uppercase font-mono">Telemetry Feed</div>
+            <div className="text-[11px] text-[var(--qd-text-3)] uppercase font-mono">Telemetry Feed</div>
             <div className="text-xs text-[var(--qd-text-2)] font-mono">Sync Interval: 15s</div>
           </div>
           
@@ -311,7 +311,7 @@ export default function OpsConsole() {
                     <td className="py-3 text-white font-semibold">{o.symbol || o.tradingsymbol}</td>
                     <td className="py-3 text-[var(--qd-text-2)]">{o.broker_order_id || o.id}</td>
                     <td className="py-3">
-                      <span className={`px-1.5 py-0.5 text-[10px] rounded uppercase font-bold ${
+                      <span className={`px-1.5 py-0.5 text-[11px] rounded uppercase font-bold ${
                         o.mode === "live" ? "bg-red-500/10 text-red-300 border border-red-500/20" : "bg-amber-500/10 text-amber-300 border border-amber-500/20"
                       }`}>
                         {o.mode}
@@ -417,11 +417,11 @@ export default function OpsConsole() {
             </div>
 
             <div className="mt-5 pt-3.5 border-t border-[var(--qd-border)] space-y-2">
-              <div className="flex justify-between items-center text-[10px] uppercase font-mono text-[var(--qd-text-3)]">
+              <div className="flex justify-between items-center text-[11px] uppercase font-mono text-[var(--qd-text-3)]">
                 <span>Active Data Broker</span>
                 <span className="text-white font-bold">{prefs.data_broker || "-"}</span>
               </div>
-              <div className="flex justify-between items-center text-[10px] uppercase font-mono text-[var(--qd-text-3)]">
+              <div className="flex justify-between items-center text-[11px] uppercase font-mono text-[var(--qd-text-3)]">
                 <span>Active Exec Broker</span>
                 <span className="text-white font-bold">{prefs.execution_broker || "-"}</span>
               </div>
@@ -473,7 +473,7 @@ export default function OpsConsole() {
                 <div key={f.key} className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3" data-testid={`feature-${f.key}`}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-head text-sm font-bold text-[var(--qd-text)]">{f.label}</span>
-                    <span className={`text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-sm border ${tone}`}>{f.state}</span>
+                    <span className={`text-[11px] uppercase tracking-widest px-2 py-0.5 rounded-sm border ${tone}`}>{f.state}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-[var(--qd-text-2)] leading-snug">{f.detail}</p>
                 </div>
@@ -481,7 +481,7 @@ export default function OpsConsole() {
             })
           )}
         </div>
-        <p className="mt-3 text-[10px] font-mono text-[var(--qd-text-3)]">Read-only · set via env (docker-compose). Rollout: off → shadow → enabled.</p>
+        <p className="mt-3 text-[11px] font-mono text-[var(--qd-text-3)]">Read-only · set via env (docker-compose). Rollout: off → shadow → enabled.</p>
       </div>
 
       {/* QUICK AUTOMATION CONTROL PANEL */}
@@ -583,7 +583,7 @@ export default function OpsConsole() {
           <div className="qd-table-wrap">
             <table className="w-full text-sm font-mono">
               <thead>
-                <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] border-b border-[var(--qd-border)] bg-[var(--qd-surface)]">
+                <tr className="text-left text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] border-b border-[var(--qd-border)] bg-[var(--qd-surface)]">
                   <th className="px-5 py-3">Strategy ID / Name</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Telemetry Segment</th>
@@ -593,7 +593,7 @@ export default function OpsConsole() {
               <tbody className="divide-y divide-[rgba(255,255,255,0.05)]">
                 {data.errored_strategies.map((s) => (
                   <tr key={s.id} className="hover:bg-transparent">
-                    <td className="px-5 py-3 text-white font-semibold">{s.name} <span className="text-[10px] text-[var(--qd-text-3)]">({s.id})</span></td>
+                    <td className="px-5 py-3 text-white font-semibold">{s.name} <span className="text-[11px] text-[var(--qd-text-3)]">({s.id})</span></td>
                     <td className="px-5 py-3 text-[var(--qd-loss)]">{s.status?.toUpperCase()}</td>
                     <td className="px-5 py-3 text-[var(--qd-text-2)]">{s.last_data_source || "-"}</td>
                     <td className="px-5 py-3 text-[var(--qd-warn)] text-xs text-right max-w-md truncate select-all">{s.last_error}</td>
@@ -626,7 +626,7 @@ function actionMessage(key, data) {
 // Sleek Metric Card
 const MetricCard = ({ label, value, tone, isPulse }) => (
   <div className="border border-[var(--qd-border)] bg-[var(--qd-surface-2)] backdrop-blur-md rounded-md p-3 hover:border-[var(--qd-border-strong)] transition-all">
-    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className="flex items-center gap-1.5 mt-1">
       {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
       <div className={`font-head text-[13px] sm:text-sm font-bold tracking-tight truncate ${
@@ -660,7 +660,7 @@ const ChecklistItem = ({ label, checked, details }) => (
       )}
       <span className={checked ? "text-[var(--qd-text-2)]" : "text-[var(--qd-text-3)]"}>{label}</span>
     </div>
-    <span className="text-[10px] text-[var(--qd-text-3)] font-mono text-right truncate max-w-[120px]">{details}</span>
+    <span className="text-[11px] text-[var(--qd-text-3)] font-mono text-right truncate max-w-[120px]">{details}</span>
   </div>
 );
 

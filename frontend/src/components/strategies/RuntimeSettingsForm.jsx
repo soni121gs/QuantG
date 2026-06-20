@@ -82,7 +82,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
     <form onSubmit={handleSubmit} className="mt-3 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-md p-3.5 space-y-3.5">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Target profit (TP %)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Target profit (TP %)</label>
           <input 
             type="number" 
             step="0.01" 
@@ -93,7 +93,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           />
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Stop loss (SL %)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Stop loss (SL %)</label>
           <input 
             type="number" 
             step="0.01" 
@@ -107,7 +107,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
 
       <div className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2.5 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-2)]">Trailing Stop Loss</span>
+          <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)]">Trailing Stop Loss</span>
           <input 
             type="checkbox" 
             checked={form.trailing_sl_enabled} 
@@ -119,7 +119,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         {form.trailing_sl_enabled && (
           <div className="grid grid-cols-2 gap-2 pt-1">
             <div>
-              <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Trigger %</label>
+              <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Trigger %</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -130,7 +130,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
               />
             </div>
             <div>
-              <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Step %</label>
+              <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Step %</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -145,7 +145,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
       </div>
 
       <div className="border-t border-[var(--qd-border)] pt-2.5">
-        <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Strategy Category</label>
+        <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Strategy Category</label>
         <select
           value={form.strategy_category}
           onChange={(e) => {
@@ -166,7 +166,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
 
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Cooldown (Min)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Cooldown (Min)</label>
           <input
             type="number"
             value={form.cooldown_minutes}
@@ -176,7 +176,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           />
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Max Trades/Day</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Max Trades/Day</label>
           <input 
             type="number" 
             value={form.max_trades_day} 
@@ -186,7 +186,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           />
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Loss Limit (INR)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Loss Limit (INR)</label>
           <input 
             type="number" 
             value={form.daily_loss_limit} 
@@ -199,7 +199,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
 
       <div className="grid grid-cols-2 gap-2 border-t border-[var(--qd-border)] pt-2.5">
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Time Exit (Min)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Time Exit (Min)</label>
           <input 
             type="number" 
             value={form.time_exit_minutes} 
@@ -209,7 +209,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           />
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Exit Mode</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Exit Mode</label>
           <select 
             value={form.exit_mode} 
             onChange={(e) => setForm({ ...form, exit_mode: e.target.value })}
@@ -224,7 +224,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
 
       <div className="grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2.5">
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
           <select 
             value={form.broker} 
             onChange={(e) => setForm({ ...form, broker: e.target.value })}
@@ -234,7 +234,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           </select>
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Deployment Mode</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Deployment Mode</label>
           <select 
             value={form.mode} 
             onChange={(e) => setForm({ ...form, mode: e.target.value })}
@@ -245,7 +245,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           </select>
         </div>
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Product Type</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Product Type</label>
           <select 
             value={form.product} 
             onChange={(e) => setForm({ ...form, product: e.target.value })}
@@ -260,7 +260,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
 
       <div className="grid grid-cols-2 gap-2 pt-1">
         <div>
-          <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Allocated Capital (INR)</label>
+          <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Allocated Capital (INR)</label>
           <input 
             type="number" 
             value={form.required_capital} 
@@ -271,7 +271,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         </div>
         <div className="flex flex-col justify-end pb-1.5">
           <div className="flex items-center justify-between px-1">
-            <span className="font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)]">Indicator Exit</span>
+            <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">Indicator Exit</span>
             <input 
               type="checkbox" 
               checked={form.indicator_exit_enabled} 
@@ -285,7 +285,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
       {s.visual_config?.options?.enabled && (
         <div className="grid grid-cols-3 gap-2 pt-1">
           <div>
-            <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Structure</label>
+            <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Structure</label>
             <select
               value={form.structure}
               onChange={(e) => setForm({ ...form, structure: e.target.value })}
@@ -300,7 +300,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           {(form.structure === "credit_spread" || form.structure === "debit_spread") && (
             <>
               <div>
-                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">
+                <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">
                   {form.structure === "debit_spread" ? "Long Δ" : "Short Δ"}
                 </label>
                 <input
@@ -312,7 +312,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
                 />
               </div>
               <div>
-                <label className="block font-mono text-[8px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Width (strikes)</label>
+                <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Width (strikes)</label>
                 <input
                   type="number" min="1" max="20"
                   value={form.spread_width}
@@ -329,7 +329,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
       <button
         type="submit"
         disabled={saving}
-        className="w-full py-2 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-[var(--qd-accent-contrast)] font-mono text-[10px] uppercase font-bold tracking-wider rounded border border-[var(--qd-border-strong)] shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+        className="w-full py-2 bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-[var(--qd-accent-contrast)] font-mono text-[11px] uppercase font-bold tracking-wider rounded border border-[var(--qd-border-strong)] shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
       >
         {saving ? (
           <RefreshCw size={12} className="animate-spin" />

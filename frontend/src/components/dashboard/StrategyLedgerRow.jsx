@@ -21,7 +21,7 @@ const BROKER_OPEN_ORDER_STATES = [
 
 export const Field = ({ label, value, tone }) => (
   <div className="min-w-0">
-    <div className="qd-section-title text-[9px]">{label}</div>
+    <div className="qd-section-title text-[11px]">{label}</div>
     <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || "text-white"}`}>{value}</div>
   </div>
 );
@@ -34,7 +34,7 @@ export const StatusPill = ({ children, tone = "neutral" }) => {
     neutral: "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]",
   };
   return (
-    <span className={`inline-flex items-center rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${tones[tone]}`}>
+    <span className={`inline-flex items-center rounded border px-2 py-1 font-mono text-[11px] uppercase tracking-wider ${tones[tone]}`}>
       {children}
     </span>
   );
@@ -47,7 +47,7 @@ export const QualityPill = ({ score, readiness }) => {
     : readiness === "BLOCK" || n < 45
       ? "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
       : "border-[rgba(255,209,102,0.38)] bg-[rgba(255,209,102,0.1)] text-[var(--qd-warn)]";
-  return <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${tone}`}>Q {n}</span>;
+  return <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[11px] font-bold ${tone}`}>Q {n}</span>;
 };
 
 export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
@@ -77,7 +77,7 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
     <div className="grid gap-3 border-t border-[var(--qd-border)] px-4 py-3 lg:grid-cols-[minmax(220px,1.1fr)_minmax(260px,1.35fr)_minmax(180px,0.9fr)_auto] lg:items-center">
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-white">{row.name}</div>
-        <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
+        <div className="mt-1 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -95,7 +95,7 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
           {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
         </div>
         <div className={`mt-2 font-mono text-xs font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
-        {detail && <div className="mt-1 max-w-[260px] truncate text-[10px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
+        {detail && <div className="mt-1 max-w-[260px] truncate text-[11px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
       </div>
 
       <div className="flex items-center justify-end gap-2">

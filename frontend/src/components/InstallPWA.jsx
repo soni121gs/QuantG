@@ -57,7 +57,7 @@ export default function InstallPWA() {
       </div>
       <div className="flex-1 min-w-0">
         <div className="font-head text-sm text-white">Install QuantG</div>
-        <div className="font-mono text-[10px] text-[var(--qd-text-2)] uppercase tracking-wider">Use as an app, even offline</div>
+        <div className="font-mono text-[11px] text-[var(--qd-text-2)] uppercase tracking-wider">Use as an app, even offline</div>
       </div>
       <button
         onClick={install}

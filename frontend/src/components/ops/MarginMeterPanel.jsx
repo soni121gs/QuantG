@@ -54,35 +54,35 @@ export default function MarginMeterPanel({ fundsData }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Available Cash</div>
           <div className="text-sm sm:text-base font-bold text-white font-mono mt-1 truncate">
             {availCash.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
           </div>
-          <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Execution limit</div>
+          <div className="text-[11px] text-[var(--qd-text-3)] font-mono mt-0.5">Execution limit</div>
         </div>
 
         <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Used Margin</div>
           <div className="text-sm sm:text-base font-bold text-[var(--qd-loss)] font-mono mt-1 truncate">
             {usedMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
           </div>
-          <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Current block</div>
+          <div className="text-[11px] text-[var(--qd-text-3)] font-mono mt-0.5">Current block</div>
         </div>
 
         <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">SPAN Margin</div>
           <div className="text-sm sm:text-base font-bold text-[var(--qd-warn)] font-mono mt-1 truncate">
             {spanMargin.toLocaleString("en-IN", { style: "currency", currency: "INR" })}
           </div>
-          <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Underlying hedge margin</div>
+          <div className="text-[11px] text-[var(--qd-text-3)] font-mono mt-0.5">Underlying hedge margin</div>
         </div>
 
         <div className="bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded p-3">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Virtual Leverage</div>
           <div className="text-sm sm:text-base font-bold text-blue-400 font-mono mt-1 truncate">
             {fundsData?.source === "paper" ? "5.0x MIS" : "1.0x NRML"}
           </div>
-          <div className="text-[10px] text-[var(--qd-text-3)] font-mono mt-0.5">Daily leverage capacity</div>
+          <div className="text-[11px] text-[var(--qd-text-3)] font-mono mt-0.5">Daily leverage capacity</div>
         </div>
       </div>
     </div>

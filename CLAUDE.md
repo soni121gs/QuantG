@@ -56,7 +56,7 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Frontend strategy components | `frontend/src/components/strategies/` (StrategyCard, RuntimeSettingsForm, AboutStrategyModal) |
 | Frontend ops components | `frontend/src/components/ops/` (MarginMeterPanel, UserReconciler, BrokerStatusPanel, IncidentRecoveryPanel, OpsActionCard) |
 | Frontend wiki components | `frontend/src/components/wiki/` (MarkdownRenderer, PhysicsGraphCanvas, WikiTreeSidebar) |
-| Frontend AI bot components | `frontend/src/components/aibot/` (ChatFeed, SessionHistorySidebar, PromptSuggestionsPanel) |
+| Frontend AI bot components | `frontend/src/components/aibot/` (ChatFeed, AgentContextPanel, PromptSuggestionsPanel) |
 | Frontend app shell / layout | `frontend/src/components/Layout.jsx`, `frontend/src/components/ui/` |
 | Frontend CSS design system | `frontend/src/index.css` (HSL variables, Sora/Inter/Mono fonts, blink keyframe animations) |
 | Docker build/env config | `docker-compose.yml`, `backend/.env` |

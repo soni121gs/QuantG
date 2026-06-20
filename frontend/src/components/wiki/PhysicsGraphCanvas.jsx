@@ -179,7 +179,7 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
 
   return (
     <div className="qd-card p-3 bg-[var(--qd-surface)] border border-[var(--qd-border)] relative">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--qd-text-3)] mb-2 flex items-center justify-between">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--qd-text-3)] mb-2 flex items-center justify-between">
         <span>Knowledge Map (Obsidian view)</span>
         {hoveredNode && <span className="text-[var(--qd-accent)] truncate max-w-[180px]">{hoveredNode}</span>}
       </div>

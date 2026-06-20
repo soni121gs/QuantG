@@ -218,6 +218,22 @@ h6 {
   letter-spacing: 0;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Type scale — single source of truth for text sizing.
+   Replaces ad-hoc text-[8px]/[9px]/[10px] usage app-wide.
+   Hard floor of 11px for readability. Use these instead of
+   hand-picked pixel sizes so proportions stay consistent.
+   ───────────────────────────────────────────────────────────── */
+.t-display { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.5rem;  line-height: 1.85rem; font-weight: 800; letter-spacing: -0.01em; }
+.t-title   { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1rem;    line-height: 1.4rem;  font-weight: 700; }
+.t-body    { font-size: 0.875rem; line-height: 1.5rem; }      /* 14px — chat & paragraphs */
+.t-label   { font-size: 0.75rem;  line-height: 1.1rem; }      /* 12px — secondary labels */
+.t-meta    { font-size: 0.6875rem; line-height: 1rem; }       /* 11px floor — mono metadata */
+
+@media (min-width: 768px) {
+  .t-display { font-size: 1.75rem; line-height: 2.1rem; }
+}
+
 .text-white {
   color: var(--qd-text) !important;
 }
@@ -470,7 +486,7 @@ a:focus-visible {
 .qd-section-title {
   color: var(--qd-text-3);
   font-family: 'Sora', 'Inter', system-ui, sans-serif;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;

@@ -39,7 +39,7 @@ export const StrategyPerformanceTable = ({ rows }) => (
                 <td className="px-4 py-3 font-mono text-[var(--qd-text-2)]">#{row.rank}</td>
                 <td className="px-4 py-3">
                   <div className="font-semibold text-white">{row.strategy_name}</div>
-                  <div className="mt-1 font-mono text-[10px] uppercase text-[var(--qd-text-3)]">
+                  <div className="mt-1 font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                     {row.recommendation || "NO_DATA"}
                   </div>
                 </td>

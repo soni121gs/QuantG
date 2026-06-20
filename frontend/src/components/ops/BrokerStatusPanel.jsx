@@ -20,12 +20,12 @@ const TelemetryMetric = ({ label, value, desc, status, isPulse }) => {
   
   return (
     <div className="bg-[var(--qd-surface)] border border-[rgba(255,255,255,0.04)] rounded-md p-3">
-      <div className="font-mono text-[9px] text-[var(--qd-text-3)] uppercase tracking-wider">{label}</div>
+      <div className="font-mono text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">{label}</div>
       <div className="flex items-center gap-1.5 mt-1">
         {isPulse && <span className="w-1.5 h-1.5 bg-[var(--qd-profit)] rounded-full animate-ping"></span>}
         <div className={`font-head text-xs sm:text-sm font-bold ${getStatusColor()}`}>{value}</div>
       </div>
-      <div className="text-[9px] text-[var(--qd-text-3)] mt-0.5 font-mono">{desc}</div>
+      <div className="text-[11px] text-[var(--qd-text-3)] mt-0.5 font-mono">{desc}</div>
     </div>
   );
 };
@@ -55,7 +55,7 @@ export default function BrokerStatusPanel({ data, busy, onUpstoxLogin }) {
 
         {upstox.connected ? (
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono font-semibold text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)] border border-[var(--qd-profit)]/30 rounded-full">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono font-semibold text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)] border border-[var(--qd-profit)]/30 rounded-full">
               <CheckCircle2 size={12} /> {upstox.feed_running ? "HFT READY" : "AUTH OK / FEED STOPPED"}
             </span>
             <button 

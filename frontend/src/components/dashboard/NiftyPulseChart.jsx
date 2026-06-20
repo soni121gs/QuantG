@@ -71,11 +71,11 @@ export const NiftyPulseChart = ({ niftyLtp, sensexLtp, candles = [], marketOpen,
 
       <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--qd-border)] pt-3">
         <div>
-          <div className="qd-section-title text-[9px]">SENSEX</div>
+          <div className="qd-section-title text-[11px]">SENSEX</div>
           <div className="mt-1 font-mono text-sm font-semibold text-[var(--qd-text)]">{sensexLtp ? formatINR(sensexLtp) : "—"}</div>
         </div>
         <div className="text-right">
-          <div className="qd-section-title text-[9px]">Feed</div>
+          <div className="qd-section-title text-[11px]">Feed</div>
           <div className="mt-1 truncate font-mono text-xs text-[var(--qd-text-2)]" title={feedLabel || label}>{feedLabel || label || "—"}</div>
         </div>
       </div>

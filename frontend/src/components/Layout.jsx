@@ -193,13 +193,13 @@ const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
         </div>
         <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
             <div className="font-mono text-xs text-[var(--qd-text-2)]">{pnlPositive ? "Positive" : "Negative"} session</div>
           </div>
           <PnlTrend positive={pnlPositive} />
         </div>
         <div>
-          <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">
+          <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">
             <span>Margin Usage</span>
             <span className="font-mono">{marginPct.toFixed(0)}%</span>
           </div>
@@ -209,11 +209,11 @@ const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Positions</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Positions</div>
             <div className="mt-1 font-mono text-lg font-bold text-[var(--qd-text)]">{activePositions}</div>
           </div>
           <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Mode</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Mode</div>
             <div className={`mt-1 font-mono text-lg font-bold ${profile?.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"}`}>
               {profile?.paper_mode ? "PAPER" : "LIVE"}
             </div>
@@ -470,7 +470,7 @@ export default function Layout({ children }) {
           <div className="flex items-center gap-2 md:gap-3">
             <div className="hidden items-center gap-3 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 md:flex">
               <span
-                className="font-head text-[10px] font-bold uppercase tracking-wide text-[var(--qd-text-3)]"
+                className="font-head text-[11px] font-bold uppercase tracking-wide text-[var(--qd-text-3)]"
                 title={`${executionSummary?.open_positions ?? 0} open positions`}
               >
                 P&L
@@ -502,7 +502,7 @@ export default function Layout({ children }) {
               <Bell size={16} />
               {notificationCounts.unread > 0 && (
                 <span
-                  className={`qd-force-white absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[10px] font-bold ${
+                  className={`qd-force-white absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[11px] font-bold ${
                     notificationCounts.critical > 0 ? "bg-[var(--qd-loss)]" : "bg-[var(--qd-accent)]"
                   }`}
                 >
@@ -562,7 +562,7 @@ export default function Layout({ children }) {
               <div className="hidden lg:flex flex-col items-end leading-none font-mono">
                 <span className="text-[11px] text-[var(--qd-text-2)]">{user?.email}</span>
                 {user?.role && (
-                  <span className={`text-[10px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
+                  <span className={`text-[11px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
                     user.role === "owner" 
                       ? "bg-[rgba(255,159,10,0.08)] text-[var(--qd-warn)] border-[var(--qd-warn)]/30" 
                       : "bg-indigo-500/10 text-indigo-300 border-indigo-500/20"
@@ -621,20 +621,20 @@ export default function Layout({ children }) {
               </div>
             ))}
           </nav>
-          <div className="mt-auto p-3 text-[9px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)]">
+          <div className="mt-auto p-3 text-[11px] font-mono text-[var(--qd-text-3)] uppercase tracking-wider border-t border-[var(--qd-border)]">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1 mb-0">
                 <span className="w-2 h-2 bg-[var(--qd-accent)] rounded-full animate-pulse" />
                 Advanced Trading
               </div>
               <span
-                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-widest bg-[var(--qd-accent)]/15 text-[var(--qd-accent)] border border-[var(--qd-accent)]/30"
                 data-testid="sidebar-version-badge"
               >
                 {APP_VERSION_LABEL}
               </span>
             </div>
-            <div className="text-[10px] text-[var(--qd-text-2)] mt-1.5">
+            <div className="text-[11px] text-[var(--qd-text-2)] mt-1.5">
               QuantG Terminal · Real-time · Live
             </div>
           </div>
@@ -692,7 +692,7 @@ export default function Layout({ children }) {
                         key={item.id}
                         type="button"
                         onClick={() => setTheme(item.id)}
-                        className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 text-left font-mono text-[10px] font-bold uppercase tracking-wider ${
+                        className={`rounded-[var(--qd-radius-sm)] border px-3 py-2 text-left font-mono text-[11px] font-bold uppercase tracking-wider ${
                           theme === item.id
                             ? "border-[var(--qd-accent)] bg-[var(--qd-accent)] text-[var(--qd-accent-contrast)]"
                             : "border-[var(--qd-border)] bg-[var(--qd-surface)] text-[var(--qd-text-2)]"
@@ -856,14 +856,14 @@ export default function Layout({ children }) {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className={`font-mono text-[10px] font-bold uppercase tracking-wide ${tone.text}`}>{tone.label}</div>
+                            <div className={`font-mono text-[11px] font-bold uppercase tracking-wide ${tone.text}`}>{tone.label}</div>
                             <h4 className="mt-1 font-head text-sm font-extrabold text-[var(--qd-text)]">{item.title}</h4>
                           </div>
                           {!item.read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[var(--qd-accent)]" />}
                         </div>
                         <p className="mt-2 text-sm leading-relaxed text-[var(--qd-text-2)]">{item.message}</p>
                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-mono text-[10px] text-[var(--qd-text-3)]">{formatNotificationTime(item.created_at)}</span>
+                          <span className="font-mono text-[11px] text-[var(--qd-text-3)]">{formatNotificationTime(item.created_at)}</span>
                           <div className="flex items-center gap-2">
                             {item.action_url && (
                               <button
@@ -909,7 +909,7 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-3 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 py-3 text-[11px] font-mono uppercase tracking-wider transition-colors ${
                 isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }

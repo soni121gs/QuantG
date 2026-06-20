@@ -58,7 +58,7 @@ export default function Positions() {
   return (
     <div className="space-y-4" data-testid="positions-page">
       <div>
-        <div className="font-mono text-[10px] tracking-widest uppercase text-[var(--qd-text-3)]">// HOLDINGS</div>
+        <div className="font-mono text-[11px] tracking-widest uppercase text-[var(--qd-text-3)]">// HOLDINGS</div>
         <h1 className="font-head text-3xl font-bold text-[var(--qd-text)] mt-1">Positions</h1>
         <p className="text-xs text-[var(--qd-text-2)] mt-1 font-mono">
           Synced from {paperMode ? "paper book" : executionBroker} · SL/TP from strategy ledger
@@ -73,7 +73,7 @@ export default function Positions() {
       )}
 
       <div className="qd-card p-4 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Total Unrealized PnL</span>
+        <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Total Unrealized PnL</span>
         <span className={`font-mono text-2xl font-bold ${total >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`} data-testid="total-pnl">
           {total >= 0 ? "+" : ""}₹{formatINR(total)}
         </span>
@@ -96,7 +96,7 @@ export default function Positions() {
           <div className="qd-table-wrap">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
+                <tr className="text-left text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] font-mono">
                   <th className="px-4 py-2">Strategy</th>
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Qty</th>
@@ -130,19 +130,19 @@ export default function Positions() {
                           <button
                             type="button"
                             onClick={() => setExpanded(isOpen ? null : stableKey)}
-                            className="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm bg-[rgba(0,122,255,0.12)] text-[var(--qd-accent)] hover:bg-[rgba(0,122,255,0.2)]"
+                            className="ml-2 text-[11px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm bg-[rgba(0,122,255,0.12)] text-[var(--qd-accent)] hover:bg-[rgba(0,122,255,0.2)]"
                             data-testid={`spread-toggle-${p.symbol}`}
                           >
                             spread {isOpen ? "▾" : "▸"}
                           </button>
                         )}
                         {isSpread && (
-                          <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
+                          <div className="text-[11px] text-[var(--qd-text-3)] mt-0.5">
                             {p.structure === "debit_spread" ? `debit ₹${formatINR(p.net_debit)}` : `credit ₹${formatINR(p.net_credit)}`}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
                           </div>
                         )}
                         {!isSpread && p.greeks && p.greeks.delta != null && (
-                          <div className="text-[10px] text-[var(--qd-text-3)] mt-0.5">
+                          <div className="text-[11px] text-[var(--qd-text-3)] mt-0.5">
                             δ {Number(p.greeks.delta).toFixed(2)}
                             {p.target_delta != null ? ` (tgt ${Number(p.target_delta).toFixed(2)})` : ""}
                             {p.greeks.theta != null ? ` · θ ${Number(p.greeks.theta).toFixed(1)}` : ""}
@@ -159,27 +159,27 @@ export default function Positions() {
                       </td>
                       <td className="px-4 py-2.5 text-[var(--qd-profit)]">{p.take_profit != null ? formatINR(p.take_profit) : "—"}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-loss)]">{p.stop_loss != null ? formatINR(p.stop_loss) : "—"}</td>
-                      <td className={`px-4 py-2.5 text-[10px] uppercase ${statusTone(p.execution_status || p.ledger_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
+                      <td className={`px-4 py-2.5 text-[11px] uppercase ${statusTone(p.execution_status || p.ledger_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
                       <td className={`px-4 py-2.5 text-right ${pnlTone}`}>
                         <FlashingValue value={p.pnl}>
                           {(p.pnl || 0) >= 0 ? "+" : ""}₹{formatINR(p.pnl)}
                         </FlashingValue>
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        <span className={`text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${
+                        <span className={`text-[11px] uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${
                           p.mode === "live" ? "bg-[rgba(255,59,48,0.12)] text-[var(--qd-loss)]" : "bg-[rgba(255,159,10,0.12)] text-[var(--qd-warn)]"
                         }`}>{p.mode || (paperMode ? "paper" : "live")}</span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         {isSpread ? (
-                          <span className="text-[9px] uppercase tracking-widest px-2 py-1 rounded-sm bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] ml-auto inline-block" title="Both legs auto-managed by TP 50% / SL 2x / EOD square-off">
+                          <span className="text-[11px] uppercase tracking-widest px-2 py-1 rounded-sm bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] ml-auto inline-block" title="Both legs auto-managed by TP 50% / SL 2x / EOD square-off">
                             Auto TP/SL
                           </span>
                         ) : (
                           <button
                             onClick={() => exit(p.symbol)}
                             disabled={exiting === p.symbol}
-                            className={`text-[10px] uppercase tracking-wider px-3 py-1 rounded-sm disabled:opacity-50 flex items-center gap-1 ml-auto ${
+                            className={`text-[11px] uppercase tracking-wider px-3 py-1 rounded-sm disabled:opacity-50 flex items-center gap-1 ml-auto ${
                               longPos ? "bg-[var(--qd-loss)] text-white" : "bg-[var(--qd-profit)] text-black"
                             }`}
                             data-testid={`exit-${p.symbol}`}
@@ -219,7 +219,7 @@ export default function Positions() {
                               ) : null;
                             return (
                               <div className="space-y-2 max-w-2xl">
-                                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">// SPREAD LEGS{p.direction ? ` — ${p.direction}` : ""}</div>
+                                <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">// SPREAD LEGS{p.direction ? ` — ${p.direction}` : ""}</div>
                                 {legRow(short)}
                                 {legRow(long)}
                                 <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-[11px] text-[var(--qd-text-2)]">
@@ -236,7 +236,7 @@ export default function Positions() {
                                       <div className="absolute inset-y-0 right-0 bg-[color-mix(in_srgb,var(--qd-profit)_25%,transparent)]" style={{ width: "50%" }} />
                                       <div className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-[var(--qd-text)]" style={{ left: `${markerPct}%` }} />
                                     </div>
-                                    <div className="mt-0.5 flex justify-between text-[9px] text-[var(--qd-text-3)]">
+                                    <div className="mt-0.5 flex justify-between text-[11px] text-[var(--qd-text-3)]">
                                       <span>-₹{formatINR(maxLossTotal)}</span>
                                       <span className={pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>P&amp;L ₹{formatINR(pnl)}</span>
                                       <span>+₹{formatINR(maxProfitTotal)}</span>

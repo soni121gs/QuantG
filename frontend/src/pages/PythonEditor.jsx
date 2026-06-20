@@ -222,7 +222,7 @@ export default function PythonEditor() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-head text-base text-white flex items-center gap-2">
             <TrendingUp size={16} className="text-[var(--qd-accent)]" /> Options Mode
-            <span className="font-mono text-[10px] text-[var(--qd-text-3)] uppercase tracking-widest ml-2">// NIFTY / BANKNIFTY / SENSEX</span>
+            <span className="font-mono text-[11px] text-[var(--qd-text-3)] uppercase tracking-widest ml-2">// NIFTY / BANKNIFTY / SENSEX</span>
           </h2>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -240,7 +240,7 @@ export default function PythonEditor() {
         {options.enabled && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
-              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Underlying</label>
+              <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Underlying</label>
               <select
                 value={options.underlying}
                 onChange={(e) => setOptions({ ...options, underlying: e.target.value })}
@@ -251,7 +251,7 @@ export default function PythonEditor() {
               </select>
             </div>
             <div>
-              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Strike Mode</label>
+              <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Strike Mode</label>
               <select
                 value={options.strike_mode}
                 onChange={(e) => setOptions({ ...options, strike_mode: e.target.value })}
@@ -262,7 +262,7 @@ export default function PythonEditor() {
               </select>
             </div>
             <div>
-              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Lots</label>
+              <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Lots</label>
               <input
                 type="number"
                 min="1"
@@ -273,7 +273,7 @@ export default function PythonEditor() {
               />
             </div>
             <div>
-              <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Expiry</label>
+              <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Expiry</label>
               <select
                 value={options.expiry_offset}
                 onChange={(e) => setOptions({ ...options, expiry_offset: +e.target.value })}
@@ -287,7 +287,7 @@ export default function PythonEditor() {
             </div>
             {options.strike_mode === "OTM_BUY" && (
               <div className="md:col-span-4">
-                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">OTM Distance (points)</label>
+                <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">OTM Distance (points)</label>
                 <input
                   type="number"
                   value={options.otm_points}
@@ -308,7 +308,7 @@ export default function PythonEditor() {
         <div className="lg:col-span-2 qd-card flex flex-col" data-testid="code-editor">
           <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-3 py-2">
             <span className="font-mono text-xs text-[var(--qd-text-2)]">strategy.py</span>
-            <span className="font-mono text-[10px] text-[var(--qd-text-3)]">{lines} lines</span>
+            <span className="font-mono text-[11px] text-[var(--qd-text-3)]">{lines} lines</span>
           </div>
           <div className="flex bg-black">
             <pre className="font-mono text-xs text-[var(--qd-text-3)] py-3 px-2 select-none border-r border-[var(--qd-border)] min-w-[3rem] text-right leading-[1.5]">
@@ -334,7 +334,7 @@ export default function PythonEditor() {
             <h3 className="font-head text-base text-white mb-3">Backtest Config</h3>
             {!options.enabled ? (
               <>
-                <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol (Equity)</label>
+                <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Symbol (Equity)</label>
                 <input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} className="w-full mt-1 mb-3 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="symbol-input" />
               </>
             ) : (
@@ -342,9 +342,9 @@ export default function PythonEditor() {
                 Underlying: <span className="text-white">{options.underlying}</span> · {options.lots} lot{options.lots > 1 ? "s" : ""} · {options.strike_mode}
               </div>
             )}
-            <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Days</label>
+            <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Days</label>
             <input type="number" value={days} onChange={(e) => setDays(e.target.value)} className="w-full mt-1 mb-3 bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="days-input" />
-            <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Engine</label>
+            <label className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">Engine</label>
             <select value={engine} onChange={(e) => setEngine(e.target.value)} className="w-full bg-[var(--qd-bg)] border border-[var(--qd-border)] px-3 py-2 text-sm text-white font-mono rounded-sm" data-testid="engine-select">
               <option value="local">Local Simulator (Fast)</option>
               <option value="backtrader">Backtrader (Advanced)</option>
@@ -354,7 +354,7 @@ export default function PythonEditor() {
           {result && (
             <div className="qd-card p-4" data-testid="backtest-summary">
               <h3 className="font-head text-base text-white mb-3">
-                Results {result.engine && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// {result.engine.toUpperCase()}</span>} {result.mode === "options" && <span className="font-mono text-[10px] uppercase text-[var(--qd-accent)] ml-1">// OPTIONS</span>}
+                Results {result.engine && <span className="font-mono text-[11px] uppercase text-[var(--qd-accent)] ml-1">// {result.engine.toUpperCase()}</span>} {result.mode === "options" && <span className="font-mono text-[11px] uppercase text-[var(--qd-accent)] ml-1">// OPTIONS</span>}
               </h3>
               <SummaryRow label="Total PnL" value={`₹${result.summary.total_pnl.toLocaleString("en-IN")}`} tone={result.summary.total_pnl >= 0 ? "p" : "l"} />
               <SummaryRow label="Return" value={`${result.summary.return_pct}%`} tone={result.summary.return_pct >= 0 ? "p" : "l"} />
@@ -388,7 +388,7 @@ export default function PythonEditor() {
 
 const SummaryRow = ({ label, value, tone }) => (
   <div className="flex justify-between py-1.5 border-b border-[var(--qd-border)] last:border-b-0">
-    <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
+    <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
     <span className={`font-mono text-sm ${tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-white"}`}>{value}</span>
   </div>
 );
@@ -400,7 +400,7 @@ const TradePlanCard = ({ plan, onSmaChange }) => (
         <SlidersHorizontal size={16} className="text-[var(--qd-accent)]" />
         Market Language
       </h3>
-      <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{plan.title}</span>
+      <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{plan.title}</span>
     </div>
 
     {plan.editable && (
@@ -427,7 +427,7 @@ const TradePlanCard = ({ plan, onSmaChange }) => (
 
 const PlainInput = ({ label, value, onChange, testid }) => (
   <label>
-    <span className="block font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">{label}</span>
+    <span className="block font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)] mb-1">{label}</span>
     <input
       type="number"
       min="1"
@@ -441,7 +441,7 @@ const PlainInput = ({ label, value, onChange, testid }) => (
 
 const PlanLine = ({ label, value, tone }) => (
   <div className="border-b border-[var(--qd-border)] last:border-b-0 pb-2 last:pb-0">
-    <div className="font-mono text-[9px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</div>
     <div className={`mt-0.5 text-xs leading-relaxed ${
       tone === "p" ? "text-[var(--qd-profit)]" : tone === "l" ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"
     }`}>{value}</div>

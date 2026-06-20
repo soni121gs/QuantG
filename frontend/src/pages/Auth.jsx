@@ -128,7 +128,7 @@ export default function Auth({ mode: initialMode = "login" }) {
           </div>
           <span className="font-head font-extrabold tracking-tight text-white text-xl">
             QUANT<span className="cyber-accent-text">G</span>
-            <span className="text-[10px] font-mono text-[var(--qd-cyan)] ml-1.5 px-1.5 py-0.5 border border-[var(--qd-cyan)]/30 rounded bg-[var(--qd-cyan)]/10 font-bold uppercase tracking-widest">
+            <span className="text-[11px] font-mono text-[var(--qd-cyan)] ml-1.5 px-1.5 py-0.5 border border-[var(--qd-cyan)]/30 rounded bg-[var(--qd-cyan)]/10 font-bold uppercase tracking-widest">
               Inst
             </span>
           </span>
