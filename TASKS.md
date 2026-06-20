@@ -1744,7 +1744,7 @@ Track every hypothesis, version, clean baseline, result, decision, reason.
 **Founder GO 2026-06-20: Stage 7 is approved and is the recommended next code priority.** This is the highest-leverage Hermes work — the `PROPOSED_ACTION → approve/reject` machinery already half-exists (`routes/ai.py:740` `approve_agent_action`, but it only handles 6 *profile* fields). Stage 7 generalizes that into a typed draft → queue → approved-executor pipeline for **non-trading** writes. Permanently forbidden at every step: live order place/cancel/modify/exit, live-mode enable (`CORE_ENGINE_LIVE_ENABLED`), broker-credential changes, risk/capital overrides. The approval executor is an **allowlist of action_types**, never a denylist.
 
 ### TASK-H018 — Draft-only operation framework (typed action proposals)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit e8d20d7 · 2026-06-20
 - **Tier**: 3
 - **Prerequisite**: TASK-H007
 - **Session size**: ~2–3 hours
@@ -1766,7 +1766,7 @@ Track every hypothesis, version, clean baseline, result, decision, reason.
 **Verify**: ask Hermes "draft a wiki note summarizing today's feed outage" → response stores a `db.pending_actions` row with `action_type:"draft_wiki_note"`, `status:"pending"`, and the chat returns a `pending_action` envelope. No file is written yet.
 
 ### TASK-H019 — Founder approval queue (in-app)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit e8d20d7 · 2026-06-20
 - **Tier**: 3
 - **Prerequisite**: TASK-H018
 - **Session size**: ~3 hours
@@ -1784,7 +1784,7 @@ Track every hypothesis, version, clean baseline, result, decision, reason.
 **Verify**: a drafted wiki note from H018 appears as a card in the Approvals panel; Reject sets `status:"rejected"`; the card disappears on refresh. (Approve wiring to an executor is H020.)
 
 ### TASK-H020 — Safe (non-trading) mutation framework (approved-only executors)
-- **Status**: `[ ]`
+- **Status**: `[x]` commit e8d20d7 · 2026-06-20
 - **Tier**: 3
 - **Prerequisite**: TASK-H019
 - **Session size**: ~3–4 hours
@@ -1935,12 +1935,15 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H015 | Weekly Strategy Scorecard Ranking Report scheduled trigger | 5da3ca4 | 2026-06-20 |
 | TASK-H016 | Parameterized Backtest Experiment query processor | 5da3ca4 | 2026-06-20 |
 | TASK-H017 | Seed the Strategy Experiment Ledger markdown page | 5da3ca4 | 2026-06-20 |
+| TASK-H018 | Draft-only operation framework (typed action proposals) | e8d20d7 | 2026-06-20 |
+| TASK-H019 | Founder approval queue (in-app) | e8d20d7 | 2026-06-20 |
+| TASK-H020 | Safe (non-trading) mutation framework (approved-only executors) | e8d20d7 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 25 Hermes (H001–H025)*
-*Open: 6 · Blocked: 0 · In progress: 0 · Done: 73 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H023/H025)*
-*Hermes open: H018, H019, H020, H021, H022, H024*
+*Open: 3 · Blocked: 0 · In progress: 0 · Done: 76 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H023/H025)*
+*Hermes open: H021, H022, H024*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
-*Recommended next build order: TASK-H018→H019→H020 (Stage 7 approval-gated writes) → TASK-H024 (proactive alerts) → Stage 8.*
+*Recommended next build order: TASK-H024 (proactive alerts) → Stage 8.*
