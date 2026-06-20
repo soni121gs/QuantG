@@ -249,3 +249,105 @@ async def test_run_agent_tool_get_backtest_summary():
     )
 
 
+@pytest.mark.anyio
+async def test_get_pending_actions():
+    """Verify that get_pending_actions queries db.pending_actions and returns pending items."""
+    from routes.ai import get_pending_actions
+    mock_db = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(return_value=[
+        {"action_id": "act-1", "action_type": "draft_wiki_note", "status": "pending"}
+    ])
+    mock_db.pending_actions.find.return_value = mock_cursor
+    
+    user = {"id": "test-trader-1"}
+    
+    with patch("routes.ai.db", mock_db):
+        res = await get_pending_actions(user=user)
+        
+    assert len(res) == 1
+    assert res[0]["action_id"] == "act-1"
+    mock_db.pending_actions.find.assert_called_once_with(
+        {"user_id": "test-trader-1", "status": "pending"},
+        {"_id": 0}
+    )
+
+
+@pytest.mark.anyio
+async def test_approve_wiki_note_action():
+    """Verify that approving a draft_wiki_note writes to disk and db.wiki_docs."""
+    from routes.ai import approve_agent_action, ActionDecisionReq
+    mock_db = MagicMock()
+    mock_db.pending_actions.find_one = AsyncMock(return_value={
+        "action_id": "act-123",
+        "action_type": "draft_wiki_note",
+        "user_id": "test-trader-1",
+        "status": "pending",
+        "params": {
+            "title": "Hermes Rules",
+            "body_markdown": "Hermes guidelines details",
+            "folder": "Projects"
+        }
+    })
+    mock_db.wiki_docs.find_one = AsyncMock(return_value=None)
+    mock_db.wiki_docs.insert_one = AsyncMock()
+    mock_db.pending_actions.update_one = AsyncMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    user = {"id": "test-trader-1"}
+    req = ActionDecisionReq(action_id="act-123")
+    
+    mock_save_disk = MagicMock()
+    mock_rebuild_links = AsyncMock()
+    
+    with patch("routes.ai.db", mock_db), \
+         patch("routes.wiki.save_wiki_to_disk", mock_save_disk), \
+         patch("routes.wiki.rebuild_all_backlinks", mock_rebuild_links):
+        res = await approve_agent_action(req, user=user)
+        
+    assert res["status"] == "approved"
+    mock_db.wiki_docs.insert_one.assert_called_once()
+    doc_inserted = mock_db.wiki_docs.insert_one.call_args[0][0]
+    assert doc_inserted["title"] == "Hermes Rules"
+    assert doc_inserted["topic"] == "Projects"
+    
+    mock_save_disk.assert_called_once_with(
+        "Hermes Rules", "Projects", "Hermes guidelines details", ["hermes-draft"], {"source": "hermes-agent"}
+    )
+    mock_rebuild_links.assert_called_once_with("test-trader-1")
+
+
+@pytest.mark.anyio
+async def test_approve_task_entry_action():
+    """Verify that approving draft_task_entry appends to TASKS.md."""
+    from routes.ai import approve_agent_action, ActionDecisionReq
+    mock_db = MagicMock()
+    mock_db.pending_actions.find_one = AsyncMock(return_value={
+        "action_id": "act-456",
+        "action_type": "draft_task_entry",
+        "user_id": "test-trader-1",
+        "status": "pending",
+        "params": {
+            "task_id": "TASK-H888",
+            "title": "Hermes task",
+            "body_markdown": "Test instructions"
+        }
+    })
+    mock_db.pending_actions.update_one = AsyncMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    user = {"id": "test-trader-1"}
+    req = ActionDecisionReq(action_id="act-456")
+    
+    mock_open = MagicMock()
+    
+    with patch("routes.ai.db", mock_db), \
+         patch("builtins.open", mock_open):
+        res = await approve_agent_action(req, user=user)
+        
+    assert res["status"] == "approved"
+    mock_open.assert_called_once()
+    assert mock_open.call_args[0][1] == "a"
+
+

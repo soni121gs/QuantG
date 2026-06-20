@@ -272,6 +272,7 @@ export default function Layout({ children }) {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("quantg-blotter-open") === "true";
   });
+  const [pendingActionsCount, setPendingActionsCount] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -339,6 +340,9 @@ export default function Layout({ children }) {
         critical: r.data.critical || 0,
       }))
       .catch(() => {});
+    api.get("/agent/actions/pending")
+      .then((r) => setPendingActionsCount(r.data.length || 0))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -346,6 +350,16 @@ export default function Layout({ children }) {
     const t = setInterval(loadNotifications, 30000);
     return () => clearInterval(t);
   }, [loadNotifications]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      api.get("/agent/actions/pending")
+        .then((r) => setPendingActionsCount(r.data.length || 0))
+        .catch(() => {});
+    };
+    window.addEventListener("quantg-pending-actions-updated", handleUpdate);
+    return () => window.removeEventListener("quantg-pending-actions-updated", handleUpdate);
+  }, []);
 
   useEffect(() => {
     if (!notificationOpen || typeof window === "undefined") return;
@@ -615,6 +629,11 @@ export default function Layout({ children }) {
                     >
                       <n.icon size={16} strokeWidth={1.7} />
                       <span>{n.label}</span>
+                      {n.id === "nav-aibot" && pendingActionsCount > 0 && (
+                        <span className="ml-auto inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[10px] font-bold text-white shadow-sm">
+                          {pendingActionsCount}
+                        </span>
+                      )}
                     </NavLink>
                   ))}
                 </div>
@@ -909,13 +928,18 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-3 text-[11px] font-mono uppercase tracking-wider transition-colors ${
+              `flex flex-col items-center justify-center gap-0.5 py-3 text-[11px] font-mono uppercase tracking-wider transition-colors relative ${
                 isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }
           >
             <n.icon size={18} strokeWidth={1.5} />
             <span>{n.label}</span>
+            {n.id === "mnav-aibot" && pendingActionsCount > 0 && (
+              <span className="qd-force-white absolute right-[25%] top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[9px] font-bold">
+                {pendingActionsCount}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

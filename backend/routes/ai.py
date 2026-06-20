@@ -30,6 +30,16 @@ async def list_agent_skills(user=Depends(get_current_user)):
     from core.skills import HERMES_SKILL_PACK
     return list(HERMES_SKILL_PACK.values())
 
+
+@agent_router.get("/actions/pending")
+async def get_pending_actions(user=Depends(get_current_user)):
+    """Retrieve all pending operator actions for the current user."""
+    rows = await db.pending_actions.find(
+        {"user_id": user["id"], "status": "pending"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return rows
+
 class ChatReq(BaseModel):
     session_id: str = "default"
     message: str
@@ -514,17 +524,48 @@ You are equipped with a skill pack of standard playbooks. When the user asks que
 - `quantg-vps-deploy-check`: Playbook to check the system's operational deployment. Synthesize `get_live_readiness`, `get_logs_errors`, and `get_recent_alerts`.
 - `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, and `get_today_fills`.
 
-STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2):
+STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2 & STAGE 7):
 - Although you cannot directly execute database changes, you can PROPOSE professional system actions for user approval.
-- Specifically, you can suggest changes to these exact fields:
-  * `max_daily_loss`: Daily drawdown limit in INR (Drawdown Control).
-  * `paper_mode`: Set to true (Emergency Kill Switch) or false.
-  * `max_position_size`: Maximum allowed capital per single position (Position Sizing).
-  * `per_strategy_capital`: Capital allocated to each strategy (Position Sizing).
-  * `max_trades_per_day`: Number of allowed trades per day.
-  * `default_qty`: Default order quantity.
-- To propose an action, you MUST append a single block matching exactly this format at the absolute end of your response text (replacing with actual keys and values in the JSON):
-PROPOSED_ACTION: {{"action": "update_profile", "params": {{"max_daily_loss": 5000.0}}}}
+- Specifically, you can suggest actions of these exact types:
+  1. Profile Updates (action: "update_profile")
+     Suggest changes to these fields in params:
+     * `max_daily_loss`: Daily drawdown limit in INR (Drawdown Control).
+     * `paper_mode`: Set to true (Emergency Kill Switch) or false.
+     * `max_position_size`: Maximum allowed capital per single position (Position Sizing).
+     * `per_strategy_capital`: Capital allocated to each strategy (Position Sizing).
+     * `max_trades_per_day`: Number of allowed trades per day.
+     * `default_qty`: Default order quantity.
+     Example: PROPOSED_ACTION: {{"action": "update_profile", "params": {{"max_daily_loss": 5000.0}}}}
+     
+  2. Draft Wiki Note (action: "draft_wiki_note")
+     Suggest creating a wiki document. Params:
+     * `title`: Note title.
+     * `body_markdown`: Markdown contents of the note (wikilinks allowed).
+     * `folder`: Must be one of: "YouTube transcripts", "Meeting transcripts", "Decisions", "Projects", "Trading Rules".
+     Example: PROPOSED_ACTION: {{"action": "draft_wiki_note", "params": {{"title": "My Note", "body_markdown": "Content here", "folder": "Projects"}}}}
+     
+  3. Draft Task Entry (action: "draft_task_entry")
+     Suggest appending a task to TASKS.md. Params:
+     * `task_id`: Task key (format e.g. "TASK-999" or "TASK-H999").
+     * `title`: Task summary label.
+     * `body_markdown`: Detailed instructions/steps.
+     Example: PROPOSED_ACTION: {{"action": "draft_task_entry", "params": {{"task_id": "TASK-123", "title": "A new task", "body_markdown": "Steps to verify"}}}}
+     
+  4. Draft Incident Report (action: "draft_incident_report")
+     Suggest drafting an incident report file. Params:
+     * `title`: Title of the incident (e.g. "Upstox WS Stalled").
+     * `body_markdown`: Incident timeline and details.
+     Example: PROPOSED_ACTION: {{"action": "draft_incident_report", "params": {{"title": "Incident X", "body_markdown": "Details"}}}}
+     
+  5. Draft PR Summary (action: "draft_pr_summary")
+     Suggest drafting a Pull Request summary. Params:
+     * `title`: PR title.
+     * `body_markdown`: Summary of code changes.
+     Example: PROPOSED_ACTION: {{"action": "draft_pr_summary", "params": {{"title": "Feat: Stage 7", "body_markdown": "Summary details"}}}}
+
+- To propose any of these actions, you MUST append a single block matching exactly the format at the absolute end of your response text (replacing with actual action name and params keys/values in the JSON).
+- You may only propose one action per turn.
+- CRITICAL: You are PERMANENTLY FORBIDDEN from proposing or executing any trading actions (placing, modifying, or cancelling orders; changing live mode `CORE_ENGINE_LIVE_ENABLED`; modifying broker API keys; or direct settings overrides).
 
 STRICT READ-ONLY DEFAULT RULES:
 - You must never place, cancel, modify, or exit trades directly.
@@ -797,6 +838,15 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
     action_type = action.get("action_type")
     params = action.get("params") or {}
     
+    allowed_actions = {"update_profile", "draft_wiki_note", "draft_task_entry", "draft_incident_report", "draft_pr_summary"}
+    if action_type not in allowed_actions:
+        raise HTTPException(status_code=400, detail=f"Unsupported action type: {action_type}")
+        
+    # Safeguard assert to verify no execution of dangerous operations
+    for keyword in ("order", "trade", "buy", "sell", "cancel", "broker", "live_enabled", "keys"):
+        if keyword in action_type.lower():
+            raise HTTPException(status_code=400, detail="Action type violates safety bounds")
+            
     if action_type == "update_profile":
         update = {}
         if "paper_mode" in params:
@@ -835,10 +885,143 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
         if update:
             await db.users.update_one({"id": user["id"]}, {"$set": update})
             
+    elif action_type == "draft_wiki_note":
+        title = params.get("title")
+        body_markdown = params.get("body_markdown")
+        folder = params.get("folder", "General").strip()
+        
+        if not title or not body_markdown:
+            raise HTTPException(status_code=400, detail="title and body_markdown are required")
+            
+        allowed_folders = {"YouTube transcripts", "Meeting transcripts", "Decisions", "Projects", "Trading Rules", "General"}
+        if folder not in allowed_folders:
+            raise HTTPException(status_code=400, detail=f"Invalid folder. Must be one of {allowed_folders}")
+            
+        import re
+        slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+        if not slug:
+            slug = str(uuid.uuid4())[:8]
+            
+        exists = await db.wiki_docs.find_one({"user_id": user["id"], "title": title})
+        if exists:
+            raise HTTPException(status_code=400, detail="A document with this title already exists")
+            
+        now_str = datetime.now(timezone.utc).isoformat()
+        from routes.wiki import parse_markdown_links, save_wiki_to_disk, rebuild_all_backlinks
+        links = parse_markdown_links(body_markdown)
+        
+        doc = {
+            "id": slug,
+            "title": title,
+            "topic": folder,
+            "content": body_markdown,
+            "tags": ["hermes-draft"],
+            "links": links,
+            "backlinks": [],
+            "metadata": {"source": "hermes-agent"},
+            "user_id": user["id"],
+            "created_at": now_str,
+            "updated_at": now_str,
+        }
+        
+        await db.wiki_docs.insert_one(doc)
+        try:
+            save_wiki_to_disk(title, folder, body_markdown, ["hermes-draft"], {"source": "hermes-agent"})
+        except Exception as exc:
+            logger.error("Failed to write approved wiki note to disk: %s", exc)
+        await rebuild_all_backlinks(user["id"])
+        
+    elif action_type == "draft_task_entry":
+        task_id = params.get("task_id")
+        title = params.get("title")
+        body_markdown = params.get("body_markdown")
+        
+        if not task_id or not title or not body_markdown:
+            raise HTTPException(status_code=400, detail="task_id, title, and body_markdown are required")
+            
+        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        tasks_file_path = os.path.join(root_dir, "TASKS.md")
+        try:
+            formatted_entry = f"\n\n### {task_id} — {title}\n- **Status**: `[ ]`\n- **Tier**: 2\n- **Description**: {body_markdown}\n"
+            with open(tasks_file_path, "a", encoding="utf-8") as f:
+                f.write(formatted_entry)
+        except Exception as exc:
+            logger.error("Failed to append draft task entry to TASKS.md: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Failed to write to TASKS.md: {exc}")
+            
+    elif action_type == "draft_incident_report":
+        title = params.get("title")
+        body_markdown = params.get("body_markdown")
+        
+        if not title or not body_markdown:
+            raise HTTPException(status_code=400, detail="title and body_markdown are required")
+            
+        import re
+        slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+        if not slug:
+            slug = str(uuid.uuid4())[:8]
+            
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        filename_title = f"{date_str}-{slug}"
+        
+        now_str = datetime.now(timezone.utc).isoformat()
+        from routes.wiki import parse_markdown_links, save_wiki_to_disk, rebuild_all_backlinks
+        links = parse_markdown_links(body_markdown)
+        
+        doc = {
+            "id": filename_title,
+            "title": f"Incident: {title}",
+            "topic": "Incidents",
+            "content": body_markdown,
+            "tags": ["incident", "hermes-draft"],
+            "links": links,
+            "backlinks": [],
+            "metadata": {"source": "hermes-agent"},
+            "user_id": user["id"],
+            "created_at": now_str,
+            "updated_at": now_str,
+        }
+        
+        await db.wiki_docs.insert_one(doc)
+        try:
+            save_wiki_to_disk(filename_title, "Incidents", body_markdown, ["incident", "hermes-draft"], {"source": "hermes-agent", "incident_title": title})
+        except Exception as exc:
+            logger.error("Failed to write incident report to disk: %s", exc)
+        await rebuild_all_backlinks(user["id"])
+        
+    elif action_type == "draft_pr_summary":
+        title = params.get("title")
+        body_markdown = params.get("body_markdown")
+        
+        if not title or not body_markdown:
+            raise HTTPException(status_code=400, detail="title and body_markdown are required")
+            
     await db.pending_actions.update_one(
         {"action_id": req.action_id},
         {"$set": {"status": "approved", "executed_at": datetime.now(timezone.utc).isoformat()}}
     )
+    
+    try:
+        audit_entry = {
+            "id": str(uuid.uuid4()),
+            "name": f"approve_{action_type}",
+            "user_id": user["id"],
+            "status": "ok",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "args": {
+                "action_id": req.action_id,
+                "action_type": action_type,
+                "params": params
+            },
+            "stale": False,
+            "confidence": 1.0,
+            "warnings": [],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.agent_tool_audit.insert_one(audit_entry)
+    except Exception as audit_exc:
+        logger.error("Failed to write to agent_tool_audit in approve_agent_action: %s", audit_exc)
+        
     return {"status": "approved", "action_id": req.action_id}
 
 
