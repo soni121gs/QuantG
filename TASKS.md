@@ -1810,14 +1810,16 @@ Track every hypothesis, version, clean baseline, result, decision, reason.
 ### Stage 8 — Incident Commander
 
 ### TASK-H021 — Automated incident timeline
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
+- **Commit**: `16dd5fe`
 - **Tier**: 3
 - **Prerequisite**: TASK-H007 (audit log), TASK-H009
 
 Reconstruct what happened/when/which strategies/whether trading stayed gated from `agent_tool_audit` + `core_events` + notifications.
 
 ### TASK-H022 — Postmortem generator
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
+- **Commit**: `16dd5fe`
 - **Tier**: 3
 - **Prerequisite**: TASK-H021
 
@@ -1938,13 +1940,15 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H018 | Draft-only operation framework (typed action proposals) | e8d20d7 | 2026-06-20 |
 | TASK-H019 | Founder approval queue (in-app) | e8d20d7 | 2026-06-20 |
 | TASK-H020 | Safe (non-trading) mutation framework (approved-only executors) | e8d20d7 | 2026-06-20 |
+| TASK-H021 | Automated incident timeline | 16dd5fe | 2026-06-20 |
+| TASK-H022 | Postmortem generator | 16dd5fe | 2026-06-20 |
 | TASK-H024 | Proactive behavioral alerts (drought / drawdown / loss-streak) | 1243636 | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 25 Hermes (H001–H025)*
-*Open: 2 · Blocked: 0 · In progress: 0 · Done: 77 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H023/H024/H025)*
-*Hermes open: H021, H022*
+*Open: 0 · Blocked: 0 · In progress: 0 · Done: 79 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H021/H022/H023/H024/H025)*
+*Hermes open: none*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
-*Recommended next build order: Stage 8.*
+*Recommended next build order: none (Hermes backlog complete).*
