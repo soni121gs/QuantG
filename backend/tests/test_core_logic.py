@@ -189,7 +189,7 @@ def test_exit_reason_stop_loss_long():
     pos = {
         "position_side": "LONG",
         "average_buy_price": 100.0,
-        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0},
+        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0, "trailing_sl_enabled": False},
     }
     reason = exit_reason(pos, ltp=93.0)   # dropped below 5% SL
     assert reason == "stop-loss"
@@ -199,7 +199,7 @@ def test_exit_reason_take_profit_long():
     pos = {
         "position_side": "LONG",
         "average_buy_price": 100.0,
-        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0},
+        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0, "trailing_sl_enabled": False},
     }
     reason = exit_reason(pos, ltp=111.0)   # above 10% TP
     assert reason == "take-profit"
@@ -209,10 +209,45 @@ def test_exit_reason_none_when_within_range():
     pos = {
         "position_side": "LONG",
         "average_buy_price": 100.0,
-        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0},
+        "tp_sl_tsl_config": {"stop_loss_pct": 5.0, "take_profit_pct": 10.0, "trailing_sl_enabled": False},
     }
     reason = exit_reason(pos, ltp=102.0)   # within range — no exit
     assert reason is None
+
+
+def test_trailing_sl_disables_take_profit():
+    # If trailing SL is enabled, take_profit should be None/suppressed, meaning no fixed TP exit
+    pos = {
+        "position_side": "LONG",
+        "average_buy_price": 100.0,
+        "tp_sl_tsl_config": {
+            "stop_loss_pct": 5.0,
+            "take_profit_pct": 10.0,
+            "trailing_sl_enabled": True,
+            "trail_trigger_pct": 5.0,
+            "trail_step_pct": 2.0,
+        },
+    }
+    # Price is 111.0. If fixed TP was active, it would exit as 'take-profit'.
+    # Since trailing is enabled, it should NOT exit as 'take-profit' immediately.
+    reason = exit_reason(pos, ltp=111.0)
+    assert reason is None
+
+    # Now price drops to 108.0 (below trailing_sl 108.78)
+    pos_active = {
+        "position_side": "LONG",
+        "average_buy_price": 100.0,
+        "tp_sl_tsl_config": {
+            "stop_loss_pct": 5.0,
+            "take_profit_pct": 10.0,
+            "trailing_sl_enabled": True,
+            "trail_trigger_pct": 5.0,
+            "trail_step_pct": 2.0,
+            "trailing_sl": 108.78, # already active
+        },
+    }
+    reason2 = exit_reason(pos_active, ltp=108.0)
+    assert reason2 == "trailing-sl"
 
 
 # ---------------------------------------------------------------------------

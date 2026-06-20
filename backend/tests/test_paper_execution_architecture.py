@@ -311,7 +311,7 @@ async def test_default_strategy_seed_is_additive_without_legacy_delete():
 
 @pytest.mark.anyio
 async def test_recover_paper_contract_resolution_halts_is_user_and_paper_scoped():
-    import server
+    from routes.profile import _recover_paper_contract_resolution_halts_for_user
 
     mock_db = MagicMock()
     mock_db.users.find_one = AsyncMock(return_value={"id": "user-123", "paper_mode": True})
@@ -323,8 +323,10 @@ async def test_recover_paper_contract_resolution_halts_is_user_and_paper_scoped(
     mock_db.strategies.find.return_value = mock_find
     mock_db.strategies.update_many = AsyncMock(return_value=MagicMock(matched_count=1, modified_count=1))
 
-    with patch("server.db", mock_db):
-        result = await server._recover_paper_contract_resolution_halts_for_user("user-123")
+    with patch("routes.profile.db", mock_db), \
+         patch("server.get_user_settings", new_callable=AsyncMock, return_value={"paper_mode": True}), \
+         patch("server._sync_strategy_modes_to_profile", new_callable=AsyncMock, return_value=1):
+        result = await _recover_paper_contract_resolution_halts_for_user("user-123")
 
     query = mock_db.strategies.update_many.await_args.args[0]
     update = mock_db.strategies.update_many.await_args.args[1]

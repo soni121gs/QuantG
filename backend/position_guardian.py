@@ -175,6 +175,64 @@ async def _guard_one(
         db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn
     )
 
+    # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
+    is_option = (
+        str(pos.get("asset_type") or "").lower() == "option"
+        or pos.get("exchange") in ("NFO", "BFO")
+        or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))
+        or str(pos.get("option_type") or "").upper() in ("CE", "PE")
+    )
+    if is_option and pos.get("status") in ("OPEN", "FILLED"):
+        last_fresh_str = pos.get("last_fresh_tick_at") or pos.get("entry_time") or pos.get("created_at")
+        last_fresh_dt = parse_iso_dt(last_fresh_str)
+        if last_fresh_dt:
+            elapsed = (datetime.now(timezone.utc) - last_fresh_dt).total_seconds()
+            from config import MONITOR
+            stale_threshold = getattr(MONITOR, "OPTION_LTP_STALE_EXIT_SECONDS", 300)
+            if elapsed > stale_threshold:
+                if ltp_source in ("ENTRY_PRICE_FALLBACK", "NONE") or ltp is None:
+                    fresh_ltp = None
+                    ikey = pos.get("instrument_key") or pos.get("instrument_token")
+                    from ltp_resolver import should_trust_ws_cache
+                    if ikey and should_trust_ws_cache(ikey):
+                        try:
+                            fresh_ltp = await quote_ltp_fn(user_id, ikey)
+                        except Exception as e:
+                            logger.warning("stale check REST fallback failed for %s in guardian: %s", symbol, e)
+                    if fresh_ltp is not None:
+                        ltp = float(fresh_ltp)
+                        ltp_source = "REST_FALLBACK"
+                        # Update DB to prevent immediate re-evaluation on next guardian poll
+                        await db.strategy_positions.update_one(
+                            {"id": pos_id, "user_id": user_id},
+                            {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat(),
+                                      "last_ltp": ltp,
+                                      "ltp_source": ltp_source,
+                                      "updated_at": datetime.now(timezone.utc).isoformat()}}
+                        )
+                    else:
+                        logger.warning(
+                            "position_guardian: OPEN option %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
+                            pos_id, user_id, symbol, elapsed,
+                        )
+                        await close_fn(user_id, sid, reason="stale-quote-protective-exit")
+                        return
+
+    # If the quote is fresh and not fallback, update last_fresh_tick_at in DB
+    # but rate-limited to avoid DB write spam (at most once every 10 seconds).
+    if ltp is not None and ltp_source not in ("ENTRY_PRICE_FALLBACK", "NONE"):
+        last_fresh_str = pos.get("last_fresh_tick_at")
+        should_update = True
+        if last_fresh_str:
+            last_fresh_dt = parse_iso_dt(last_fresh_str)
+            if last_fresh_dt and (datetime.now(timezone.utc) - last_fresh_dt).total_seconds() < 10:
+                should_update = False
+        if should_update:
+            await db.strategy_positions.update_one(
+                {"id": pos_id, "user_id": user_id},
+                {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat()}}
+            )
+
     # ── 5. Deadline exceeded with no LTP → force MARKET exit ─────────────────
     deadline_str = pos.get("deadline_at")
     deadline_passed = False

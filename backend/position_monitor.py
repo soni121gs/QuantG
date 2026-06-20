@@ -411,6 +411,42 @@ async def _process_one_position(
     # ── Fetch LTP with full fallback chain ────────────────────────────────────
     ltp, ltp_source = await _resolve_ltp(db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn)
 
+    # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
+    is_option = (
+        str(pos.get("asset_type") or "").lower() == "option"
+        or pos.get("exchange") in ("NFO", "BFO")
+        or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))
+        or str(pos.get("option_type") or "").upper() in ("CE", "PE")
+    )
+    now_str = datetime.now(timezone.utc).isoformat()
+    if is_option and pos.get("status") in ("OPEN", "FILLED"):
+        last_fresh_str = pos.get("last_fresh_tick_at") or pos.get("entry_time") or pos.get("created_at")
+        last_fresh_dt = parse_iso_dt(last_fresh_str)
+        if last_fresh_dt:
+            elapsed = (datetime.now(timezone.utc) - last_fresh_dt).total_seconds()
+            from config import MONITOR
+            stale_threshold = getattr(MONITOR, "OPTION_LTP_STALE_EXIT_SECONDS", 300)
+            if elapsed > stale_threshold:
+                if ltp_source in ("ENTRY_PRICE_FALLBACK", "NONE") or ltp is None:
+                    fresh_ltp = None
+                    ikey = pos.get("instrument_key") or pos.get("instrument_token")
+                    from ltp_resolver import should_trust_ws_cache
+                    if ikey and should_trust_ws_cache(ikey):
+                        try:
+                            fresh_ltp = await quote_ltp_fn(user_id, ikey)
+                        except Exception as e:
+                            logger.warning("stale check REST fallback failed for %s: %s", symbol, e)
+                    if fresh_ltp is not None:
+                        ltp = float(fresh_ltp)
+                        ltp_source = "REST_FALLBACK"
+                    else:
+                        logger.warning(
+                            "position_monitor: OPEN option %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
+                            pos["id"], user_id, symbol, elapsed,
+                        )
+                        await close_fn(user_id, sid, reason="stale-quote-protective-exit", ltp_source=ltp_source)
+                        return
+
     if ltp is None:
         # All sources exhausted — mark unavailable and skip exit check
         await db.strategy_positions.update_one(
@@ -447,17 +483,21 @@ async def _process_one_position(
         risk["trailing_sl"] = risk_prices["trailing_sl"]
 
     now_str = datetime.now(timezone.utc).isoformat()
+    set_fields = {
+        "last_ltp":       ltp,
+        "ltp_source":     ltp_source,
+        "unrealized_pnl": pnl,
+        "last_tick_at":   now_str,
+        "updated_at":     now_str,
+        "tp_sl_tsl_config": risk,
+    }
+    if ltp_source not in ("ENTRY_PRICE_FALLBACK", "NONE"):
+        set_fields["last_fresh_tick_at"] = now_str
+
     await db.strategy_positions.update_one(
         {"id": pos["id"], "user_id": user_id},
         {
-            "$set": {
-                "last_ltp":       ltp,
-                "ltp_source":     ltp_source,
-                "unrealized_pnl": pnl,
-                "last_tick_at":   now_str,
-                "updated_at":     now_str,
-                "tp_sl_tsl_config": risk,
-            },
+            "$set": set_fields,
             "$unset": {"last_error": ""},
         },
     )

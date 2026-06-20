@@ -1,7 +1,11 @@
+import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from order_lifecycle import (
     ORDER_FILLED,
@@ -305,6 +309,12 @@ async def test_execution_report_reducer_filled_settles_reservation():
         "average_buy_price": 0,
         "tp_sl_tsl_config": {},
     }])
+    fake_db.strategies = _FakeCollection(rows=[{
+        "id": "s1",
+        "visual_config": {"risk": {"stop_loss_pct": 10.0}}
+    }])
+    fake_db.processed_fill_ids = _FakeCollection()
+    fake_db.positions = _FakeCollection()
     fake_db.risk_reservations = _FakeCollection()
     fake_db.trade_fills = _FakeCollection()
     fake_db.trades = _FakeCollection()
@@ -330,7 +340,7 @@ async def test_execution_report_reducer_filled_settles_reservation():
     assert order_update["filled_qty"] == 10
     assert fake_db.trade_fills.inserted[0]["mode"] == "live"
     assert fake_db.trade_fills.inserted[0]["order_id"] == "o1"
-    assert fake_db.trade_fills.inserted[0]["fill_price"] == 55.5
+    assert fake_db.trade_fills.inserted[0]["price"] == 55.5
     fake_db.risk_reservations.update_many.assert_awaited()
     reservation_update = fake_db.risk_reservations.update_many.await_args.args[1]["$set"]
     assert reservation_update["status"] == "SETTLED"

@@ -700,8 +700,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             "user_id": s["user_id"],
                             "strategy_id": s["id"],
                             "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
-                        },
-                        {"_id": 0, "id": 1, "instrument_key": 1, "trading_symbol": 1},
+                        }
                     )
                     if active_position:
                         inst_key = str(active_position.get("instrument_key") or active_position.get("trading_symbol") or "").upper()
@@ -714,13 +713,32 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             is_exit = False
 
                         if is_exit and close_strategy_fn:
-                            await close_strategy_fn(s["user_id"], s["id"], reason=f"strategy-{action.lower()}-signal")
+                            # Before honoring a signal-driven exit, check if stop-loss was already hit
+                            ltp = active_position.get("last_ltp")
+                            try:
+                                ltp_val = float(ltp) if ltp is not None else None
+                            except (TypeError, ValueError):
+                                ltp_val = None
+
+                            exit_tag = f"strategy-{action.lower()}-signal"
+                            if ltp_val is not None:
+                                from core.position_lifecycle import position_risk_prices
+                                prices = position_risk_prices(active_position, ltp=ltp_val)
+                                stop_loss = prices.get("stop_loss")
+                                trailing_sl = prices.get("trailing_sl")
+                                side = str(active_position.get("position_side") or "LONG").upper()
+                                if stop_loss is not None:
+                                    is_triggered = (ltp_val >= stop_loss) if side == "SHORT" else (ltp_val <= stop_loss)
+                                    if is_triggered:
+                                        exit_tag = "trailing-sl" if trailing_sl else "stop-loss"
+
+                            await close_strategy_fn(s["user_id"], s["id"], reason=exit_tag)
                             await db.strategies.update_one(
                                 {"id": s["id"]},
                                 {"$set": {**eval_set,
                                           "last_signal_action": action,
                                           "last_signals_count": signals_count,
-                                          "last_filter_reason": f"{action} signal used as option-buying exit."},
+                                          "last_filter_reason": f"{action} signal used as option-buying exit (exited as {exit_tag})."},
                                  "$inc": inc_set},
                             )
                         else:

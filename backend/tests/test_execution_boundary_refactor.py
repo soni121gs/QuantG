@@ -218,12 +218,12 @@ def test_sl_tp_prices_come_from_strategy_config_not_global_defaults():
     no_config = server._position_risk_prices({
         "average_buy_price": 100.0,
         "position_side": "LONG",
-        "tp_sl_tsl_config": {},
+        "tp_sl_tsl_config": {"trailing_sl_enabled": False},
     })
     configured = server._position_risk_prices({
         "average_buy_price": 100.0,
         "position_side": "LONG",
-        "tp_sl_tsl_config": {"stop_loss_pct": 5, "take_profit_pct": 12},
+        "tp_sl_tsl_config": {"stop_loss_pct": 5, "take_profit_pct": 12, "trailing_sl_enabled": False},
     })
 
     assert no_config["stop_loss"] is None

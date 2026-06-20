@@ -45,8 +45,8 @@ SCALPER_MIN_TRADES_DAY = 5     # a scalper must be allowed at least 5 trades/day
 DEFAULT_STRATEGY_RISK: Dict[str, Any] = {
     "stop_loss_pct": 8.0,
     "take_profit_pct": 12.0,
-    "trail_trigger_pct": 5.5,
-    "trail_step_pct": 3.0,
+    "trail_trigger_pct": 7.0,
+    "trail_step_pct": 4.0,
     "cooldown_minutes": 15,
     "max_trades_day": 3,
     "daily_loss_limit": 750.0,
@@ -177,8 +177,8 @@ def adaptive_risk_percentages(entry: float, risk: Dict[str, Any]) -> Dict[str, O
     stop = _clamp(stop * premium_factor, min_stop, max_stop)
     r_multiple = _clamp(float(risk.get("target_r_multiple") or min_r), min_r, max_r)
     target = _clamp(max(target, stop * r_multiple), stop * min_r, stop * max_r)
-    trigger = _clamp(min(trigger, stop * 0.75), 2.5, max(3.0, stop * 0.95))
-    step = _clamp(min(step, stop * 0.45), 1.5, max(2.0, stop * 0.65))
+    trigger = _clamp(min(trigger, stop * 0.95), 2.5, max(3.0, stop * 1.5))
+    step = _clamp(min(step, stop * 0.60), 1.5, max(2.0, stop * 0.95))
     return {"stop": stop, "target": target, "trigger": trigger, "step": step}
 
 
@@ -234,13 +234,15 @@ def position_risk_prices(position: Dict[str, Any], ltp: Optional[float] = None) 
     side = str(position.get("position_side") or "LONG").upper()
     stop_price = risk.get("stoploss_price") or risk.get("stop_loss")
     target_price = risk.get("target_price") or risk.get("take_profit")
+    if risk.get("trailing_sl_enabled"):
+        target_price = None
     dynamic = adaptive_risk_percentages(entry, risk)
     if stop_price in (None, ""):
         stop_pct = risk.get("stop_loss_pct")
         if stop_pct is not None:
             stop_pct = float(stop_pct)
             stop_price = entry * (1 - stop_pct / 100) if side != "SHORT" else entry * (1 + stop_pct / 100)
-    if target_price in (None, ""):
+    if target_price in (None, "") and not risk.get("trailing_sl_enabled"):
         target_pct = risk.get("take_profit_pct")
         if target_pct is not None:
             target_pct = float(target_pct)

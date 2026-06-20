@@ -97,8 +97,8 @@ class STRATEGY_DEFAULTS:
     TARGET_PCT = 2.0             # % take-profit
     STOPLOSS_PCT = 1.0           # % stop-loss
     TRAILING_SL_ENABLED = False
-    TRAIL_TRIGGER_PCT = 1.5
-    TRAIL_STEP_PCT = 0.5
+    TRAIL_TRIGGER_PCT = 3.5
+    TRAIL_STEP_PCT = 2.0
     EXIT_MODE = "tp_sl"
     TARGET_R_MULTIPLE = 2.0
 
@@ -106,6 +106,7 @@ class STRATEGY_DEFAULTS:
 class MONITOR:
     # Position monitor polling intervals (seconds)
     POLL_IN_HOURS = int(os.getenv("POSITION_MONITOR_POLL_SECONDS", "5"))
+    OPTION_LTP_STALE_EXIT_SECONDS = int(os.getenv("OPTION_LTP_STALE_EXIT_SECONDS", "300"))
     POLL_OUT_HOURS = 30
 
     # Signal manager lock TTL (seconds)
