@@ -7,6 +7,136 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
+## PRIORITY 0 — Profitability Campaign (2026-06-20)
+
+**Source**: Full strategy audit 2026-06-20. Evidence: `trade_fills` realized P&L = −₹40,802 over 106 closes;
+clean epoch (post 06-18) = 9 trades / −₹2,644 / 11% win. Diagnosis: entry logic is NOT the main problem —
+**exit logic + buy-only theta structure are**. Losses average 3–5× wins (avgWin +239 vs avgLoss −688 to −1,066),
+so even a 40% win rate bleeds.
+
+Key evidence (exit-reason breakdown of realized P&L):
+| total P&L | trades | avg | exit reason |
+|---|---|---|---|
+| −19,959 | 29 | −688 | stop-loss (works ~7%) |
+| −18,117 | 17 | −1,066 | **strategy-sell-signal (bypasses SL)** |
+| −6,814 | 21 | −324 | time-exit-22m |
+| −4,908 | 1 | −4,908 | **eod-square-off (SL never fired → staleness gap)** |
+| +4,771 | 20 | +239 | take-profit (winners cut tiny) |
+| +4,706 | 8 | +588 | trailing-sl (best exit we have) |
+
+Sequencing: P-EX01 + P-EX02 are real bugs (≈ −₹23k of the −₹40k) and come first. P-EX03/04 are strategy-design
+changes. P-EX05 is cleanup. After all five: run a clean paper-forward window → rank → keep only the 2–3 survivors.
+
+---
+
+### TASK-P-EX01 — Make the hard stop-loss an un-bypassable floor
+- **Status**: `[ ]` open
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: None
+- **Targets**: the −₹18,117 `strategy-sell-signal` bucket (avg −1,066)
+
+**Problem**: A strategy's own python_code can emit an opposite SELL that closes the whole position at market,
+regardless of the configured 7% SL. The momentum indicator flips only *after* the option premium has already
+collapsed, so `strategy-sell-signal` exits realize ~1.5× the loss the SL would have. The SL check in
+`backend/core/position_lifecycle.py:284` (`exit_reason`) is correct and fires at a clean ~7% (−688 avg) — but
+the signal-driven exit path in the strategy/signal evaluation loop never consults it.
+
+**Files to touch**: `backend/core/position_lifecycle.py`, `backend/signal_manager.py` / `backend/strategy_runner.py`
+(whichever path turns a strategy SELL into a position close), `backend/position_guardian.py`.
+
+**Exact steps**:
+1. Trace where `strategy-sell-signal` exits originate (grep `strategy-sell-signal`).
+2. Before honoring a signal-driven exit on a LONG option, compute the SL price via `position_risk_prices`.
+   If current LTP is already at/through the SL, tag the exit `stop-loss` (not the signal) — behaviour is the same
+   but ensures the SL is the *first* gate and the guardian's 5s loop catches it before the slower signal path.
+3. Confirm the guardian (5s) evaluates `exit_reason()` SL independently every tick, so no position can sit past
+   its SL waiting for a signal flip.
+
+**Acceptance**: no future CLOSE fill has `exit_reason="strategy-sell-signal"` with a loss larger than the
+configured `stop_loss_pct` would allow.
+
+---
+
+### TASK-P-EX02 — Close the staleness → EOD square-off gap
+- **Status**: `[ ]` open
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: None
+- **Targets**: the −₹4,908 single `eod-square-off` trade + staleness-driven losers
+
+**Problem**: One position bled to the 15:20 square-off for −4,908 because its SL never evaluated intraday — the
+monitor had no fresh LTP (WS_CACHE / feed-staleness bug class, see memory `project_trade_drought`,
+`project_equity_ws_cache_phantom`). When LTP is stale the SL check is silently skipped and the position rides
+to EOD.
+
+**Files to touch**: `backend/position_monitor.py`, `backend/position_guardian.py`, `backend/core/quote_service.py`.
+
+**Exact steps**:
+1. Identify where the monitor/guardian skips an open position when LTP is stale/unavailable.
+2. Add a protective rule: if an OPEN option has no fresh LTP for > N seconds (config-gated), attempt REST/last-good
+   fallback; if still none, force a protective exit rather than letting it ride to square-off.
+3. Ensure this does NOT reintroduce the WS_CACHE phantom-price bug (no pricing exits off unsubscribed NSE_EQ keys).
+
+**Acceptance**: no CLOSE fill reaches `eod-square-off` with a loss exceeding the configured SL because of a
+stale-quote skip.
+
+---
+
+### TASK-P-EX03 — Stop capping winners (let trailing run)
+- **Status**: `[ ]` open
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~1.5 hours
+- **Prerequisite**: P-EX01
+- **Targets**: realized TP only captures +239 vs configured 11%; trailing-sl is the best exit (+588)
+
+**Problem**: Winners are cut tiny by a fixed take-profit while losers run. Trailing-sl already outperforms fixed
+TP. The R:R is inverted in *realized* terms even though configured TP > SL.
+
+**Exact steps**:
+1. Widen `trail_trigger_pct` / loosen `trail_step_pct` so winners trail instead of hitting the fixed TP early.
+2. Consider replacing the fixed `take_profit_pct` with a trailing-only exit above the trigger.
+3. Backtest/paper-forward the change before promoting; do not raise risk per trade (keep 1-lot cap).
+
+**Acceptance**: realized avg-win rises toward configured target; trailing-sl share of profitable exits increases.
+
+---
+
+### TASK-P-EX04 — Rebalance from ATM-buying toward theta-positive spreads
+- **Status**: `[ ]` open
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: None
+- **Targets**: every large loser is an ATM option *buyer* (BANKNIFTY avgL −2,234, NIFTY −1,586)
+
+**Problem**: ATM buying = max theta, needs a big directional move every trade; bleeds on range/quiet days. The 4
+credit-spread (theta-positive) strategies are all paused — i.e. the book has no edge on exactly the days buyers
+can't win. See memory `project_credit_spread_diversification`.
+
+**Exact steps**:
+1. Re-activate the 4 paused credit-spread strategies (NIFTY Theta, NIFTY Range, BANKNIFTY Theta, SENSEX Theta)
+   for paper, verify they fire on biased candles (beat the staleness guard).
+2. Convert 1–2 worst ATM buyers to `debit_spread` (structure support exists, TASK-048) to cut theta cost.
+3. Track buyers vs sellers P&L split over the clean window.
+
+**Acceptance**: live(paper) set is a balanced mix of buyers + theta-positive sellers; spreads firing verified.
+
+---
+
+### TASK-P-EX05 — Dedupe strategies (DONE — accounts) + canonicalize
+- **Status**: `[~]` accounts purged 2026-06-20 (76 dup drafts deleted with 4 non-owner users)
+- **Tier**: 1 (Haiku) for remaining cleanup
+- **Session size**: ~30 min
+- **Prerequisite**: None
+
+**Done**: deleted 4 non-owner accounts (drgaurav, agent, test+1, test+2) and their 76 duplicate draft strategies,
+1 paper_wallet, 14 ai_chats. Only owner `soni121.gs@gmail.com` remains (24 strategies, all real).
+
+**Remaining**: within the owner's 24, collapse any leftover duplicate/draft definitions so the strategy list is a
+clean canonical set ready for ranking. Then run the clean paper-forward window → rank → keep 2–3 survivors.
+
+---
+
 ## PRIORITY 1 — Bug Fixes (Ship These First)
 
 ---
@@ -1946,8 +2076,8 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 
 ---
 
-*Last updated: 2026-06-20*
-*Total tasks: 53 + 25 Hermes (H001–H025)*
+*Last updated: 2026-06-20 (added PRIORITY 0 Profitability Campaign: P-EX01–P-EX05; deleted 4 non-owner accounts + 76 dup strategies)*
+*Total tasks: 53 + 25 Hermes (H001–H025) + 5 Profitability (P-EX01–P-EX05)*
 *Open: 0 · Blocked: 0 · In progress: 0 · Done: 79 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H021/H022/H023/H024/H025)*
 *Hermes open: none*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
