@@ -44,9 +44,14 @@ To make sure Hermes only alerts *your* account, get your Telegram Chat ID:
    ```
 5. Replace the template values with your actual Telegram credentials:
    ```ini
-   TELEGRAM_BOT_TOKEN=1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ
-   TELEGRAM_CHAT_ID=987654321
-   ```
+    TELEGRAM_BOT_TOKEN=1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ
+    TELEGRAM_CHAT_ID=987654321
+
+    # Proactive behavioral alerts configuration (planned thresholds)
+    DROUGHT_CUTOFF_IST=12:00
+    DRAWDOWN_ALERT_FRAC=0.8
+    LOSS_STREAK_N=3
+    ```
 6. Keep the defaults for `QUANTG_BACKEND_URL` and `QUANTG_OPERATOR_EMAIL`/`QUANTG_OPERATOR_PASSWORD` (which login to the local container via `http://backend:8000/api`).
 7. Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
@@ -77,3 +82,24 @@ You should see log output similar to:
 ```
 And you should receive a message in Telegram:
 `🚀 Hermes Sidecar Agent initialized and connected successfully on the VPS.`
+
+---
+
+## Two-Way Telegram Interface & Security
+
+Hermes operates as a **two-way operator bridge**. Beyond the scheduled and triggered push notifications, you can query Hermes directly from Telegram.
+
+### Security and Authorization
+
+To protect your trading platform from unauthorized access, Hermes enforces a strict **Single-User Authorization Policy**:
+- Hermes only processes messages originating from the configured `TELEGRAM_CHAT_ID`.
+- Incoming messages from any other chat ID are **silently ignored** and logged.
+- The command bridge is **strictly read-only**; no write or mutation calls can ever be triggered from Telegram.
+- Any reply proposing a system action (`PROPOSED_ACTION`) is stripped of its JSON metadata, and Hermes appends a notice: `(Action proposed: Please approve in-app)`. All system updates must still be approved inside the QuantG web UI.
+
+### Supported Commands
+
+You can send the following commands to the bot from your authorized Telegram chat:
+1. **/status** - Calls the backend feed status and live readiness checks, returning a consolidated system readiness report.
+2. **/pnl** - Fetches the daily report for today (IST) and formats it like the standard End-of-Day report.
+3. **/why [question]** or **[free text]** - Queries the Hermes AI analyst agent. For example, `/why why didn't Nifty trade today?` or just `how are my positions doing?`. The reply will include a `sources` footer listing the read-only tools used to answer your question.

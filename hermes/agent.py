@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import re
 from datetime import datetime, timezone, timedelta
 import requests
 from dotenv import load_dotenv
@@ -237,10 +238,247 @@ def run_eod_report(date_str):
 
     send_telegram_alert(msg)
 
+
+def init_telegram_offset():
+    if not TELEGRAM_BOT_TOKEN:
+        return 0
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        r = requests.get(url, params={"offset": -1, "timeout": 0}, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            results = data.get("result", [])
+            if results:
+                return results[-1]["update_id"] + 1
+    except Exception as e:
+        print(f"[TELEGRAM] Error initializing offset: {e}")
+    return 0
+
+
+def get_status_command_reply():
+    now_utc = datetime.now(timezone.utc)
+    ist = now_utc + timedelta(hours=5, minutes=30)
+    today_str = ist.strftime("%Y-%m-%d")
+    
+    # 1. Fetch feed status
+    feed_detail = ""
+    r_feed = client.request("GET", "/core/feed-status")
+    if r_feed and r_feed.status_code == 200:
+        f_data = r_feed.json()
+        f_conn = f_data.get("connected", False)
+        f_tok = f_data.get("token_valid", False)
+        f_stall = f_data.get("feed_stalled", False)
+        f_stall_reason = f_data.get("feed_stalled_reason") or "No reason provided"
+        
+        feed_icon = "✅" if (f_conn and f_tok and not f_stall) else "❌"
+        feed_st = "CONNECTED" if f_conn else "DISCONNECTED"
+        if not f_tok:
+            feed_st += " (TOKEN EXPIRED)"
+        if f_stall:
+            feed_st += f" (STALLED: {f_stall_reason})"
+        feed_detail = f"{feed_icon} Upstox Feed: *{feed_st}*\n"
+    else:
+        feed_detail = "❌ Upstox Feed: *UNKNOWN (API Error)*\n"
+
+    # 2. Fetch live readiness
+    r_readiness = client.request("GET", "/trading/live-readiness")
+    if not r_readiness or r_readiness.status_code != 200:
+        return "🛑 *QuantG Hermes Alert*:\nFailed to compile status report. API request error."
+
+    data = r_readiness.json()
+    checks = data.get("checks", [])
+    mode = data.get("current_mode", "PAPER")
+    overall_ok = data.get("ok", False)
+
+    status_emoji = "✅ READY" if overall_ok else "🛑 BLOCKED"
+    
+    checks_list = []
+    for c in checks:
+        if c.get("id") == "market_hours":
+            continue
+        icon = "✅" if c.get("ok") else "❌"
+        label = c.get("label", c.get("id"))
+        detail = c.get("detail")
+        hint = c.get("hint")
+        
+        line = f"{icon} {label}"
+        if not c.get("ok") and hint:
+            line += f"\n   _(Hint: {hint})_"
+        elif detail:
+            line += f"\n   _({detail})_"
+        checks_list.append(line)
+
+    checks_formatted = "\n".join(checks_list)
+    msg = f"🔔 *Hermes Status Report*\n" \
+          f"Date: `{today_str}`\n" \
+          f"Mode: `{mode}`\n\n" \
+          f"{feed_detail}" \
+          f"*System Status checks*:\n" \
+          f"{checks_formatted}\n\n" \
+          f"Overall Status: *{status_emoji}*"
+    return msg
+
+
+def get_pnl_command_reply():
+    now_utc = datetime.now(timezone.utc)
+    ist = now_utc + timedelta(hours=5, minutes=30)
+    today_str = ist.strftime("%Y-%m-%d")
+    
+    r = client.request("GET", f"/reports/daily/{today_str}")
+    if not r or r.status_code != 200:
+        return f"⚠️ *QuantG Hermes Alert*:\nDaily P&L report for `{today_str}` could not be retrieved. API request error."
+        
+    report_doc = r.json()
+    
+    realized = report_doc.get("total_realized_pnl", 0.0)
+    unrealized = report_doc.get("total_unrealized_pnl", 0.0)
+    total_pnl = realized + unrealized
+    trades = report_doc.get("trades_taken", 0)
+    fired = report_doc.get("signals_fired", 0)
+    filtered = report_doc.get("signals_filtered", 0)
+    regime = report_doc.get("market_regime") or "UNKNOWN"
+    best = report_doc.get("best_strategy")
+    worst = report_doc.get("worst_strategy")
+    strategies = report_doc.get("strategies", [])
+
+    pnl_sign = "+" if total_pnl >= 0 else ""
+    pnl_formatted = f"{pnl_sign}Rs {total_pnl:,.2f}"
+
+    regime_desc = str(regime).upper()
+
+    strat_list = []
+    for s in strategies:
+        s_pnl = s.get("realized_pnl") or s.get("pnl") or 0.0
+        s_sign = "+" if s_pnl >= 0 else ""
+        strat_list.append(f"• *{s.get('name')}*: {s_sign}Rs {s_pnl:,.2f} ({s.get('trade_count', 0)} trades)")
+    
+    strategies_formatted = "\n".join(strat_list) if strat_list else "No active strategy trades."
+
+    msg = f"📊 *Hermes Daily P&L Report*\n" \
+          f"Date: `{today_str}`\n" \
+          f"Regime: *{regime_desc}*\n\n" \
+          f"*Performance Summary*:\n" \
+          f"• *Total Daily P&L*: `{pnl_formatted}`\n" \
+          f"  _(Realized: Rs {realized:,.2f} / Unrealized: Rs {unrealized:,.2f})_\n" \
+          f"• *Trades Filled*: `{trades}`\n" \
+          f"• *Signals Processed*: `{fired}` _(Filtered/Blocked: {filtered})_\n\n" \
+          f"*Per-Strategy Performance*:\n" \
+          f"{strategies_formatted}"
+
+    if best and best.get("pnl", 0) > 0:
+        msg += f"\n\n⭐ *Best*: {best.get('name')} (+Rs {best.get('pnl'):,.2f})"
+    if worst and worst.get("pnl", 0) < 0:
+        msg += f"\n\n⚠️ *Worst*: {worst.get('name')} (Rs {worst.get('pnl'):,.2f})"
+
+    return msg
+
+
+def get_agent_chat_reply(text):
+    payload = {
+        "session_id": "telegram_session",
+        "message": text
+    }
+    r = client.request("POST", "/agent/chat", json=payload)
+    if not r or r.status_code != 200:
+        return "🛑 *QuantG Hermes Alert*:\nFailed to get reply from Hermes agent. API request error."
+        
+    data = r.json()
+    reply_text = data.get("content", "").strip()
+    
+    # Strip any PROPOSED_ACTION: {...} text if it is still present in reply_text
+    reply_text = re.sub(r"PROPOSED_ACTION:\s*(\{.*\})", "", reply_text, flags=re.DOTALL).strip()
+    
+    # Check if a proposed action was returned (either in text or in pending_action)
+    has_action = data.get("pending_action") is not None
+    if has_action:
+        reply_text += "\n\n*(Action proposed: Please approve in-app)*"
+        
+    # Append the sources footer
+    tools = data.get("tools_used", [])
+    tool_names = [t.get("name") for t in tools if t.get("status") == "ok"]
+    # De-duplicate names keeping order
+    seen = set()
+    unique_tool_names = []
+    for name in tool_names:
+        if name not in seen:
+            seen.add(name)
+            unique_tool_names.append(name)
+            
+    sources_str = ", ".join(unique_tool_names) if unique_tool_names else "none"
+    reply_text += f"\nsources: {sources_str}"
+    
+    return reply_text
+
+
+def handle_incoming_message(message):
+    text = message.get("text", "").strip()
+    if not text:
+        return
+    
+    print(f"[TELEGRAM] Processing message from authorized chat: {text}")
+    
+    try:
+        if text.startswith("/status"):
+            reply = get_status_command_reply()
+            send_telegram_alert(reply)
+        elif text.startswith("/pnl"):
+            reply = get_pnl_command_reply()
+            send_telegram_alert(reply)
+        else:
+            # Handle "/why" prefix by stripping it, or general text
+            query_text = text
+            if text.startswith("/why"):
+                query_text = text[4:].strip()
+                if not query_text:
+                    send_telegram_alert("❓ *Hermes Analyst*:\nPlease provide a question after /why.")
+                    return
+            reply = get_agent_chat_reply(query_text)
+            send_telegram_alert(reply)
+    except Exception as e:
+        print(f"[TELEGRAM] Error handling message '{text}': {e}")
+        send_telegram_alert(f"⚠️ *QuantG Hermes Alert*:\nError processing command: `{e}`")
+
+
+def poll_telegram_updates(offset):
+    if not TELEGRAM_BOT_TOKEN:
+        return offset
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    params = {"offset": offset, "timeout": 2}
+    try:
+        r = requests.get(url, params=params, timeout=7)
+        if r.status_code == 200:
+            data = r.json()
+            updates = data.get("result", [])
+            for update in updates:
+                offset = max(offset, update["update_id"] + 1)
+                
+                message = update.get("message")
+                if not message:
+                    continue
+                
+                chat = message.get("chat")
+                if not chat:
+                    continue
+                
+                chat_id = str(chat.get("id"))
+                if not TELEGRAM_CHAT_ID or chat_id.strip() != str(TELEGRAM_CHAT_ID).strip():
+                    print(f"[TELEGRAM] Ignored message from unauthorized chat_id: {chat_id}")
+                    continue
+                
+                handle_incoming_message(message)
+    except Exception as e:
+        print(f"[TELEGRAM] Error polling updates: {e}")
+    return offset
+
+
 def run_loop():
     last_watchdog_run = 0
     last_premarket_date = None
     last_eod_date = None
+    telegram_offset = 0
+    
+    # Initialize telegram offset on startup to ignore past messages
+    telegram_offset = init_telegram_offset()
     
     print("[AGENT] Hermes Sidecar Agent started successfully.")
     
@@ -271,11 +509,15 @@ def run_loop():
                 if ist.hour == 15 and ist.minute == 35 and last_eod_date != today_str:
                     run_eod_report(today_str)
                     last_eod_date = today_str
-                    
+            
+            # 4. Poll Telegram Updates
+            telegram_offset = poll_telegram_updates(telegram_offset)
+            
         except Exception as e:
             print(f"[AGENT] Exception in main loop: {e}")
             
-        time.sleep(10)
+        time.sleep(1)
+
 
 if __name__ == "__main__":
     run_loop()
