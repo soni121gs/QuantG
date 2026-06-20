@@ -141,6 +141,182 @@ clean canonical set ready for ranking. Then run the clean paper-forward window �
 
 ---
 
+## PRIORITY 0 — Equity Phase Campaign (2026-06-21)
+
+**Founder decision 2026-06-21**: start the equity phase. Footprint target = the **full equity universe**
+(the 12 NSE_EQ names mapped in `server.py:7316` — RELIANCE, TCS, HDFCBANK, INFY, ICICIBANK, SBIN, AXISBANK,
+BHARTIARTL, KOTAKBANK, ITC, LT, MARUTI). Token will be connected on a trading day.
+
+**Why now**: the only A/B-graded strategies in the whole book are equity (LT, AXISBANK) — see memory
+`project_options_backtester_analytics`. They were paused twice (06-16, 06-18) not for lack of edge but for a
+**phantom-price bug**: equity NSE_EQ keys are never subscribed to the Upstox V3 feed, so the WS cache returns
+garbage LTP and exits book impossible fills (TCS exit ₹2189 vs real ~₹4200, etc.). Both fixes to date were
+**band-aids** (`_EQ| → skip WS cache → fall back to a ±0.5% mock price`), not a real feed. See memory
+`project_equity_ws_cache_phantom_2026_06_16` and `project_equity_exit_005_bug`.
+
+**One-sentence thesis**: equity has the best measured edge but no real price feed — build the feed first, then
+everything downstream (exec, sizing, backtest, re-enable) becomes safe.
+
+Sequencing is strict dependency order: EQ-01 (feed) gates EQ-02/EQ-03; EQ-04 needs a connected token;
+EQ-05 must land before EQ-06 (don't re-enable until we know why they auto-reactivated). After all six:
+run a clean paper-forward window on the equity universe → rank → promote survivors alongside the options book.
+
+Note: equity is officially roadmap Phase 3 (CLAUDE.md §10) — this campaign is the founder pulling it forward
+because the edge evidence is already here. Live equity stays `CORE_ENGINE_LIVE_ENABLED=false` gated like options.
+
+---
+
+### TASK-EQ-01 — Real NSE_EQ price feed (kill the phantom at the source)
+- **Status**: `[ ]` not started
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~3 hours
+- **Prerequisite**: None (pure wiring — buildable with no token, zero trading risk)
+- **Targets**: the entire equity phantom-loss bug class (06-16 −₹2,730, 06-18 inverted exits)
+
+**Problem**: equity instrument keys (`NSE_EQ|<ISIN>`) are never subscribed to the Upstox V3 WS feed. The
+startup re-subscribe (`_subscribe_open_position_tokens_on_startup`, `server.py:16381`) and the entry-time
+`start_market_data_ws` calls cover options/index keys but equity positions ride on a stale/garbage WS cache.
+The two existing fixes (`_EQ| → skip WS cache`) only stop reading the garbage — they fall through to a **mock**
+SYMBOL_LTP (±0.5% of base), which is still not a real price.
+
+**Files to touch**: `backend/brokers/upstox_gateway.py` (confirm V3 sub accepts NSE_EQ), `backend/server.py`
+(entry subscribe path + `_subscribe_open_position_tokens_on_startup`), `backend/position_monitor.py` +
+`backend/position_guardian.py` (remove the `_EQ|` WS-cache band-aid ONCE the real feed is confirmed live).
+
+**Exact steps**:
+1. Verify the V3 feed accepts `NSE_EQ|<ISIN>` subscriptions and returns real LTP (capture a live frame, same
+   way `project_trade_drought` proved the index feed — watch for the `mode="full"` vs `"full_d5"` trap).
+2. Subscribe equity tokens at position entry AND on startup re-subscribe, exactly like option tokens.
+3. Only after a real equity LTP is flowing, REMOVE the `is_cash_equity = "_EQ|" in ikey` skip in BOTH
+   `position_monitor._resolve_ltp` and `position_guardian._resolve_ltp_guardian` so equity prices off the
+   real feed, not the mock. Keep a staleness guard (no fresh tick → protective exit, never a garbage price).
+4. Confirm paper-fill entry pricing (`_get_paper_ltp`) and exit pricing both resolve to the real equity LTP.
+
+**Acceptance**: a live equity position shows `ltp_source=WS_CACHE` (or a new real source) with a price within
+~±2% of the true market price; no exit fills at impossible prices; capture proof during a trading session.
+
+---
+
+### TASK-EQ-02 — Equity execution sanity (fills, exits, exit-reasons)
+- **Status**: `[ ]` not started
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2.5 hours
+- **Prerequisite**: EQ-01
+- **Targets**: the inverted-exit / 2–4s churn pattern (06-18) once it's on real prices
+
+**Problem**: with garbage prices gone, the equity exit path still needs an end-to-end audit — the ₹0.05
+nominal-fill bug (`project_equity_exit_005_bug`) lived in the equity exit branch, and exit-reason inversion
+(`take-profit` exits losing) came from deciding on one price and filling at another.
+
+**Files to touch**: `backend/server.py` (equity SL/TP exit branch ~`server.py:7176`), `backend/core/paper_broker.py`,
+`backend/position_lifecycle.py`.
+
+**Exact steps**:
+1. Trace the equity exit branch; confirm the price used to DECIDE the exit == the price used to FILL it.
+2. Remove the ₹0.05 nominal fallback for equity exits; require a real LTP (or protective-exit, per EQ-01 §3).
+3. Verify exit reasons are consistent (a `take-profit` exit must be a gain at fill, a `stop-loss` a loss).
+
+**Acceptance**: no equity CLOSE fill with an inverted reason; no ₹0.05 / nominal-price fills; entry vs exit
+price sources match.
+
+---
+
+### TASK-EQ-03 — Equity sizing model (shares, not option lots)
+- **Status**: `[ ]` not started
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: EQ-01
+- **Targets**: correct notional/qty for cash equity
+
+**Problem**: cash equity trades in **shares** (lot size 1), not option lots. The risk manager, position sizing,
+and Greeks/delta proxy are all options-shaped. `market_domains.get_lot_size` already returns 1 for equity (good),
+but the sizing + risk path must size by ₹ notional / capital-% on shares, and the delta/Greeks cap must be
+bypassed for cash equity (no Greeks on a stock).
+
+**Files to touch**: `backend/core/risk_manager.py`, `backend/core/market_domains.py` (confirm equity domain),
+position-sizing in `backend/server.py` / `backend/strategy_runner.py`.
+
+**Exact steps**:
+1. Confirm equity resolves to lot_size=1 everywhere (no hardcoded option lot leakage — already fixed in the
+   equity backtester `backtest_engine.py`).
+2. Size equity positions by capital-% / ₹ notional, not by lots.
+3. Bypass the Greeks/delta exposure cap for cash equity (it's an options-only check).
+
+**Acceptance**: an equity entry sizes to a sensible share quantity for the configured capital allocation;
+no Greeks/delta rejection on a cash-equity order.
+
+---
+
+### TASK-EQ-04 — Backtest + rank the full equity universe (real OHLC)
+- **Status**: `[ ]` not started
+- **Tier**: 1–2
+- **Session size**: ~1.5 hours
+- **Prerequisite**: token connected on a trading day (EQ-01 not strictly required — backtest is read-only)
+- **Targets**: rank all 12 equity names before any go live
+
+**Problem**: the equity backtester is now wired to real Upstox OHLC (`POST /core/backtests/run` equity path,
+commit 3905ae2) but has never been run on the full universe with a live token. LT/AXISBANK graded A/B on the
+old `trade_fills` sample; the rest are unranked.
+
+**Files to touch**: none (operational) — run the endpoint per strategy, record results.
+
+**Exact steps**:
+1. With the token connected, run `POST /core/backtests/run` for each of the 12 equity strategies.
+2. Record win-rate / Sharpe / Sortino / max-DD / data_quality per name.
+3. Produce a ranking; flag which names clear a Sharpe > 1 bar on a real sample.
+
+**Acceptance**: a ranked table of all 12 equity strategies on real OHLC, with the A/B graders confirmed and
+the negative-edge names identified.
+
+---
+
+### TASK-EQ-05 — Find the paused→live auto-reactivation root cause
+- **Status**: `[ ]` not started
+- **Tier**: 2
+- **Session size**: ~1.5 hours
+- **Prerequisite**: None
+- **Targets**: the unexplained reactivation that un-paused equity twice (06-16 → live by 06-18)
+
+**Problem**: equity strategies were set `status=paused` on 06-16 but were `live` again by 06-18, root cause
+NOT confirmed. The enable-all op (`server.py:8083`) flips anything NOT in `["live","paused"]` to live — the
+assumption "paused is safe from enable-all" may be false, or a daily scheduler / manual action re-enabled them.
+This MUST be understood before re-enabling the full universe, or they'll bleed again on any feed gap.
+
+**Files to touch**: `backend/server.py` (enable-all `~:8083`), `backend/routes/ops.py`, the daily scheduler
+loop, `backend/strategy_runner.py`.
+
+**Exact steps**:
+1. Audit every code path that can set a strategy `status=live` and check whether it respects `paused`.
+2. Reproduce/confirm which path reactivated the equity set.
+3. Ensure `paused` (with `pause_reason`) is durably honored — an explicitly-paused strategy must not be
+   auto-reactivated by enable-all or the scheduler.
+
+**Acceptance**: a paused strategy stays paused across an enable-all and a daily-scheduler cycle; the
+reactivation vector is identified and closed.
+
+---
+
+### TASK-EQ-06 — Re-enable the full equity universe (paper) + paper-forward rank
+- **Status**: `[ ]` not started — FOUNDER GATE
+- **Tier**: 1
+- **Session size**: ~1 hour + monitoring
+- **Prerequisite**: EQ-01, EQ-02, EQ-03, EQ-04, EQ-05 all green
+- **Targets**: full equity universe trading paper on a real feed
+
+**Problem**: only safe once the feed is real (EQ-01), exec is sound (EQ-02), sizing is correct (EQ-03), the
+universe is ranked (EQ-04), and they can't silently auto-reactivate (EQ-05).
+
+**Exact steps**:
+1. Re-enable all 12 equity strategies to `status=live` (paper) with the token connected.
+2. Run a clean paper-forward window; track equity vs options P&L split (use `strategies.last_filter_reason`
+   + `trade_fills` like the Profitability Campaign).
+3. Rank on real fills → keep the survivors live alongside the options book.
+
+**Acceptance**: full equity universe trading paper on the real feed with no phantom fills; a clean
+paper-forward P&L sample accumulating for ranking.
+
+---
+
 ## PRIORITY 1 — Bug Fixes (Ship These First)
 
 ---
@@ -2080,8 +2256,8 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 
 ---
 
-*Last updated: 2026-06-20 (Profitability Campaign: P-EX01/02/03 code shipped 6d598b3 pending live validation; P-EX04 rebalance done — 4 credit + 2 debit spreads armed for Monday; P-EX05 accounts purged)*
-*Total tasks: 53 + 25 Hermes (H001–H025) + 5 Profitability (P-EX01–P-EX05)*
+*Last updated: 2026-06-21 (Equity Phase Campaign added: EQ-01..EQ-06, full-universe footprint, founder decision 06-21. Backtester already fenced equity↔options + wired to real OHLC: commits 5ec2b53, 3905ae2.)*
+*Total tasks: 53 + 25 Hermes (H001–H025) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
 *Open: 0 · Blocked: 0 · In progress: 0 · Done: 79 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H021/H022/H023/H024/H025)*
 *Hermes open: none*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
