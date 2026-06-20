@@ -127,3 +127,184 @@ def test_run_eod_report(mock_send):
     assert "Rs 5,000.00" in msg_text
     assert "SMA Scalper" in msg_text
     assert "EMA Fader" in msg_text
+
+
+@patch("agent.send_telegram_alert")
+@patch("agent.is_market_hours", return_value=True)
+@patch("agent.should_rate_limit", return_value=False)
+def test_run_behavior_watch_drawdown_breach(mock_rate_limit, mock_market_hours, mock_send):
+    mock_client = MagicMock()
+    
+    # Mock /portfolio response
+    mock_port_resp = MagicMock()
+    mock_port_resp.status_code = 200
+    mock_port_resp.json.return_value = {
+        "total_pnl": -4200.0,
+        "live_strategies": 1
+    }
+    
+    # Mock /profile response
+    mock_prof_resp = MagicMock()
+    mock_prof_resp.status_code = 200
+    mock_prof_resp.json.return_value = {
+        "max_daily_loss": 5000.0
+    }
+    
+    # Mock /core/orders response
+    mock_ord_resp = MagicMock()
+    mock_ord_resp.status_code = 200
+    mock_ord_resp.json.return_value = []
+    
+    def mock_request(method, path, **kwargs):
+        if path == "/portfolio":
+            return mock_port_resp
+        elif path == "/profile":
+            return mock_prof_resp
+        elif path == "/core/orders":
+            return mock_ord_resp
+        return None
+        
+    mock_client.request.side_effect = mock_request
+
+    with patch("agent.client", mock_client):
+        agent.run_behavior_watch()
+        
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "Risk Alert: Drawdown Breach" in msg
+    assert "Rs -4,200.00" in msg
+    assert "Rs 5,000.00" in msg
+
+
+@patch("agent.send_telegram_alert")
+@patch("agent.is_market_hours", return_value=True)
+@patch("agent.should_rate_limit", return_value=False)
+def test_run_behavior_watch_trade_drought(mock_rate_limit, mock_market_hours, mock_send):
+    mock_client = MagicMock()
+    
+    # Mock /portfolio response
+    mock_port_resp = MagicMock()
+    mock_port_resp.status_code = 200
+    mock_port_resp.json.return_value = {
+        "total_pnl": 0.0,
+        "live_strategies": 2
+    }
+    
+    # Mock /profile response
+    mock_prof_resp = MagicMock()
+    mock_prof_resp.status_code = 200
+    mock_prof_resp.json.return_value = {
+        "max_daily_loss": 5000.0
+    }
+    
+    # Mock /core/orders response (no filled orders today)
+    mock_ord_resp = MagicMock()
+    mock_ord_resp.status_code = 200
+    mock_ord_resp.json.return_value = []
+    
+    # Mock /core/feed-status response
+    mock_feed_resp = MagicMock()
+    mock_feed_resp.status_code = 200
+    mock_feed_resp.json.return_value = {
+        "connected": True,
+        "token_valid": True,
+        "feed_stalled": False
+    }
+    
+    def mock_request(method, path, **kwargs):
+        if path == "/portfolio":
+            return mock_port_resp
+        elif path == "/profile":
+            return mock_prof_resp
+        elif path == "/core/orders":
+            return mock_ord_resp
+        elif path == "/core/feed-status":
+            return mock_feed_resp
+        return None
+        
+    mock_client.request.side_effect = mock_request
+
+    # Mock monday 13:00 IST = Monday 07:30 UTC (after 12:00 IST cutoff)
+    with patch("agent.client", mock_client), patch("agent.datetime") as mock_dt:
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        mock_dt.now.return_value = datetime(2026, 6, 22, 7, 30, tzinfo=timezone.utc)
+        agent.run_behavior_watch()
+        
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "Operator Alert: Trade Drought" in msg
+    assert "0 fills" in msg
+    assert "HEALTHY" in msg
+    assert "2" in msg
+
+
+@patch("agent.send_telegram_alert")
+@patch("agent.is_market_hours", return_value=True)
+@patch("agent.should_rate_limit", return_value=False)
+def test_run_behavior_watch_loss_streak(mock_rate_limit, mock_market_hours, mock_send):
+    mock_client = MagicMock()
+    
+    # Mock /portfolio response
+    mock_port_resp = MagicMock()
+    mock_port_resp.status_code = 200
+    mock_port_resp.json.return_value = {
+        "total_pnl": -500.0,
+        "live_strategies": 2
+    }
+    
+    # Mock /profile response
+    mock_prof_resp = MagicMock()
+    mock_prof_resp.status_code = 200
+    mock_prof_resp.json.return_value = {
+        "max_daily_loss": 5000.0
+    }
+    
+    # Mock /core/orders response (3 filled exit orders with negative pnl today)
+    mock_ord_resp = MagicMock()
+    mock_ord_resp.status_code = 200
+    mock_ord_resp.json.return_value = [
+        {
+            "strategy_id": "SMA_Scalper",
+            "status": "FILLED",
+            "idempotency_key": "exit:pos1",
+            "net_pnl": -100.0,
+            "created_at": "2026-06-22T10:00:00Z"
+        },
+        {
+            "strategy_id": "SMA_Scalper",
+            "status": "FILLED",
+            "idempotency_key": "exit:pos2",
+            "realized_pnl": -200.0,
+            "created_at": "2026-06-22T10:05:00Z"
+        },
+        {
+            "strategy_id": "SMA_Scalper",
+            "status": "FILLED",
+            "idempotency_key": "exit:pos3",
+            "net_pnl": -150.0,
+            "created_at": "2026-06-22T10:10:00Z"
+        }
+    ]
+    
+    def mock_request(method, path, **kwargs):
+        if path == "/portfolio":
+            return mock_port_resp
+        elif path == "/profile":
+            return mock_prof_resp
+        elif path == "/core/orders":
+            return mock_ord_resp
+        return None
+        
+    mock_client.request.side_effect = mock_request
+
+    # Mock monday 11:00 UTC = Monday 16:30 IST
+    with patch("agent.client", mock_client), patch("agent.datetime") as mock_dt:
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        mock_dt.now.return_value = datetime(2026, 6, 22, 11, 0, tzinfo=timezone.utc)
+        agent.run_behavior_watch()
+        
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "Risk Alert: Loss Streak Breach" in msg
+    assert "SMA_Scalper" in msg
+    assert "3 consecutive losses" in msg

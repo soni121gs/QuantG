@@ -20,6 +20,11 @@ QUANTG_OPERATOR_PASSWORD = os.getenv("QUANTG_OPERATOR_PASSWORD", "demo1234")
 last_alert_sent = {}
 ALERT_COOLDOWN_SECONDS = 3600
 
+# Behavioral alerts configurations (TASK-H024)
+DROUGHT_CUTOFF_IST = os.getenv("DROUGHT_CUTOFF_IST", "12:00")
+DRAWDOWN_ALERT_FRAC = float(os.getenv("DRAWDOWN_ALERT_FRAC", "0.8"))
+LOSS_STREAK_N = int(os.getenv("LOSS_STREAK_N", "3"))
+
 class QuantGClient:
     def __init__(self, base_url, email, password):
         self.base_url = base_url.rstrip('/')
@@ -134,6 +139,133 @@ def run_watchdog():
     elif feed_stalled:
         if not should_rate_limit("feed_stalled"):
             send_telegram_alert(f"⚠️ *QuantG Hermes Watchdog*:\nUpstox live price feed is *STALLED*.\nReason: `{feed_stalled_reason}`\nAuto-trading blocks active signals.")
+
+def run_behavior_watch():
+    """Checks for trading anomalies: trade drought, drawdown warnings, and loss streaks during market hours."""
+    if not is_market_hours():
+        return
+
+    print("[BEHAVIOR_WATCH] Checking trading behavior and risk drawdowns...")
+    
+    # 1. Fetch current portfolio stats for P&L and live strategies
+    r_portfolio = client.request("GET", "/portfolio")
+    if not r_portfolio or r_portfolio.status_code != 200:
+        print("[BEHAVIOR_WATCH] Failed to retrieve portfolio from backend.")
+        return
+    port_data = r_portfolio.json()
+    total_pnl = float(port_data.get("total_pnl") or 0.0)
+    live_strategies_count = int(port_data.get("live_strategies") or 0)
+
+    # 2. Fetch current profile settings for daily loss limit
+    r_profile = client.request("GET", "/profile")
+    if not r_profile or r_profile.status_code != 200:
+        print("[BEHAVIOR_WATCH] Failed to retrieve user settings from backend.")
+        return
+    profile_data = r_profile.json()
+    max_daily_loss = float(profile_data.get("max_daily_loss") or 0.0)
+
+    # 3. Fetch today's orders
+    r_orders = client.request("GET", "/core/orders")
+    if not r_orders or r_orders.status_code != 200:
+        print("[BEHAVIOR_WATCH] Failed to retrieve orders from backend.")
+        return
+    orders = r_orders.json()
+
+    now_utc = datetime.now(timezone.utc)
+    ist = now_utc + timedelta(hours=5, minutes=30)
+    ist_today_start = ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = ist_today_start - timedelta(hours=5, minutes=30)
+
+    # Filter for orders filled today
+    todays_filled_orders = []
+    for o in orders:
+        created_at_str = o.get("created_at")
+        if not created_at_str:
+            continue
+        try:
+            dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+            if dt >= today_start_utc and o.get("status") in {"FILLED", "COMPLETE", "CLOSED"}:
+                todays_filled_orders.append(o)
+        except Exception:
+            pass
+
+    fills_count = len(todays_filled_orders)
+
+    # A. Drawdown Alert
+    if max_daily_loss > 0.0 and total_pnl <= -abs(max_daily_loss * DRAWDOWN_ALERT_FRAC):
+        if not should_rate_limit("drawdown_warning"):
+            pnl_formatted = f"Rs {total_pnl:,.2f}"
+            limit_formatted = f"Rs {max_daily_loss:,.2f}"
+            send_telegram_alert(
+                f"⚠️ *QuantG Risk Alert: Drawdown Breach*\n"
+                f"Today's total P&L is `{pnl_formatted}` which has breached "
+                f"*{DRAWDOWN_ALERT_FRAC * 100:.0f}%* of your daily loss limit (`{limit_formatted}`)."
+            )
+
+    # B. No-Trade Drought Alert
+    try:
+        cutoff_hour, cutoff_min = map(int, DROUGHT_CUTOFF_IST.split(":"))
+        cutoff_minutes = cutoff_hour * 60 + cutoff_min
+        ist_minutes = ist.hour * 60 + ist.minute
+        if ist_minutes >= cutoff_minutes and fills_count == 0 and live_strategies_count >= 1:
+            # Check if feed is healthy
+            r_feed = client.request("GET", "/core/feed-status")
+            if r_feed and r_feed.status_code == 200:
+                feed_data = r_feed.json()
+                feed_ok = (
+                    feed_data.get("connected", False)
+                    and feed_data.get("token_valid", False)
+                    and not feed_data.get("feed_stalled", False)
+                )
+                if feed_ok:
+                    if not should_rate_limit("trade_drought"):
+                        send_telegram_alert(
+                            f"🔔 *QuantG Operator Alert: Trade Drought*\n"
+                            f"There are *0 fills* recorded by `{DROUGHT_CUTOFF_IST}` IST today. "
+                            f"The price feed is *HEALTHY* and *{live_strategies_count}* strategies are armed. "
+                            f"Verify strategy logic and signal generation."
+                        )
+    except Exception as e:
+        print(f"[BEHAVIOR_WATCH] Error evaluating no-trade drought: {e}")
+
+    # C. Loss Streak Alert (Consecutive SL/Losing trades per strategy today)
+    strategy_orders = {}
+    for o in todays_filled_orders:
+        strat_id = o.get("strategy_id")
+        if not strat_id:
+            continue
+        strategy_orders.setdefault(strat_id, []).append(o)
+
+    for strat_id, s_orders in strategy_orders.items():
+        s_orders.sort(key=lambda x: x.get("created_at") or "")
+        
+        current_streak = 0
+        for o in reversed(s_orders):
+            is_exit = False
+            pnl = 0.0
+            if o.get("idempotency_key") and "exit" in str(o.get("idempotency_key")).lower():
+                is_exit = True
+                pnl = float(o.get("net_pnl") or o.get("realized_pnl") or 0.0)
+            elif o.get("net_pnl") is not None and float(o.get("net_pnl")) != 0.0:
+                is_exit = True
+                pnl = float(o.get("net_pnl"))
+            elif o.get("realized_pnl") is not None and float(o.get("realized_pnl")) != 0.0:
+                is_exit = True
+                pnl = float(o.get("realized_pnl"))
+                
+            if is_exit:
+                if pnl < 0.0:
+                    current_streak += 1
+                else:
+                    break
+                    
+        if current_streak >= LOSS_STREAK_N:
+            alert_key = f"loss_streak_{strat_id}"
+            if not should_rate_limit(alert_key):
+                send_telegram_alert(
+                    f"⚠️ *QuantG Risk Alert: Loss Streak Breach*\n"
+                    f"Strategy *{strat_id}* has hit *{current_streak} consecutive losses* today."
+                )
 
 def run_premarket_check(date_str):
     """Generates the pre-market readiness report."""
@@ -555,6 +687,7 @@ def run_loop():
             now_ts = time.time()
             if now_ts - last_watchdog_run >= 180:
                 run_watchdog()
+                run_behavior_watch()
                 last_watchdog_run = now_ts
                 
             # 2. Pre-market Check: 09:00 IST on weekdays
