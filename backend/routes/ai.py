@@ -70,6 +70,8 @@ READ_ONLY_AGENT_TOOLS = [
     "get_recent_alerts",
     "search_wiki",
     "get_backtest_summary",
+    "get_core_events",
+    "get_agent_tool_audit",
 ]
 
 
@@ -337,6 +339,18 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 {"_id": 0, "user_id": 0, "dedupe_key": 0}
             ).sort("created_at", -1).to_list(20)
             source = "db.notifications"
+        elif name == "get_core_events":
+            data = await db.core_events.find(
+                {"user_id": user["id"]},
+                {"_id": 0}
+            ).sort("created_at", -1).to_list(100)
+            source = "db.core_events"
+        elif name == "get_agent_tool_audit":
+            data = await db.agent_tool_audit.find(
+                {"user_id": user["id"]},
+                {"_id": 0}
+            ).sort("created_at", -1).to_list(100)
+            source = "db.agent_tool_audit"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -522,7 +536,7 @@ You are equipped with a skill pack of standard playbooks. When the user asks que
 - `quantg-eod-report`: Playbook to analyze session close metrics. Reconcile daily realized/unrealized P&L, best/worst strategies, and trades count using `get_daily_report` and `get_risk_snapshot`.
 - `quantg-backtest-review`: Playbook to review backtests. Analyze expectancies, win-rates, profit factors, and drawdowns via `get_backtest_summary`. You can guide the user to run customized backtests by providing the strategy ID and date range (YYYY-MM-DD) in their query.
 - `quantg-vps-deploy-check`: Playbook to check the system's operational deployment. Synthesize `get_live_readiness`, `get_logs_errors`, and `get_recent_alerts`.
-- `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, and `get_today_fills`.
+- `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, `get_today_fills`, `get_core_events`, and `get_agent_tool_audit`. Trace order/fill logs, system warnings, and error timelines. Compile a clean markdown table of events leading up to the outage, outlining root cause and recovery details. Guide the user to draft a postmortem using the `draft_incident_report` action.
 
 STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2 & STAGE 7):
 - Although you cannot directly execute database changes, you can PROPOSE professional system actions for user approval.

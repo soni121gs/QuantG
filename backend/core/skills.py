@@ -70,10 +70,11 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
     "quantg-incident-postmortem": {
         "name": "quantg-incident-postmortem",
         "description": "Reconstructs timeline and evidence logs for trading outages.",
-        "composes_tools": ["get_recent_alerts", "get_logs_errors", "get_today_fills"],
+        "composes_tools": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit"],
         "playbook": (
             "Trace order/fill logs, system warnings, and error timelines. Compile a clean markdown table of events "
-            "leading up to the outage, outlining root cause and recovery details."
+            "leading up to the outage, outlining root cause and recovery details. When compiling a postmortem report, "
+            "propose drafting the report to the wiki via a draft_incident_report action."
         )
     }
 }

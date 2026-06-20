@@ -351,3 +351,101 @@ async def test_approve_task_entry_action():
     assert mock_open.call_args[0][1] == "a"
 
 
+@pytest.mark.anyio
+async def test_run_agent_tool_get_core_events():
+    """Verify that get_core_events queries db.core_events and returns events list."""
+    mock_db = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(return_value=[
+        {"event_id": "evt-123", "event_type": "STRATEGY_SIGNAL", "created_at": "2026-06-20T10:00:00Z"}
+    ])
+    mock_db.core_events.find.return_value = mock_cursor
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+
+    user = {"id": "test-trader-1"}
+
+    with patch("routes.ai.db", mock_db):
+        res = await _run_agent_tool("get_core_events", user)
+
+    assert res["status"] == "ok"
+    assert res["source"] == "db.core_events"
+    assert len(res["data"]) == 1
+    assert res["data"][0]["event_id"] == "evt-123"
+    mock_db.core_events.find.assert_called_once_with(
+        {"user_id": "test-trader-1"},
+        {"_id": 0}
+    )
+
+
+@pytest.mark.anyio
+async def test_run_agent_tool_get_agent_tool_audit():
+    """Verify that get_agent_tool_audit queries db.agent_tool_audit and returns audit records."""
+    mock_db = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(return_value=[
+        {"id": "audit-456", "name": "get_orders", "status": "ok", "created_at": "2026-06-20T10:05:00Z"}
+    ])
+    mock_db.agent_tool_audit.find.return_value = mock_cursor
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+
+    user = {"id": "test-trader-1"}
+
+    with patch("routes.ai.db", mock_db):
+        res = await _run_agent_tool("get_agent_tool_audit", user)
+
+    assert res["status"] == "ok"
+    assert res["source"] == "db.agent_tool_audit"
+    assert len(res["data"]) == 1
+    assert res["data"][0]["id"] == "audit-456"
+    mock_db.agent_tool_audit.find.assert_called_once_with(
+        {"user_id": "test-trader-1"},
+        {"_id": 0}
+    )
+
+
+@pytest.mark.anyio
+async def test_approve_incident_report_action():
+    """Verify that approving a draft_incident_report writes to disk, db.wiki_docs, and updates action status."""
+    from routes.ai import approve_agent_action, ActionDecisionReq
+    mock_db = MagicMock()
+    mock_db.pending_actions.find_one = AsyncMock(return_value={
+        "action_id": "act-789",
+        "action_type": "draft_incident_report",
+        "user_id": "test-trader-1",
+        "status": "pending",
+        "params": {
+            "title": "Outage feed stall",
+            "body_markdown": "Details about the stall"
+        }
+    })
+    mock_db.wiki_docs.insert_one = AsyncMock()
+    mock_db.pending_actions.update_one = AsyncMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    user = {"id": "test-trader-1"}
+    req = ActionDecisionReq(action_id="act-789")
+    
+    mock_save_disk = MagicMock()
+    mock_rebuild_links = AsyncMock()
+    
+    with patch("routes.ai.db", mock_db), \
+         patch("routes.wiki.save_wiki_to_disk", mock_save_disk), \
+         patch("routes.wiki.rebuild_all_backlinks", mock_rebuild_links):
+        res = await approve_agent_action(req, user=user)
+        
+    assert res["status"] == "approved"
+    mock_db.wiki_docs.insert_one.assert_called_once()
+    doc_inserted = mock_db.wiki_docs.insert_one.call_args[0][0]
+    assert doc_inserted["title"] == "Incident: Outage feed stall"
+    assert doc_inserted["topic"] == "Incidents"
+    
+    current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expected_filename = f"{current_date}-outage-feed-stall"
+    mock_save_disk.assert_called_once_with(
+        expected_filename, "Incidents", "Details about the stall", ["incident", "hermes-draft"], {"source": "hermes-agent", "incident_title": "Outage feed stall"}
+    )
+    mock_rebuild_links.assert_called_once_with("test-trader-1")
+
+
