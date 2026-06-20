@@ -17,12 +17,9 @@ logger = logging.getLogger("quantg.ltp_resolver")
 
 def should_trust_ws_cache(instrument_key: str | None) -> bool:
     """
-    Returns False if instrument_key is None or contains "_EQ|".
-    Otherwise returns True.
+    Returns True if instrument_key is not None.
     """
-    if not instrument_key:
-        return False
-    return "_EQ|" not in str(instrument_key)
+    return bool(instrument_key)
 
 
 async def resolve_position_ltp(

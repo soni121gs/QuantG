@@ -442,12 +442,12 @@ async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_c
     from server import option_ledger, _sync_option_ledger_strategy
 
     # Only re-enable strategies that were previously PAUSED — never touch draft or custom-stopped ones
-    rows = await db.strategies.find({"user_id": user["id"], "status": "paused"}, {"_id": 0}).to_list(500)
+    rows = await db.strategies.find({"user_id": user["id"], "status": "paused", "manual_paused": {"$ne": True}}, {"_id": 0}).to_list(500)
     for row in rows:
         _sync_option_ledger_strategy(row)
         option_ledger.set_kill_switch(False, strategy_id=row["id"])
     res = await db.strategies.update_many(
-        {"user_id": user["id"], "status": "paused"},
+        {"user_id": user["id"], "status": "paused", "manual_paused": {"$ne": True}},
         {"$set": {"status": "live"}, "$unset": {"last_error": "", "last_signal_validation": ""}},
     )
     return {"ok": True, "enabled_strategies": res.modified_count, "ledger_enabled": len(rows)}

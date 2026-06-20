@@ -415,14 +415,15 @@ async def _process_one_position(
     ltp, ltp_source = await _resolve_ltp(db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn)
 
     # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
-    is_option = (
-        str(pos.get("asset_type") or "").lower() == "option"
-        or pos.get("exchange") in ("NFO", "BFO")
+    is_option_or_equity = (
+        str(pos.get("asset_type") or "").lower() in ("option", "equity")
+        or pos.get("exchange") in ("NFO", "BFO", "NSE", "BSE")
         or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))
         or str(pos.get("option_type") or "").upper() in ("CE", "PE")
+        or "_EQ|" in str(pos.get("instrument_key") or "")
     )
     now_str = datetime.now(timezone.utc).isoformat()
-    if is_option and pos.get("status") in ("OPEN", "FILLED"):
+    if is_option_or_equity and pos.get("status") in ("OPEN", "FILLED"):
         last_fresh_str = pos.get("last_fresh_tick_at") or pos.get("entry_time") or pos.get("created_at")
         last_fresh_dt = parse_iso_dt(last_fresh_str)
         if last_fresh_dt:
@@ -444,10 +445,10 @@ async def _process_one_position(
                         ltp_source = "REST_FALLBACK"
                     else:
                         logger.warning(
-                            "position_monitor: OPEN option %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
+                            "position_monitor: OPEN position %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
                             pos["id"], user_id, symbol, elapsed,
                         )
-                        await close_fn(user_id, sid, reason="stale-quote-protective-exit", ltp_source=ltp_source)
+                        await close_fn(user_id, sid, reason="stale-quote-protective-exit", ltp_source=ltp_source, decided_ltp=ltp)
                         return
 
     if ltp is None:
@@ -531,4 +532,4 @@ async def _process_one_position(
             "Monitor exit strategy=%s symbol=%s reason=%s ltp=%.2f source=%s",
             sid, symbol, reason, ltp, ltp_source,
         )
-        await close_fn(user_id, sid, reason=reason, ltp_source=ltp_source)
+        await close_fn(user_id, sid, reason=reason, ltp_source=ltp_source, decided_ltp=ltp)

@@ -168,6 +168,18 @@ class RiskManager:
         max_lot = int(float(visual_risk.get("max_lot") or 0) or 0)
         ceiling_lots = max_lot if max_lot > 0 else max(1, configured_lots)
 
+        # TASK-EQ-03: Size equity positions by capital-% / ₹ notional on shares
+        is_equity = (lot_size == 1) or (domain.name in (DomainType.NSE_EQ, DomainType.BSE_EQ))
+        if is_equity:
+            allocated_capital = float(
+                visual_risk.get("required_capital")
+                or visual_options.get("required_capital")
+                or 15000.0
+            )
+            allocated_capital = min(allocated_capital, free_margin)
+            requested_qty = max(1, int(allocated_capital / price))
+            ceiling_lots = requested_qty
+
         margin_requirement_ratio = 1.0
         if domain.name in (DomainType.NSE_EQ, DomainType.BSE_EQ):
             resolved_product = str(product or "MIS").upper().strip()

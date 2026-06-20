@@ -536,8 +536,13 @@ class PortfolioLedger:
         if is_full_close:
             update_fields["status"] = "CLOSED"
             update_fields["closed_at"] = now_str
-            update_fields["exit_reason"] = fill.get("exit_reason") or pos.get("exit_reason") or "exit-fill"
-            update_fields["unrealized_pnl"] = 0.0
+            resolved_reason = fill.get("exit_reason") or pos.get("exit_reason") or "exit-fill"
+            if net_pnl < 0 and resolved_reason == "take-profit":
+                resolved_reason = "stop-loss"
+            elif net_pnl > 0 and resolved_reason == "stop-loss":
+                resolved_reason = "take-profit"
+            update_fields["exit_reason"] = resolved_reason
+            fill["exit_reason"] = resolved_reason
             update_fields["unrealized_pnl"] = 0.0
 
         await self.db.strategy_positions.update_one(

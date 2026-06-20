@@ -615,6 +615,12 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
         "broker": "upstox",
         "mode": strategy_mode,
     }
+    if new_status == "paused":
+        update_fields["manual_paused"] = True
+        update_fields["schedule_paused"] = False
+    else:
+        update_fields["manual_paused"] = False
+        update_fields["schedule_paused"] = False
     if strategy_mode == "paper":
         update_fields.update({
             "quarantined": False,

@@ -6862,7 +6862,7 @@ async def _collect_strategy_orders(user_id: str, sid: str) -> List[Dict[str, Any
     }, {"_id": 0}).to_list(1000)
 
 
-async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit", ltp_source: str = "") -> Dict[str, Any]:
+async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-exit", ltp_source: str = "", decided_ltp: float | None = None) -> Dict[str, Any]:
     from core.market_domains import resolve_domain_by_underlying
     results = []
     positions = await db.strategy_positions.find({
@@ -7045,20 +7045,32 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
             place_kwargs["symbol"] = sym
             place_kwargs["qty"] = qty_net
             place_kwargs["exchange"] = pos.get("exchange") or "NSE"
-            # FIX 5: equity exits must carry a price too. Without one, _place_order_core
-            # falls through to the ₹0.05 nominal MARKET fill (cash equity has no
-            # subscribed WS token, and the simulated fallback is skipped while the
-            # market is open) — booking a phantom loss equal to the full notional.
-            # Mirror the option branch: prefer last_ltp, else average_buy_price.
-            raw_ltp = pos.get("last_ltp")
-            try:
-                last_known_ltp = float(raw_ltp) if raw_ltp and raw_ltp != "LTP_UNAVAILABLE" else 0.0
-            except (TypeError, ValueError):
-                last_known_ltp = 0.0
-            if last_known_ltp <= 0:
-                last_known_ltp = float(pos.get("average_buy_price") or pos.get("average_price") or 0)
-            if last_known_ltp > 0:
-                place_kwargs["price"] = last_known_ltp
+            # Prefer decided_ltp if passed, otherwise last_ltp, otherwise REST quote, otherwise raise.
+            resolved_exit_price = decided_ltp
+            if resolved_exit_price is None or resolved_exit_price <= 0:
+                raw_ltp = pos.get("last_ltp")
+                try:
+                    resolved_exit_price = float(raw_ltp) if raw_ltp and raw_ltp != "LTP_UNAVAILABLE" else 0.0
+                except (TypeError, ValueError):
+                    resolved_exit_price = 0.0
+            
+            if resolved_exit_price is None or resolved_exit_price <= 0:
+                # Live REST quote lookup fallback
+                try:
+                    ikey = pos.get("instrument_key") or pos.get("instrument_token")
+                    if ikey:
+                        quote_val = await _quote_upstox_instrument_key(user_id, ikey)
+                        if quote_val and float(quote_val) > 0:
+                            resolved_exit_price = float(quote_val)
+                except Exception as rest_err:
+                    logger.warning("REST fallback failed during equity close for %s: %s", sym, rest_err)
+            
+            if resolved_exit_price is not None and resolved_exit_price > 0:
+                place_kwargs["price"] = resolved_exit_price
+            else:
+                raise ValueError(
+                    f"LTP_UNAVAILABLE: No valid LTP found to close equity position {pos.get('id')} for symbol {sym}"
+                )
         else:
             # FAIL-CLOSED (2026-06-17): unrecognized position shape. Never fall through
             # to a generic order — defaulting an unknown asset_type to the equity path
@@ -11858,7 +11870,7 @@ async def _place_order_core(user_id: str, symbol: str, side: str, qty: Optional[
         )
         order_res = await router.route_intent(user_id, intent_doc)
         # Subscribe this instrument to the WS feed so position monitor gets live ticks
-        if option_contract and intent_doc.get("instrument_key"):
+        if intent_doc.get("instrument_key"):
             try:
                 _gw = await get_user_upstox_gateway(user_id)
                 if _gw:

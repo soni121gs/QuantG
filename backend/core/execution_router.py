@@ -119,6 +119,18 @@ class PaperAdapter:
         side = str(intent["side"]).upper()
         option_contract = intent.get("option_contract") or {}
 
+        import re
+        is_option = (
+            bool(re.search(r"\d(CE|PE)$", str(intent.get("target_symbol") or "")))
+            or "option" in str(intent.get("asset_type") or "").lower()
+        )
+        is_equity = not is_option and (
+            str(intent.get("asset_type") or "").lower() == "equity"
+            or intent.get("exchange") in ("NSE", "BSE")
+        )
+        if is_equity and fill_price <= 0.05:
+            raise ValueError(f"PaperAdapter: Nominal fill price {fill_price:.2f} <= 0.05 is not allowed for cash equity.")
+
         # ── 1. Quote timestamp validation ─────────────────────────────────────
         # Reject fills whose price quote is too old — prevents paper trades from
         # executing against stale LTPs during connectivity gaps or market open.
@@ -151,11 +163,6 @@ class PaperAdapter:
 
         # ── 2. Slippage: ~half the bid-ask spread (market-order crossing cost),
         #       falling back to an asset-class base when the book is unknown. ──
-        is_option = (
-            "CE" in str(intent.get("target_symbol") or "")
-            or "PE" in str(intent.get("target_symbol") or "")
-            or "option" in str(intent.get("asset_type") or "").lower()
-        )
         slippage = _estimate_slippage(fill_price, option_contract, is_option)
         final_price = round(
             fill_price + slippage if side == "BUY" else fill_price - slippage, 2

@@ -105,3 +105,9 @@ backend/scratch/
 backend/get_user_hash.py
 backend/scratch_query.py
 SYSTEM_GAP_ANALYSIS_*.md
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+frontend/.ds-css/

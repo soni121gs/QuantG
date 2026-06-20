@@ -176,13 +176,14 @@ async def _guard_one(
     )
 
     # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
-    is_option = (
-        str(pos.get("asset_type") or "").lower() == "option"
-        or pos.get("exchange") in ("NFO", "BFO")
+    is_option_or_equity = (
+        str(pos.get("asset_type") or "").lower() in ("option", "equity")
+        or pos.get("exchange") in ("NFO", "BFO", "NSE", "BSE")
         or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))
         or str(pos.get("option_type") or "").upper() in ("CE", "PE")
+        or "_EQ|" in str(pos.get("instrument_key") or "")
     )
-    if is_option and pos.get("status") in ("OPEN", "FILLED"):
+    if is_option_or_equity and pos.get("status") in ("OPEN", "FILLED"):
         last_fresh_str = pos.get("last_fresh_tick_at") or pos.get("entry_time") or pos.get("created_at")
         last_fresh_dt = parse_iso_dt(last_fresh_str)
         if last_fresh_dt:
@@ -215,10 +216,10 @@ async def _guard_one(
                         )
                     else:
                         logger.warning(
-                            "position_guardian: OPEN option %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
+                            "position_guardian: OPEN position %s user=%s symbol=%s has no fresh LTP for %.0fs — forcing protective exit.",
                             pos_id, user_id, symbol, elapsed,
                         )
-                        await close_fn(user_id, sid, reason="stale-quote-protective-exit")
+                        await close_fn(user_id, sid, reason="stale-quote-protective-exit", decided_ltp=ltp)
                         return
 
     # If the quote is fresh and not fallback, update last_fresh_tick_at in DB
@@ -271,7 +272,7 @@ async def _guard_one(
             "PositionGuardian: exit pos=%s user=%s symbol=%s reason=%s ltp=%.2f src=%s",
             pos_id, user_id, symbol, reason, float(ltp), ltp_source,
         )
-        await close_fn(user_id, sid, reason=reason)
+        await close_fn(user_id, sid, reason=reason, decided_ltp=float(ltp))
 
 
 # ── Ensure risk params helper ─────────────────────────────────────────────────
