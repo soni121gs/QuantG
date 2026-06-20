@@ -1,4 +1,11 @@
-"""QuantG Backtesting Engine.
+"""QuantG Backtesting Engine — UNDERLYING / EQUITY backtester.
+
+USE THIS FOR: equity / futures strategies, where the traded price IS the candle
+price. DO NOT use for options — it prices trades on the underlying candle and so
+ignores premium, theta and spread cost, returning a confidently-wrong grade for
+any option strategy. For options use core/options_backtest.py (OptionsBacktestEngine).
+Dispatch is enforced in routes/core_status.py:run_core_backtest by
+visual_config.options.enabled.
 
 Runs AST sandboxed python strategy code sequentially over historical candle series.
 Simulates realistic order fills at next candle open, enforces SL/TP risk boundaries,
@@ -12,6 +19,28 @@ from datetime import datetime, timezone
 from core.strategy_signal_service import StrategySignalService, CoreSignalType
 
 logger = logging.getLogger("quantg.backtest_engine")
+
+
+def _assess_data_quality(candles: List[Dict[str, Any]], total_trades: int) -> str:
+    """Grade the input series, not just its length. A long but flat/degenerate
+    series (no intrabar range) or one that produced too few trades to be
+    statistically meaningful is NOT 'HIGH', however many bars it has.
+    """
+    n = len(candles)
+    if n < 60:  # below the 50-bar warmup + a handful of evaluable bars
+        return "INSUFFICIENT"
+    # Fraction of bars carrying real intrabar range (high > low). A synthetic or
+    # flat-spot series collapses to ~0 here and must not score HIGH.
+    ranged = sum(1 for c in candles if float(c.get("high") or 0) > float(c.get("low") or 0))
+    range_frac = ranged / n if n else 0.0
+    if range_frac < 0.5:
+        return "LOW"
+    if total_trades < 10:
+        return "LOW"        # too few trades for the scorecard to mean anything
+    if n >= 500 and total_trades >= 30:
+        return "HIGH"
+    return "MEDIUM"
+
 
 class BacktestEngine:
     def __init__(self, db):
@@ -47,14 +76,11 @@ class BacktestEngine:
         opt_cfg = vc.get("options") or {}
         underlying = opt_cfg.get("underlying") or strategy_metadata.get("symbol") or "NIFTY"
         
-        lot_size = 1
-        if underlying.upper() == "NIFTY":
-            lot_size = 65
-        elif underlying.upper() == "BANKNIFTY":
-            lot_size = 30
-        elif underlying.upper() == "SENSEX":
-            lot_size = 20
-            
+        # Resolve via market_domains (source of truth) — falls back to 1 for
+        # cash equity, which is correct for this underlying/equity engine.
+        from core.market_domains import resolve_domain_by_underlying
+        lot_size = resolve_domain_by_underlying(underlying).get_lot_size(underlying)
+
         qty = lot_size * int(opt_cfg.get("lots") or 1)
 
         # Sequential bar-by-bar evaluation (zero lookahead)
@@ -223,7 +249,7 @@ class BacktestEngine:
             "sharpe": sharpe,
             "sortino": sortino,
             "strategy_score": strategy_score,
-            "data_quality": "HIGH" if len(candles) > 200 else "LOW",
+            "data_quality": _assess_data_quality(candles, total_trades),
             "trades": trades,
             "equity_curve": equity_curve,
             "created_at": datetime.now(timezone.utc).isoformat()

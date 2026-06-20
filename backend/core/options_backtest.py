@@ -1,4 +1,7 @@
-"""Option-priced backtester.
+"""Option-priced backtester — OPTIONS backtester.
+
+USE THIS FOR: options strategies (single_leg / credit_spread / debit_spread).
+For equity / futures use core/backtest_engine.py (BacktestEngine).
 
 Unlike core/backtest_engine.py (which prices trades on the UNDERLYING index and
 so ignores premium, theta and spreads), this engine prices every leg from real

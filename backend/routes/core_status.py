@@ -72,6 +72,17 @@ async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
     if not strat:
         raise HTTPException(status_code=404, detail="Strategy not found.")
 
+    # Dispatch by instrument type. Option strategies MUST use the option-priced
+    # engine (real CE/PE premiums incl. theta + spread cost); the underlying
+    # candle engine would price them on the index and return a confidently-wrong
+    # grade. Everything else (equity / futures) uses the underlying engine, where
+    # the traded price IS the candle price.
+    options_mode = bool(((strat.get("visual_config") or {}).get("options") or {}).get("enabled"))
+    if options_mode:
+        from core.options_backtest import OptionsBacktestEngine
+        engine = OptionsBacktestEngine(db)
+        return await engine.run(strat)
+
     try:
         raw_candles = intraday_series(100.0, 250)
     except Exception as e:
