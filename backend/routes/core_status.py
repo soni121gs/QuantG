@@ -61,7 +61,7 @@ async def get_core_backtests(user=Depends(get_current_user)):
 
 @router.post("/core/backtests/run")
 async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
-    from server import intraday_series
+    from server import _fetch_strategy_history
 
     user_id = user["id"]
     strategy_id = req.strategy_id
@@ -83,10 +83,33 @@ async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
         engine = OptionsBacktestEngine(db)
         return await engine.run(strat)
 
+    # Equity / futures: backtest on REAL underlying OHLC pulled from Upstox V3
+    # (same source the live engine and /strategies/backtest use). Mock candles
+    # are hard-blocked here — a grade off random-walk data is worse than no grade.
+    symbol = ((strat.get("visual_config") or {}).get("symbol")
+              or strat.get("symbol") or req.symbol or "").upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Strategy has no symbol to backtest.")
     try:
-        raw_candles = intraday_series(100.0, 250)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed generating backtest historical bars: {e}")
+        history = await _fetch_strategy_history(
+            user_id, symbol, days=req.days, interval="5minute",
+            allow_mock=False, strategy=strat,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    raw_candles = history.get("data") or []
+    if "mock" in str(history.get("source", "")).lower():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Backtest blocked: price data source is '{history.get('source')}' (simulated). "
+                   "Connect Upstox and ensure real historical data is available.",
+        )
+    if len(raw_candles) < 60:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient real OHLC for {symbol}: {len(raw_candles)} bars "
+                   "(need >=60 for the 50-bar warmup). Connect Upstox / widen 'days'.",
+        )
 
     engine = BacktestEngine(db)
     result = await engine.run_backtest(
