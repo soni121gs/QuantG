@@ -1830,7 +1830,8 @@ Draft a postmortem (evidence-cited) into the wiki via the Stage-7 approval gate.
 Context & founder decisions 2026-06-20: (1) **build a two-way Telegram system** — today the sidecar (`hermes/agent.py`) only PUSHES (watchdog/pre-market/EOD); founder wants to also ASK Hermes from Telegram. (2) **Stay on Gemini 2.5-flash for now** (`DEFAULT_GEMINI_MODEL`, `routes/ai.py:21`) — revisit model choice later; do NOT introduce a new provider in these tasks. These tasks close the two gaps the roadmap (H001–H022) never covered: the chat channel beyond in-app, and proactive (behavioral, not just plumbing) alerting. Same safety contract applies — Telegram is a READ-ONLY question channel; any write still goes through the Stage-7 approval queue in-app, never auto-applied from chat.
 
 ### TASK-H023 — Two-way Telegram command bridge
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
+- **Commit**: `4ea022b`
 - **Tier**: 3
 - **Prerequisite**: TASK-H006 (read-only tools), TASK-H009 (sidecar loop)
 - **Session size**: ~3–4 hours
@@ -1872,7 +1873,8 @@ Context & founder decisions 2026-06-20: (1) **build a two-way Telegram system** 
 **Verify**: with 0 fills past the cutoff on a healthy feed, a single drought alert fires; it does not repeat within the cooldown.
 
 ### TASK-H025 — Document two-way Telegram in DEPLOY_HERMES.md
-- **Status**: `[ ]`
+- **Status**: `[x]` Completed by Antigravity · 2026-06-20
+- **Commit**: `4ea022b`
 - **Tier**: 1
 - **Prerequisite**: TASK-H023
 - **Session size**: ~30 min
@@ -1926,12 +1928,14 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H008 | Market-Open Readiness Report scheduler and messaging logic | 8a4f501 | 2026-06-20 |
 | TASK-H009 | Intraday Watchdog loop and alert rate-limiting | 8a4f501 | 2026-06-20 |
 | TASK-H010 | EOD Report scheduler and messaging logic | 8a4f501 | 2026-06-20 |
+| TASK-H023 | Two-way Telegram command bridge in the Hermes sidecar daemon | 4ea022b | 2026-06-20 |
+| TASK-H025 | Document two-way Telegram command capabilities in DEPLOY_HERMES.md and .env.hermes.example | 4ea022b | 2026-06-20 |
 
 ---
 
 *Last updated: 2026-06-20*
 *Total tasks: 53 + 25 Hermes (H001–H025)*
-*Open: 12 · Blocked: 0 · In progress: 0 · Done: 66 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012)*
-*Hermes open: H013, H014, H015, H016, H017, H018, H019, H020, H021, H022, H023, H024, H025*
+*Open: 11 · Blocked: 0 · In progress: 0 · Done: 68 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H023/H025)*
+*Hermes open: H013, H014, H015, H016, H017, H018, H019, H020, H021, H022, H024*
 *Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
 *Recommended next build order: TASK-H023 (two-way Telegram) ‖ TASK-H018→H019→H020 (Stage 7 approval-gated writes) → TASK-H024 (proactive alerts) → Stage 5/6/8.*
