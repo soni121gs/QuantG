@@ -471,9 +471,67 @@ def poll_telegram_updates(offset):
     return offset
 
 
+def run_weekly_ranking_report(date_str):
+    """Compiles the weekly strategy ranking report."""
+    print(f"[WEEKLY_RANK] Compiling strategy ranking report for {date_str}...")
+    r = client.request("GET", "/ops/risk-scorecard")
+    if not r or r.status_code != 200:
+        send_telegram_alert(f"⚠️ *QuantG Hermes Alert*:\nFailed to compile weekly strategy ranking report for `{date_str}`. API request error.")
+        return
+
+    res_data = r.json()
+    rows = res_data.get("rows", [])
+    by_structure = res_data.get("by_structure", {})
+
+    if not rows:
+        send_telegram_alert(f"📊 *Hermes Weekly Strategy Ranking*\nDate: `{date_str}`\nNo strategy trade history found to rank.")
+        return
+
+    # 1. Format individual strategy rows
+    lines = []
+    # Rank top 5 strategies
+    for idx, strat in enumerate(rows[:5]):
+        name = strat.get("name", "Unknown")
+        grade_val = strat.get("grade", "F")
+        sharpe = strat.get("sharpe", 0.0)
+        exp = strat.get("expectancy", 0.0)
+        pnl = strat.get("total_pnl", 0.0)
+        trades = strat.get("total_trades", 0)
+        win_rate = strat.get("win_rate", 0.0) * 100
+        
+        medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "•"
+        lines.append(
+            f"{medal} *{name}* (Grade: *{grade_val}*)\n"
+            f"  Sharpe: `{sharpe:.2f}` | Expectancy: `Rs {exp:.2f}`\n"
+            f"  P&L: `Rs {pnl:,.2f}` | Trades: `{trades}` | Win: `{win_rate:.1f}%`"
+        )
+    strategies_formatted = "\n\n".join(lines)
+
+    # 2. Format structure-level summary (credit spreads vs single leg buyer)
+    summary_lines = []
+    for structure, s_info in by_structure.items():
+        s_pnl = s_info.get("total_pnl", 0.0)
+        s_sign = "+" if s_pnl >= 0 else ""
+        s_rate = s_info.get("win_rate", 0.0) * 100
+        summary_lines.append(
+            f"• *{structure}*: {s_sign}Rs {s_pnl:,.2f} ({s_info.get('total_trades', 0)} trades, Win: {s_rate:.1f}%)"
+        )
+    summary_formatted = "\n".join(summary_lines) if summary_lines else "No structured trade history."
+
+    msg = f"📊 *Hermes Weekly Strategy Ranking*\n" \
+          f"Date: `{date_str}`\n\n" \
+          f"*Top Deployed Strategies*:\n" \
+          f"{strategies_formatted}\n\n" \
+          f"*Performance by Structure*:\n" \
+          f"{summary_formatted}"
+          
+    send_telegram_alert(msg)
+
+
 def run_loop():
     last_watchdog_run = 0
     last_premarket_date = None
+    last_weekly_rank_date = None
     last_eod_date = None
     telegram_offset = 0
     
@@ -504,6 +562,12 @@ def run_loop():
                 if ist.hour == 9 and ist.minute == 0 and last_premarket_date != today_str:
                     run_premarket_check(today_str)
                     last_premarket_date = today_str
+                    
+                # Weekly Strategy Ranking: Friday at 09:00 IST (TASK-H015)
+                # Note: 4 is Friday (0 is Mon, 1 is Tue, 2 is Wed, 3 is Thu, 4 is Fri)
+                if ist.weekday() == 4 and ist.hour == 9 and ist.minute == 0 and last_weekly_rank_date != today_str:
+                    run_weekly_ranking_report(today_str)
+                    last_weekly_rank_date = today_str
                     
                 # 3. EOD Report: 15:35 IST on weekdays
                 if ist.hour == 15 and ist.minute == 35 and last_eod_date != today_str:

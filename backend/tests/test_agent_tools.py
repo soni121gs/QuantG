@@ -116,8 +116,9 @@ async def test_run_agent_tool_search_wiki():
 
     user = {"id": "test-trader-1"}
 
-    with patch("routes.ai.db", mock_db):
+    with patch("routes.ai.db", mock_db), patch("routes.wiki.sync_wiki_directory", AsyncMock()) as mock_sync:
         res = await _run_agent_tool("search_wiki", user, query="risk management")
+        mock_sync.assert_called_once_with(user=user)
 
     assert res["status"] == "ok"
     assert res["source"] == "db.wiki_docs"
@@ -214,4 +215,37 @@ async def test_agent_chat_api_response():
     assert bot_msg_inserted["role"] == "assistant"
     assert "tools_used" in bot_msg_inserted
     assert bot_msg_inserted["tools_used"][0]["source"] == "db.orders"
+
+
+@pytest.mark.anyio
+async def test_run_agent_tool_get_backtest_summary():
+    """Verify get_backtest_summary extracts strategy ID and dates from query and passes to ops_options_backtest."""
+    mock_db = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.to_list = AsyncMock(return_value=[
+        {"id": "strat_buyer_opt"}
+    ])
+    mock_db.strategies.find.return_value = mock_cursor
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+
+    user = {"id": "test-trader-1"}
+    mock_backtest_fn = AsyncMock(return_value={"status": "success", "results": []})
+
+    with patch("routes.ai.db", mock_db), \
+         patch("routes.ops.ops_options_backtest", mock_backtest_fn):
+        res = await _run_agent_tool(
+            "get_backtest_summary", 
+            user, 
+            query="Run backtest for strat_buyer_opt from 2026-06-01 to 2026-06-15"
+        )
+
+    assert res["status"] == "ok"
+    assert res["source"] == "routes.ops.ops_options_backtest"
+    mock_backtest_fn.assert_called_once_with(
+        strategy_id="strat_buyer_opt",
+        start="2026-06-01",
+        end="2026-06-15",
+        user=user
+    )
+
 

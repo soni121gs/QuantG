@@ -23,6 +23,13 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 router = APIRouter(prefix="/ai", tags=["AI"])
 agent_router = APIRouter(prefix="/agent", tags=["AI Agent"])
 
+
+@agent_router.get("/skills")
+async def list_agent_skills(user=Depends(get_current_user)):
+    """Expose the active Hermes operator skill pack playbooks."""
+    from core.skills import HERMES_SKILL_PACK
+    return list(HERMES_SKILL_PACK.values())
+
 class ChatReq(BaseModel):
     session_id: str = "default"
     message: str
@@ -228,7 +235,31 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             source = "routes.ops.ops_risk_scorecard"
         elif name == "get_backtest_summary":
             from routes.ops import ops_options_backtest
-            data = await ops_options_backtest(user=user)
+            strategy_id = None
+            start = None
+            end = None
+            if query:
+                import re
+                try:
+                    strats = await db.strategies.find({"user_id": user["id"]}, {"id": 1}).to_list(1000)
+                    for s in strats:
+                        sid = s.get("id")
+                        if sid and (sid in query or sid.replace("_", " ") in query.lower()):
+                            strategy_id = sid
+                            break
+                except Exception as e_strats:
+                    logger.warning("Failed to lookup strategies in get_backtest_summary: %s", e_strats)
+                
+                try:
+                    dates = re.findall(r"\d{4}-\d{2}-\d{2}", query)
+                    if len(dates) >= 2:
+                        start, end = dates[0], dates[1]
+                    elif len(dates) == 1:
+                        start = dates[0]
+                except Exception as e_dates:
+                    logger.warning("Failed to parse dates in get_backtest_summary: %s", e_dates)
+                    
+            data = await ops_options_backtest(strategy_id=strategy_id, start=start, end=end, user=user)
             source = "routes.ops.ops_options_backtest"
         elif name == "get_today_fills":
             from server import get_trading_day_window_ist
@@ -253,6 +284,12 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             source = "db.signals / db.skipped_signals"
         elif name == "search_wiki":
             import re
+            try:
+                from routes.wiki import sync_wiki_directory
+                await sync_wiki_directory(user=user)
+            except Exception as sync_exc:
+                logger.error("Failed to sync wiki directory dynamically: %s", sync_exc)
+                
             match_query = {"user_id": user["id"]}
             if query:
                 words = [w.strip() for w in re.split(r'\s+', query) if len(w.strip()) > 2]
@@ -271,6 +308,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                     match_query["$and"] = clauses
             data = await db.wiki_docs.find(match_query, {"_id": 0, "user_id": 0}).to_list(15)
             source = "db.wiki_docs"
+            warnings.append("Note: Wiki docs are user-written context guidelines, not production trading execution truth (DB/orders/fills/readiness).")
         elif name == "get_daily_report":
             first_strat = await db.strategies.find_one(
                 {"user_id": user["id"], "status": {"$in": ["live", "active", "running"]}}
@@ -464,6 +502,17 @@ def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], r
     )
     prompt = f"""
 You are Hermes, a trading operator and research assistant inside QuantG.
+
+HERMES SPECIALIZED OPERATOR SKILLS:
+You are equipped with a skill pack of standard playbooks. When the user asks questions in these areas, follow the playbook strictly, combining wiki context and database tool truth:
+- `quantg-live-readiness`: Playbook to audit live trading status. Synthesis of `get_live_readiness`, `get_feed_status`, and `get_token_status`. Check keys, session token validity, and tick feed.
+- `quantg-why-no-trade`: Playbook to diagnose why no trades occurred today. Analyze active strategies (`get_active_strategies`), feed status (`get_feed_status`), skipped signals (`get_skipped_signals`), logs/errors (`get_logs_errors`), and risk snapshot P&L/drawdowns (`get_risk_snapshot`).
+- `quantg-strategy-loss-review`: Playbook to review strategy metrics and check for drawdowns. Synthesize win-rates, Sharpe/Sortino ratios, and expectancy using `get_strategy_scorecard`, `get_daily_report`, and `get_risk_snapshot`.
+- `quantg-feed-token-diagnosis`: Playbook to check auth token or websocket feed connection stalls. Diagnose via `get_upstox_status` and `get_market_data_status`.
+- `quantg-eod-report`: Playbook to analyze session close metrics. Reconcile daily realized/unrealized P&L, best/worst strategies, and trades count using `get_daily_report` and `get_risk_snapshot`.
+- `quantg-backtest-review`: Playbook to review backtests. Analyze expectancies, win-rates, profit factors, and drawdowns via `get_backtest_summary`. You can guide the user to run customized backtests by providing the strategy ID and date range (YYYY-MM-DD) in their query.
+- `quantg-vps-deploy-check`: Playbook to check the system's operational deployment. Synthesize `get_live_readiness`, `get_logs_errors`, and `get_recent_alerts`.
+- `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, and `get_today_fills`.
 
 STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2):
 - Although you cannot directly execute database changes, you can PROPOSE professional system actions for user approval.
