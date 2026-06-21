@@ -177,6 +177,10 @@
   --qd-band: linear-gradient(135deg, rgba(139, 125, 255, 0.14), rgba(68, 217, 230, 0.04));
 }
 
+html {
+  font-size: 13.5px !important;
+}
+
 html,
 body,
 #root {
@@ -224,14 +228,14 @@ h6 {
    Hard floor of 11px for readability. Use these instead of
    hand-picked pixel sizes so proportions stay consistent.
    ───────────────────────────────────────────────────────────── */
-.t-display { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.5rem;  line-height: 1.85rem; font-weight: 800; letter-spacing: -0.01em; }
-.t-title   { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1rem;    line-height: 1.4rem;  font-weight: 700; }
-.t-body    { font-size: 0.875rem; line-height: 1.5rem; }      /* 14px — chat & paragraphs */
-.t-label   { font-size: 0.75rem;  line-height: 1.1rem; }      /* 12px — secondary labels */
-.t-meta    { font-size: 0.6875rem; line-height: 1rem; }       /* 11px floor — mono metadata */
+.t-display { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.38rem;  line-height: 1.75rem; font-weight: 800; letter-spacing: -0.01em; }
+.t-title   { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.08rem;  line-height: 1.45rem; font-weight: 700; }
+.t-body    { font-size: 0.92rem;  line-height: 1.4rem; }      /* ~12.5px */
+.t-label   { font-size: 0.85rem;  line-height: 1.2rem; }      /* ~11.5px */
+.t-meta    { font-size: 0.77rem;  line-height: 1.05rem; }     /* ~10.5px */
 
 @media (min-width: 768px) {
-  .t-display { font-size: 1.75rem; line-height: 2.1rem; }
+  .t-display { font-size: 1.55rem; line-height: 1.95rem; }
 }
 
 .text-white {
