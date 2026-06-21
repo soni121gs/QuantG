@@ -38,7 +38,7 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
           const cMatch = cPart.match(/^`([^`]+)`$/);
           if (cMatch) {
             return (
-              <code key={k} className="px-1.5 py-0.5 rounded bg-[var(--qd-surface-3)] font-mono text-xs text-[var(--qd-warn)]">
+              <code key={k} className="px-1.5 py-0.5 rounded bg-[var(--qd-surface-3)] font-mono text-[11px] text-[var(--qd-warn)]">
                 {cMatch[1]}
               </code>
             );
@@ -58,7 +58,7 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
   const flushList = (key) => {
     if (listItems.length > 0) {
       elements.push(
-        <ul key={key} className="list-disc pl-5 my-3 space-y-1.5 text-[var(--qd-text-2)] text-sm">
+        <ul key={key} className="list-disc pl-4 my-1.5 space-y-1 text-[var(--qd-text-2)] text-xs">
           {listItems}
         </ul>
       );
@@ -72,7 +72,7 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
       if (isCode) {
         // End of code block
         elements.push(
-          <pre key={`code-${index}`} className="p-4 my-3 rounded bg-[var(--qd-surface-2)] border border-[var(--qd-border)] overflow-x-auto font-mono text-xs text-[var(--qd-text-2)]">
+          <pre key={`code-${index}`} className="p-2.5 my-2 rounded bg-[var(--qd-surface-2)] border border-[var(--qd-border)] overflow-x-auto font-mono text-[11px] text-[var(--qd-text-2)]">
             <code>{codeBlock.join("\n")}</code>
           </pre>
         );
@@ -95,21 +95,21 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
     if (line.startsWith("# ")) {
       flushList(`list-before-h1-${index}`);
       elements.push(
-        <h1 key={index} className="text-2xl font-extrabold font-head text-[var(--qd-text)] mt-6 mb-3 border-b border-[var(--qd-border)] pb-2">
+        <h1 key={index} className="text-[17px] font-extrabold font-head text-[var(--qd-text)] mt-4 mb-2 border-b border-[var(--qd-border)] pb-1">
           {parseInline(line.substring(2))}
         </h1>
       );
     } else if (line.startsWith("## ")) {
       flushList(`list-before-h2-${index}`);
       elements.push(
-        <h2 key={index} className="text-xl font-bold font-head text-[var(--qd-text)] mt-5 mb-2.5">
+        <h2 key={index} className="text-[14px] font-bold font-head text-[var(--qd-text)] mt-3 mb-1.5">
           {parseInline(line.substring(3))}
         </h2>
       );
     } else if (line.startsWith("### ")) {
       flushList(`list-before-h3-${index}`);
       elements.push(
-        <h3 key={index} className="text-lg font-semibold font-head text-[var(--qd-text)] mt-4 mb-2">
+        <h3 key={index} className="text-[12px] font-semibold font-head text-[var(--qd-text)] mt-2.5 mb-1">
           {parseInline(line.substring(4))}
         </h3>
       );
@@ -122,7 +122,7 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
     // Horizontal rule
     else if (line.trim() === "---") {
       flushList(`list-before-hr-${index}`);
-      elements.push(<hr key={index} className="my-6 border-[var(--qd-border)]" />);
+      elements.push(<hr key={index} className="my-4 border-[var(--qd-border)]" />);
     }
     // Empty line
     else if (line.trim() === "") {
@@ -133,7 +133,7 @@ export default function MarkdownRenderer({ content, onSelectNote }) {
     else {
       flushList(`list-before-p-${index}`);
       elements.push(
-        <p key={index} className="leading-relaxed text-sm text-[var(--qd-text-2)] my-2">
+        <p key={index} className="leading-relaxed text-xs text-[var(--qd-text-2)] my-1">
           {parseInline(line)}
         </p>
       );

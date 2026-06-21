@@ -179,6 +179,24 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
 
   return (
     <div className="qd-card p-3 bg-[var(--qd-surface)] border border-[var(--qd-border)] relative">
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes linkFlow {
+          to {
+            stroke-dashoffset: -20;
+          }
+        }
+        .flow-link {
+          stroke-dasharray: 6, 4;
+          animation: linkFlow 0.8s linear infinite;
+        }
+        .glow-node {
+          transition: filter 0.2s ease, r 0.2s ease;
+        }
+        .glow-node:hover {
+          filter: drop-shadow(0 0 6px var(--node-color));
+          r: 7.5px !important;
+        }
+      `}} />
       <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--qd-text-3)] mb-2 flex items-center justify-between">
         <span>Knowledge Map (Obsidian view)</span>
         {hoveredNode && <span className="text-[var(--qd-accent)] truncate max-w-[180px]">{hoveredNode}</span>}
@@ -209,7 +227,8 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
               y2={t.y}
               stroke={isHighlighted ? "var(--qd-accent)" : "var(--qd-border)"}
               strokeWidth={isHighlighted ? 1.5 : 1}
-              strokeOpacity={isHighlighted ? 0.8 : 0.4}
+              strokeOpacity={isHighlighted ? 0.9 : 0.4}
+              className={isHighlighted ? "flow-link" : ""}
             />
           );
         })}
@@ -222,12 +241,13 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
               (l.source === currentTitle && l.target === node.id) ||
               (l.target === currentTitle && l.source === node.id)
           );
+          const nodeColor = getTopicColor(node.topic);
           
           return (
             <g
               key={node.id}
               className="transition-opacity duration-150"
-              style={{ opacity: hoveredNode && hoveredNode !== node.id && !isLinked && !isCurrent ? 0.3 : 1 }}
+              style={{ opacity: hoveredNode && hoveredNode !== node.id && !isLinked && !isCurrent ? 0.35 : 1 }}
               onMouseEnter={() => setHoveredNode(node.id)}
               onMouseLeave={() => setHoveredNode(null)}
               onClick={() => onSelectNode(node.id)}
@@ -235,11 +255,12 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
               <circle
                 cx={node.x}
                 cy={node.y}
-                r={isCurrent ? 7 : 5}
-                fill={getTopicColor(node.topic)}
+                r={isCurrent ? 7.5 : 5}
+                fill={nodeColor}
                 stroke={isCurrent ? "var(--qd-text)" : "transparent"}
                 strokeWidth={2}
-                className="cursor-pointer"
+                style={{ "--node-color": nodeColor }}
+                className="cursor-pointer glow-node"
                 onMouseDown={(e) => handleMouseDown(node, e)}
               />
               {isCurrent && (
@@ -251,6 +272,7 @@ export default function PhysicsGraphCanvas({ data, currentTitle, onSelectNode })
                   stroke="var(--qd-accent)"
                   strokeWidth={1}
                   className="animate-pulse"
+                  style={{ filter: "drop-shadow(0 0 4px var(--qd-accent))" }}
                 />
               )}
             </g>

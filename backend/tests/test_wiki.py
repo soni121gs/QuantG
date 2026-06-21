@@ -114,3 +114,91 @@ def test_disk_operations():
                 shutil.rmtree(temp_dir)
             except Exception:
                 pass
+
+def test_wrap_first_occurrence():
+    from routes.wiki import wrap_first_occurrence
+    
+    # 1. Simple replacement
+    content = "This is a Upstox setup guide."
+    new_content, changed = wrap_first_occurrence(content, "Upstox setup")
+    assert changed is True
+    assert new_content == "This is a [[Upstox setup]] guide."
+    
+    # 2. Case insensitive match, but wraps with term casing
+    content = "Check upstox setup details."
+    new_content, changed = wrap_first_occurrence(content, "Upstox Setup")
+    assert changed is True
+    assert new_content == "Check [[Upstox Setup]] details."
+    
+    # 3. Already linked, should not wrap again
+    content = "This is already [[Upstox setup]] linked."
+    new_content, changed = wrap_first_occurrence(content, "Upstox setup")
+    assert changed is False
+    assert new_content == content
+    
+    # 4. Multiple occurrences: skip the linked one and wrap the first unlinked one
+    content = "First [[Upstox setup]] is linked, but second Upstox setup is not."
+    new_content, changed = wrap_first_occurrence(content, "Upstox setup")
+    assert changed is True
+    assert new_content == "First [[Upstox setup]] is linked, but second [[Upstox setup]] is not."
+
+def test_html_text_extractor():
+    from routes.wiki import HTMLTextExtractor
+    
+    html = """
+    <html>
+        <head><title>Test Page</title></head>
+        <style>body { color: red; }</style>
+        <body>
+            <header>Header content</header>
+            <nav>Nav links</nav>
+            <h1>Setup Guide</h1>
+            <p>Use Upstox keys to authenticate.</p>
+            <script>console.log("hello");</script>
+            <footer>Footer notes</footer>
+        </body>
+    </html>
+    """
+    extractor = HTMLTextExtractor()
+    extractor.feed(html)
+    text = extractor.get_text()
+    
+    # Scripts, styles, header, nav, footer should be stripped
+    assert "Setup Guide" in text
+    assert "Use Upstox keys" in text
+    assert "console.log" not in text
+    assert "color: red" not in text
+    assert "Header content" not in text
+    assert "Footer notes" not in text
+
+def test_rules_extraction_logic():
+    import re
+    loss_pattern = re.compile(r"max(?:imum)?\s+daily\s+loss\s*(?:limit|\s+)*\s*(?::)?\s*₹?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+    lot_pattern = re.compile(r"max(?:imum)?\s+lot\s*(?:size|\s+)*\s*(?::)?\s*([\d,]+)", re.IGNORECASE)
+    delta_pattern = re.compile(r"max(?:imum)?\s+(?:net\s+)?delta\s*(?:exposure|limit|\s+)*\s*(?::)?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+    
+    content = """
+    # Trading Rules
+    - Max daily loss limit: ₹5,000
+    - Max Lot Size: 2 lots
+    - Max net delta exposure limit: 50.5
+    """
+    
+    daily_loss = None
+    max_lot = None
+    net_delta = None
+    
+    for line in content.split("\n"):
+        loss_match = loss_pattern.search(line)
+        if loss_match:
+            daily_loss = float(loss_match.group(1).replace(",", ""))
+        lot_match = lot_pattern.search(line)
+        if lot_match:
+            max_lot = int(lot_match.group(1))
+        delta_match = delta_pattern.search(line)
+        if delta_match:
+            net_delta = float(delta_match.group(1))
+            
+    assert daily_loss == 5000.0
+    assert max_lot == 2
+    assert net_delta == 50.5

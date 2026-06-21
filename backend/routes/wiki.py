@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import uuid
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from html.parser import HTMLParser
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -189,13 +191,56 @@ async def rebuild_all_backlinks(user_id: str):
 # ==================== API Endpoints ====================
 
 @router.get("")
-async def list_wiki_docs(user=Depends(get_current_user)):
-    """List all wiki documents for the current user."""
-    rows = await db.wiki_docs.find(
-        {"user_id": user["id"]},
-        {"_id": 0, "content": 0}  # Exclude body to keep list payloads lightweight
-    ).sort("updated_at", -1).to_list(1000)
-    return rows
+async def list_wiki_docs(search: Optional[str] = None, user=Depends(get_current_user)):
+    """List all wiki documents for the current user, optionally filtered by search query."""
+    user_id = user["id"]
+    if search:
+        import re
+        words = [w.strip() for w in re.split(r'\s+', search) if w.strip()]
+        if words:
+            clauses = []
+            for word in words:
+                escaped = re.escape(word)
+                clauses.append({
+                    "$or": [
+                        {"title": {"$regex": escaped, "$options": "i"}},
+                        {"topic": {"$regex": escaped, "$options": "i"}},
+                        {"content": {"$regex": escaped, "$options": "i"}},
+                        {"tags": {"$regex": escaped, "$options": "i"}},
+                    ]
+                })
+            match_query = {"user_id": user_id, "$and": clauses}
+        else:
+            match_query = {"user_id": user_id}
+            
+        rows = await db.wiki_docs.find(
+            match_query,
+            {"_id": 0}
+        ).sort("updated_at", -1).to_list(1000)
+        
+        # Build search match snippets
+        for row in rows:
+            content = row.get("content") or ""
+            snippet = ""
+            for word in words:
+                match = re.search(re.escape(word), content, re.IGNORECASE)
+                if match:
+                    start = max(0, match.start() - 40)
+                    end = min(len(content), match.end() + 80)
+                    snippet = ("..." if start > 0 else "") + content[start:end].replace("\n", " ").strip() + ("..." if end < len(content) else "")
+                    break
+            if not snippet and content:
+                snippet = content[:120].replace("\n", " ").strip() + ("..." if len(content) > 120 else "")
+            row["snippet"] = snippet
+            # Exclude full content from list response
+            row.pop("content", None)
+        return rows
+    else:
+        rows = await db.wiki_docs.find(
+            {"user_id": user_id},
+            {"_id": 0, "content": 0}  # Exclude body to keep list payloads lightweight
+        ).sort("updated_at", -1).to_list(1000)
+        return rows
 
 @router.get("/{id_or_title}")
 async def get_wiki_doc(id_or_title: str, user=Depends(get_current_user)):
@@ -451,3 +496,345 @@ async def get_wiki_graph_data(user=Depends(get_current_user)):
         "nodes": nodes,
         "links": links
     }
+
+# ==================== Unlinked Mentions Endpoints ====================
+
+class LinkMentionReq(BaseModel):
+    source_id: str
+
+def wrap_first_occurrence(content: str, term: str) -> tuple[str, bool]:
+    pattern = re.compile(rf"\b({re.escape(term)})\b", re.IGNORECASE)
+    match = pattern.search(content)
+    if not match:
+        return content, False
+        
+    start, end = match.span()
+    left_str = content[:start]
+    right_str = content[end:]
+    
+    if left_str.rstrip().endswith("[[") and right_str.lstrip().startswith("]]"):
+        matches = list(pattern.finditer(content))
+        for m in matches:
+            s, e = m.span()
+            l = content[:s]
+            r = content[e:]
+            if not (l.rstrip().endswith("[[") and r.lstrip().startswith("]]")):
+                replacement = f"[[{term}]]"
+                new_content = content[:s] + replacement + content[e:]
+                return new_content, True
+        return content, False
+    else:
+        replacement = f"[[{term}]]"
+        new_content = left_str + replacement + right_str
+        return new_content, True
+
+@router.get("/{id_or_title}/unlinked-mentions")
+async def get_unlinked_mentions(id_or_title: str, user=Depends(get_current_user)):
+    user_id = user["id"]
+    target_doc = await db.wiki_docs.find_one({
+        "user_id": user_id,
+        "$or": [
+            {"id": id_or_title},
+            {"title": id_or_title}
+        ]
+    })
+    if not target_doc:
+        raise HTTPException(status_code=404, detail="Target document not found")
+        
+    title = target_doc["title"]
+    all_docs = await db.wiki_docs.find({
+        "user_id": user_id,
+        "id": {"$ne": target_doc["id"]}
+    }).to_list(1000)
+    
+    unlinked = []
+    pattern = re.compile(rf"\b{re.escape(title)}\b", re.IGNORECASE)
+    
+    for doc in all_docs:
+        links = doc.get("links") or []
+        is_linked = any(l.lower() == title.lower() for l in links)
+        if not is_linked:
+            content = doc.get("content") or ""
+            if pattern.search(content):
+                unlinked.append({
+                    "id": doc["id"],
+                    "title": doc["title"],
+                    "topic": doc.get("topic", "General")
+                })
+                
+    return unlinked
+
+@router.post("/{id_or_title}/link-mention")
+async def link_mention(id_or_title: str, req: LinkMentionReq, user=Depends(get_current_user)):
+    user_id = user["id"]
+    target_doc = await db.wiki_docs.find_one({
+        "user_id": user_id,
+        "$or": [
+            {"id": id_or_title},
+            {"title": id_or_title}
+        ]
+    })
+    if not target_doc:
+        raise HTTPException(status_code=404, detail="Target document not found")
+        
+    term = target_doc["title"]
+    source_doc = await db.wiki_docs.find_one({
+        "user_id": user_id,
+        "id": req.source_id
+    })
+    if not source_doc:
+        raise HTTPException(status_code=404, detail="Source document not found")
+        
+    new_content, changed = wrap_first_occurrence(source_doc["content"], term)
+    if not changed:
+        return {"status": "no_change", "message": "No unlinked mentions found in source note content."}
+        
+    links = parse_markdown_links(new_content)
+    
+    await db.wiki_docs.update_one(
+        {"id": source_doc["id"], "user_id": user_id},
+        {"$set": {
+            "content": new_content,
+            "links": links,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    try:
+        save_wiki_to_disk(
+            source_doc["title"],
+            source_doc["topic"],
+            new_content,
+            source_doc["tags"],
+            source_doc.get("metadata") or {}
+        )
+    except Exception as exc:
+        logger.error("Failed to update synced markdown on disk during link-mention: %s", exc)
+        
+    await rebuild_all_backlinks(user_id)
+    return {"status": "ok", "message": f"Successfully linked '{term}' in note '{source_doc['title']}'."}
+
+@router.get("/audit/rules")
+async def audit_trading_rules(user=Depends(get_current_user)):
+    user_id = user["id"]
+    rules_docs = await db.wiki_docs.find({"user_id": user_id, "topic": "Trading Rules"}).to_list(1000)
+    
+    documented_max_daily_loss = None
+    documented_max_lot = None
+    documented_max_net_delta = None
+    
+    loss_pattern = re.compile(r"max(?:imum)?\s+daily\s+loss\s*(?:limit|\s+)*\s*(?::)?\s*₹?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+    lot_pattern = re.compile(r"max(?:imum)?\s+lot\s*(?:size|\s+)*\s*(?::)?\s*([\d,]+)", re.IGNORECASE)
+    delta_pattern = re.compile(r"max(?:imum)?\s+(?:net\s+)?delta\s*(?:exposure|limit|\s+)*\s*(?::)?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+    
+    for doc in rules_docs:
+        content = doc.get("content") or ""
+        for line in content.split("\n"):
+            loss_match = loss_pattern.search(line)
+            if loss_match and documented_max_daily_loss is None:
+                try:
+                    documented_max_daily_loss = float(loss_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+            
+            lot_match = lot_pattern.search(line)
+            if lot_match and documented_max_lot is None:
+                try:
+                    documented_max_lot = int(lot_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+                    
+            delta_match = delta_pattern.search(line)
+            if delta_match and documented_max_net_delta is None:
+                try:
+                    documented_max_net_delta = float(delta_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+
+    user_doc = await db.users.find_one({"id": user_id})
+    settings = dict((user_doc or {}).get("settings") or {})
+    active_daily_loss = float(settings.get("max_daily_loss") or user_doc.get("max_daily_loss") or 0.0)
+    
+    active_max_net_delta = float(settings.get("max_net_delta") or os.environ.get("QUANTG_MAX_NET_DELTA") or 50.0)
+    strategies = await db.strategies.find({"user_id": user_id}).to_list(1000)
+    
+    mismatches = []
+    matches = []
+    
+    if documented_max_daily_loss is not None:
+        if active_daily_loss > documented_max_daily_loss:
+            mismatches.append({
+                "rule": "Max Daily Loss Limit",
+                "documented": f"₹{documented_max_daily_loss:,.2f}",
+                "active": f"₹{active_daily_loss:,.2f}",
+                "severity": "warning",
+                "reason": "Active system daily loss limit is looser than documented guidelines."
+            })
+        else:
+            matches.append({
+                "rule": "Max Daily Loss Limit",
+                "value": f"₹{active_daily_loss:,.2f}"
+            })
+            
+    if documented_max_net_delta is not None:
+        if active_max_net_delta > documented_max_net_delta:
+            mismatches.append({
+                "rule": "Max Net Delta Exposure Limit",
+                "documented": str(documented_max_net_delta),
+                "active": str(active_max_net_delta),
+                "severity": "warning",
+                "reason": "Active delta exposure ceiling is looser than documented guidelines."
+            })
+        else:
+            matches.append({
+                "rule": "Max Net Delta Exposure Limit",
+                "value": str(active_max_net_delta)
+            })
+
+    if documented_max_lot is not None:
+        for strat in strategies:
+            status = str(strat.get("status") or "").lower()
+            if status not in ("live", "active", "running"):
+                continue
+                
+            visual = strat.get("visual_config") or {}
+            visual_risk = visual.get("risk") or {}
+            visual_options = visual.get("options") or {}
+            
+            configured_lots = int(float(visual_options.get("lots") or 1) or 1)
+            max_lot = int(float(visual_risk.get("max_lot") or 0) or 0)
+            strat_lot = max_lot if max_lot > 0 else configured_lots
+            
+            if strat_lot > documented_max_lot:
+                mismatches.append({
+                    "rule": f"Strategy '{strat.get('name')}' Max Lots",
+                    "documented": f"{documented_max_lot} lots",
+                    "active": f"{strat_lot} lots",
+                    "severity": "warning",
+                    "reason": f"Active strategy '{strat.get('name')}' runs with larger trade size than documented rules."
+                })
+            else:
+                matches.append({
+                    "rule": f"Strategy '{strat.get('name')}' Max Lots",
+                    "value": f"{strat_lot} lots"
+                })
+
+    status = "warning" if mismatches else "ok"
+    return {
+        "status": status,
+        "mismatches": mismatches,
+        "matches": matches,
+        "notes_audited": len(rules_docs)
+    }
+
+class WikiSummarizeReq(BaseModel):
+    url: str
+
+class HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.result = []
+        self.in_script_or_style = False
+        
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "header", "footer", "nav"):
+            self.in_script_or_style = True
+            
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "header", "footer", "nav"):
+            self.in_script_or_style = False
+            
+    def handle_data(self, data):
+        if not self.in_script_or_style:
+            text = data.strip()
+            if text:
+                self.result.append(text)
+                
+    def get_text(self):
+        return " ".join(self.result)
+
+@router.post("/summarize")
+async def summarize_url(req: WikiSummarizeReq, user=Depends(get_current_user)):
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+        
+    try:
+        import requests
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=10)
+        res.raise_for_status()
+        html = res.text
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {exc}")
+        
+    extractor = HTMLTextExtractor()
+    try:
+        extractor.feed(html)
+        text = extractor.get_text()
+    except Exception:
+        text = html
+        
+    trimmed_text = text[:15000].strip()
+    if not trimmed_text:
+        trimmed_text = "Empty webpage content."
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {
+            "title": f"Imported: {url.split('//')[-1][:30]}",
+            "topic": "General",
+            "tags": ["scraped"],
+            "summary_markdown": f"# Scraped Note from URL\n\nReference: {url}\n\n*This content was imported directly because the Gemini API key is not configured in the environment.*\n\n## Scraped Text Preview\n\n{trimmed_text[:1000]}..."
+        }
+        
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    prompt = f"""You are an expert trading operations and research assistant.
+Summarize the key trading rules, setups, decisions, or meeting transcripts from the following text scraped from a webpage, and format it as a clean, highly structured Markdown note.
+
+SCRAPED TEXT:
+{trimmed_text}
+
+Output ONLY a JSON block containing the following keys (do not output any other text or markdown wrappers except the JSON):
+{{
+  "title": "A short, descriptive note title (e.g., Nifty Momentum Setup)",
+  "topic": "YouTube transcripts" or "Meeting transcripts" or "Decisions" or "Projects" or "Trading Rules" or "General",
+  "tags": ["tag1", "tag2"],
+  "summary_markdown": "# Note Title\\n\\nWrite the summarized contents in complete Markdown. Use bullet points and headers."
+}}"""
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 1500,
+        },
+    }
+    
+    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    try:
+        api_res = requests.post(
+            gemini_url,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=25,
+        )
+        api_res.raise_for_status()
+        res_data = api_res.json()
+        
+        parts = res_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        text_out = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
+        
+        parsed_json = json.loads(text_out)
+        return parsed_json
+    except Exception as exc:
+        logger.error("Gemini summarization failed: %s", exc)
+        return {
+            "title": f"Imported: {url.split('//')[-1][:30]}",
+            "topic": "General",
+            "tags": ["scraped", "error"],
+            "summary_markdown": f"# Scraped Note (AI Summarization Failed)\n\nReference: {url}\n\n*AI Summarization failed: {exc}*\n\n## Scraped Text Preview\n\n{trimmed_text[:1000]}..."
+        }
