@@ -377,8 +377,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     "last_evaluated_at": datetime.now(timezone.utc).isoformat(),
                     "last_pod": POD_ID,
                 }
-                # increment scan counter
-                inc_set: Dict[str, Any] = {"evaluations": 1}
+                # increment scan counter (cumulative + per-day, reset by daily lifecycle)
+                inc_set: Dict[str, Any] = {"evaluations": 1, "evaluations_today": 1}
                 if not code:
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": eval_set, "$inc": inc_set})

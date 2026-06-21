@@ -151,8 +151,8 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         <Metric label="Capital" value={money(s.required_capital)} compact />
         <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
         <Metric label="Score" value={scoreValue ? `${scoreValue}%` : "-"} compact />
-        <Metric label="Scans" value={s.evaluations ?? 0} compact />
-        <Metric label="Orders" value={s.signals_fired ?? 0} compact tone={(s.signals_fired ?? 0) > 0 ? "text-[var(--qd-profit)]" : ""} />
+        <Metric label="Scans" value={s.evaluations_today ?? 0} compact />
+        <Metric label="Orders" value={tradesToday} compact tone={tradesToday > 0 ? "text-[var(--qd-profit)]" : ""} />
         <Metric label="Last" value={timeAgo(s.last_evaluated_at)} compact />
       </div>
 
@@ -196,7 +196,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
       <div className="grid grid-cols-5 gap-1 relative z-10 mt-auto">
         <button
           onClick={() => exitAll(s.id)}
-          className="flex flex-col items-center justify-center gap-0.5 rounded bg-[var(--qd-warn)] py-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-black hover:opacity-90"
+          className="flex flex-col items-center justify-center gap-0.5 rounded border border-[color-mix(in_srgb,var(--qd-warn)_28%,transparent)] bg-[color-mix(in_srgb,var(--qd-warn)_12%,transparent)] py-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-[var(--qd-warn)] hover:bg-[color-mix(in_srgb,var(--qd-warn)_20%,transparent)]"
           data-testid={`exit-all-${s.id}`}
           type="button"
           title="Square off / exit positions"
@@ -205,7 +205,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         </button>
         <button
           onClick={() => onAbout(s)}
-          className="flex flex-col items-center justify-center gap-0.5 rounded bg-[var(--qd-accent)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-white hover:bg-[var(--qd-accent-hover)]"
+          className="flex flex-col items-center justify-center gap-0.5 rounded border border-[color-mix(in_srgb,var(--qd-accent)_28%,transparent)] bg-[color-mix(in_srgb,var(--qd-accent)_12%,transparent)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-[var(--qd-accent)] hover:bg-[color-mix(in_srgb,var(--qd-accent)_20%,transparent)]"
           data-testid={`about-${s.id}`}
           type="button"
           title="About this strategy"

@@ -880,7 +880,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             "last_candle_at": history.get("last_candle_at"),
                             "latest_candle_age_sec": history.get("latest_candle_age_sec"),
                         },
-                         "$inc": {"signals_fired": 1, "evaluations": 1}},
+                         "$inc": {"signals_fired": 1, "evaluations": 1, "evaluations_today": 1}},
                     )
                 except HTTPException as e:
                     placed_error = e.detail
