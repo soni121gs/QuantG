@@ -12,62 +12,62 @@
    ───────────────────────────────────────────────────────────── */
 
 :root {
-  /* Warm paper light */
-  --qd-bg: #f3f1ea;
-  --qd-bg-2: #eeece4;
+  /* Cool light — blue accent on clean slate-white */
+  --qd-bg: #eef1f6;
+  --qd-bg-2: #e6eaf2;
   --qd-surface: #ffffff;
-  --qd-surface-2: #f4f2ec;
-  --qd-surface-3: #eae7df;
+  --qd-surface-2: #f1f4f9;
+  --qd-surface-3: #e3e8f1;
   --qd-elevated: #ffffff;
-  --qd-panel: #fdfcfa;
-  --qd-border: rgba(45, 40, 32, 0.12);
-  --qd-border-strong: rgba(201, 100, 66, 0.42);
-  --qd-text: #20201d;
-  --qd-text-2: #5c5a52;
-  --qd-text-3: #8a877d;
-  --qd-accent: #c96442;
-  --qd-accent-hover: #b5532f;
+  --qd-panel: #ffffff;
+  --qd-border: rgba(15, 23, 42, 0.12);
+  --qd-border-strong: rgba(37, 99, 235, 0.45);
+  --qd-text: #0f172a;
+  --qd-text-2: #475569;
+  --qd-text-3: #7c8aa0;
+  --qd-accent: #2563eb;
+  --qd-accent-hover: #1d4ed8;
   --qd-accent-contrast: #ffffff;
-  --qd-cyan: #3c8a85;
-  --qd-cyan-hover: #2f6f6b;
-  --qd-profit: #2f8a52;
-  --qd-loss: #c0392b;
-  --qd-warn: #b07a1e;
-  --qd-focus: rgba(201, 100, 66, 0.22);
+  --qd-cyan: #0891b2;
+  --qd-cyan-hover: #0e7490;
+  --qd-profit: #15803d;
+  --qd-loss: #dc2626;
+  --qd-warn: #b45309;
+  --qd-focus: rgba(37, 99, 235, 0.22);
   --qd-radius: 10px;
   --qd-radius-sm: 7px;
-  --qd-shadow: 0 1px 2px rgba(40, 34, 26, 0.05);
-  --qd-glow: 0 1px 3px rgba(40, 34, 26, 0.07);
+  --qd-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --qd-glow: 0 1px 3px rgba(15, 23, 42, 0.08);
   --qd-noise: none;
   --qd-band: none;
 }
 
-/* Dark — warm graphite, Claude-night feel */
+/* Dark — black + blue */
 :root[data-quantg-theme="slate"],
 [data-quantg-theme="slate"] {
-  --qd-bg: #1d1c19;
-  --qd-bg-2: #232220;
-  --qd-surface: #2a2926;
-  --qd-surface-2: #302e2a;
-  --qd-surface-3: #3a3833;
-  --qd-elevated: #2d2c28;
-  --qd-panel: #2a2926;
-  --qd-border: rgba(235, 228, 214, 0.11);
-  --qd-border-strong: rgba(217, 130, 100, 0.42);
-  --qd-text: #f1eee6;
-  --qd-text-2: #b6b2a7;
-  --qd-text-3: #87847b;
-  --qd-accent: #d6805f;
-  --qd-accent-hover: #e08e6d;
-  --qd-accent-contrast: #1b1410;
-  --qd-cyan: #5bb3ad;
-  --qd-cyan-hover: #74c4be;
-  --qd-profit: #54c084;
-  --qd-loss: #e36b62;
-  --qd-warn: #e0a94f;
-  --qd-focus: rgba(214, 128, 95, 0.3);
-  --qd-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --qd-glow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  --qd-bg: #07090f;
+  --qd-bg-2: #0b0e16;
+  --qd-surface: #11151f;
+  --qd-surface-2: #161b27;
+  --qd-surface-3: #1f2735;
+  --qd-elevated: #11151f;
+  --qd-panel: #0e121b;
+  --qd-border: rgba(148, 163, 184, 0.16);
+  --qd-border-strong: rgba(59, 130, 246, 0.5);
+  --qd-text: #f1f5fb;
+  --qd-text-2: #aab6c8;
+  --qd-text-3: #6b7892;
+  --qd-accent: #3b82f6;
+  --qd-accent-hover: #60a5fa;
+  --qd-accent-contrast: #ffffff;
+  --qd-cyan: #22d3ee;
+  --qd-cyan-hover: #67e8f9;
+  --qd-profit: #34d399;
+  --qd-loss: #f87171;
+  --qd-warn: #fbbf24;
+  --qd-focus: rgba(59, 130, 246, 0.3);
+  --qd-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --qd-glow: 0 1px 4px rgba(0, 0, 0, 0.45);
   --qd-noise: none;
   --qd-band: none;
 }
@@ -203,25 +203,25 @@ a[class*="bg-indigo-"],
 
 @layer base {
   :root {
-    --background: 48 25% 94%;
-    --foreground: 60 6% 12%;
+    --background: 220 30% 95%;
+    --foreground: 222 47% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 60 6% 12%;
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 60 6% 12%;
-    --primary: 14 53% 53%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 217 91% 55%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 45 20% 92%;
-    --secondary-foreground: 60 6% 12%;
-    --muted: 45 20% 92%;
-    --muted-foreground: 45 6% 43%;
-    --accent: 14 53% 53%;
+    --secondary: 215 28% 92%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 215 28% 92%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 217 91% 55%;
     --accent-foreground: 0 0% 100%;
-    --destructive: 6 63% 46%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
-    --border: 40 14% 84%;
-    --input: 40 14% 84%;
-    --ring: 14 53% 53%;
+    --border: 215 20% 84%;
+    --input: 215 20% 84%;
+    --ring: 217 91% 55%;
     --radius: 0.625rem;
   }
 

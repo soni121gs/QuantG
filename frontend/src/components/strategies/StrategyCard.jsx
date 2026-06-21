@@ -37,14 +37,14 @@ function StatusBadge({ status }) {
     : status === "paused"
       ? "border-[rgba(255,159,10,0.38)] bg-[rgba(255,159,10,0.1)] text-[var(--qd-warn)]"
       : "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]";
-  return <span className={`rounded border px-2 py-1 font-mono text-[11px] uppercase tracking-wider ${tone}`}>{status || "draft"}</span>;
+  return <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${tone}`}>{status || "draft"}</span>;
 }
 
 function Metric({ label, value, tone, compact = false }) {
   return (
     <div className="min-w-0">
-      <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
-      <div className={`${compact ? "text-xs" : "text-sm"} mt-1 truncate font-mono font-semibold ${tone || "text-white"}`}>{value}</div>
+      <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
+      <div className={`${compact ? "text-xs" : "text-sm"} mt-0.5 truncate font-mono font-semibold ${tone || "text-white"}`}>{value}</div>
     </div>
   );
 }
@@ -100,18 +100,18 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
   const broker = getBrokerStatus();
 
   return (
-    <article 
-      className={`qd-card qd-strategy-card flex flex-col p-3 transition-all duration-300 relative overflow-hidden ${
-        isHft 
+    <article
+      className={`qd-card qd-strategy-card flex flex-col p-2 relative overflow-hidden ${
+        isHft
           ? "border-[var(--qd-border-strong)]"
           : "hover:border-[var(--qd-border-strong)]"
-      }`} 
+      }`}
       data-testid={`strategy-${s.id}`}
     >
-      <div className="flex flex-col gap-3 relative z-10 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-2 relative z-10 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           {isHft && (
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-[var(--qd-warn)] font-mono text-[11px] uppercase tracking-wider font-semibold mb-1 w-max">
+            <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-[var(--qd-warn)] font-mono text-[10px] uppercase tracking-wider font-semibold mb-1 w-max">
               <Zap size={9} /> Upstox
             </div>
           )}
@@ -120,22 +120,22 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
             <span className="w-1 h-1 rounded-full bg-[var(--qd-text-3)]" />
             <span className="text-[var(--qd-text-2)]">{speedLabel()}</span>
           </div>
-          <h2 className="mt-1 truncate font-head text-base font-semibold text-[var(--qd-text)]">{s.name}</h2>
-          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)] animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
+          <h2 className="mt-0.5 truncate font-head text-sm font-semibold text-[var(--qd-text)]">{s.name}</h2>
+          <div className="flex items-center gap-1 mt-1 flex-wrap">
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)] animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
               {s.mode === "live" ? "PRODUCTION LIVE" : "PAPER SIMULATED"}
             </span>
-            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-[var(--qd-text)]">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-[var(--qd-surface-2)] border border-[var(--qd-border)] text-[var(--qd-text)]">
               BROKER: {s.broker?.replace("_", " ") || "UPSTOX"}
             </span>
             {isOptionStrat && (
-              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
                 {cardOpts.structure === "debit_spread" ? "DEBIT SPREAD" : cardOpts.structure === "credit_spread" ? "CREDIT SPREAD" : "SINGLE-LEG"}
               </span>
             )}
             {maxTd != null && (
               <span
-                className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider border ${atCap ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"}`}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border ${atCap ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"}`}
                 title="Trades today / daily cap"
               >
                 {tradesToday} / {maxTd} today
@@ -143,7 +143,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
             )}
           </div>
         </div>
-        <div className="grid min-w-[280px] grid-cols-3 gap-2 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2 sm:grid-cols-6 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid min-w-[280px] grid-cols-3 gap-1.5 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-1.5 sm:grid-cols-6 lg:grid-cols-3 xl:grid-cols-6">
           <Metric label="Capital" value={money(s.required_capital)} compact />
           <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
           <Metric label="Score" value={scoreValue ? `${scoreValue}%` : "-"} compact />
@@ -162,7 +162,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
       </div>
 
       {notice && (
-        <div className={`mt-2 rounded border px-3 py-2 text-xs ${
+        <div className={`mt-1.5 rounded border px-2.5 py-1.5 text-[11px] ${
           notice.kind === "filter"
             ? "border-[rgba(255,159,10,0.35)] text-[var(--qd-warn)]"
             : "border-[rgba(255,59,48,0.35)] text-[var(--qd-loss)]"
@@ -172,10 +172,10 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
       )}
 
       {/* EXPANDABLE RISK & EXIT SETTINGS */}
-      <div className="mt-2 border-t border-[var(--qd-border)] pt-2">
-        <button 
+      <div className="mt-1.5 border-t border-[var(--qd-border)] pt-1.5">
+        <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center justify-between py-1.5 px-2 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] rounded font-mono text-[11px] uppercase tracking-wide text-[var(--qd-text)] transition-all active:scale-[0.99]"
+          className="w-full flex items-center justify-between py-1 px-2 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] hover:border-[var(--qd-border-strong)] rounded font-mono text-[10px] uppercase tracking-wide text-[var(--qd-text)] transition-all active:scale-[0.99]"
           type="button"
         >
           <span className="flex items-center gap-1.5">
@@ -190,42 +190,42 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         )}
       </div>
 
-      <div className="mt-2">
+      <div className="mt-1.5">
         <div className="grid grid-cols-1 gap-2 sm:hidden">
           <button
             onClick={() => exitAll(s.id)}
-            className="flex items-center justify-center gap-2 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black py-2.5 font-mono text-xs font-bold uppercase tracking-wider transition-all"
+            className="flex items-center justify-center gap-2 rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] hover:bg-[var(--qd-warn)] hover:text-black py-2 font-mono text-[11px] font-bold uppercase tracking-wider transition-all"
             data-testid={`exit-all-${s.id}`}
             type="button"
           >
-            <Shield size={14} /> Square Off / Exit Position
+            <Shield size={13} /> Square Off / Exit Position
           </button>
         </div>
-        <div className="mt-2 grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-2">
+        <div className="mt-1.5 grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-1.5">
           <button
             onClick={() => exitAll(s.id)}
-            className="hidden items-center justify-center gap-2 rounded border border-[var(--qd-warn)] px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black sm:flex"
+            className="hidden items-center justify-center gap-1.5 rounded border border-[var(--qd-warn)] px-2.5 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black sm:flex"
             data-testid={`exit-all-${s.id}`}
             type="button"
           >
-            <Shield size={13} /> Exit
+            <Shield size={12} /> Exit
           </button>
           <button
             onClick={() => onAbout(s)}
-            className="flex items-center justify-center gap-2 rounded border border-[var(--qd-accent)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white"
+            className="flex items-center justify-center gap-1.5 rounded border border-[var(--qd-accent)] px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-accent)] hover:text-white"
             data-testid={`about-${s.id}`}
             type="button"
           >
-            <HelpCircle size={13} /> About
+            <HelpCircle size={12} /> About
           </button>
-          <button onClick={() => toggle(s.id)} className="flex items-center justify-center gap-2 rounded border border-[var(--qd-border)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`toggle-${s.id}`} type="button">
-            {live ? <><Pause size={13} /> Pause</> : <><Play size={13} /> {paused ? "Resume" : "Live"}</>}
+          <button onClick={() => toggle(s.id)} className="flex items-center justify-center gap-1.5 rounded border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`toggle-${s.id}`} type="button">
+            {live ? <><Pause size={12} /> Pause</> : <><Play size={12} /> {paused ? "Resume" : "Live"}</>}
           </button>
-          <Link to={editPath} className="rounded border border-[var(--qd-border)] px-3 py-3 text-center font-mono text-xs uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
+          <Link to={editPath} className="flex items-center justify-center rounded border border-[var(--qd-border)] px-2.5 py-1.5 text-center font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]" data-testid={`edit-${s.id}`}>
             Edit
           </Link>
-          <button onClick={() => del(s.id)} className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-border)] text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy" type="button">
-            <Trash2 size={14} />
+          <button onClick={() => del(s.id)} className="flex h-8 w-8 items-center justify-center rounded border border-[var(--qd-border)] text-[var(--qd-loss)] hover:border-[var(--qd-loss)]" data-testid={`delete-${s.id}`} aria-label="Delete strategy" type="button">
+            <Trash2 size={13} />
           </button>
         </div>
       </div>
