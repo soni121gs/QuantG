@@ -2024,6 +2024,12 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
     highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
     lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
     vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
+    # Index ltpc ticks carry no volume, so every bar collapses to the 1.0 floor.
+    # When that happens the volume series is degenerate and the volume gate below
+    # (avg_vol * 1.05) is mathematically unsatisfiable, silently blocking EVERY
+    # entry. Detect a real volume signal once and only enforce the gate then;
+    # otherwise treat volume as confirmed (price/VWAP logic still governs entries).
+    vol_reliable = any(float(d.get('volume') or 0) > 0 for d in data)
 
     def avg(values):
         return sum(values) / max(1, len(values))
@@ -2126,7 +2132,7 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
         # Triggers
         bullish_trigger = False
         if bullish_state == 2:
-            if closes[i] > retest_val and closes[i] > vwap[i] and vols[i] >= avg_vol * 1.05 and body >= range_avg * 0.25 and cooldown == 0:
+            if closes[i] > retest_val and closes[i] > vwap[i] and (not vol_reliable or vols[i] >= avg_vol * 1.05) and body >= range_avg * 0.25 and cooldown == 0:
                 bullish_trigger = True
                 bullish_state = 0
             elif closes[i] < vwap[i]:
@@ -2134,7 +2140,7 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
 
         bearish_trigger = False
         if bearish_state == 2:
-            if closes[i] < retest_val and closes[i] < vwap[i] and vols[i] >= avg_vol * 1.05 and body >= range_avg * 0.25 and cooldown == 0:
+            if closes[i] < retest_val and closes[i] < vwap[i] and (not vol_reliable or vols[i] >= avg_vol * 1.05) and body >= range_avg * 0.25 and cooldown == 0:
                 bearish_trigger = True
                 bearish_state = 0
             elif closes[i] > vwap[i]:
@@ -3316,6 +3322,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
         "description": "Upstox-compatible single-leg NIFTY ATM option buying strategy. Uses live NIFTY candles, resolves the exact Upstox option instrument_key, enters on momentum, and exits through the same order manager.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 35: return []
@@ -3358,6 +3365,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
         "description": "Upstox-compatible single-leg BANKNIFTY ATM option buying strategy. It avoids multi-leg selling, resolves the exact Upstox option instrument_key, and lets the order manager place one BUY/exit cycle.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 35: return []
@@ -3609,6 +3617,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "BANKNIFTY Volatility Breakout",
         "description": "Capital-efficient (INR 8,000) BANKNIFTY retail options buying strategy. Captures quick price expansions when closing candles break out of standard deviation bands.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 8000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 25: return []
@@ -5946,7 +5955,11 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             "expiry_offset": template.get("expiry_offset", 0),
             "lots": template["lots"],
             "required_capital": required_capital,
-            "product": template.get("product") or "NRML"
+            "product": template.get("product") or "NRML",
+            # Phase 2 #5: option structure — single_leg (default), credit_spread,
+            # or debit_spread. Consumed by the spread builder at signal time.
+            "structure": template.get("structure") or "single_leg",
+            "spread_width": template.get("spread_width"),
         }
         
     risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}
@@ -16421,7 +16434,16 @@ async def startup():
     # Phase 2 DB migration: update existing strategy python_code when
     # strategy_logic_version is stale (< "2.0").
     async def _migrate_strategy_code_versions():
-        """Silently update python_code for any user who still has v1 strategy code."""
+        """Silently update python_code for any user who still has stale strategy code.
+
+        Bumped to 2.1 to re-push two changes to the live book:
+        (1) the NIFTY VWAP volume-gate fix (the gate was unsatisfiable on
+            volume-less index ltpc data and silently blocked every entry), and
+        (2) re-assert risk_style from the catalog so the live delta-strike
+            selector targets ~0.35-0.40 delta instead of ATM for each buyer.
+        Re-pushing from the in-code catalog (the single source of truth) is
+        idempotent, so version-gating only avoids redundant writes.
+        """
         await asyncio.sleep(5)
         try:
             updated = 0
@@ -16431,13 +16453,15 @@ async def startup():
                         "name": name,
                         "$or": [
                             {"strategy_logic_version": {"$exists": False}},
-                            {"strategy_logic_version": {"$lt": "2.0"}},
+                            {"strategy_logic_version": {"$lt": "2.1"}},
                             {"strategy_logic_version": "1.0"},
                         ],
                     },
                     {"$set": {
                         "python_code": code,
-                        "strategy_logic_version": "2.0",
+                        "risk_style": _cat,
+                        "visual_config.risk.risk_style": _cat,
+                        "strategy_logic_version": "2.1",
                         "code_migrated_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
@@ -16448,6 +16472,35 @@ async def startup():
             logger.warning("Strategy code migration failed: %s", _mig_err)
 
     asyncio.create_task(_migrate_strategy_code_versions())
+
+    # Debit-spread enablement: the engine (builder/lifecycle/monitor) already
+    # supports debit spreads; it only activates when a strategy's
+    # visual_config.options.structure == "debit_spread". Convert the report's
+    # three naked-ATM directional buyers to defined-risk debit spreads so their
+    # max loss is capped at net debit instead of full premium. Idempotent.
+    async def _migrate_debit_spread_structure():
+        await asyncio.sleep(6)
+        _debit_names = [
+            "UPSTOX NIFTY ATM Option Momentum Buyer",
+            "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+            "BANKNIFTY Volatility Breakout",
+        ]
+        try:
+            res = await db.strategies.update_many(
+                {"name": {"$in": _debit_names},
+                 "visual_config.options.structure": {"$ne": "debit_spread"}},
+                {"$set": {
+                    "visual_config.options.structure": "debit_spread",
+                    "visual_config.options.spread_width": 2,
+                    "structure": "debit_spread",
+                }},
+            )
+            if res.modified_count:
+                logger.info("DB migration: set debit_spread structure on %d strategy documents", res.modified_count)
+        except Exception as _ds_err:
+            logger.warning("Debit-spread structure migration failed: %s", _ds_err)
+
+    asyncio.create_task(_migrate_debit_spread_structure())
 
     # Fix 3: Warn loudly at boot if running with the default JWT secret.
     # The secret is SHA-256'd so it won't crash, but forging tokens is trivial

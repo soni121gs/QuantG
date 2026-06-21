@@ -72,6 +72,10 @@ services:
       CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-true}"
       CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
+      # Debit spreads (defined-risk option BUYING) — engine fully supports them;
+      # NIFTY/BANKNIFTY directional buyers opt in via structure=debit_spread.
+      DEBIT_SPREADS_ENABLED: "${DEBIT_SPREADS_ENABLED:-true}"
+      DEBIT_SPREAD_LONG_DELTA: "${DEBIT_SPREAD_LONG_DELTA:-0.50}"
     volumes:
       - backend-state:/data
       - ./wiki:/app/wiki
