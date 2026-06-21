@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { Bot, Send, Plus, PanelRight, X, ShieldCheck } from "lucide-react";
+import { Bot, Send, Plus, PanelRight, PanelRightClose, PanelLeft, PanelLeftClose, X, ShieldCheck } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
 import ChatFeed from "../components/aibot/ChatFeed";
-import AgentContextPanel from "../components/aibot/AgentContextPanel";
+import AgentContextPanel, { ConversationHistoryCard, RiskPostureCard, CapabilitiesCard } from "../components/aibot/AgentContextPanel";
 import { PromptSuggestionsPanel, EmptyState } from "../components/aibot/PromptSuggestionsPanel";
 
 // Multiple conversations are tracked client-side; the backend already keys
@@ -31,6 +31,11 @@ export default function AIBot() {
   const [railOpen, setRailOpen] = useState(false); // mobile context drawer
   const [activeTab, setActiveTab] = useState("chat"); // "chat" or "approvals"
   const [pendingActions, setPendingActions] = useState([]);
+
+  // Collapsible sidebar states for desktop
+  const [showHistory, setShowHistory] = useState(true);
+  const [showInspector, setShowInspector] = useState(true);
+  const [showSuggestions, setShowSuggestions] = useState(true);
 
   const endRef = useRef(null);
 
@@ -88,12 +93,14 @@ export default function AIBot() {
     setText("");
     setRailOpen(false);
     setActiveTab("chat");
+    setShowSuggestions(true);
   };
 
   const selectSession = (id) => {
     setSessionId(id);
     setRailOpen(false);
     setActiveTab("chat");
+    setShowSuggestions(true);
   };
 
   const deleteSession = (id) => {
@@ -168,66 +175,128 @@ export default function AIBot() {
     />
   );
 
+  // Dynamic column layout classes
+  const historySpan = showHistory ? 3 : 0;
+  const inspectorSpan = showInspector ? 3 : 0;
+  const chatSpan = 12 - historySpan - inspectorSpan;
+  const chatSpanClass = {
+    6: "lg:col-span-6",
+    9: "lg:col-span-9",
+    12: "lg:col-span-12"
+  }[chatSpan] || "lg:col-span-8";
+
   return (
     <div className="flex flex-col gap-4" data-testid="ai-bot-page">
-      <PageHeader
-        eyebrow="Active Risk & Co-Pilot"
-        title="Hermes Analyst Co-Pilot"
-        subtitle="Governance-gated operations and research co-pilot, grounded in live terminal context."
-        badge={<StatusBadge tone={profile?.paper_mode ? "paper" : "live"}>{profile?.paper_mode ? "Paper" : "Live"}</StatusBadge>}
-      />
+      {/* Compact Inline Page Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--qd-border)]/45 pb-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8.5 h-8.5 rounded-lg bg-[var(--qd-accent)] flex items-center justify-center shadow-xs">
+            <Bot size={16} className="text-[var(--qd-accent-contrast)]" />
+          </div>
+          <div>
+            <h1 className="font-head text-base font-extrabold text-[var(--qd-text)] flex items-center gap-2">
+              Hermes Analyst Co-Pilot
+              <StatusBadge tone={profile?.paper_mode ? "paper" : "live"} className="h-5 px-1.5 text-[9px] font-mono font-bold">
+                {profile?.paper_mode ? "Paper" : "Live"}
+              </StatusBadge>
+            </h1>
+            <p className="text-[11px] text-[var(--qd-text-2)] font-sans">
+              Governance-gated operations and research co-pilot grounded in live terminal context.
+            </p>
+          </div>
+        </div>
+        <div className="hidden sm:flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] font-semibold border border-[var(--qd-border)] px-2.5 py-1 rounded-full bg-[var(--qd-surface-2)]/30">
+          <span className={`h-1.5 w-1.5 rounded-full ${profile?.paper_mode ? "bg-amber-400" : "bg-emerald-400"}`} />
+          {profile?.paper_mode ? "Paper Mode Active" : "Live Broker Connected"}
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-186px)] lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-130px)] lg:grid-cols-12">
+        {/* Left Sidebar: Conversations list */}
+        {showHistory && (
+          <div className="hidden lg:block lg:col-span-3 lg:h-full lg:min-h-0 animate-fade-in">
+            <ConversationHistoryCard
+              sessions={sessions}
+              sessionId={sessionId}
+              onSelect={selectSession}
+              onNew={newChat}
+              onDelete={deleteSession}
+            />
+          </div>
+        )}
 
-        {/* Chat workspace — fills the column height, internal scroll, docked composer */}
-        <div className="flex min-h-[62vh] flex-col overflow-hidden qd-card lg:col-span-8 lg:min-h-0 lg:h-full">
+        {/* Center Panel: Chat workspace */}
+        <div className={`flex min-h-[62vh] flex-col overflow-hidden qd-card ${chatSpanClass} lg:min-h-0 lg:h-full transition-all duration-300`}>
 
-          {/* Header: tabs */}
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-4 py-3">
+          {/* Header: tabs & sidebar toggles */}
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-4 py-3 bg-[var(--qd-surface-2)]/40 backdrop-blur-xs">
             <div className="flex min-w-0 items-center gap-4">
               <button
-                onClick={() => setActiveTab("chat")}
-                className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors ${
-                  activeTab === "chat"
-                    ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
-                    : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
-                }`}
+                type="button"
+                onClick={() => setShowHistory(!showHistory)}
+                className="hidden lg:inline-flex items-center justify-center p-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)] cursor-pointer transition-colors"
+                title={showHistory ? "Collapse history" : "Expand history"}
               >
-                Co-Pilot Chat
+                {showHistory ? <PanelLeftClose size={15} /> : <PanelLeft size={15} />}
               </button>
-              <button
-                onClick={() => { setActiveTab("approvals"); fetchPendingActions(); }}
-                className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
-                  activeTab === "approvals"
-                    ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
-                    : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
-                }`}
-              >
-                Approvals Queue
-                {pendingActions.length > 0 && (
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[9px] font-bold text-white px-1 shadow-sm">
-                    {pendingActions.length}
-                  </span>
-                )}
-              </button>
+
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  onClick={() => setActiveTab("chat")}
+                  className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                    activeTab === "chat"
+                      ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
+                      : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
+                  }`}
+                >
+                  Co-Pilot Chat
+                </button>
+                <button
+                  onClick={() => { setActiveTab("approvals"); fetchPendingActions(); }}
+                  className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === "approvals"
+                      ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
+                      : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
+                  }`}
+                >
+                  Approvals Queue
+                  {pendingActions.length > 0 && (
+                    <span className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[9px] font-bold text-white px-1 shadow-sm">
+                      {pendingActions.length}
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
+            
             <div className="flex items-center gap-2">
-              <span className="hidden items-center gap-1 rounded-full border border-[var(--qd-border)] px-2 py-0.5 font-mono text-[var(--qd-text-3)] sm:inline-flex t-meta uppercase tracking-wider" title="Reasoning provider">
+              <span className="hidden items-center gap-1.5 rounded-full border border-[var(--qd-border)] px-2.5 py-0.5 font-mono text-[var(--qd-text-3)] sm:inline-flex t-meta uppercase tracking-wider" title="Reasoning provider">
                 <span className={`h-1.5 w-1.5 rounded-full ${aiStatus?.gemini_configured ? "bg-emerald-500" : "bg-amber-500"}`} /> {providerLabel}
               </span>
+              
               <button
                 type="button"
                 onClick={newChat}
-                className="inline-flex items-center gap-1 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] t-meta uppercase tracking-wider"
+                className="inline-flex items-center gap-1 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] t-meta uppercase tracking-wider cursor-pointer hover:bg-[var(--qd-surface-2)]"
                 data-testid="ai-new-chat-header"
               >
                 <Plus size={13} /> New
               </button>
+
+              <button
+                type="button"
+                onClick={() => setShowInspector(!showInspector)}
+                className="hidden lg:inline-flex items-center justify-center p-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] hover:bg-[var(--qd-surface-2)] cursor-pointer transition-colors"
+                title={showInspector ? "Collapse inspector" : "Expand inspector"}
+              >
+                {showInspector ? <PanelRightClose size={15} /> : <PanelRight size={15} />}
+              </button>
+              
               {/* Mobile: open conversations / context drawer */}
               <button
                 type="button"
                 onClick={() => setRailOpen(true)}
-                className="inline-flex items-center rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] p-1.5 text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] lg:hidden"
+                className="inline-flex items-center rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] p-1.5 text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] lg:hidden cursor-pointer"
                 data-testid="ai-open-rail"
                 aria-label="Open conversations and context"
               >
@@ -240,7 +309,7 @@ export default function AIBot() {
           {activeTab === "chat" ? (
             <>
               {/* Messages */}
-              <div className="flex-1 space-y-4 overflow-y-auto p-4" data-testid="messages">
+              <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6" data-testid="messages">
                 {messages.length === 0 ? (
                   <EmptyState onPick={send} />
                 ) : (
@@ -250,22 +319,48 @@ export default function AIBot() {
                 <div ref={endRef} />
               </div>
 
-              {/* Composer */}
-              <div className="border-t border-[var(--qd-border)] bg-[var(--qd-bg)]/20">
-                {messages.length > 0 && <PromptSuggestionsPanel onPick={send} busy={busy} />}
-                <div className="flex items-end gap-2 p-3">
-                  <textarea
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                    rows={1}
-                    placeholder="Ask about positions, risk or feed health — or say 'lower my daily loss limit to 6000'."
-                    className="t-body max-h-32 flex-1 resize-none rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] px-4 py-3 text-[var(--qd-text)] outline-none focus:border-[var(--qd-accent)] focus:ring-1 focus:ring-[var(--qd-accent)]"
-                    data-testid="ai-input"
-                  />
-                  <Button onClick={() => send()} disabled={busy || !text.trim()} variant="primary" size="lg" data-testid="ai-send-btn" aria-label="Send message">
-                    <Send size={16} />
-                  </Button>
+              {/* Composer Input Area */}
+              <div className="border-t border-[var(--qd-border)] bg-[var(--qd-surface-2)]/10 backdrop-blur-xs flex flex-col">
+                {messages.length > 0 && showSuggestions && !text.trim() && (
+                  <PromptSuggestionsPanel onPick={send} busy={busy} onClose={() => setShowSuggestions(false)} />
+                )}
+                <div className="p-4">
+                  <div className="group relative rounded-xl border border-[var(--qd-border)] bg-[var(--qd-surface)] shadow-xs focus-within:border-[var(--qd-border-strong)] focus-within:ring-2 focus-within:ring-[var(--qd-focus)] transition-all flex flex-col">
+                    <textarea
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      onKeyDown={(e) => { 
+                        if (e.key === "Enter" && !e.shiftKey) { 
+                          e.preventDefault(); 
+                          send(); 
+                        } 
+                      }}
+                      rows={2}
+                      placeholder="Ask about positions, risk or feed health — or say 'lower my daily loss limit to 6000'."
+                      className="w-full border-0 bg-transparent px-4 py-3 text-[14px] leading-relaxed text-[var(--qd-text)] outline-none shadow-none resize-none font-sans placeholder-[var(--qd-text-3)]"
+                      data-testid="ai-input"
+                      disabled={busy}
+                    />
+                    
+                    <div className="flex items-center justify-between px-3 py-2 border-t border-[var(--qd-border)]/40 bg-[var(--qd-surface-2)]/20 rounded-b-xl">
+                      <div className="flex items-center gap-2">
+                        <span className="t-meta text-[var(--qd-text-3)] font-mono uppercase tracking-widest flex items-center gap-1 font-semibold">
+                          <Bot size={12} className="text-[var(--qd-accent)]" /> Active Analyst
+                        </span>
+                      </div>
+                      
+                      <button 
+                        onClick={() => send()} 
+                        disabled={busy || !text.trim()} 
+                        className="rounded-lg bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white p-2 flex items-center justify-center transition-all active:scale-95 hover:scale-105 disabled:opacity-40 disabled:scale-100 disabled:pointer-events-none cursor-pointer shadow-sm"
+                        data-testid="ai-send-btn" 
+                        aria-label="Send message"
+                        type="button"
+                      >
+                        <Send size={14} className="text-white" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </>
@@ -354,22 +449,25 @@ export default function AIBot() {
           )}
         </div>
 
-        {/* Desktop rail */}
-        <div className="hidden lg:col-span-4 lg:block lg:h-full lg:min-h-0">
-          {contextPanel}
-        </div>
+        {/* Right Sidebar: Risk Posture & Capabilities (Desktop only) */}
+        {showInspector && (
+          <div className="hidden lg:flex lg:col-span-3 lg:flex-col lg:h-full lg:overflow-y-auto space-y-4 lg:min-h-0 pr-1 animate-fade-in">
+            <RiskPostureCard profile={profile} executionSummary={executionSummary} />
+            <CapabilitiesCard profile={profile} />
+          </div>
+        )}
       </div>
 
       {/* Mobile rail drawer */}
       {railOpen && (
-        <div className="fixed inset-0 z-[60] bg-black/60 lg:hidden" onClick={() => setRailOpen(false)} data-testid="ai-rail-overlay">
+        <div className="fixed inset-0 z-[60] bg-black/60 lg:hidden animate-fade-in" onClick={() => setRailOpen(false)} data-testid="ai-rail-overlay">
           <aside
-            className="absolute right-0 top-0 bottom-0 w-[88%] max-w-sm overflow-y-auto border-l border-[var(--qd-border)] bg-[var(--qd-bg-2)] p-4"
+            className="absolute right-0 top-0 bottom-0 w-[88%] max-w-sm overflow-y-auto border-l border-[var(--qd-border)] bg-[var(--qd-bg-2)] p-4 flex flex-col gap-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-3 flex items-center justify-between">
-              <span className="qd-section-title">Conversations &amp; Context</span>
-              <button type="button" onClick={() => setRailOpen(false)} className="rounded p-1 text-[var(--qd-text-2)]" aria-label="Close">
+            <div className="flex items-center justify-between">
+              <span className="qd-section-title font-mono animate-fade-in">Conversations &amp; Context</span>
+              <button type="button" onClick={() => setRailOpen(false)} className="rounded p-1 text-[var(--qd-text-2)] hover:bg-[var(--qd-surface-2)] cursor-pointer" aria-label="Close">
                 <X size={18} />
               </button>
             </div>
@@ -382,15 +480,20 @@ export default function AIBot() {
 }
 
 const TypingIndicator = () => (
-  <div className="flex gap-3">
-    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded bg-[var(--qd-accent)] shadow-md">
-      <Bot size={16} className="text-white" />
+  <div className="flex gap-3.5 items-center animate-pulse">
+    <div className="relative flex-shrink-0">
+      <div className="w-8.5 h-8.5 rounded-lg bg-[var(--qd-accent)] flex items-center justify-center shadow-md">
+        <Bot size={17} className="text-[var(--qd-accent-contrast)]" />
+      </div>
+      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-amber-500 border-2 border-[var(--qd-bg)] rounded-full animate-ping" title="Agent thinking" />
     </div>
-    <div className="flex items-center gap-1.5 rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface-2)]/65 px-4 py-3">
-      <span className="t-meta mr-1 font-mono text-[var(--qd-text-3)]">Reading your account</span>
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
+    <div className="flex items-center gap-2 rounded-xl border border-[var(--qd-border)] bg-[var(--qd-surface)] px-4 py-3 shadow-xs">
+      <span className="text-[12px] font-mono text-[var(--qd-text-3)] font-semibold uppercase tracking-wider">Hermes is thinking</span>
+      <div className="flex items-center gap-1">
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
+      </div>
     </div>
   </div>
 );
