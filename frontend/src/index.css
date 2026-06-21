@@ -1,184 +1,79 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────
+   QuantG design system — Claude-inspired.
+   Warm paper light theme + warm dark theme. Flat surfaces,
+   thin borders, almost no shadow, no glassmorphism. Compact.
+   Two themes only: default (:root + "daylight") and "slate" (dark).
+   ───────────────────────────────────────────────────────────── */
+
 :root {
-  --qd-bg: #f8fafc;
-  --qd-bg-2: #eef4fb;
-  --qd-surface: rgba(255, 255, 255, 0.86);
-  --qd-surface-2: rgba(241, 245, 249, 0.92);
-  --qd-surface-3: rgba(226, 232, 240, 0.96);
-  --qd-elevated: rgba(255, 255, 255, 0.96);
-  --qd-panel: rgba(255, 255, 255, 0.92);
-  --qd-border: rgba(15, 23, 42, 0.1);
-  --qd-border-strong: rgba(37, 99, 235, 0.28);
-  --qd-text: #111827;
-  --qd-text-2: #475569;
-  --qd-text-3: #7b8797;
-  --qd-accent: #2563eb;
-  --qd-accent-hover: #1d4ed8;
+  /* Warm paper light */
+  --qd-bg: #f3f1ea;
+  --qd-bg-2: #eeece4;
+  --qd-surface: #ffffff;
+  --qd-surface-2: #f4f2ec;
+  --qd-surface-3: #eae7df;
+  --qd-elevated: #ffffff;
+  --qd-panel: #fdfcfa;
+  --qd-border: rgba(45, 40, 32, 0.12);
+  --qd-border-strong: rgba(201, 100, 66, 0.42);
+  --qd-text: #20201d;
+  --qd-text-2: #5c5a52;
+  --qd-text-3: #8a877d;
+  --qd-accent: #c96442;
+  --qd-accent-hover: #b5532f;
   --qd-accent-contrast: #ffffff;
-  --qd-cyan: #0891b2;
-  --qd-cyan-hover: #0e7490;
-  --qd-profit: #15803d;
-  --qd-loss: #dc2626;
-  --qd-warn: #b7791f;
-  --qd-focus: rgba(37, 99, 235, 0.2);
-  --qd-radius: 8px;
-  --qd-radius-sm: 6px;
-  --qd-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
-  --qd-glow: 0 12px 30px rgba(37, 99, 235, 0.12);
-  --qd-noise: radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.08), transparent 24%),
-    radial-gradient(circle at 88% 4%, rgba(8, 145, 178, 0.06), transparent 30%);
-  --qd-band: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(8, 145, 178, 0.03));
+  --qd-cyan: #3c8a85;
+  --qd-cyan-hover: #2f6f6b;
+  --qd-profit: #2f8a52;
+  --qd-loss: #c0392b;
+  --qd-warn: #b07a1e;
+  --qd-focus: rgba(201, 100, 66, 0.22);
+  --qd-radius: 10px;
+  --qd-radius-sm: 7px;
+  --qd-shadow: 0 1px 2px rgba(40, 34, 26, 0.05);
+  --qd-glow: 0 1px 3px rgba(40, 34, 26, 0.07);
+  --qd-noise: none;
+  --qd-band: none;
 }
 
+/* Dark — warm graphite, Claude-night feel */
+:root[data-quantg-theme="slate"],
 [data-quantg-theme="slate"] {
-  --qd-bg: #07111f;
-  --qd-bg-2: #0b1626;
-  --qd-surface: rgba(18, 30, 48, 0.78);
-  --qd-surface-2: rgba(27, 42, 64, 0.82);
-  --qd-surface-3: rgba(40, 59, 86, 0.88);
-  --qd-elevated: rgba(13, 24, 39, 0.92);
-  --qd-panel: rgba(11, 22, 37, 0.9);
-  --qd-border: rgba(156, 178, 211, 0.18);
-  --qd-border-strong: rgba(170, 196, 232, 0.36);
-  --qd-text: #f7fbff;
-  --qd-text-2: #bfd0e5;
-  --qd-text-3: #7e93ad;
-  --qd-accent: #54a3ff;
-  --qd-accent-hover: #2f86f6;
-  --qd-accent-contrast: #04111f;
-  --qd-cyan: #37d5e8;
-  --qd-cyan-hover: #12a8c0;
-  --qd-profit: #35d07f;
-  --qd-loss: #ff5277;
-  --qd-warn: #f7b955;
-  --qd-focus: rgba(84, 163, 255, 0.32);
-  --qd-glow: 0 10px 28px rgba(84, 163, 255, 0.2);
-  --qd-noise: radial-gradient(circle at 8% 0%, rgba(84, 163, 255, 0.12), transparent 25%),
-    radial-gradient(circle at 82% 7%, rgba(55, 213, 232, 0.08), transparent 28%);
-  --qd-band: linear-gradient(135deg, rgba(84, 163, 255, 0.12), rgba(55, 213, 232, 0.04));
-}
-
-:root[data-quantg-theme="graphite"],
-[data-quantg-theme="graphite"] {
-  --qd-bg: #11100d;
-  --qd-bg-2: #191611;
-  --qd-surface: rgba(34, 31, 25, 0.8);
-  --qd-surface-2: rgba(47, 42, 33, 0.86);
-  --qd-surface-3: rgba(66, 58, 43, 0.9);
-  --qd-elevated: rgba(27, 24, 19, 0.94);
-  --qd-panel: rgba(24, 22, 18, 0.92);
-  --qd-border: rgba(220, 198, 146, 0.18);
-  --qd-border-strong: rgba(242, 203, 115, 0.34);
-  --qd-text: #fffaf0;
-  --qd-text-2: #d8cfbd;
-  --qd-text-3: #9b907c;
-  --qd-accent: #f0b84f;
-  --qd-accent-hover: #d89b26;
-  --qd-accent-contrast: #1d1405;
-  --qd-cyan: #82d8c8;
-  --qd-profit: #49d48b;
-  --qd-loss: #ff6b73;
-  --qd-warn: #ffc15c;
-  --qd-focus: rgba(240, 184, 79, 0.28);
-  --qd-glow: 0 10px 30px rgba(240, 184, 79, 0.18);
-  --qd-noise: radial-gradient(circle at 12% 0%, rgba(240, 184, 79, 0.13), transparent 24%),
-    radial-gradient(circle at 90% 8%, rgba(130, 216, 200, 0.07), transparent 28%);
-  --qd-band: linear-gradient(135deg, rgba(240, 184, 79, 0.13), rgba(130, 216, 200, 0.04));
-}
-
-:root[data-quantg-theme="daylight"],
-[data-quantg-theme="daylight"] {
-  --qd-bg: #f3f6fb;
-  --qd-bg-2: #e9eef7;
-  --qd-surface: rgba(255, 255, 255, 0.82);
-  --qd-surface-2: rgba(239, 244, 251, 0.9);
-  --qd-surface-3: rgba(225, 233, 244, 0.94);
-  --qd-elevated: rgba(255, 255, 255, 0.96);
-  --qd-panel: rgba(255, 255, 255, 0.92);
-  --qd-border: rgba(36, 54, 78, 0.14);
-  --qd-border-strong: rgba(38, 92, 159, 0.28);
-  --qd-text: #162033;
-  --qd-text-2: #42536b;
-  --qd-text-3: #718096;
-  --qd-accent: #2563eb;
-  --qd-accent-hover: #1d4ed8;
-  --qd-accent-contrast: #ffffff;
-  --qd-cyan: #0891b2;
-  --qd-profit: #15803d;
-  --qd-loss: #dc274f;
-  --qd-warn: #b7791f;
-  --qd-focus: rgba(37, 99, 235, 0.22);
-  --qd-shadow: 0 16px 42px rgba(20, 36, 64, 0.11);
-  --qd-glow: 0 10px 28px rgba(37, 99, 235, 0.16);
-  --qd-noise: radial-gradient(circle at 10% 0%, rgba(37, 99, 235, 0.09), transparent 26%),
-    radial-gradient(circle at 88% 8%, rgba(8, 145, 178, 0.07), transparent 30%);
-  --qd-band: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(8, 145, 178, 0.04));
-}
-
-:root[data-quantg-theme="focus"],
-[data-quantg-theme="focus"] {
-  --qd-bg: #eef4ff;
-  --qd-bg-2: #e3ecfb;
-  --qd-surface: rgba(255, 255, 255, 0.9);
-  --qd-surface-2: rgba(232, 240, 252, 0.96);
-  --qd-surface-3: rgba(214, 226, 244, 0.98);
-  --qd-elevated: rgba(255, 255, 255, 0.98);
-  --qd-panel: rgba(255, 255, 255, 0.95);
-  --qd-border: rgba(23, 37, 84, 0.16);
-  --qd-border-strong: rgba(29, 78, 216, 0.34);
-  --qd-text: #0f172a;
-  --qd-text-2: #334155;
-  --qd-text-3: #64748b;
-  --qd-accent: #1d4ed8;
-  --qd-accent-hover: #1e40af;
-  --qd-accent-contrast: #ffffff;
-  --qd-cyan: #0f766e;
-  --qd-profit: #047857;
-  --qd-loss: #be123c;
-  --qd-warn: #a16207;
-  --qd-focus: rgba(29, 78, 216, 0.22);
-  --qd-shadow: 0 18px 46px rgba(15, 23, 42, 0.12);
-  --qd-glow: 0 14px 34px rgba(29, 78, 216, 0.16);
-  --qd-noise: radial-gradient(circle at 8% 0%, rgba(29, 78, 216, 0.09), transparent 25%),
-    radial-gradient(circle at 92% 6%, rgba(15, 118, 110, 0.07), transparent 29%);
-  --qd-band: linear-gradient(135deg, rgba(29, 78, 216, 0.1), rgba(15, 118, 110, 0.05));
-}
-
-:root[data-quantg-theme="aurora"],
-[data-quantg-theme="aurora"] {
-  --qd-bg: #0c1021;
-  --qd-bg-2: #11162b;
-  --qd-surface: rgba(27, 31, 58, 0.8);
-  --qd-surface-2: rgba(37, 42, 76, 0.86);
-  --qd-surface-3: rgba(52, 55, 96, 0.9);
-  --qd-elevated: rgba(18, 22, 43, 0.94);
-  --qd-panel: rgba(16, 20, 40, 0.92);
-  --qd-border: rgba(184, 188, 255, 0.18);
-  --qd-border-strong: rgba(169, 146, 255, 0.36);
-  --qd-text: #fbfaff;
-  --qd-text-2: #c9cff7;
-  --qd-text-3: #8d94c5;
-  --qd-accent: #8b7dff;
-  --qd-accent-hover: #7164f2;
-  --qd-accent-contrast: #ffffff;
-  --qd-cyan: #44d9e6;
-  --qd-profit: #40d99b;
-  --qd-loss: #ff5c92;
-  --qd-warn: #ffd166;
-  --qd-focus: rgba(139, 125, 255, 0.3);
-  --qd-glow: 0 12px 32px rgba(139, 125, 255, 0.2);
-  --qd-noise: radial-gradient(circle at 14% 0%, rgba(139, 125, 255, 0.14), transparent 26%),
-    radial-gradient(circle at 86% 6%, rgba(68, 217, 230, 0.09), transparent 28%);
-  --qd-band: linear-gradient(135deg, rgba(139, 125, 255, 0.14), rgba(68, 217, 230, 0.04));
+  --qd-bg: #1d1c19;
+  --qd-bg-2: #232220;
+  --qd-surface: #2a2926;
+  --qd-surface-2: #302e2a;
+  --qd-surface-3: #3a3833;
+  --qd-elevated: #2d2c28;
+  --qd-panel: #2a2926;
+  --qd-border: rgba(235, 228, 214, 0.11);
+  --qd-border-strong: rgba(217, 130, 100, 0.42);
+  --qd-text: #f1eee6;
+  --qd-text-2: #b6b2a7;
+  --qd-text-3: #87847b;
+  --qd-accent: #d6805f;
+  --qd-accent-hover: #e08e6d;
+  --qd-accent-contrast: #1b1410;
+  --qd-cyan: #5bb3ad;
+  --qd-cyan-hover: #74c4be;
+  --qd-profit: #54c084;
+  --qd-loss: #e36b62;
+  --qd-warn: #e0a94f;
+  --qd-focus: rgba(214, 128, 95, 0.3);
+  --qd-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --qd-glow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  --qd-noise: none;
+  --qd-band: none;
 }
 
 html {
-  font-size: 13.5px !important;
+  font-size: 13px !important;
 }
 
 html,
@@ -195,11 +90,7 @@ body,
 
 body {
   margin: 0;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--qd-bg-2) 88%, transparent), var(--qd-bg)),
-    var(--qd-noise),
-    var(--qd-bg);
-  background-attachment: fixed;
+  background: var(--qd-bg);
 }
 
 .font-mono {
@@ -207,35 +98,40 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* font-head stays sans (used on tiny uppercase labels too) */
 .font-head {
-  font-family: 'Sora', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  letter-spacing: 0;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: -0.01em;
 }
 
+/* Big headings use an elegant serif — the Claude touch */
 h1,
 h2,
-h3,
+h3 {
+  font-family: 'Newsreader', 'Inter', Georgia, serif;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
 h4,
 h5,
 h6 {
-  font-family: 'Sora', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  letter-spacing: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
 
 /* ─────────────────────────────────────────────────────────────
    Type scale — single source of truth for text sizing.
-   Replaces ad-hoc text-[8px]/[9px]/[10px] usage app-wide.
-   Hard floor of 11px for readability. Use these instead of
-   hand-picked pixel sizes so proportions stay consistent.
+   Compact, with an 11px floor for readability.
    ───────────────────────────────────────────────────────────── */
-.t-display { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.38rem;  line-height: 1.75rem; font-weight: 800; letter-spacing: -0.01em; }
-.t-title   { font-family: 'Sora','Inter',system-ui,sans-serif; font-size: 1.08rem;  line-height: 1.45rem; font-weight: 700; }
-.t-body    { font-size: 0.92rem;  line-height: 1.4rem; }      /* ~12.5px */
-.t-label   { font-size: 0.85rem;  line-height: 1.2rem; }      /* ~11.5px */
-.t-meta    { font-size: 0.77rem;  line-height: 1.05rem; }     /* ~10.5px */
+.t-display { font-family: 'Newsreader','Inter',Georgia,serif; font-size: 1.4rem;  line-height: 1.7rem; font-weight: 600; letter-spacing: -0.015em; }
+.t-title   { font-family: 'Newsreader','Inter',Georgia,serif; font-size: 1.05rem; line-height: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
+.t-body    { font-size: 0.9rem;  line-height: 1.35rem; }     /* ~11.7px */
+.t-label   { font-size: 0.84rem; line-height: 1.15rem; }     /* ~11px */
+.t-meta    { font-size: 0.84rem; line-height: 1.05rem; }     /* ~11px floor */
 
 @media (min-width: 768px) {
-  .t-display { font-size: 1.55rem; line-height: 1.95rem; }
+  .t-display { font-size: 1.55rem; line-height: 1.9rem; }
 }
 
 .text-white {
@@ -307,25 +203,25 @@ a[class*="bg-indigo-"],
 
 @layer base {
   :root {
-    --background: 224 39% 5%;
-    --foreground: 222 47% 11%;
+    --background: 48 25% 94%;
+    --foreground: 60 6% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 60 6% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 217 91% 60%;
+    --popover-foreground: 60 6% 12%;
+    --primary: 14 53% 53%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 214 32% 91%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 214 32% 91%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 188 86% 50%;
-    --accent-foreground: 222 47% 8%;
-    --destructive: 348 89% 60%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 86%;
-    --input: 214 32% 86%;
-    --ring: 217 91% 60%;
+    --secondary: 45 20% 92%;
+    --secondary-foreground: 60 6% 12%;
+    --muted: 45 20% 92%;
+    --muted-foreground: 45 6% 43%;
+    --accent: 14 53% 53%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 6 63% 46%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 40 14% 84%;
+    --input: 40 14% 84%;
+    --ring: 14 53% 53%;
     --radius: 0.625rem;
   }
 
@@ -344,21 +240,21 @@ a[class*="bg-indigo-"],
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--qd-surface-2);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(115, 128, 149, 0.42);
+  background: color-mix(in srgb, var(--qd-text-3) 45%, transparent);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(183, 194, 211, 0.56);
+  background: color-mix(in srgb, var(--qd-text-3) 70%, transparent);
 }
 
 ::selection {
-  background: rgba(59, 130, 246, 0.34);
-  color: #fff;
+  background: color-mix(in srgb, var(--qd-accent) 30%, transparent);
+  color: var(--qd-text);
 }
 
 button,
@@ -367,12 +263,11 @@ input,
 select,
 textarea {
   transition:
-    border-color 160ms ease,
-    background-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease,
-    box-shadow 160ms ease,
-    opacity 160ms ease;
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease;
 }
 
 input,
@@ -401,62 +296,46 @@ a:focus-visible {
 }
 
 .qd-shell {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--qd-bg-2) 94%, transparent), var(--qd-bg)),
-    var(--qd-noise),
-    var(--qd-bg);
+  background: var(--qd-bg);
 }
 
 .qd-grid-bg {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--qd-bg) 32%, transparent), color-mix(in srgb, var(--qd-bg) 88%, transparent)),
-    radial-gradient(color-mix(in srgb, var(--qd-text) 8%, transparent) 1px, transparent 0);
-  background-size: auto, 30px 30px;
+  background: var(--qd-bg);
 }
 
 .qd-topbar {
-  background: var(--qd-surface);
+  background: color-mix(in srgb, var(--qd-bg) 88%, transparent);
   border-bottom: 1px solid var(--qd-border);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .qd-sidebar {
-  background: var(--qd-surface);
+  background: var(--qd-bg-2);
   border-right: 1px solid var(--qd-border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .qd-page-header,
 .qd-filter-bar {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--qd-accent) 7%, transparent), transparent 48%),
-    var(--qd-panel);
-  box-shadow: var(--qd-shadow);
-  padding: 14px;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--qd-panel);
+  box-shadow: none;
+  padding: 12px;
 }
 
 .qd-page-header {
-  padding: 18px;
+  padding: 14px 16px;
 }
 
 .qd-card,
 .qd-card-tight,
 .glass-card,
 .qd-stat-panel {
-  background:
-    linear-gradient(180deg, var(--qd-elevated), var(--qd-panel)),
-    var(--qd-band);
+  background: var(--qd-panel);
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  box-shadow: var(--qd-shadow);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  box-shadow: none;
   position: relative;
   overflow: hidden;
 }
@@ -466,33 +345,26 @@ a:focus-visible {
   overflow-x: hidden;
 }
 
+/* No more gradient band overlays */
 .qd-card::before,
 .qd-card-tight::before,
 .glass-card::before,
 .qd-stat-panel::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background: var(--qd-band);
-  opacity: 0.55;
+  content: none;
 }
 
 .qd-card:hover,
 .qd-card-tight:hover,
 .glass-card:hover {
   border-color: var(--qd-border-strong);
-  box-shadow: var(--qd-shadow), var(--qd-glow);
-  transform: translateY(-1px);
 }
 
 .qd-section-title {
   color: var(--qd-text-3);
-  font-family: 'Sora', 'Inter', system-ui, sans-serif;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
@@ -519,13 +391,11 @@ a:focus-visible {
 
 .qd-table-wrap tbody tr:hover,
 tbody tr:hover {
-  background: color-mix(in srgb, var(--qd-surface-2) 62%, transparent);
+  background: color-mix(in srgb, var(--qd-surface-2) 70%, transparent);
 }
 
 .qd-hero-panel {
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--qd-accent) 16%, transparent), transparent 54%),
-    linear-gradient(180deg, var(--qd-surface), var(--qd-panel));
+  background: var(--qd-panel);
 }
 
 .qd-dashboard-hero {
@@ -535,10 +405,8 @@ tbody tr:hover {
 .qd-market-pulse {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background:
-    linear-gradient(180deg, var(--qd-elevated), var(--qd-surface)),
-    var(--qd-band);
-  padding: 14px;
+  background: var(--qd-panel);
+  padding: 12px;
 }
 
 .qd-pulse-status {
@@ -546,44 +414,43 @@ tbody tr:hover {
   align-items: center;
   border: 1px solid var(--qd-border);
   border-radius: 999px;
-  padding: 4px 9px;
-  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  padding: 3px 9px;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .qd-pulse-status.is-open {
-  border-color: rgba(4, 120, 87, 0.28);
-  background: rgba(4, 120, 87, 0.1);
+  border-color: color-mix(in srgb, var(--qd-profit) 35%, transparent);
+  background: color-mix(in srgb, var(--qd-profit) 10%, transparent);
   color: var(--qd-profit);
 }
 
 .qd-pulse-status.is-closed {
-  border-color: rgba(161, 98, 7, 0.28);
-  background: rgba(161, 98, 7, 0.1);
+  border-color: color-mix(in srgb, var(--qd-warn) 35%, transparent);
+  background: color-mix(in srgb, var(--qd-warn) 10%, transparent);
   color: var(--qd-warn);
 }
 
 .qd-strategy-card {
-  background:
-    linear-gradient(180deg, var(--qd-elevated), var(--qd-panel)),
-    var(--qd-band);
+  background: var(--qd-panel);
 }
 
 .qd-dashboard-details {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background: var(--qd-surface);
-  box-shadow: var(--qd-shadow);
-  padding: 14px;
+  background: var(--qd-panel);
+  box-shadow: none;
+  padding: 12px;
 }
 
 .qd-dashboard-details > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   cursor: pointer;
   list-style: none;
 }
@@ -594,18 +461,16 @@ tbody tr:hover {
 
 .qd-dashboard-details > summary strong {
   display: block;
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--qd-text);
-  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-family: 'Newsreader', 'Inter', Georgia, serif;
   font-size: 14px;
+  font-weight: 600;
 }
 
 .qd-artboard {
   min-height: 560px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--qd-bg-2) 90%, transparent), color-mix(in srgb, var(--qd-bg) 98%, transparent)),
-    var(--qd-noise),
-    var(--qd-bg);
+  background: var(--qd-bg);
 }
 
 .qd-chip {
@@ -614,14 +479,14 @@ tbody tr:hover {
   gap: 6px;
   border: 1px solid var(--qd-border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--qd-surface-2) 72%, transparent);
+  background: var(--qd-surface-2);
   color: var(--qd-text-2);
-  padding: 6px 10px;
-  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  padding: 4px 9px;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
 }
 
 .qd-mini-blotter {
@@ -631,11 +496,9 @@ tbody tr:hover {
   display: none;
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius);
-  background: var(--qd-surface);
-  box-shadow: var(--qd-shadow);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  padding: 14px;
+  background: var(--qd-panel);
+  box-shadow: none;
+  padding: 12px;
 }
 
 .qd-blotter-metric {
@@ -646,15 +509,15 @@ tbody tr:hover {
   border: 1px solid var(--qd-border);
   border-radius: var(--qd-radius-sm);
   background: var(--qd-surface-2);
-  padding: 12px;
+  padding: 10px;
 }
 
 .qd-blotter-metric span {
   color: var(--qd-text-3);
-  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
@@ -711,12 +574,12 @@ tbody tr:hover {
 @media (max-width: 768px) {
   .qd-page-header,
   .qd-filter-bar {
-    padding: 12px;
+    padding: 11px;
   }
 
   .qd-page-header h1 {
-    font-size: 1.35rem;
-    line-height: 1.8rem;
+    font-size: 1.3rem;
+    line-height: 1.7rem;
   }
 
   .qd-card,
@@ -732,11 +595,11 @@ tbody tr:hover {
 }
 
 .qd-live-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   background: var(--qd-profit);
-  box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--qd-profit) 14%, transparent);
   animation: qd-pulse 1.8s ease-in-out infinite;
 }
 
@@ -759,35 +622,35 @@ tbody tr:hover {
 }
 
 @keyframes qd-flash-up {
-  0% { background: rgba(34, 197, 94, 0.18); }
+  0% { background: color-mix(in srgb, var(--qd-profit) 16%, transparent); }
   100% { background: transparent; }
 }
 
 @keyframes qd-flash-dn {
-  0% { background: rgba(244, 63, 94, 0.18); }
+  0% { background: color-mix(in srgb, var(--qd-loss) 16%, transparent); }
   100% { background: transparent; }
 }
 
 .qd-btn-buy {
   background: var(--qd-profit);
-  color: #04130a;
-  border: 1px solid rgba(34, 197, 94, 0.72);
-  font-weight: 800;
+  color: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--qd-profit) 75%, transparent);
+  font-weight: 700;
 }
 
 .qd-btn-buy:hover {
-  background: #16a34a;
+  background: color-mix(in srgb, var(--qd-profit) 88%, black);
 }
 
 .qd-btn-sell {
   background: var(--qd-loss);
   color: #ffffff;
-  border: 1px solid rgba(244, 63, 94, 0.72);
-  font-weight: 800;
+  border: 1px solid color-mix(in srgb, var(--qd-loss) 75%, transparent);
+  font-weight: 700;
 }
 
 .qd-btn-sell:hover {
-  background: #e11d48;
+  background: color-mix(in srgb, var(--qd-loss) 88%, black);
 }
 
 .qd-tab-active {
@@ -797,7 +660,7 @@ tbody tr:hover {
 
 .cyber-glow-cyan,
 .cyber-glow-indigo {
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
 }
 
 .cyber-gradient-text,
@@ -813,11 +676,11 @@ tbody tr:hover {
   align-items: center;
   gap: 5px;
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 2px 8px;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -830,22 +693,22 @@ tbody tr:hover {
 }
 
 .badge-kill {
-  border-color: rgba(244, 63, 94, 0.45);
+  border-color: color-mix(in srgb, var(--qd-loss) 45%, transparent);
   color: var(--qd-loss);
 }
 
 .badge-drawdown {
-  border-color: rgba(245, 158, 11, 0.45);
+  border-color: color-mix(in srgb, var(--qd-warn) 45%, transparent);
   color: var(--qd-warn);
 }
 
 .badge-size {
-  border-color: rgba(59, 130, 246, 0.45);
-  color: #93c5fd;
+  border-color: color-mix(in srgb, var(--qd-accent) 45%, transparent);
+  color: var(--qd-accent);
 }
 
 .badge-normal {
-  border-color: rgba(34, 197, 94, 0.45);
+  border-color: color-mix(in srgb, var(--qd-profit) 45%, transparent);
   color: var(--qd-profit);
 }
 
@@ -855,11 +718,11 @@ tbody tr:hover {
 }
 
 .glow-pulse-red {
-  box-shadow: 0 0 0 4px rgba(244, 63, 94, 0.14);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--qd-loss) 14%, transparent);
 }
 
 .glow-pulse-green {
-  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--qd-profit) 14%, transparent);
 }
 
 @media (max-width: 768px) {
