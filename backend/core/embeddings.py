@@ -7,7 +7,7 @@ from typing import List
 
 logger = logging.getLogger("quantg.embeddings")
 
-DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
+DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
 
 def _generate_gemini_embedding_sync(text: str) -> List[float]:
@@ -15,12 +15,15 @@ def _generate_gemini_embedding_sync(text: str) -> List[float]:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.warning("GEMINI_API_KEY is not set. Returning a zero vector placeholder.")
-        return [0.0] * 768  # text-embedding-004 is 768-dimensional
+        return [0.0] * 768  # gemini-embedding-001 is set to 768-dimensional
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{DEFAULT_EMBEDDING_MODEL}:embedContent"
     payload = {
         "content": {
             "parts": [{"text": text}]
+        },
+        "config": {
+            "output_dimensionality": 768
         }
     }
     try:
