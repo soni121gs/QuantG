@@ -318,6 +318,11 @@ async def close_credit_spread(
         await db.trade_fills.insert_one({
             "id": f"tf_spread_{pos_id}",
             "fill_id": f"tf_spread_{pos_id}",
+            # Deterministic unique order_id: trade_fills has a unique (non-sparse)
+            # index on order_id, so every spread close omitting it stored null and
+            # the 2nd+ close collided (E11000). Per-position id keeps cross-spread
+            # uniqueness AND idempotency (same pos re-close dedupes, never double-counts).
+            "order_id": f"spread_close_{pos_id}",
             "position_id": pos_id,
             "user_id": user_id,
             "strategy_id": strategy_id,
@@ -616,6 +621,11 @@ async def close_debit_spread(
         await db.trade_fills.insert_one({
             "id": f"tf_spread_{pos_id}",
             "fill_id": f"tf_spread_{pos_id}",
+            # Deterministic unique order_id: trade_fills has a unique (non-sparse)
+            # index on order_id, so every spread close omitting it stored null and
+            # the 2nd+ close collided (E11000). Per-position id keeps cross-spread
+            # uniqueness AND idempotency (same pos re-close dedupes, never double-counts).
+            "order_id": f"spread_close_{pos_id}",
             "position_id": pos_id,
             "user_id": user_id,
             "strategy_id": strategy_id,
