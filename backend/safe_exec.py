@@ -45,6 +45,7 @@ _SAFE_BUILTINS = {
     "list": list, "dict": dict, "tuple": tuple, "set": set,
     "enumerate": enumerate, "zip": zip, "map": map, "filter": filter,
     "sorted": sorted, "reversed": reversed, "any": any, "all": all,
+    "next": next, "iter": iter,
     "print": print,
 }
 

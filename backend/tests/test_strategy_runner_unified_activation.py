@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategy_runner import _contract_resolution_update, _latest_signal_price
+from strategy_runner import _contract_resolution_update, _latest_signal_price, _select_latest_recent_signal
 
 
 def test_paper_contract_resolution_failure_does_not_halt():
@@ -67,3 +67,27 @@ def test_runner_signal_price_prefers_contract_ltp_then_latest_candle():
     assert _latest_signal_price({}, [{"close": 101.5}], {"ltp": 34.5}) == 34.5
     assert _latest_signal_price({"price": 55.0}, [{"close": 101.5}], None) == 55.0
     assert _latest_signal_price({}, [{"close": 101.5}], None) == 101.5
+
+
+def test_runner_selects_latest_recent_signal_not_stale_tail():
+    data = [
+        {"date": "2026-06-19 13:55", "close": 100.0},
+        {"date": "2026-06-22 12:30", "close": 101.0},
+        {"date": "2026-06-22 12:35", "close": 102.0},
+    ]
+    signals = [
+        {"date": "2026-06-19 13:55", "action": "BUY"},
+        {"date": "2026-06-22 12:30", "action": "SELL"},
+    ]
+
+    assert _select_latest_recent_signal(signals, data) == signals[1]
+
+
+def test_runner_returns_none_when_only_historical_signals_exist():
+    data = [
+        {"date": "2026-06-22 12:30", "close": 101.0},
+        {"date": "2026-06-22 12:35", "close": 102.0},
+    ]
+    signals = [{"date": "2026-06-19 13:55", "action": "BUY"}]
+
+    assert _select_latest_recent_signal(signals, data) is None

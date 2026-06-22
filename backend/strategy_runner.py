@@ -178,6 +178,14 @@ def _latest_signal_price(signal: Dict[str, Any], data: List[dict], option_contra
     return None
 
 
+def _select_latest_recent_signal(signals: List[Dict[str, Any]], data: List[dict]) -> Dict[str, Any] | None:
+    recent_dates = {d.get("date") for d in data[-2:]}
+    for signal in reversed(signals):
+        if signal.get("date", "") in recent_dates:
+            return signal
+    return None
+
+
 def _contract_resolution_update(
     eval_set: Dict[str, Any],
     inc_set: Dict[str, Any],
@@ -463,13 +471,25 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    },
                                                     "$inc": inc_set})
                     continue
-                last_sig = signals[-1]
                 is_paper_mode = bool(history.get("paper_mode", True)) if isinstance(history, dict) else False
                 if not is_paper_mode and not bool(history.get("is_live") if isinstance(history, dict) else False):
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
                                                              "last_error": "Mock price history; live strategy execution blocked until real Upstox data is available.",
                                                              "last_signals_count": len(signals)},
+                                                    "$inc": inc_set})
+                    continue
+                last_sig = _select_latest_recent_signal(signals, data)
+                if not last_sig:
+                    last_historical_date = (signals[-1] or {}).get("date", "")
+                    await db.strategies.update_one({"id": s["id"]},
+                                                   {"$set": {**eval_set,
+                                                             "last_signals_count": signals_count,
+                                                             "last_filter_reason": (
+                                                                 f"No current setup from strategy code "
+                                                                 f"(candles={len(data)}, source={eval_set.get('last_data_source', 'unknown')}; "
+                                                                 f"last historical signal={last_historical_date!r})."
+                                                             )},
                                                     "$inc": inc_set})
                     continue
                 last_sig_date = last_sig.get("date", "")
@@ -481,19 +501,6 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set,
                                                              "last_signals_count": signals_count,
                                                              "last_filter_reason": "Duplicate signal (already fired for this candle)"},
-                                                    "$inc": inc_set})
-                    continue
-
-                # Allow signals from the last 2 candles (max 10 min on 5-min bars)
-                # to prevent entering stale/decayed trades.
-                # Ancient signals from yesterday are still blocked since data only
-                # contains today's intraday + recent context bars.
-                recent_dates = {d.get("date") for d in data[-2:]}
-                if last_sig_date not in recent_dates:
-                    await db.strategies.update_one({"id": s["id"]},
-                                                   {"$set": {**eval_set,
-                                                             "last_signals_count": signals_count,
-                                                             "last_filter_reason": f"Stale signal (date={last_sig_date!r} not in last 2 candles)"},
                                                     "$inc": inc_set})
                     continue
 
