@@ -51,6 +51,13 @@ LTP_ENTRY_PRICE         = "ENTRY_PRICE_FALLBACK"
 # 30s outside hours (just stale-EXITING cleanup).
 _POLL_INTERVAL_IN_HOURS  = int(os.environ.get("POSITION_MONITOR_POLL_SECONDS", "5"))
 _POLL_INTERVAL_OUT_HOURS = 30
+# Phantom equity-quote guard: the open-auction window can yield a transient LTP
+# ~½ or ~2× the real price. Feeding it into the SL/TP check fires a phantom
+# "stop-loss" and the exit fills at the bad price (HDFCBANK BUY 1649 → SELL 786
+# one second later, −5190, 2026-06-22). A large cap can't move beyond its NSE
+# circuit band (≤20%) intraday, so reject any equity LTP that deviates more than
+# this from entry and skip the exit/mark this cycle rather than act on bad data.
+_EQUITY_LTP_MAX_DEV = float(os.environ.get("EQUITY_LTP_MAX_DEV", "0.35"))
 
 # Force-close all positions at this IST minute-of-day (15:10 = 910 minutes)
 _SQUAREOFF_MINUTE_IST = 15 * 60 + 10
@@ -424,6 +431,28 @@ async def _process_one_position(
 
     # ── Fetch LTP with full fallback chain ────────────────────────────────────
     ltp, ltp_source = await _resolve_ltp(db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn)
+
+    # ── Phantom equity-quote guard ────────────────────────────────────────────
+    # Reject an implausible equity LTP (suspected bad open-auction tick) before it
+    # can trigger a phantom SL/TP exit or stamp a phantom P&L mark.
+    if (
+        ltp is not None
+        and ltp_source != LTP_ENTRY_PRICE
+        and str(pos.get("asset_type") or "").lower() == "equity"
+    ):
+        _entry_ref = float(pos.get("average_buy_price") or pos.get("average_price") or pos.get("entry_price") or 0)
+        if _entry_ref > 0 and abs(float(ltp) / _entry_ref - 1.0) > _EQUITY_LTP_MAX_DEV:
+            _dev = abs(float(ltp) / _entry_ref - 1.0)
+            logger.warning(
+                "position_monitor: rejecting phantom equity ltp=%.2f for %s (entry=%.2f dev=%.0f%% src=%s) — skipping exit/mark",
+                float(ltp), symbol, _entry_ref, _dev * 100, ltp_source,
+            )
+            await db.strategy_positions.update_one(
+                {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
+                {"$set": {"last_error": f"PHANTOM_LTP_REJECTED: {float(ltp):.2f} vs entry {_entry_ref:.2f} ({_dev * 100:.0f}%)",
+                          "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            return
 
     # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
     # Spreads are excluded: they have a top-level option_type ("CE"/"PE") that

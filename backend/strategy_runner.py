@@ -42,6 +42,12 @@ LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
+# Phantom equity-candle guard: the open-auction window can emit a single bad
+# candle ~½ or ~2× the real price. Entering off it opens at a phantom basis that
+# books a huge fake loss on exit (TCS entry 4041 vs real ~2136, 2026-06-22). Skip
+# the entry when the latest equity close deviates more than this from the recent
+# median — well beyond any NSE large-cap circuit band (≤20%), so no real move trips it.
+EQUITY_PHANTOM_MAX_DEV = float(os.environ.get("EQUITY_PHANTOM_MAX_DEV", "0.35"))
 NON_ERROR_ENTRY_BLOCKS = (
     "cooldown-active",
     "duplicate-buy-dropped",
@@ -1006,6 +1012,37 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             continue
                     except Exception as _of_exc:
                         logger.debug("orderflow gate failed for %s: %s", s["id"], _of_exc)
+
+                # ── Phantom equity-candle guard (entry-side) ──────────────────
+                # Reject an equity entry whose latest candle close is an outlier
+                # vs the recent median — a suspected bad open-auction tick that
+                # would open the position at a phantom basis. Equity only; option
+                # and spread entries price off the chain, not the underlying bar.
+                if _is_entry and str(s.get("asset_class") or "").lower() == "equity" and len(data) >= 6:
+                    try:
+                        _last_close = float((data[-1] or {}).get("close") or 0)
+                        _prior = sorted(c for c in (float((d or {}).get("close") or 0) for d in data[-6:-1]) if c > 0)
+                        if _last_close > 0 and len(_prior) >= 3:
+                            _med = _prior[len(_prior) // 2]
+                            if _med > 0 and abs(_last_close / _med - 1.0) > EQUITY_PHANTOM_MAX_DEV:
+                                _ph_reason = (
+                                    f"PHANTOM_CANDLE: last close {_last_close:.2f} deviates "
+                                    f"{abs(_last_close / _med - 1.0) * 100:.0f}% from recent median {_med:.2f} "
+                                    "— skipping entry on suspected bad open-auction tick"
+                                )
+                                logger.warning("phantom-candle guard: strategy=%s %s", s["id"], _ph_reason)
+                                await record_strategy_filter(db, s["id"], s.get("user_id"), "PHANTOM_CANDLE", _ph_reason)
+                                await db.strategies.update_one(
+                                    {"id": s["id"]},
+                                    {"$set": {**eval_set,
+                                              "last_signals_count": signals_count,
+                                              "last_signal_action": action,
+                                              "last_filter_reason": _ph_reason},
+                                     "$inc": inc_set},
+                                )
+                                continue
+                    except Exception as _ph_exc:
+                        logger.debug("phantom-candle guard failed for %s: %s", s["id"], _ph_exc)
 
                 # Insert signal into db.signals collection instead of placing order directly
                 try:
