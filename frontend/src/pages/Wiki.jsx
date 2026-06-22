@@ -403,106 +403,28 @@ export default function Wiki() {
 
   return (
     <div className="space-y-3">
-      {/* Immersive 3D Knowledge Hub hero */}
-      <style>{`
-        @keyframes khubAurora {
-          0%   { transform: translate3d(0,0,0) scale(1); }
-          33%  { transform: translate3d(6%, -8%, 0) scale(1.15); }
-          66%  { transform: translate3d(-8%, 5%, 0) scale(0.92); }
-          100% { transform: translate3d(0,0,0) scale(1); }
-        }
-        @keyframes khubGrid {
-          0%   { background-position: 0 0, 0 0; }
-          100% { background-position: 44px 44px, 44px 44px; }
-        }
-        @keyframes khubFloat {
-          0%,100% { transform: translateY(0) rotateX(14deg) rotateZ(-8deg); }
-          50%     { transform: translateY(-9px) rotateX(20deg) rotateZ(-4deg); }
-        }
-        @keyframes khubShine {
-          0%   { background-position: -200% center; }
-          100% { background-position: 200% center; }
-        }
-        @keyframes khubPulse {
-          0%,100% { opacity: .55; transform: scale(1); }
-          50%     { opacity: 1;   transform: scale(1.25); }
-        }
-        .khub-hero { perspective: 1100px; }
-        .khub-icon { transform-style: preserve-3d; animation: khubFloat 6s ease-in-out infinite; }
-        .khub-icon::after {
-          content: ""; position: absolute; inset: 0; border-radius: 1rem;
-          background: linear-gradient(145deg, rgba(255,255,255,.35), transparent 60%);
-          transform: translateZ(1px); pointer-events: none;
-        }
-        .khub-title {
-          background: linear-gradient(100deg, var(--qd-text) 20%, var(--qd-accent) 45%, var(--qd-text) 70%);
-          background-size: 200% auto; -webkit-background-clip: text; background-clip: text;
-          -webkit-text-fill-color: transparent; animation: khubShine 6s linear infinite;
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .khub-icon, .khub-title, .khub-aurora, .khub-dot { animation: none !important; }
-        }
-      `}</style>
-      <div className="khub-hero relative overflow-hidden rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface)]">
-        {/* animated aurora blobs */}
-        <div className="khub-aurora pointer-events-none absolute -left-16 -top-20 h-56 w-56 rounded-full blur-3xl opacity-40"
-             style={{ background: "radial-gradient(circle, var(--qd-accent), transparent 70%)", animation: "khubAurora 14s ease-in-out infinite" }} />
-        <div className="khub-aurora pointer-events-none absolute right-0 -bottom-24 h-64 w-64 rounded-full blur-3xl opacity-25"
-             style={{ background: "radial-gradient(circle, #6d8bff, transparent 70%)", animation: "khubAurora 18s ease-in-out infinite reverse" }} />
-        {/* perspective grid floor */}
-        <div className="pointer-events-none absolute inset-0 opacity-[0.18]"
-             style={{
-               backgroundImage: "linear-gradient(var(--qd-border) 1px, transparent 1px), linear-gradient(90deg, var(--qd-border) 1px, transparent 1px)",
-               backgroundSize: "44px 44px",
-               maskImage: "radial-gradient(ellipse 80% 120% at 50% -10%, #000 40%, transparent 75%)",
-               WebkitMaskImage: "radial-gradient(ellipse 80% 120% at 50% -10%, #000 40%, transparent 75%)",
-               animation: "khubGrid 8s linear infinite",
-             }} />
-        {/* floating particles */}
-        <span className="khub-dot pointer-events-none absolute left-[22%] top-5 h-1.5 w-1.5 rounded-full bg-[var(--qd-accent)]" style={{ animation: "khubPulse 3.2s ease-in-out infinite" }} />
-        <span className="khub-dot pointer-events-none absolute left-[40%] bottom-6 h-1 w-1 rounded-full bg-[#6d8bff]" style={{ animation: "khubPulse 4.1s ease-in-out .6s infinite" }} />
-        <span className="khub-dot pointer-events-none absolute right-[30%] top-8 h-1 w-1 rounded-full bg-[var(--qd-accent)]" style={{ animation: "khubPulse 3.7s ease-in-out 1.1s infinite" }} />
-
-        <div className="relative flex flex-col gap-5 p-6 md:flex-row md:items-center md:justify-between md:p-8">
-          <div className="flex items-center gap-5">
-            {/* 3D floating book tile */}
-            <div className="relative grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[var(--qd-accent)] to-[#5a6dff] shadow-[0_18px_40px_-12px_var(--qd-accent)] khub-icon">
-              <BookOpen className="text-white" size={30} strokeWidth={1.75} />
-            </div>
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.35em] text-[var(--qd-accent)]">Hermes · Second Brain</div>
-              <h1 className="khub-title font-head text-3xl font-black leading-tight md:text-4xl">Knowledge Hub</h1>
-              <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-[var(--qd-text-2)]">
-                A living Obsidian vault of transcripts, rules and decisions — linked with <code className="text-[var(--qd-accent)]">[[wikilinks]]</code>,
-                synced live to disk, and now wired straight into the Hermes agent's reasoning.
-              </p>
-            </div>
+      {/* Compact Knowledge Hub header */}
+      <div className="qd-card flex flex-wrap items-center justify-between gap-2 border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-2">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-[var(--qd-accent)]">
+            <BookOpen className="text-[var(--qd-accent-contrast)]" size={15} strokeWidth={1.9} />
           </div>
-          <div className="flex items-center gap-2 self-start md:self-auto">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleSyncObsidian}
-              disabled={syncBusy}
-              data-testid="wiki-sync"
-              className="h-9 text-xs px-3 backdrop-blur-sm"
-            >
-              <RefreshCw size={13} className={syncBusy ? "animate-spin mr-1.5" : "mr-1.5"} />
-              Sync Obsidian
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setShowSummarizeModal(true)}
-              data-testid="wiki-summarize-btn"
-              className="h-9 text-xs px-3 backdrop-blur-sm"
-            >
-              <Share2 size={13} className="mr-1.5 rotate-90" /> AI Summarize
-            </Button>
-            <Button variant="accent" size="sm" onClick={handleCreateNew} data-testid="wiki-new" className="h-9 text-xs px-3 shadow-[0_8px_22px_-8px_var(--qd-accent)]">
-              <Plus size={14} className="mr-1.5" /> New Note
-            </Button>
+          <div className="min-w-0">
+            <h1 className="font-head text-sm font-extrabold text-[var(--qd-text)] leading-none">Knowledge Hub</h1>
+            <p className="mt-0.5 truncate text-[10px] text-[var(--qd-text-3)]">Obsidian vault · synced live · wired into Hermes</p>
           </div>
+        </div>
+        <div className="flex items-center gap-1.5 self-start md:self-auto">
+          <Button variant="secondary" size="sm" onClick={handleSyncObsidian} disabled={syncBusy} data-testid="wiki-sync" className="h-7 text-[11px] px-2">
+            <RefreshCw size={12} className={syncBusy ? "animate-spin mr-1" : "mr-1"} />
+            Sync
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setShowSummarizeModal(true)} data-testid="wiki-summarize-btn" className="h-7 text-[11px] px-2">
+            <Share2 size={12} className="mr-1 rotate-90" /> Summarize
+          </Button>
+          <Button variant="accent" size="sm" onClick={handleCreateNew} data-testid="wiki-new" className="h-7 text-[11px] px-2">
+            <Plus size={13} className="mr-1" /> New
+          </Button>
         </div>
       </div>
 
@@ -520,8 +442,8 @@ export default function Wiki() {
           auditResult={auditResult}
         />
 
-        {/* Center: Viewer / Editor Panel (Col 6) */}
-        <div className="lg:col-span-6 qd-card p-3 bg-[var(--qd-surface)] border border-[var(--qd-border)] min-h-[500px]">
+        {/* Center: Viewer / Editor Panel (Col 5) */}
+        <div className="lg:col-span-5 qd-card p-3 bg-[var(--qd-surface)] border border-[var(--qd-border)] min-h-[500px]">
           {isEditing ? (
             /* Note Editor Form */
             <form onSubmit={handleSave} className="space-y-4">
@@ -809,8 +731,8 @@ export default function Wiki() {
           )}
         </div>
 
-        {/* Right Side: link graph & topics summary (Col 3) */}
-        <div className="lg:col-span-3 space-y-4">
+        {/* Right Side: link graph & topics summary (Col 4) */}
+        <div className="lg:col-span-4 space-y-4">
           {/* Interactive Graph view component */}
           <PhysicsGraphCanvas
             data={graphData}
