@@ -2332,9 +2332,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ### Phase B — Memory Ring
 
-| HSB-03 | Episodic memory tool `get_historical_context(days=N)`: reads `daily_reports` + `core_events` + alert history so the brain can say "drought 4 sessions running" / "BANKNIFTY ATM worst structure 5 weeks". Time-awareness. | `routes/ai.py` |
-| HSB-04 | Recall layer: new `db.hermes_memory` collection (one atomic fact/doc: `{text, type, date, embedding, source_refs}`) + Gemini embeddings (same API key) + `recall_memory(query)` tool doing in-process cosine top-k. **Decision: time-decay weighting, NOT deletion** — old facts down-weighted so stale regime calls don't haunt. | `routes/ai.py`, new collection |
-| HSB-05 | Auto-memory: EOD `compile_memory` step distills the day into 1–3 atomic facts → `db.hermes_memory`, and auto-drafts a "session memory" wiki note via the existing `draft_wiki_note` (approval-gated). Mirrors the MEMORY.md pattern; compounds over time. | `hermes/agent.py` or backend EOD job |
+*Completed and verified.*
 
 ### Phase C — Web Context
 
@@ -2425,12 +2423,15 @@ a confident overfitting machine — that is the single worst outcome and is expl
 | TASK-H024 | Proactive behavioral alerts (drought / drawdown / loss-streak) | 1243636 | 2026-06-20 |
 | HSB-01 | `get_strategy_score_explained` read-only tool with threshold warning | be8d7d4 | 2026-06-22 |
 | HSB-02 | Query-aware playbook router filtering executed tools | be8d7d4 | 2026-06-22 |
+| HSB-03 | Episodic memory tool `get_historical_context(days=N)` | feabc9d | 2026-06-22 |
+| HSB-04 | Recall layer: `db.hermes_memory` and `recall_memory` tool | feabc9d | 2026-06-22 |
+| HSB-05 | Auto-memory: daily distillation compiler to `db.hermes_memory` and wiki notes | feabc9d | 2026-06-22 |
 
 ---
 
 *Last updated: 2026-06-22 (Hermes Second-Brain Campaign added: PRIORITY 12, HSB-01..HSB-17 — RAG/memory/advisor/self-improvement loop + folded-in strategy AutoResearch ratchet, judge-first. Backlog, below the active Win-Rate campaign.)*
 *Total tasks: 53 + 25 Hermes (H001–H025) + 17 Hermes Second-Brain (HSB-01–HSB-17) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
-*Open: 15 (HSB-03–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 81 (53 + H001–H025 + HSB-01–HSB-02)*
-*Hermes open: HSB-03–HSB-17 (PRIORITY 12, do not start until Win-Rate campaign settles)*
+*Open: 12 (HSB-06–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 84 (53 + H001–H025 + HSB-01–HSB-05)*
+*Hermes open: HSB-06–HSB-17 (PRIORITY 12, do not start until Win-Rate campaign settles)*
 *Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
-*Recommended next build order (when unblocked): HSB-03 (episodic memory tool) next.*
+*Recommended next build order (when unblocked): HSB-06 (Google-Search grounding) next.*
