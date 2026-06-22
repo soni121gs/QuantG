@@ -311,6 +311,55 @@ async def test_signal_manager_max_trades_is_blocked():
 
 
 @pytest.mark.anyio
+async def test_signal_manager_paper_measurement_relaxes_cooldown():
+    db = MagicMock()
+
+    db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "user_id": "user-1",
+        "mode": "paper",
+        "last_signal_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 15,
+                "max_trades_day": 0,
+            }
+        },
+    })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
+
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", {})
+    assert ok
+    assert reason is None
+    assert alloc_mult == 1.0
+
+
+@pytest.mark.anyio
+async def test_signal_manager_paper_measurement_raises_trade_cap():
+    db = MagicMock()
+
+    db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "user_id": "user-1",
+        "mode": "paper",
+        "last_signal_at": None,
+        "order_count_today": 8,
+        "visual_config": {
+            "risk": {
+                "cooldown_minutes": 0,
+                "max_trades_day": 8,
+            }
+        },
+    })
+    db.strategy_loss_streaks.find_one = AsyncMock(return_value=None)
+
+    ok, reason, alloc_mult = await SignalManager.validate_strategy_limits(db, "strat-1", "user-1", {})
+    assert ok
+    assert reason is None
+    assert alloc_mult == 1.0
+
+
+@pytest.mark.anyio
 async def test_signal_manager_profitable_strategy_gets_extra_trade_slot():
     db = MagicMock()
 

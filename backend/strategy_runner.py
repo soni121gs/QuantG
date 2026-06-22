@@ -178,12 +178,35 @@ def _latest_signal_price(signal: Dict[str, Any], data: List[dict], option_contra
     return None
 
 
-def _select_latest_recent_signal(signals: List[Dict[str, Any]], data: List[dict]) -> Dict[str, Any] | None:
-    recent_dates = {d.get("date") for d in data[-2:]}
+def _select_latest_recent_signal(
+    signals: List[Dict[str, Any]],
+    data: List[dict],
+    lookback_candles: int = 2,
+) -> Dict[str, Any] | None:
+    recent_dates = {d.get("date") for d in data[-lookback_candles:]}
     for signal in reversed(signals):
         if signal.get("date", "") in recent_dates:
             return signal
     return None
+
+
+def _select_paper_measurement_signal(signals: List[Dict[str, Any]], data: List[dict]) -> Dict[str, Any] | None:
+    if not data:
+        return None
+    latest_session = str(data[-1].get("date") or "")[:10]
+    recent_dates = {d.get("date") for d in data[-12:]}
+    for signal in reversed(signals):
+        signal_date = str(signal.get("date") or "")
+        if signal_date[:10] == latest_session and signal_date in recent_dates:
+            return signal
+    return None
+
+
+def _paper_measurement_reason(signal: Dict[str, Any], data: List[dict]) -> str:
+    return (
+        "Paper measurement mode: accepted same-session setup "
+        f"from {signal.get('date')!r} within the last {min(12, len(data))} candles."
+    )
 
 
 def _contract_resolution_update(
@@ -480,6 +503,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                     "$inc": inc_set})
                     continue
                 last_sig = _select_latest_recent_signal(signals, data)
+                paper_measurement_reason = None
+                if not last_sig and is_paper_mode:
+                    last_sig = _select_paper_measurement_signal(signals, data)
+                    if last_sig:
+                        paper_measurement_reason = _paper_measurement_reason(last_sig, data)
                 if not last_sig:
                     last_historical_date = (signals[-1] or {}).get("date", "")
                     await db.strategies.update_one({"id": s["id"]},
@@ -895,6 +923,15 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         )
                         if _opt_ltp > 0 and data:
                             last_sig = attach_exit_policy_to_signal(last_sig, data, _opt_ltp)
+                            if is_paper_mode and last_sig.get("theta_guard_blocked"):
+                                _atr_val = last_sig.get("underlying_atr_pct", 0.0)
+                                last_sig["theta_guard_paper_bypassed"] = True
+                                last_sig["theta_guard_reason"] = (
+                                    f"THETA_GUARD: atr%={_atr_val:.4f} below minimum threshold; paper entry allowed for measurement."
+                                )
+                                last_sig.pop("theta_guard_blocked", None)
+                                if not paper_measurement_reason:
+                                    paper_measurement_reason = "Paper measurement mode: theta guard warning logged but not blocking paper entry."
                             if last_sig.get("theta_guard_blocked"):
                                 _atr_val = last_sig.get("underlying_atr_pct", 0.0)
                                 _tg_reason = (
@@ -1033,6 +1070,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         {"$set": {**eval_set,
                                   "last_signal_action": action,
                                   "last_signals_count": signals_count,
+                                  **({"last_filter_reason": paper_measurement_reason} if paper_measurement_reason else {}),
                                   "last_fired_signal_date": last_sig_date,
                                   "last_traded_symbol": target_symbol,
                                   "last_resolver_stage": (option_contract or {}).get("resolver_stage"),

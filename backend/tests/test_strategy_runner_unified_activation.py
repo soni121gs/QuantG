@@ -3,7 +3,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategy_runner import _contract_resolution_update, _latest_signal_price, _select_latest_recent_signal
+from strategy_runner import (
+    _contract_resolution_update,
+    _latest_signal_price,
+    _select_latest_recent_signal,
+    _select_paper_measurement_signal,
+)
 
 
 def test_paper_contract_resolution_failure_does_not_halt():
@@ -91,3 +96,25 @@ def test_runner_returns_none_when_only_historical_signals_exist():
     signals = [{"date": "2026-06-19 13:55", "action": "BUY"}]
 
     assert _select_latest_recent_signal(signals, data) is None
+
+
+def test_runner_paper_measurement_selects_same_session_signal():
+    data = [
+        {"date": "2026-06-22 12:00", "close": 100.0},
+        {"date": "2026-06-22 12:05", "close": 101.0},
+        {"date": "2026-06-22 12:10", "close": 102.0},
+        {"date": "2026-06-22 12:15", "close": 103.0},
+    ]
+    signals = [{"date": "2026-06-22 12:00", "action": "BUY"}]
+
+    assert _select_paper_measurement_signal(signals, data) == signals[0]
+
+
+def test_runner_paper_measurement_ignores_prior_session_signal():
+    data = [
+        {"date": "2026-06-22 12:10", "close": 102.0},
+        {"date": "2026-06-22 12:15", "close": 103.0},
+    ]
+    signals = [{"date": "2026-06-21 12:15", "action": "BUY"}]
+
+    assert _select_paper_measurement_signal(signals, data) is None

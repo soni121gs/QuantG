@@ -454,6 +454,7 @@ class SignalManager:
             or (visual_config or {}).get("risk")
             or {}
         )
+        is_paper_strategy = str(strategy.get("mode") or "").lower() == "paper"
 
         # 1. Max trades per day
         max_trades = risk_cfg.get("max_trades_day", risk_cfg.get("max_trades_per_day"))
@@ -462,6 +463,8 @@ class SignalManager:
                 max_trades = int(max_trades)
             except (TypeError, ValueError):
                 max_trades = None
+        if is_paper_strategy:
+            max_trades = max(int(max_trades or 0), int(os.environ.get("PAPER_MEASUREMENT_MAX_TRADES_DAY", "24")))
         if max_trades and max_trades > 0:
             effective_max_trades = SignalManager._effective_max_trades(max_trades, strategy, risk_cfg)
             count_today = int(strategy.get("order_count_today") or 0)
@@ -479,6 +482,8 @@ class SignalManager:
                 cooldown_minutes = int(cooldown_minutes)
             except (TypeError, ValueError):
                 cooldown_minutes = None
+        if is_paper_strategy and cooldown_minutes:
+            cooldown_minutes = min(cooldown_minutes, int(os.environ.get("PAPER_MEASUREMENT_COOLDOWN_MINUTES", "3")))
         if cooldown_minutes and cooldown_minutes > 0:
             last_signal_at = strategy.get("last_signal_at")
             if last_signal_at:
