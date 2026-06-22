@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from safe_exec import safe_run_strategy
-from server import DEFAULT_OPTION_STRATEGIES, RETAIL_LIVE_STATE_CODE
+from server import DEFAULT_OPTION_STRATEGIES, RETAIL_LIVE_STATE_CODE, UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME
 
 
 EXPECTED_DEFAULT_NAMES = {
@@ -78,6 +78,17 @@ def test_default_strategy_templates_are_not_collapsed_to_generic_retail_code():
             continue
         assert "time exit" in code.lower() or "scalper time exit" in code.lower(), strategy["name"]
         assert strategy.get("risk_style") in {"momentum", "breakout", "pullback", "micro_scalp", "volatile_breakout"}
+
+
+def test_equity_templates_are_in_versioned_code_migration():
+    equity_names = {
+        strategy["name"]
+        for strategy in DEFAULT_OPTION_STRATEGIES
+        if strategy.get("instrument_group") in ("NSE", "BSE")
+    }
+
+    assert equity_names
+    assert equity_names.issubset(UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME)
 
 
 def test_default_strategy_templates_are_sandbox_runnable():

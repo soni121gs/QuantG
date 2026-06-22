@@ -2148,6 +2148,24 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
             elif closes[i] > vwap[i]:
                 bearish_state = 0
 
+        if cooldown == 0:
+            recent_high = max(highs[i-6:i])
+            recent_low = min(lows[i-6:i])
+            bullish_continuation = (
+                closes[i] > vwap[i] * 1.0005
+                and closes[i] >= recent_high * 0.999
+                and closes[i] > closes[i-1]
+                and body >= range_avg * 0.18
+            )
+            bearish_continuation = (
+                closes[i] < vwap[i] * 0.9995
+                and closes[i] <= recent_low * 1.001
+                and closes[i] < closes[i-1]
+                and body >= range_avg * 0.18
+            )
+            bullish_trigger = bullish_trigger or bullish_continuation
+            bearish_trigger = bearish_trigger or bearish_continuation
+
         if position == "LONG":
             if bearish_trigger or closes[i] < vwap[i] * 0.998:
                 signals.append({
@@ -2330,13 +2348,13 @@ SENSEX_RSI_PULLBACK_CODE = """def run(data):
 
         slope_extreme = abs(vwap[i] - vwap[max(0, i-10)]) > vwap[i] * 0.012
 
-        was_oversold  = any(rsi[j] <= 35 for j in range(max(0, i-5), i))
-        was_overbought= any(rsi[j] >= 65 for j in range(max(0, i-5), i))
+        was_oversold  = any(rsi[j] <= 42 for j in range(max(0, i-8), i + 1))
+        was_overbought= any(rsi[j] >= 58 for j in range(max(0, i-8), i + 1))
 
-        bullish = (trend_up and was_oversold and rsi[i-1] <= 37 and rsi[i] >= 39
+        bullish = (trend_up and was_oversold and rsi[i] >= rsi[i-1] and rsi[i] >= 41
                    and closes[i] > closes[i-1] and not slope_extreme
                    and cooldown == 0 and not gap_down)
-        bearish = (trend_down and was_overbought and rsi[i-1] >= 63 and rsi[i] <= 61
+        bearish = (trend_down and was_overbought and rsi[i] <= rsi[i-1] and rsi[i] <= 59
                    and closes[i] < closes[i-1] and not slope_extreme and cooldown == 0)
 
         if position == "LONG":
@@ -2350,7 +2368,7 @@ SENSEX_RSI_PULLBACK_CODE = """def run(data):
                     "regime_required": "pullback", "option_selection_preference": "ATM",
                     "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
-                position = "NONE"; cooldown = 8
+                position = "NONE"; cooldown = 4
         elif position == "SHORT":
             if bullish or rsi[i] < 32 or closes[i] > vwap[i]:
                 signals.append({
@@ -2362,7 +2380,7 @@ SENSEX_RSI_PULLBACK_CODE = """def run(data):
                     "regime_required": "pullback", "option_selection_preference": "ATM",
                     "signal_version": "v13", "strategy_logic_version": "2.0"
                 })
-                position = "NONE"; cooldown = 8
+                position = "NONE"; cooldown = 4
         else:
             if bullish:
                 conf = 65.0
@@ -2466,9 +2484,9 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
         slope_up = ema20[i] > ema20[i-3]
         slope_down = ema20[i] < ema20[i-3]
         
-        # No-trade zones: 0.15% buffer
-        buffer = closes[i] * 0.0015
-        outside_buffer = abs(closes[i] - ema20[i]) > buffer and abs(closes[i] - vwap[i]) > buffer
+        # No-trade zones: keep only a small buffer so paper measurement captures valid intraday trends.
+        buffer = closes[i] * 0.0006
+        outside_buffer = abs(closes[i] - ema20[i]) > buffer or abs(closes[i] - vwap[i]) > buffer
         
         bullish = closes[i] > ema20[i] > ema50[i] and closes[i] > vwap[i] and slope_up and outside_buffer and cooldown == 0
         bearish = closes[i] < ema20[i] < ema50[i] and closes[i] < vwap[i] and slope_down and outside_buffer and cooldown == 0
@@ -2493,7 +2511,7 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
                     "strategy_logic_version": "1.0"
                 })
                 position = "NONE"
-                cooldown = 15
+                cooldown = 6
         elif position == "SHORT":
             if bullish or closes[i] > ema20[i]:
                 signals.append({
@@ -2514,7 +2532,7 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
                     "strategy_logic_version": "1.0"
                 })
                 position = "NONE"
-                cooldown = 15
+                cooldown = 6
         else:
             if bullish:
                 conf = 60.0
@@ -3041,12 +3059,15 @@ NIFTY_QUICK_EMA_SCALPER_CODE = """def run(data):
         body = abs(closes[i] - data[i].get('open', closes[i]))
         vol_ok = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.85
 
-        # Crossover checks
+        # Crossover or active alignment checks. The old template only entered on
+        # the exact EMA cross candle, which left the strategy idle after restart.
         bullish_cross = ema3[i] > ema9[i] and ema3[i-1] <= ema9[i-1]
         bearish_cross = ema3[i] < ema9[i] and ema3[i-1] >= ema9[i-1]
+        bullish_aligned = ema3[i] > ema9[i] and closes[i] >= ema3[i] and closes[i] >= closes[i-1]
+        bearish_aligned = ema3[i] < ema9[i] and closes[i] <= ema3[i] and closes[i] <= closes[i-1]
         
-        bullish = bullish_cross and closes[i] > vwap[i] and body > range_avg * 0.4 and vol_ok
-        bearish = bearish_cross and closes[i] < vwap[i] and body > range_avg * 0.4 and vol_ok
+        bullish = (bullish_cross or bullish_aligned) and closes[i] > vwap[i] * 0.999 and body > range_avg * 0.20 and vol_ok
+        bearish = (bearish_cross or bearish_aligned) and closes[i] < vwap[i] * 1.001 and body > range_avg * 0.20 and vol_ok
 
         if position == "LONG":
             if bearish_cross or i - last_entry_i >= 6:
@@ -3153,7 +3174,7 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
     highs = [float(d.get('high', d.get('close') or 0) or 0) for d in data]
     lows = [float(d.get('low', d.get('close') or 0) or 0) for d in data]
     vols = [max(1.0, float(d.get('volume') or 1)) for d in data]
-    band_mult = 1.6  # Wider bands to detect true compression-to-expansion
+    band_mult = 1.2
     
     def avg(values):
         return sum(values) / max(1, len(values))
@@ -3207,7 +3228,7 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
             width_history.append((c_sma + band_mult * c_std - (c_sma - band_mult * c_std)) / c_sma if c_sma else 0.0)
             
         avg_width = sum(width_history) / len(width_history)
-        compressed = width <= avg_width * 0.88  # Volatility compressed at least 12% below average
+        compressed = width <= avg_width * 1.05
         
         # ATR check
         atr = max(0.01, avg([max(highs[j], closes[j-1]) - min(lows[j], closes[j-1]) for j in range(i-14, i)]))
@@ -3215,10 +3236,10 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
         
         # Breakout indicators
         expanding = width > width_history[-1]
-        vol_surge = float(data[i].get('tod_vol_ratio', 1.0)) >= 1.0 and body > atr * 0.75
+        vol_surge = float(data[i].get('tod_vol_ratio', 1.0)) >= 0.75 and body > atr * 0.35
 
-        bullish = compressed and closes[i] > upper and closes[i-1] <= upper and expanding and vol_surge and cooldown == 0
-        bearish = compressed and closes[i] < lower and closes[i-1] >= lower and expanding and vol_surge and cooldown == 0
+        bullish = compressed and closes[i] > upper and closes[i] > closes[i-1] and expanding and vol_surge and cooldown == 0
+        bearish = compressed and closes[i] < lower and closes[i] < closes[i-1] and expanding and vol_surge and cooldown == 0
 
         if position == "LONG":
             if bearish or closes[i] < sma:
@@ -3240,7 +3261,7 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
                     "strategy_logic_version": "1.0"
                 })
                 position = "NONE"
-                cooldown = 15
+                cooldown = 6
         elif position == "SHORT":
             if bullish or closes[i] > sma:
                 signals.append({
@@ -3261,7 +3282,7 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
                     "strategy_logic_version": "1.0"
                 })
                 position = "NONE"
-                cooldown = 15
+                cooldown = 6
         else:
             if bullish:
                 # Compression-to-expansion breakout confidence
@@ -3801,7 +3822,13 @@ DEFAULT_OPTION_STRATEGIES = [
             continue
             
         tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
-        bearish_entry = closes[i] < vwap[i] and closes[i] < ema50[i] and tod_vol > 1.2 and closes[i] < min(closes[max(0, i-10):i])
+        bearish_entry = (
+            closes[i] < vwap[i] * 1.001
+            and closes[i] < ema50[i] * 1.001
+            and tod_vol >= 0.8
+            and closes[i] <= min(closes[max(0, i-6):i]) * 1.001
+            and closes[i] <= closes[i-1]
+        )
         bearish_exit = closes[i] > vwap[i] or closes[i] > ema50[i]
         
         if position == "NONE":
@@ -3811,8 +3838,8 @@ DEFAULT_OPTION_STRATEGIES = [
                     "action": "SELL",
                     "direction": "PE",
                     "setup_type": "bearish_breakdown",
-                    "confidence": 85.0,
-                    "entry_reason": "VWAP & EMA bearish breakdown",
+                    "confidence": 72.0,
+                    "entry_reason": "VWAP & EMA bearish continuation",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.2,
@@ -3994,9 +4021,16 @@ DEFAULT_OPTION_STRATEGIES = [
                 position = "NONE"
             continue
             
-        donchian_high = max(highs[i-20:i])
+        donchian_high = max(highs[i-12:i])
+        recent_high = max(highs[i-6:i])
         tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
-        news_trigger = closes[i] > donchian_high and tod_vol > 2.0
+        atr_now = max(0.01, atr[i])
+        news_trigger = (
+            closes[i] >= recent_high * 0.999
+            and closes[i] > closes[i-1]
+            and (closes[i] > donchian_high or closes[i] - closes[i-1] >= atr_now * 0.25)
+            and tod_vol >= 0.85
+        )
         
         if position == "NONE":
             if news_trigger:
@@ -4005,8 +4039,8 @@ DEFAULT_OPTION_STRATEGIES = [
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "volatility_breakout",
-                    "confidence": 95.0,
-                    "entry_reason": "News catalyst breakout buy",
+                    "confidence": 76.0,
+                    "entry_reason": "Volatility continuation breakout buy",
                     "target_R": 2.5,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4360,18 +4394,19 @@ DEFAULT_OPTION_STRATEGIES = [
                 position = "NONE"
             continue
             
-        donchian_high = max(highs[i-20:i])
-        donchian_low = min(lows[i-20:i])
+        donchian_high = max(highs[i-12:i])
+        donchian_low = min(lows[i-12:i])
+        range_mid = (donchian_high + donchian_low) / 2
         
         if position == "NONE":
-            if closes[i] > donchian_high:
+            if closes[i] >= donchian_high * 0.999 or (closes[i] > range_mid and closes[i] > closes[i-1] > closes[i-2]):
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "breakout",
-                    "confidence": 85.0,
-                    "entry_reason": "Donchian channel breakout buy",
+                    "confidence": 74.0,
+                    "entry_reason": "Donchian momentum participation buy",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4456,7 +4491,12 @@ DEFAULT_OPTION_STRATEGIES = [
                 position = "NONE"
             continue
             
-        crossover_buy = ema20[i] > ema50[i] and ema20[i-1] <= ema50[i-1]
+        crossover_buy = (
+            ema20[i] > ema50[i] * 0.999
+            and ema20[i] >= ema20[i-2]
+            and closes[i] >= ema20[i] * 0.999
+            and closes[i] >= closes[i-1]
+        )
         crossover_sell = ema20[i] < ema50[i]
         
         if position == "NONE":
@@ -4466,8 +4506,8 @@ DEFAULT_OPTION_STRATEGIES = [
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "defensive_trend",
-                    "confidence": 85.0,
-                    "entry_reason": "Telecom ema crossover buy",
+                    "confidence": 72.0,
+                    "entry_reason": "Telecom EMA trend participation buy",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4528,14 +4568,17 @@ DEFAULT_OPTION_STRATEGIES = [
     
     for i in range(20, len(data)):
         if position == "NONE":
-            if rsi[i-1] <= 30 and rsi[i] > 30:
+            recent_rsi = min(rsi[max(0, i-6):i+1])
+            rebound = rsi[i] >= 34 and rsi[i] > rsi[i-1] and closes[i] >= closes[i-1]
+            value_zone = recent_rsi <= 42 and closes[i] <= max(closes[max(0, i-10):i+1])
+            if rebound and value_zone:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "rsi_swing",
-                    "confidence": 85.0,
-                    "entry_reason": "RSI recovery oversold buy",
+                    "confidence": 72.0,
+                    "entry_reason": "RSI rebound participation buy",
                     "target_R": 2.5,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.8,
@@ -5817,6 +5860,11 @@ STANDARD_STRATEGY_CATALOG = [
 ]
 
 
+_DEFAULT_STRATEGY_CODE_BY_NAME = {
+    str(_template.get("name") or ""): str(_template.get("python_code") or "")
+    for _template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDARD_STRATEGY_CATALOG]
+}
+
 UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
     "UPSTOX NIFTY ATM Option Momentum Buyer": (NIFTY_ATM_MOMENTUM_CODE, "momentum", "Upstox live trend and momentum with true EMA, volume, time and exit guards"),
     "UPSTOX BANKNIFTY ATM Option Breakout Buyer": (BANKNIFTY_ATM_BREAKOUT_CODE, "breakout", "BANKNIFTY range breakout with ATR, volume, duplicate-sensitive exit controls"),
@@ -5827,6 +5875,16 @@ UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
     "BANKNIFTY HFT Momentum Scalper": (BANKNIFTY_STD_BAND_SCALPER_CODE, "breakout", "BANKNIFTY standard-deviation breakout with volume and exit controls"),
     "NIFTY Quick EMA Scalper": (NIFTY_QUICK_EMA_SCALPER_CODE, "micro_scalp", "True EMA quick scalp with noise, volume, cooldown and time guards"),
     "BANKNIFTY Volatility Breakout": (BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE, "volatile_breakout", "Sensitive BANKNIFTY volatility breakout with volume and exit controls"),
+    "UPSTOX RELIANCE Advanced Momentum Trend Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX RELIANCE Advanced Momentum Trend Rider"], "equity_trend", "Equity trend participation with EMA continuation"),
+    "UPSTOX SBIN Macro Short Seller": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX SBIN Macro Short Seller"], "equity_short", "Equity short participation with VWAP/EMA continuation"),
+    "UPSTOX HDFCBANK Range Mean Reversion": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX HDFCBANK Range Mean Reversion"], "equity_mean_reversion", "Equity range mean reversion"),
+    "UPSTOX ICICIBANK News & Volatility Catalyst": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX ICICIBANK News & Volatility Catalyst"], "equity_breakout", "Equity volatility continuation breakout"),
+    "UPSTOX TCS Defensive Swing Accumulator": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX TCS Defensive Swing Accumulator"], "equity_swing", "Equity defensive RSI accumulation"),
+    "UPSTOX INFY VWAP Pullback Buyer": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX INFY VWAP Pullback Buyer"], "equity_pullback", "Equity VWAP pullback participation"),
+    "UPSTOX AXISBANK Macro Trend Follower": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX AXISBANK Macro Trend Follower"], "equity_trend", "Equity macro trend participation"),
+    "UPSTOX LT Infrastructure Momentum Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX LT Infrastructure Momentum Rider"], "equity_breakout", "Equity Donchian momentum participation"),
+    "UPSTOX BHARTIARTL Defensive Intraday Trend": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX BHARTIARTL Defensive Intraday Trend"], "equity_trend", "Equity defensive EMA participation"),
+    "UPSTOX KOTAKBANK RSI Rebound Swing": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX KOTAKBANK RSI Rebound Swing"], "equity_swing", "Equity RSI rebound participation"),
 }
 
 
@@ -16446,15 +16504,15 @@ async def startup():
     asyncio.create_task(_subscribe_open_position_tokens_on_startup())
 
     # Phase 2 DB migration: update existing strategy python_code when
-    # strategy_logic_version is stale (< "2.0").
+    # strategy_logic_version is stale.
     async def _migrate_strategy_code_versions():
         """Silently update python_code for any user who still has stale strategy code.
 
-        Bumped to 2.1 to re-push two changes to the live book:
-        (1) the NIFTY VWAP volume-gate fix (the gate was unsatisfiable on
-            volume-less index ltpc data and silently blocked every entry), and
-        (2) re-assert risk_style from the catalog so the live delta-strike
-            selector targets ~0.35-0.40 delta instead of ATM for each buyer.
+        Bumped to 2.2 to re-push live-market participation tuning:
+        (1) option buyers accept valid current continuation setups instead of
+            only exact cross/retest candles, and
+        (2) equity templates are included in the versioned migration so live
+            stored python_code receives strategy-specific threshold tuning.
         Re-pushing from the in-code catalog (the single source of truth) is
         idempotent, so version-gating only avoids redundant writes.
         """
@@ -16467,7 +16525,7 @@ async def startup():
                         "name": name,
                         "$or": [
                             {"strategy_logic_version": {"$exists": False}},
-                            {"strategy_logic_version": {"$lt": "2.1"}},
+                            {"strategy_logic_version": {"$lt": "2.2"}},
                             {"strategy_logic_version": "1.0"},
                         ],
                     },
@@ -16475,13 +16533,13 @@ async def startup():
                         "python_code": code,
                         "risk_style": _cat,
                         "visual_config.risk.risk_style": _cat,
-                        "strategy_logic_version": "2.1",
+                        "strategy_logic_version": "2.2",
                         "code_migrated_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
                 updated += result.modified_count
             if updated:
-                logger.info("DB migration: updated python_code for %d strategy documents to v2.0", updated)
+                logger.info("DB migration: updated python_code for %d strategy documents to v2.2", updated)
         except Exception as _mig_err:
             logger.warning("Strategy code migration failed: %s", _mig_err)
 
