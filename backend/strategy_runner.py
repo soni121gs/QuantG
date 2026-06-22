@@ -655,15 +655,21 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     if last_sig.get("regime_gate_strict"):
                         if _r_name == "RANGE":
                             _reason = f"REGIME_STRICT_GATE: RANGE regime — strategy requires trend"
-                            await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_STRICT_GATE", _reason)
-                            await db.strategies.update_one(
-                                {"id": s["id"]},
-                                {"$set": {**eval_set, "last_signals_count": signals_count,
-                                          "last_signal_action": action,
-                                          "last_filter_reason": _reason},
-                                 "$inc": inc_set},
-                            )
-                            continue
+                            if is_paper_mode:
+                                last_sig = dict(last_sig)
+                                last_sig["regime_strict_paper_bypassed"] = True
+                                last_sig["regime_strict_reason"] = f"{_reason}; paper entry allowed for measurement."
+                                paper_measurement_reason = "Paper measurement mode: strict regime gate warning logged but not blocking paper entry."
+                            else:
+                                await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_STRICT_GATE", _reason)
+                                await db.strategies.update_one(
+                                    {"id": s["id"]},
+                                    {"$set": {**eval_set, "last_signals_count": signals_count,
+                                              "last_signal_action": action,
+                                              "last_filter_reason": _reason},
+                                     "$inc": inc_set},
+                                )
+                                continue
 
                     # S2 overextended exemption: only allow in CRASH (PE) or MELTUP (CE)
                     if last_sig.get("overextended_regime_exempt"):
