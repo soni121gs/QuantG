@@ -1141,6 +1141,11 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "get_open_positions",
         "get_active_strategies",
         "recall_memory",
+        # Obsidian second-brain grounding: search_wiki live-syncs the Obsidian
+        # vault from disk (sync_wiki_directory) and surfaces notes relevant to
+        # the message. Always-on so every Hermes turn is grounded in the
+        # knowledge base, not only when the user types an explicit wiki keyword.
+        "search_wiki",
     ])
     
     return [t for t in READ_ONLY_AGENT_TOOLS if t in matched_tools]
