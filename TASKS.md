@@ -7,6 +7,98 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
+## PRIORITY 0 — Win-Rate & Expectancy Campaign (2026-06-22)
+
+**Source**: Full session 2026-06-22. Day was −₹24,044 realized (24% win rate, avg loss −696 = 3.4× avg win +202).
+Root-caused to BUGS + wrong metric, NOT bad strategy logic. Research-grounded (see Sources). **Core thesis:
+win rate is the wrong target — optimize EXPECTANCY + Sharpe, weight the book toward measured-positive edge
+(equity momentum A/B, theta-selling 60–75%) and away from measured-negative (ATM option buying, grade F).**
+
+Loss attribution (today): equity phantom-quote fake stop-losses −12,975 (54%) · spread stale-exit −6,266 (26%) ·
+spreads sold into trends ~−8k · single-leg buyers ~−3k (buckets overlap). ~80% was bug-driven, not trading.
+
+Key facts established this session:
+- Credit spreads are correctly built (0.30Δ short, 2-wide, 50% TP) → were bug-destroyed to 11–18% win (should be ~70%).
+- Momentum buyers at 22–40% win is CORRECT for trend-following (research: 35–45%); fix EXPECTANCY not win rate.
+- Signal plumbing is HEALTHY: no duplicates, symbol-group dup-guard works (4 blocks), no stale-signal starvation,
+  cooldown not biting. Only inefficiency = spread over-emission (52–63 sig → 11 ord; ADX gate now reduces it).
+- NIFTY EMA Scalper = 60% win / −5,695 → proof win rate is a vanity metric (its stop lets losers run).
+
+**Sequencing**: Phase 1 (validate clean) BLOCKS tuning — don't pile changes that muddy measurement.
+Critical path: WR-1x (validate) → WR-21 + WR-22 (EMA stop + ITM strikes) → WR-31 (spread delta) →
+WR-42 (weight to proven edge) → WR-51/52 (risk sizing + kill-switch).
+
+Sources: apexvol.com/strategies/credit-spread · robottraders.io/blog/trend-following-vs-mean-reversion ·
+journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.com/theta-gang-strategies
+
+---
+
+### Phase 0 — Done & deployed this session (baseline)
+- `[x]` **WR-00a** Spread stale-exit bug fixed (3-layer: refresh last_fresh_tick_at + exclude spreads from staleness predicate + ignore stale reason in close path + debit_spread close routing) · `bc73d37` · 2026-06-22
+- `[x]` **WR-00b** ADX(14) regime gate on 3 Theta credit spreads (stand down ADX≥25) · DB python_code v1.1 · 2026-06-22
+- `[x]` **WR-00c** Feed-aware volume gate (range-expansion fallback) on 6 index-option strategies · DB · 2026-06-22
+- `[x]` **WR-00d** Equity phantom-quote guards: runner outlier-candle entry skip + monitor/guardian >35%-from-entry LTP reject · `ec09c7a` · 2026-06-22
+- `[x]` **WR-00e** Mongo healthcheck flap permanently fixed (timeout 5s→20s + start_period 60s) · `cbc4944` · 2026-06-22
+- `[x]` **WR-00f** Verified stops/trailing are correctly configured and DO fire (clean trades booked sane P&L)
+
+---
+
+### Phase 1 — Validate on clean data (P0 — BLOCKS all tuning below)
+- `[ ]` **WR-11** At next open, grep logs for `PHANTOM_CANDLE` / `PHANTOM_LTP_REJECTED` — confirm guards fire, no 1-second equity stop-losses at ~½ entry.
+- `[ ]` **WR-12** Confirm credit spreads hold past 5 min and win rate flips 11–18% → ~70% (the stale-exit-fix payoff). Query closed spreads by exit_reason.
+- `[ ]` **WR-13** Confirm ADX gate stands spreads down in trends (fewer signals on trending bars; check last_filter_reason + signal counts).
+- `[ ]` **WR-14** Tune thresholds only if over/under-firing: `EQUITY_LTP_MAX_DEV`, `EQUITY_PHANTOM_MAX_DEV`, `FREQ_CAP_*`, `CREDIT_SPREAD_*`.
+
+---
+
+### Phase 2 — Strategy logic fixes (P1 — no market wait needed)
+- `[ ]` **WR-21** NIFTY EMA Scalper (2f7ce983): 60% win / −5,695 → losers dwarf winners. Audit/fix its stop so losses are capped (hard SL floor, don't let signal-flip exit bypass it). *High impact, low effort.*
+- `[ ]` **WR-22** Momentum buyers: move strike ATM → ITM1 (higher delta, less theta) so trend-following's fat right tail actually pays. Targets: NIFTY/BANKNIFTY ATM buyers + scalpers. Edit visual_config strike_mode / option_selection_preference. *High impact, medium effort.*
+- `[ ]` **WR-23** Audit equity trend re-entry patch — re-cloning entry signal while trend persists may churn / enter late. Add exhaustion/cooldown guard if churning. *Medium impact, low effort.*
+- `[ ]` **WR-24** Reduce spread over-emission (per-candle dedupe in python_code) so spam-filter isn't load-bearing. ADX gate already helps. *Low impact, cleanup.*
+
+---
+
+### Phase 3 — Economics / strike tuning (P1 — AFTER Phase 1 confirms)
+- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. Do AFTER baseline so the change is attributable.
+- `[ ]` **WR-32** Verify 50%-profit close (`SPREAD_TP_FRAC=0.5`) actually fires post-bugfix on live spreads.
+- `[ ]` **WR-33** Let momentum winners run: raise `target_R`, enable trailing — fixes expectancy.
+
+---
+
+### Phase 4 — Portfolio construction & measurement (P1 — the real strategy)
+- `[ ]` **WR-41** Switch north-star metric from win rate → expectancy + Sharpe + profit factor as the keep/kill driver (scorecard already computes these).
+- `[ ]` **WR-42** Weight book toward measured-positive edge (equity momentum A/B, theta-selling); de-weight measured-negative (ATM option buying grade F). Data-driven.
+- `[ ]` **WR-43** Build portfolio of UNCORRELATED archetypes (theta=range, mean-reversion=stat-arb-lite, trend=momentum) so regimes hedge each other.
+- `[ ]` **WR-44** Run the ratchet: backtest OOS → paper-forward → keep/kill by expectancy. Keep only 2–3 survivors.
+- `[ ]` **WR-45** Track per-strategy correlation matrix to confirm edges are genuinely independent.
+
+---
+
+### Phase 5 — Risk management (P1 — the actual product)
+- `[ ]` **WR-51** Size each bet by risk (fraction-of-Kelly / fixed-fractional), not fixed lots.
+- `[ ]` **WR-52** Hard daily-loss kill-switch per strategy + portfolio-wide (verify `daily_loss_limit` enforced end-to-end).
+- `[ ]` **WR-53** Cap per-underlying concentration (extend the symbol-group guard to aggregate exposure).
+- `[ ]` **WR-54** Auto-pause a strategy on max-drawdown breach.
+
+---
+
+### Phase 6 — Operational / data hygiene (P2)
+- `[ ]` **WR-61** Root-cause the equity phantom-quote SOURCE (why the open emits ½/2× ticks) — guards are a net; fix the feed.
+- `[ ]` **WR-62** Add index on `strategies.id` (currently COLLSCAN every eval; minor).
+- `[ ]` **WR-63** Clean contaminated lifetime stats (pre-2026-06-18 oversizing/phantom era still pollutes win/loss counts).
+- `[ ]` **WR-64** Pre-open readiness check (token valid + feed live + strategies live) so mornings don't silently fail.
+
+---
+
+### Phase 7 — Roadmap-aligned, bigger build (P2/P3)
+- `[ ]` **WR-71** Strategy backtesting on real options-chain history (blocked by Upstox expired-option API — needs a data source).
+- `[ ]` **WR-72** Walk-forward / out-of-sample validation harness before any live scaling.
+- `[ ]` **WR-73** Enable `CORE_ENGINE_LIVE_ENABLED` on 2–3 proven strategies (founder gate; roadmap Phase 1).
+- `[ ]` **WR-74** Performance analytics dashboard (per-strategy Sharpe, drawdown, expectancy) for the investor track record.
+
+---
+
 ## PRIORITY 0 — Profitability Campaign (2026-06-20)
 
 **Source**: Full strategy audit 2026-06-20. Evidence: `trade_fills` realized P&L = −₹40,802 over 106 closes;
