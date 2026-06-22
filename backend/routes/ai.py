@@ -69,6 +69,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_daily_report",
     "get_recent_alerts",
     "search_wiki",
+    "get_knowledge_graph",
     "get_backtest_summary",
     "get_core_events",
     "get_agent_tool_audit",
@@ -375,6 +376,44 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await db.wiki_docs.find(match_query, {"_id": 0, "user_id": 0}).to_list(15)
             source = "db.wiki_docs"
             warnings.append("Note: Wiki docs are user-written context guidelines, not production trading execution truth (DB/orders/fills/readiness).")
+        elif name == "get_knowledge_graph":
+            # The same node/link map the Knowledge Map (Obsidian view) renders, so
+            # Hermes can "see" how notes interconnect — not just read them.
+            try:
+                from routes.wiki import sync_wiki_directory
+                await sync_wiki_directory(user=user)
+            except Exception as sync_exc:
+                logger.error("Failed to sync wiki for knowledge graph: %s", sync_exc)
+            docs = await db.wiki_docs.find(
+                {"user_id": user["id"]},
+                {"_id": 0, "title": 1, "topic": 1, "links": 1, "backlinks": 1},
+            ).to_list(1000)
+            titles = {d["title"] for d in docs}
+            edges = []
+            topic_counts: Dict[str, int] = {}
+            for d in docs:
+                topic_counts[d.get("topic", "General")] = topic_counts.get(d.get("topic", "General"), 0) + 1
+                for target in (d.get("links") or []):
+                    if target in titles:
+                        edges.append({"source": d["title"], "target": target})
+            # Most-connected notes (hubs) by total degree
+            degree: Dict[str, int] = {}
+            for e in edges:
+                degree[e["source"]] = degree.get(e["source"], 0) + 1
+                degree[e["target"]] = degree.get(e["target"], 0) + 1
+            hubs = sorted(degree.items(), key=lambda kv: kv[1], reverse=True)[:8]
+            orphans = sorted([t for t in titles if degree.get(t, 0) == 0])
+            data = {
+                "note_count": len(docs),
+                "link_count": len(edges),
+                "topics": topic_counts,
+                "nodes": [{"id": d["title"], "topic": d.get("topic", "General")} for d in docs],
+                "links": edges,
+                "most_connected": [{"title": t, "connections": c} for t, c in hubs],
+                "orphan_notes": orphans[:20],
+            }
+            source = "db.wiki_docs (knowledge graph)"
+            warnings.append("Note: Knowledge graph is user-written context structure, not trading execution truth.")
         elif name == "get_daily_report":
             first_strat = await db.strategies.find_one(
                 {"user_id": user["id"], "status": {"$in": ["live", "active", "running"]}}
@@ -1108,6 +1147,13 @@ def classify_playbook_by_query(query: str) -> List[str]:
         has_matches = True
         
     if any(w in q for w in wiki_keywords):
+        matched_tools.add("search_wiki")
+        has_matches = True
+
+    # Knowledge-map / graph "view" questions: how notes interconnect, hubs, orphans.
+    if any(w in q for w in ["map", "graph", "knowledge map", "connected", "connections",
+                            "link graph", "related notes", "backlinks", "orphan", "structure of notes"]):
+        matched_tools.add("get_knowledge_graph")
         matched_tools.add("search_wiki")
         has_matches = True
         
