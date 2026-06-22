@@ -22,9 +22,7 @@ def _generate_gemini_embedding_sync(text: str) -> List[float]:
         "content": {
             "parts": [{"text": text}]
         },
-        "config": {
-            "output_dimensionality": 768
-        }
+        "output_dimensionality": 768
     }
     try:
         res = requests.post(
