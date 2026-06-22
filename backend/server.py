@@ -16138,7 +16138,17 @@ async def startup():
         option_side = "CE" if action_u == "BUY" else "PE"
         if "SELL" in strike_mode_u:
             option_side = "PE" if action_u == "BUY" else "CE"
-        strike_rule = "OTM1" if int(otm_points or 0) > 0 else "ATM"
+        # Strike selection: OTM1 when otm_points set, ITM1 when the strike_mode
+        # asks for it (e.g. "ITM1_BUY"), else ATM. ITM1 (~0.6 delta) carries less
+        # theta and a higher win rate than ATM for directional buyers — the
+        # resolver already supports "ITM1" (instrument_resolver.py); this was the
+        # missing derivation that previously forced every buyer to ATM (max theta).
+        if int(otm_points or 0) > 0:
+            strike_rule = "OTM1"
+        elif "ITM" in strike_mode_u:
+            strike_rule = "ITM1"
+        else:
+            strike_rule = "ATM"
         instrument_type = "INDEX_OPTION"
         diagnostics: Dict[str, Any] = {
             "resolver_stage": "start",

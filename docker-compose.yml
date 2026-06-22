@@ -80,7 +80,9 @@ services:
       # Debit spreads (defined-risk option BUYING) — engine fully supports them;
       # NIFTY/BANKNIFTY directional buyers opt in via structure=debit_spread.
       DEBIT_SPREADS_ENABLED: "${DEBIT_SPREADS_ENABLED:-true}"
-      DEBIT_SPREAD_LONG_DELTA: "${DEBIT_SPREAD_LONG_DELTA:-0.50}"
+      # 0.50→0.65: ITM long leg (less theta, higher win rate) for directional
+      # debit-spread buyers — WR-22. Reversible via env.
+      DEBIT_SPREAD_LONG_DELTA: "${DEBIT_SPREAD_LONG_DELTA:-0.65}"
     volumes:
       - backend-state:/data
       - ./wiki:/app/wiki

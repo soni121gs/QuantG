@@ -52,8 +52,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 2 — Strategy logic fixes (P1 — no market wait needed)
-- `[ ]` **WR-21** NIFTY EMA Scalper (2f7ce983): 60% win / −5,695 → losers dwarf winners. Audit/fix its stop so losses are capped (hard SL floor, don't let signal-flip exit bypass it). *High impact, low effort.*
-- `[ ]` **WR-22** Momentum buyers: move strike ATM → ITM1 (higher delta, less theta) so trend-following's fat right tail actually pays. Targets: NIFTY/BANKNIFTY ATM buyers + scalpers. Edit visual_config strike_mode / option_selection_preference. *High impact, medium effort.*
+- `[x]` **WR-21** NIFTY EMA Scalper (2f7ce983): stop is NOT broken — verified 2026-06-22. The −5,695 lifetime / "60% win but big loss" was ONE pre-fix oversized trade (qty=650 = 10 lots, 2026-06-12, −5,350) that lost only −6.3%/unit × 10× size. The 1-lot trade lost exactly −5.66% = the 5.5% stop firing correctly. `max_lot=1` now prevents recurrence. No stop fix needed; contamination tracked in WR-63. Real lever = WR-22 (ATM→ITM).
+- `[~]` **WR-22** Momentum buyers: move strike ATM → ITM1. ROOT CAUSE found 2026-06-22: `server.py:16141` derived `strike_rule = "OTM1" if otm_points>0 else "ATM"` — could NEVER produce ITM regardless of config/preference (the unlanded "Fix 1"). The resolver (instrument_resolver.py:109) already supports ITM1. Fix: honor `"ITM"` in strike_mode → strike_rule "ITM1"; set 5 single-leg buyers' strike_mode "ATM_BUY"→"ITM1_BUY"; raise DEBIT_SPREAD_LONG_DELTA 0.50→0.65 for the 3 debit-spread buyers.
 - `[ ]` **WR-23** Audit equity trend re-entry patch — re-cloning entry signal while trend persists may churn / enter late. Add exhaustion/cooldown guard if churning. *Medium impact, low effort.*
 - `[ ]` **WR-24** Reduce spread over-emission (per-candle dedupe in python_code) so spam-filter isn't load-bearing. ADX gate already helps. *Low impact, cleanup.*
 
