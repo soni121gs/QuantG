@@ -358,6 +358,37 @@ class UpstoxGateway:
 
         # --- Standard equity / derivative path ---------------------------------
         from datetime import timedelta
+
+        # Intraday: the V2 /historical-candle/intraday endpoint returns ONLY the
+        # current day, so early in the session there are too few bars (e.g. 14 by
+        # 10:20) and callers requiring >=20 bars silently fall back to MOCK data.
+        # Use the V3 multi-day historical endpoint (prior days) merged with today's
+        # V3 intraday — the same approach the index path uses — so equity strategies
+        # always get enough continuous REAL bars.
+        if interval != "day":
+            _v3_step = {"5minute": 5, "1minute": 1, "minute": 1,
+                        "15minute": 15, "30minute": 30}.get(interval, 5)
+            _now = datetime.now()
+            _from = (_now - timedelta(days=max(days, 10))).strftime("%Y-%m-%d")
+            _to = _now.strftime("%Y-%m-%d")
+            _v3_hist: List[Dict[str, Any]] = []
+            _v3_intra: List[Dict[str, Any]] = []
+            try:
+                _v3_hist = self.get_historical_candles_v3(
+                    instrument_key, unit="minutes", interval=_v3_step,
+                    from_date=_from, to_date=_to) or []
+            except Exception as exc:
+                logger.debug("Upstox V3 historical failed key=%s: %s", instrument_key, exc)
+            try:
+                _v3_intra = self.get_intraday_candles_v3(
+                    instrument_key, unit="minutes", interval=_v3_step) or []
+            except Exception as exc:
+                logger.debug("Upstox V3 intraday failed key=%s: %s", instrument_key, exc)
+            _merged = self._merge_candle_series(_v3_hist, _v3_intra)
+            if _merged:
+                return _merged
+            # else: fall through to the legacy V2 intraday path below.
+
         upstox_interval = interval
         if interval == "minute":
             upstox_interval = "1minute"
@@ -678,6 +709,23 @@ class UpstoxGateway:
             cur += _td(minutes=interval_minutes)
             idx += 1
         return bars
+
+    @staticmethod
+    def _merge_candle_series(*series: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge multiple oldest-first OHLCV bar lists into one continuous series.
+
+        Dedupes by the bar "date" string (later series win on overlap, so today's
+        intraday refreshes any same-timestamp historical bar) and returns the
+        result oldest-first. The "YYYY-MM-DD HH:MM" date format sorts correctly
+        lexicographically.
+        """
+        by_date: Dict[str, Dict[str, Any]] = {}
+        for s in series:
+            for bar in (s or []):
+                d = bar.get("date")
+                if d:
+                    by_date[d] = bar
+        return [by_date[d] for d in sorted(by_date.keys())]
 
     @staticmethod
     def _resample_to_5min(bars_1min: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
