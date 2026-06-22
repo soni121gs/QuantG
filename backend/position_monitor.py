@@ -217,6 +217,10 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     "EOD aggregation user=%s date=%s realized=%.2f trades=%d",
                     user_id, today_str, total_realized, total_trades,
                 )
+                try:
+                    await _compile_eod_memory(db, user_id, today_str, doc)
+                except Exception as mem_exc:
+                    logger.error("Auto-memory aggregation failed for user=%s: %s", user_id, mem_exc)
             except Exception as user_exc:
                 logger.error("EOD aggregation failed for user=%s: %s", user_id, user_exc)
 
@@ -226,6 +230,132 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
 
     except Exception as exc:
         logger.error("EOD aggregation top-level error: %s", exc)
+
+
+async def _compile_eod_memory(db, user_id: str, date_str: str, report_doc: dict) -> None:
+    """Distills the daily performance summary into hermes_memory and drafts a wiki note."""
+    import json
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from core.embeddings import distill_daily_report_to_facts, generate_gemini_embedding
+
+    logger.info("Starting daily memory compilation for user=%s date=%s", user_id, date_str)
+    
+    # 1. Fetch alerts/notifications today
+    report_day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    ist_start = report_day.replace(hour=9, minute=15, second=0, microsecond=0)
+    ist_end   = report_day.replace(hour=15, minute=30, second=0, microsecond=0)
+    utc_start = (ist_start - timedelta(hours=5, minutes=30)).isoformat()
+    utc_end   = (ist_end   - timedelta(hours=5, minutes=30)).isoformat()
+    
+    alerts = await db.notifications.find({
+        "user_id": user_id,
+        "created_at": {"$gte": utc_start, "$lt": utc_end}
+    }, {"_id": 0, "message": 1, "created_at": 1}).to_list(100)
+    
+    signals = await db.signals.find({
+        "user_id": user_id,
+        "created_at": {"$gte": utc_start, "$lt": utc_end},
+        "status": {"$in": ["FILTERED", "SKIPPED_SIGNAL", "BLOCKED", "rejected"]}
+    }, {"_id": 0, "strategy_id": 1, "symbol": 1, "last_filter_reason": 1}).to_list(100)
+
+    # 2. Build summary string for Gemini
+    summary_data = f"""
+Daily Report for {date_str}:
+- Realized P&L: Rs {report_doc.get('total_realized_pnl', 0.0)}
+- Unrealized P&L: Rs {report_doc.get('total_unrealized_pnl', 0.0)}
+- Trades Taken: {report_doc.get('trades_taken', 0)}
+- Signals Fired: {report_doc.get('signals_fired', 0)}
+- Signals Filtered: {report_doc.get('signals_filtered', 0)}
+- Best Strategy: {report_doc.get('best_strategy')}
+- Worst Strategy: {report_doc.get('worst_strategy')}
+
+Strategies detail:
+{json.dumps(report_doc.get('strategies', []), default=str)}
+
+Today's alerts:
+{json.dumps(alerts, default=str)}
+
+Today's skipped/filtered signals:
+{json.dumps(signals, default=str)}
+"""
+
+    # 3. Call Gemini to distill into facts
+    facts = await distill_daily_report_to_facts(summary_data)
+    if not facts:
+        logger.warning("No facts distilled by Gemini. Storing default summary fact.")
+        facts = [f"Daily session on {date_str} completed with realized P&L: Rs {report_doc.get('total_realized_pnl', 0.0)} over {report_doc.get('trades_taken', 0)} trades."]
+
+    # 4. Generate embeddings and save to db.hermes_memory
+    now_str = datetime.now(timezone.utc).isoformat()
+    for fact in facts:
+        try:
+            embedding = await generate_gemini_embedding(fact)
+            memory_doc = {
+                "id": "mem_" + str(uuid.uuid4()),
+                "user_id": user_id,
+                "text": fact,
+                "type": "daily_summary",
+                "date": date_str,
+                "embedding": embedding,
+                "source_refs": [{"collection": "daily_reports", "date": date_str}],
+                "created_at": now_str
+            }
+            await db.hermes_memory.insert_one(memory_doc)
+            logger.info("Saved EOD memory fact for user=%s: %s", user_id, fact)
+        except Exception as e_mem:
+            logger.error("Failed to generate embedding or save EOD fact: %s", e_mem)
+
+    # 5. Formulate markdown body for the session memory wiki note draft
+    facts_md = "\n".join(f"- {f}" for f in facts)
+    strat_list = []
+    for s in report_doc.get("strategies", []):
+        strat_list.append(f"- **{s.get('name', s.get('strategy_id'))}**: realized P&L: Rs {s.get('realized_pnl', 0.0)} ({s.get('trade_count', 0)} trades)")
+    strat_details_md = "\n".join(strat_list)
+    
+    wiki_body = f"""# Session Memory {date_str}
+
+**Compiled by Hermes Co-Pilot**
+*Topic: Daily Session Memory*
+*Tags: #session-memory #eod-distillation #trading-activity*
+
+## Daily Overview
+- **Total Realized P&L**: Rs {report_doc.get('total_realized_pnl', 0.0)}
+- **Total Unrealized P&L**: Rs {report_doc.get('total_unrealized_pnl', 0.0)}
+- **Trades Taken**: {report_doc.get('trades_taken', 0)}
+- **Signals Fired**: {report_doc.get('signals_fired', 0)} (Filtered: {report_doc.get('signals_filtered', 0)})
+- **Best Strategy**: {report_doc.get('best_strategy', {}).get('name') if report_doc.get('best_strategy') else 'None'} ({report_doc.get('best_strategy', {}).get('pnl', 0.0) if report_doc.get('best_strategy') else 0.0})
+- **Worst Strategy**: {report_doc.get('worst_strategy', {}).get('name') if report_doc.get('worst_strategy') else 'None'} ({report_doc.get('worst_strategy', {}).get('pnl', 0.0) if report_doc.get('worst_strategy') else 0.0})
+
+## Distilled Facts to Remember
+{facts_md}
+
+## Strategy Breakdown
+{strat_details_md}
+
+## System Alerts & Diagnostics
+- Today's Alert Count: {len(alerts)}
+- Today's Filtered Signals Count: {len(signals)}
+"""
+
+    # 6. Insert pending_actions card
+    try:
+        pending_action_doc = {
+            "action_id": "act_" + str(uuid.uuid4()),
+            "user_id": user_id,
+            "action_type": "draft_wiki_note",
+            "params": {
+                "title": f"Session Memory {date_str}",
+                "folder": "Decisions",
+                "body_markdown": wiki_body.strip()
+            },
+            "status": "pending",
+            "created_at": now_str
+        }
+        await db.pending_actions.insert_one(pending_action_doc)
+        logger.info("Created pending action draft_wiki_note for user=%s memory note", user_id)
+    except Exception as e_action:
+        logger.error("Failed to insert pending action wiki note: %s", e_action)
 
 
 async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn) -> None:

@@ -16,7 +16,8 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
         "description": "Diagnoses why the platform hasn't executed trades today.",
         "composes_tools": [
             "get_skipped_signals", "get_market_data_status", "get_active_strategies", 
-            "get_logs_errors", "get_today_orders", "get_today_fills", "get_recent_alerts"
+            "get_logs_errors", "get_today_orders", "get_today_fills", "get_recent_alerts",
+            "get_historical_context", "recall_memory"
         ],
         "playbook": (
             "Check if any strategies are live/running. Verify the feed is connected and streaming. "
@@ -26,7 +27,7 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
     "quantg-strategy-loss-review": {
         "name": "quantg-strategy-loss-review",
         "description": "Evaluates strategy performance, drawdown streaks, and win-rates.",
-        "composes_tools": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained"],
+        "composes_tools": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained", "get_historical_context", "recall_memory"],
         "playbook": (
             "Check realized P&L and drawdown metrics from the scorecard. Spot loss streaks, win-rate degradation, "
             "and suggest adjustments if capital buffers or daily loss limits are close to breach."
@@ -44,7 +45,7 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
     "quantg-eod-report": {
         "name": "quantg-eod-report",
         "description": "Reviews the market session performance and daily P&L summary.",
-        "composes_tools": ["get_daily_report", "get_risk_snapshot"],
+        "composes_tools": ["get_daily_report", "get_risk_snapshot", "get_historical_context", "recall_memory"],
         "playbook": (
             "Analyze the final realized P&L, unrealized P&L, total trades taken, best/worst strategy, and signal counts. "
             "Provide a clean structured summary of the day's execution."
@@ -70,7 +71,7 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
     "quantg-incident-postmortem": {
         "name": "quantg-incident-postmortem",
         "description": "Reconstructs timeline and evidence logs for trading outages.",
-        "composes_tools": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit"],
+        "composes_tools": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit", "get_historical_context", "recall_memory"],
         "playbook": (
             "Trace order/fill logs, system warnings, and error timelines. Compile a clean markdown table of events "
             "leading up to the outage, outlining root cause and recovery details. When compiling a postmortem report, "

@@ -73,6 +73,8 @@ READ_ONLY_AGENT_TOOLS = [
     "get_core_events",
     "get_agent_tool_audit",
     "get_strategy_score_explained",
+    "get_historical_context",
+    "recall_memory",
 ]
 
 
@@ -446,6 +448,100 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                     stale = False
                     confidence = 1.0
             source = "db.strategies / core.strategy_scorecard"
+        elif name == "get_historical_context":
+            days = kwargs.get("days")
+            if not days and query:
+                import re
+                try:
+                    match = re.search(r"(\d+)\s*days", query.lower())
+                    if match:
+                        days = int(match.group(1))
+                except Exception:
+                    pass
+            if not days:
+                days = 7
+            
+            try:
+                days = min(max(1, int(days)), 30)
+            except Exception:
+                days = 7
+                
+            from datetime import timedelta
+            ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            start_date_str = (ist_now.date() - timedelta(days=days)).isoformat()
+            start_time_iso = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            
+            daily_reports = await db.daily_reports.find({
+                "user_id": user["id"],
+                "date": {"$gte": start_date_str}
+            }, {"_id": 0, "user_id": 0}).sort("date", -1).to_list(30)
+            
+            core_events = await db.core_events.find({
+                "user_id": user["id"],
+                "created_at": {"$gte": start_time_iso}
+            }, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
+            
+            alerts = await db.notifications.find({
+                "user_id": user["id"],
+                "created_at": {"$gte": start_time_iso}
+            }, {"_id": 0, "user_id": 0, "dedupe_key": 0}).sort("created_at", -1).to_list(50)
+            
+            data = {
+                "days_requested": days,
+                "start_date": start_date_str,
+                "daily_reports": daily_reports,
+                "core_events": core_events,
+                "alert_history": alerts
+            }
+            source = "db.daily_reports / db.core_events / db.notifications"
+        elif name == "recall_memory":
+            import math
+            from core.embeddings import generate_gemini_embedding
+            
+            query_text = query or ""
+            if not query_text:
+                data = {"error": "Query is required for memory recall."}
+                warnings.append("Empty query provided.")
+            else:
+                q_emb = await generate_gemini_embedding(query_text)
+                
+                memories = await db.hermes_memory.find(
+                    {"user_id": user["id"]}
+                ).sort("created_at", -1).to_list(500)
+                
+                scored_memories = []
+                for m in memories:
+                    m_emb = m.get("embedding")
+                    if not m_emb or len(m_emb) != len(q_emb):
+                        continue
+                    
+                    dot = sum(x * y for x, y in zip(q_emb, m_emb))
+                    mag_q = math.sqrt(sum(x * x for x in q_emb))
+                    mag_m = math.sqrt(sum(x * x for x in m_emb))
+                    sim = dot / (mag_q * mag_m) if (mag_q > 0 and mag_m > 0) else 0.0
+                    
+                    created_at_str = m.get("created_at") or m.get("date")
+                    try:
+                        created_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                        created_dt_utc = created_dt if created_dt.tzinfo else created_dt.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - created_dt_utc).total_seconds() / 86400.0
+                    except Exception:
+                        age_days = 0.0
+                        
+                    decay_score = sim * math.exp(-0.05 * age_days)
+                    
+                    scored_memories.append({
+                        "text": m.get("text"),
+                        "type": m.get("type"),
+                        "date": m.get("date"),
+                        "source_refs": m.get("source_refs"),
+                        "similarity": round(sim, 4),
+                        "decay_score": round(decay_score, 4)
+                    })
+                
+                scored_memories.sort(key=lambda x: x["decay_score"], reverse=True)
+                data = scored_memories[:8]
+                source = "db.hermes_memory"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -830,14 +926,15 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "live-readiness": ["get_live_readiness", "get_feed_status", "get_token_status", "get_upstox_status"],
         "why-no-trade": [
             "get_skipped_signals", "get_market_data_status", "get_active_strategies", 
-            "get_logs_errors", "get_today_orders", "get_today_fills", "get_recent_alerts"
+            "get_logs_errors", "get_today_orders", "get_today_fills", "get_recent_alerts",
+            "get_historical_context"
         ],
-        "strategy-loss-review": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained"],
+        "strategy-loss-review": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained", "get_historical_context"],
         "feed-token-diagnosis": ["get_upstox_status", "get_market_data_status", "get_feed_status", "get_token_status"],
-        "eod-report": ["get_daily_report", "get_risk_snapshot", "get_today_fills", "get_today_orders"],
+        "eod-report": ["get_daily_report", "get_risk_snapshot", "get_today_fills", "get_today_orders", "get_historical_context"],
         "backtest-review": ["get_backtest_summary", "get_active_strategies"],
         "vps-deploy-check": ["get_live_readiness", "get_logs_errors", "get_recent_alerts"],
-        "incident-postmortem": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit"],
+        "incident-postmortem": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit", "get_historical_context"],
     }
     
     wiki_keywords = ["wiki", "document", "documentation", "rule", "rules", "policy", "guideline", "decisions", "transcripts"]
@@ -882,6 +979,11 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("search_wiki")
         has_matches = True
         
+    if any(w in q for w in ["history", "historical", "past", "yesterday", "days", "weeks", "month", "previous", "context"]):
+        matched_tools.add("get_historical_context")
+        matched_tools.add("recall_memory")
+        has_matches = True
+        
     if not has_matches:
         matched_tools.update([
             "get_risk_snapshot",
@@ -896,6 +998,7 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "get_risk_snapshot",
         "get_open_positions",
         "get_active_strategies",
+        "recall_memory",
     ])
     
     return [t for t in READ_ONLY_AGENT_TOOLS if t in matched_tools]

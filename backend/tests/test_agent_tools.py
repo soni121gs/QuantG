@@ -545,4 +545,141 @@ def test_classify_playbook_by_query():
     assert "get_risk_snapshot" in tools_default
 
 
+@pytest.mark.anyio
+async def test_generate_gemini_embedding():
+    """Verify generate_gemini_embedding requests Gemini embeddings and returns float list."""
+    from core.embeddings import generate_gemini_embedding
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(return_value={"embedding": {"values": [0.1] * 768}})
+    
+    with patch("requests.post", return_value=mock_response), \
+         patch.dict("os.environ", {"GEMINI_API_KEY": "fake_key"}):
+        res = await generate_gemini_embedding("test text")
+        assert len(res) == 768
+        assert res[0] == 0.1
+
+
+@pytest.mark.anyio
+async def test_run_agent_tool_get_historical_context():
+    """Verify get_historical_context collation of daily reports, events, and alerts."""
+    mock_db = MagicMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mock_cursor.to_list = AsyncMock(return_value=[{"date": "2026-06-22", "total_realized_pnl": 1000.0}])
+    mock_db.daily_reports.find.return_value = mock_cursor
+    
+    mock_cursor_events = MagicMock()
+    mock_cursor_events.sort.return_value = mock_cursor_events
+    mock_cursor_events.to_list = AsyncMock(return_value=[{"created_at": "2026-06-22T10:00:00Z", "event": "test"}])
+    mock_db.core_events.find.return_value = mock_cursor_events
+    
+    mock_cursor_alerts = MagicMock()
+    mock_cursor_alerts.sort.return_value = mock_cursor_alerts
+    mock_cursor_alerts.to_list = AsyncMock(return_value=[{"created_at": "2026-06-22T10:05:00Z", "message": "alert"}])
+    mock_db.notifications.find.return_value = mock_cursor_alerts
+    
+    user = {"id": "test-trader-1"}
+    with patch("routes.ai.db", mock_db):
+        res = await _run_agent_tool("get_historical_context", user, query="Show history for 5 days")
+        
+    assert res["status"] == "ok"
+    assert res["data"]["days_requested"] == 5
+    assert len(res["data"]["daily_reports"]) == 1
+    assert res["data"]["daily_reports"][0]["total_realized_pnl"] == 1000.0
+    assert len(res["data"]["core_events"]) == 1
+    assert len(res["data"]["alert_history"]) == 1
+
+
+@pytest.mark.anyio
+async def test_run_agent_tool_recall_memory():
+    """Verify recall_memory cosine similarity lookup and time-decay calculations."""
+    mock_db = MagicMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    mock_cursor = MagicMock()
+    mock_cursor.sort.return_value = mock_cursor
+    mem_vector = [0.1] * 768
+    mock_cursor.to_list = AsyncMock(return_value=[{
+        "text": "Nifty EMA Scalper made Rs 5000",
+        "type": "daily_summary",
+        "date": "2026-06-22",
+        "embedding": mem_vector,
+        "created_at": "2026-06-22T12:00:00Z"
+    }])
+    mock_db.hermes_memory.find.return_value = mock_cursor
+    
+    user = {"id": "test-trader-1"}
+    
+    with patch("routes.ai.db", mock_db), \
+         patch("core.embeddings.generate_gemini_embedding", AsyncMock(return_value=[0.1] * 768)):
+        res = await _run_agent_tool("recall_memory", user, query="Nifty performance")
+        
+    assert res["status"] == "ok"
+    assert len(res["data"]) == 1
+    assert res["data"][0]["similarity"] == 1.0
+    assert res["data"][0]["decay_score"] <= 1.0
+    assert res["data"][0]["text"] == "Nifty EMA Scalper made Rs 5000"
+
+
+@pytest.mark.anyio
+async def test_distill_daily_report_to_facts():
+    """Verify EOD daily report fact distillation parses Gemini JSON results properly."""
+    from core.embeddings import distill_daily_report_to_facts
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(return_value={"candidates": [{"content": {"parts": [{"text": '["Fact A", "Fact B"]'}]}}]})
+    
+    with patch("requests.post", return_value=mock_response), \
+         patch.dict("os.environ", {"GEMINI_API_KEY": "fake_key"}):
+        res = await distill_daily_report_to_facts("test report summary")
+        assert len(res) == 2
+        assert res[0] == "Fact A"
+
+
+@pytest.mark.anyio
+async def test_compile_eod_memory():
+    """Verify that EOD compilation triggers fact distillation, embeds vectors, and drafts wiki note."""
+    from position_monitor import _compile_eod_memory
+    
+    mock_db = MagicMock()
+    
+    mock_cursor_alerts = MagicMock()
+    mock_cursor_alerts.to_list = AsyncMock(return_value=[])
+    mock_db.notifications.find.return_value = mock_cursor_alerts
+    
+    mock_cursor_signals = MagicMock()
+    mock_cursor_signals.to_list = AsyncMock(return_value=[])
+    mock_db.signals.find.return_value = mock_cursor_signals
+    
+    mock_db.hermes_memory.insert_one = AsyncMock()
+    mock_db.pending_actions.insert_one = AsyncMock()
+    
+    report_doc = {
+        "total_realized_pnl": 2500.0,
+        "total_unrealized_pnl": 0.0,
+        "trades_taken": 3,
+        "strategies": [{"name": "Strat 1", "realized_pnl": 2500.0, "trade_count": 3}]
+    }
+    
+    mock_facts = ["Fact 1", "Fact 2"]
+    mock_embedding = [0.05] * 768
+    
+    with patch("core.embeddings.distill_daily_report_to_facts", AsyncMock(return_value=mock_facts)), \
+         patch("core.embeddings.generate_gemini_embedding", AsyncMock(return_value=mock_embedding)):
+        await _compile_eod_memory(mock_db, "test-user", "2026-06-22", report_doc)
+        
+    assert mock_db.hermes_memory.insert_one.call_count == 2
+    mock_db.pending_actions.insert_one.assert_called_once()
+    action_doc = mock_db.pending_actions.insert_one.call_args[0][0]
+    assert action_doc["action_type"] == "draft_wiki_note"
+    assert action_doc["params"]["title"] == "Session Memory 2026-06-22"
+    assert "## Daily Overview" in action_doc["params"]["body_markdown"]
+
+
+
 
