@@ -14870,7 +14870,18 @@ async def _option_engine_monitor_loop(stop_event: asyncio.Event) -> None:
                         quotes = await asyncio.to_thread(upstox_gw.get_market_quote, list(upstox_keys.values()))
                         data_node = quotes.get("data", {}) or {}
                         for idx_sym, upstox_key in upstox_keys.items():
-                            node = data_node.get(upstox_key) or {}
+                            # Upstox /market-quote/ltp returns its data dict keyed by
+                            # EXCHANGE:SYMBOL (colon, e.g. "NSE_INDEX:Nifty 50"), NOT the
+                            # pipe instrument_key we send. Match flexibly or we silently
+                            # fall through to the simulated random walk every cycle.
+                            colon_key = upstox_key.replace("|", ":")
+                            node = data_node.get(upstox_key) or data_node.get(colon_key) or {}
+                            if not node:
+                                suffix = upstox_key.split("|")[-1].upper()
+                                for _k, _v in data_node.items():
+                                    if str(_k).upper().endswith(suffix) and isinstance(_v, dict):
+                                        node = _v
+                                        break
                             spot_ltp = node.get("last_price") or node.get("ltp")
                             if spot_ltp:
                                 option_ledger.record_market_tick(idx_sym, float(spot_ltp), "upstox")
