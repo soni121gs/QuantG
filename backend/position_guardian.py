@@ -140,6 +140,17 @@ async def _guard_one(
     if not user_id or not sid or not symbol or not pos_id:
         return
 
+    # Credit/debit spreads are valued from BOTH legs and are owned exclusively by
+    # position_monitor._process_spread_position. The guardian's single-leg LTP /
+    # staleness logic cannot price a spread: it has no top-level instrument_key,
+    # yet a top-level option_type ("PE"/"CE") wrongly trips the option staleness
+    # guard, so every spread fell back to entry-price, never refreshed
+    # last_fresh_tick_at, and was force-closed at the 300s stale threshold
+    # (reason=stale-quote-protective-exit) — almost always at a loss. Let the
+    # monitor (which prices both legs) own the spread lifecycle.
+    if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
+        return
+
     # ── 1. Verify/assign SL + TP + deadline ───────────────────────────────────
     pos = await _ensure_risk_params(db, pos)
 
