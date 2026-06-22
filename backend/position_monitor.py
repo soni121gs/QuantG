@@ -221,6 +221,10 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     await _compile_eod_memory(db, user_id, today_str, doc)
                 except Exception as mem_exc:
                     logger.error("Auto-memory aggregation failed for user=%s: %s", user_id, mem_exc)
+                try:
+                    await _score_open_recommendations(db, user_id, today_str, doc)
+                except Exception as score_exc:
+                    logger.error("Recommendation scoring failed for user=%s: %s", user_id, score_exc)
             except Exception as user_exc:
                 logger.error("EOD aggregation failed for user=%s: %s", user_id, user_exc)
 
@@ -356,6 +360,126 @@ Today's skipped/filtered signals:
         logger.info("Created pending action draft_wiki_note for user=%s memory note", user_id)
     except Exception as e_action:
         logger.error("Failed to insert pending action wiki note: %s", e_action)
+
+
+async def _score_open_recommendations(db, user_id: str, date_str: str, report_doc: dict) -> None:
+    """HSB-09: grade due Hermes recommendations against REAL fills, then distil the
+    verdict + rolling hit-rate into hermes_memory. This is the output side of the
+    self-improvement loop: future advice is conditioned on measured accuracy.
+
+    Grading window: intraday recs grade at today's EOD; structural recs after their
+    grade_after_date (~5 days). A rec is gradable only if it names a strategy_id.
+    """
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from core.embeddings import generate_gemini_embedding
+
+    NEUTRAL_BAND = 200.0  # |pnl| within this counts as "neutral"
+
+    due = await db.hermes_recommendations.find({
+        "user_id": user_id,
+        "status": "open",
+        "grade_after_date": {"$lte": date_str},
+    }).to_list(200)
+    if not due:
+        return
+
+    async def _strategy_pnl_over_window(strategy_id: str, days: int) -> float:
+        start_date = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=days)).date().isoformat()
+        reports = await db.daily_reports.find({
+            "user_id": user_id,
+            "date": {"$gte": start_date, "$lte": date_str},
+        }, {"_id": 0, "strategies": 1}).to_list(60)
+        total = 0.0
+        for rep in reports:
+            for s in (rep.get("strategies") or []):
+                if s.get("strategy_id") == strategy_id:
+                    total += float(s.get("realized_pnl") or 0.0)
+        return round(total, 2)
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    for rec in due:
+        strategy_id = rec.get("strategy_id")
+        predicted = str(rec.get("predicted_outcome") or "neutral").lower()
+        window = 5 if rec.get("horizon") == "structural" else 0
+
+        if not strategy_id:
+            verdict, realized = "unverifiable", None
+        elif rec.get("acted_on") and predicted == "loss":
+            # The advice (pause) was followed, so the strategy didn't trade — we cannot
+            # observe the counterfactual loss. Don't penalize a heeded warning.
+            verdict, realized = "unverifiable", await _strategy_pnl_over_window(strategy_id, window)
+        else:
+            realized = await _strategy_pnl_over_window(strategy_id, window)
+            if predicted == "loss":
+                actual = "loss" if realized < -NEUTRAL_BAND else ("neutral" if abs(realized) <= NEUTRAL_BAND else "profit")
+            elif predicted == "profit":
+                actual = "profit" if realized > NEUTRAL_BAND else ("neutral" if abs(realized) <= NEUTRAL_BAND else "loss")
+            else:
+                actual = "neutral" if abs(realized) <= NEUTRAL_BAND else ("loss" if realized < 0 else "profit")
+            verdict = "correct" if actual == predicted else "incorrect"
+
+        await db.hermes_recommendations.update_one(
+            {"id": rec["id"]},
+            {"$set": {
+                "status": "graded",
+                "verdict": verdict,
+                "realized_pnl_window": realized,
+                "graded_at": now_str,
+            }},
+        )
+
+        if verdict in ("correct", "incorrect") and strategy_id:
+            fact = (
+                f"Recommendation '{rec.get('what')}' ({rec.get('horizon')}) predicted {predicted} "
+                f"for strategy {strategy_id} and was {verdict.upper()} "
+                f"(realized {realized} over {window or 'same'}-day window)."
+            )
+            try:
+                embedding = await generate_gemini_embedding(fact)
+                await db.hermes_memory.insert_one({
+                    "id": "mem_" + str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "text": fact,
+                    "type": "recommendation_outcome",
+                    "date": date_str,
+                    "embedding": embedding,
+                    "source_refs": [{"collection": "hermes_recommendations", "id": rec["id"]}],
+                    "created_at": now_str,
+                })
+            except Exception as e_mem:
+                logger.error("Failed to save recommendation-outcome memory: %s", e_mem)
+
+    # Rolling hit-rate fact (only over gradable verdicts) so the brain knows its accuracy.
+    graded = await db.hermes_recommendations.find({
+        "user_id": user_id,
+        "verdict": {"$in": ["correct", "incorrect"]},
+    }, {"_id": 0, "verdict": 1}).to_list(1000)
+    if graded:
+        correct = sum(1 for g in graded if g.get("verdict") == "correct")
+        total = len(graded)
+        rate = round(100.0 * correct / total, 1)
+        hit_fact = f"Hermes recommendation hit-rate to date: {correct}/{total} correct ({rate}%)."
+        try:
+            embedding = await generate_gemini_embedding(hit_fact)
+            await db.hermes_memory.update_one(
+                {"user_id": user_id, "type": "recommendation_hit_rate"},
+                {"$set": {
+                    "id": "mem_hitrate_" + user_id,
+                    "user_id": user_id,
+                    "text": hit_fact,
+                    "type": "recommendation_hit_rate",
+                    "date": date_str,
+                    "embedding": embedding,
+                    "source_refs": [{"collection": "hermes_recommendations"}],
+                    "created_at": now_str,
+                }},
+                upsert=True,
+            )
+        except Exception as e_hr:
+            logger.error("Failed to save hit-rate memory: %s", e_hr)
+
+    logger.info("Scored %d due recommendations for user=%s", len(due), user_id)
 
 
 async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn) -> None:

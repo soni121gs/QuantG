@@ -267,6 +267,33 @@ def run_behavior_watch():
                     f"Strategy *{strat_id}* has hit *{current_streak} consecutive losses* today."
                 )
 
+BRIEFING_QUERY = (
+    "Morning briefing. Give me the THREE things that matter most for trading today, "
+    "ranked by impact (risk/drawdown first, then trade-readiness, then info). For each: a one-line "
+    "grounded finding citing the tool/source, and if action is warranted, propose ONE governed action. "
+    "Use historical context and your recall memory to flag anything that is a repeat or a trend "
+    "(e.g. 'drought 3rd day', 'this strategy lost 4 sessions running'). Check external context for "
+    "today's event risk (expiry, RBI/Fed, results) and label it external/unverified. Be concise — "
+    "this is a briefing, not a status dump."
+)
+
+
+def run_morning_briefing(date_str):
+    """HSB-07: proactive, prioritized daily briefing (ranked top-3, not a status dump).
+
+    Reuses the full Hermes brain (memory recall, historical context, scorecard, external
+    grounding) via /agent/chat so the briefing is grounded and self-improving over time.
+    """
+    print(f"[BRIEFING] Compiling prioritized morning briefing for {date_str}...")
+    reply = get_agent_chat_reply(BRIEFING_QUERY)
+    msg = (
+        f"🧭 *Hermes Morning Briefing*\n"
+        f"Date: `{date_str}`\n\n"
+        f"{reply}"
+    )
+    send_telegram_alert(msg)
+
+
 def run_premarket_check(date_str):
     """Generates the pre-market readiness report."""
     print(f"[PREMARKET] Compiling readiness report for {date_str}...")
@@ -556,6 +583,10 @@ def handle_incoming_message(message):
         elif text.startswith("/pnl"):
             reply = get_pnl_command_reply()
             send_telegram_alert(reply)
+        elif text.startswith("/brief"):
+            now_utc = datetime.now(timezone.utc)
+            ist = now_utc + timedelta(hours=5, minutes=30)
+            run_morning_briefing(ist.strftime("%Y-%m-%d"))
         else:
             # Handle "/why" prefix by stripping it, or general text
             query_text = text
@@ -663,6 +694,7 @@ def run_weekly_ranking_report(date_str):
 def run_loop():
     last_watchdog_run = 0
     last_premarket_date = None
+    last_briefing_date = None
     last_weekly_rank_date = None
     last_eod_date = None
     telegram_offset = 0
@@ -695,7 +727,12 @@ def run_loop():
                 if ist.hour == 9 and ist.minute == 0 and last_premarket_date != today_str:
                     run_premarket_check(today_str)
                     last_premarket_date = today_str
-                    
+
+                # HSB-07 Prioritized Morning Briefing: 09:05 IST weekdays (after readiness)
+                if ist.hour == 9 and ist.minute == 5 and last_briefing_date != today_str:
+                    run_morning_briefing(today_str)
+                    last_briefing_date = today_str
+
                 # Weekly Strategy Ranking: Friday at 09:00 IST (TASK-H015)
                 # Note: 4 is Friday (0 is Mon, 1 is Tue, 2 is Wed, 3 is Thu, 4 is Fri)
                 if ist.weekday() == 4 and ist.hour == 9 and ist.minute == 0 and last_weekly_rank_date != today_str:

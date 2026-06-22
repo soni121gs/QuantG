@@ -75,11 +75,62 @@ READ_ONLY_AGENT_TOOLS = [
     "get_strategy_score_explained",
     "get_historical_context",
     "recall_memory",
+    "get_external_context",
 ]
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _gemini_grounded_search_sync(query: str) -> Dict[str, Any]:
+    """HSB-06: Pull external macro/news context via Gemini's Google-Search grounding.
+
+    Returns a dict tagged EXTERNAL/UNVERIFIED with source URLs. This is the ONLY tool
+    that reaches outside QuantG's own data — by design law its output must never enter a
+    numeric trading claim, only macro/event context (e.g. 'is there event risk today').
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"error": "GEMINI_API_KEY not configured — external context unavailable."}
+
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    timeout = float(os.environ.get("GEMINI_TIMEOUT_SEC", "20"))
+    payload = {
+        "contents": [{"parts": [{"text": (
+            "Provide brief, factual market/macro context for an Indian (NSE/BSE) options "
+            "trader for this query. Focus on scheduled events, news, and event-risk only. "
+            "Do NOT give trading advice or price targets.\n\nQuery: " + query
+        )}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    res = requests.post(
+        url,
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+    )
+    res.raise_for_status()
+    data = res.json()
+    candidate = (data.get("candidates") or [{}])[0]
+    parts = candidate.get("content", {}).get("parts", [])
+    text = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
+
+    sources = []
+    grounding = candidate.get("groundingMetadata", {}) or {}
+    for chunk in (grounding.get("groundingChunks") or []):
+        web = chunk.get("web") or {}
+        if web.get("uri"):
+            sources.append({"title": web.get("title"), "uri": web.get("uri")})
+
+    return {
+        "tag": "EXTERNAL/UNVERIFIED",
+        "query": query,
+        "summary": text or "(no external context returned)",
+        "sources": sources,
+    }
 
 
 def _clip_json(value: Any, limit: int = 24000) -> Any:
@@ -542,6 +593,22 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 scored_memories.sort(key=lambda x: x["decay_score"], reverse=True)
                 data = scored_memories[:8]
                 source = "db.hermes_memory"
+        elif name == "get_external_context":
+            query_text = query or ""
+            if not query_text:
+                data = {"error": "Query is required for external context."}
+                warnings.append("Empty query provided.")
+                confidence = 0.0
+            else:
+                data = await asyncio.to_thread(_gemini_grounded_search_sync, query_text)
+                if isinstance(data, dict) and data.get("error"):
+                    confidence = 0.0
+                    warnings.append(str(data.get("error")))
+                else:
+                    # External web data is never trading truth — always flag it.
+                    confidence = 0.6
+                    warnings.append("EXTERNAL/UNVERIFIED web context (Gemini Google-Search grounding) — never use for a numeric P&L/score claim, macro/event context only.")
+            source = "gemini-google-search-grounding"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -704,6 +771,55 @@ def _parse_and_store_pending_action(reply_text: str, user_id: str) -> tuple[str,
     return reply_text, None
 
 
+def _parse_and_store_recommendation(reply_text: str, user_id: str) -> tuple[str, Optional[dict]]:
+    """HSB-08: extract an optional RECOMMENDATION:{...} block and turn it into a
+    testable ledger record. Each recommendation is a prediction the HSB-09 outcome
+    scorer grades later against real fills — the input side of the self-improvement loop.
+
+    Block schema (one per turn, at end of reply):
+      RECOMMENDATION: {"what": str, "why": str, "predicted_outcome": "loss"|"profit"|"neutral",
+                       "horizon": "intraday"|"structural", "strategy_id": optional str}
+    """
+    import re
+    from datetime import timedelta
+    pattern = r"RECOMMENDATION:\s*(\{.*\})"
+    match = re.search(pattern, reply_text, re.DOTALL)
+    if not match:
+        return reply_text, None
+    raw_json = match.group(1).strip()
+    try:
+        data = json.loads(raw_json)
+    except Exception as e:
+        logger.warning("Failed to parse recommendation JSON: %s", e)
+        return reply_text, None
+
+    what = (data.get("what") or "").strip()
+    if not what:
+        return reply_text, None
+
+    horizon = str(data.get("horizon") or "intraday").lower()
+    if horizon not in ("intraday", "structural"):
+        horizon = "intraday"
+    # intraday recs are graded at today's EOD; structural recs after ~5 calendar days.
+    grade_after = datetime.now(timezone.utc) + (timedelta(days=5) if horizon == "structural" else timedelta(0))
+
+    cleaned_text = reply_text.replace(match.group(0), "").strip()
+    rec_doc = {
+        "id": "rec_" + str(uuid.uuid4()),
+        "user_id": user_id,
+        "what": what,
+        "why": (data.get("why") or "").strip(),
+        "predicted_outcome": str(data.get("predicted_outcome") or "neutral").lower(),
+        "horizon": horizon,
+        "strategy_id": data.get("strategy_id"),
+        "status": "open",
+        "acted_on": None,
+        "grade_after_date": grade_after.date().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return cleaned_text, rec_doc
+
+
 def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -768,9 +884,25 @@ STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2 & STAGE 7):
      * `body_markdown`: Summary of code changes.
      Example: PROPOSED_ACTION: {{"action": "draft_pr_summary", "params": {{"title": "Feat: Stage 7", "body_markdown": "Summary details"}}}}
 
+  6. Pause Strategy (action: "draft_strategy_pause")
+     Propose pausing a strategy so it STOPS emitting new entries (e.g. it is on a loss streak or grossly mismatched to the regime). This is a non-trade status flip — it never closes or places trades. Params:
+     * `strategy_id`: The id of the strategy to pause (resolve it from `get_active_strategies` / `get_strategy_score_explained`).
+     * `reason`: One-line justification grounded in the tool data.
+     Example: PROPOSED_ACTION: {{"action": "draft_strategy_pause", "params": {{"strategy_id": "abc123", "reason": "4 consecutive losing exits today, grade F, expectancy -640"}}}}
+
 - To propose any of these actions, you MUST append a single block matching exactly the format at the absolute end of your response text (replacing with actual action name and params keys/values in the JSON).
 - You may only propose one action per turn.
-- CRITICAL: You are PERMANENTLY FORBIDDEN from proposing or executing any trading actions (placing, modifying, or cancelling orders; changing live mode `CORE_ENGINE_LIVE_ENABLED`; modifying broker API keys; or direct settings overrides).
+- CRITICAL: You are PERMANENTLY FORBIDDEN from proposing or executing any trading actions (placing, modifying, or cancelling orders; changing live mode `CORE_ENGINE_LIVE_ENABLED`; modifying broker API keys; or direct settings overrides). Pausing a strategy is allowed (it only stops new entries); closing/exiting positions is NOT.
+
+SELF-IMPROVEMENT RECOMMENDATION LEDGER (HSB-08):
+- When you give a concrete, testable piece of operational advice (e.g. "pause X", "this strategy will keep losing", "expect the drought to continue"), you MAY log it as a tracked prediction by appending ONE block at the very end:
+  RECOMMENDATION: {{"what": "...", "why": "...", "predicted_outcome": "loss"|"profit"|"neutral", "horizon": "intraday"|"structural", "strategy_id": "<id or omit>"}}
+- Use `horizon: intraday` for same-session calls and `structural` for multi-day calls. The system grades these against real fills later and remembers your hit-rate, so only log genuinely verifiable predictions.
+- A RECOMMENDATION block is independent of PROPOSED_ACTION — you may include both in one reply.
+
+EXTERNAL CONTEXT GROUNDING (HSB-06):
+- A `get_external_context` tool result (tagged EXTERNAL/UNVERIFIED, from Google Search) may be present for macro/event questions. You MAY use it ONLY for event/news/macro context (e.g. "RBI policy today", "expiry day", "global risk-off").
+- NEVER use external context to state any number that belongs to QuantG (P&L, scores, win-rates, prices) — those come only from internal tools. When you cite external context, explicitly label it as external/unverified and include the source where possible.
 
 STRICT READ-ONLY DEFAULT RULES:
 - You must never place, cancel, modify, or exit trades directly.
@@ -983,6 +1115,16 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_historical_context")
         matched_tools.add("recall_memory")
         has_matches = True
+
+    # HSB-06: external macro/news/event-risk context via Gemini Google-Search grounding.
+    # Bounded to clearly external questions so it never fires on internal-data queries.
+    if any(w in q for w in [
+        "news", "event", "macro", "rbi", "fed", "policy", "budget", "global",
+        "sgx", "gift nifty", "event risk", "results", "earnings", "expiry",
+        "holiday", "market today", "happening", "world", "geopolit", "crude", "vix news"
+    ]):
+        matched_tools.add("get_external_context")
+        has_matches = True
         
     if not has_matches:
         matched_tools.update([
@@ -1034,6 +1176,14 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     reply, pending_action_doc = _parse_and_store_pending_action(reply, user["id"])
     if pending_action_doc:
         await db.pending_actions.insert_one(pending_action_doc)
+
+    # HSB-08: parse and store a testable recommendation (self-improvement loop input)
+    reply, recommendation_doc = _parse_and_store_recommendation(reply, user["id"])
+    if recommendation_doc:
+        try:
+            await db.hermes_recommendations.insert_one(recommendation_doc)
+        except Exception as rec_exc:
+            logger.warning("Failed to store recommendation: %s", rec_exc)
 
     provider = "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback"
     failed_tools = [t for t in tool_results if t.get("status") != "ok"]
@@ -1129,11 +1279,13 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
     action_type = action.get("action_type")
     params = action.get("params") or {}
     
-    allowed_actions = {"update_profile", "draft_wiki_note", "draft_task_entry", "draft_incident_report", "draft_pr_summary"}
+    allowed_actions = {"update_profile", "draft_wiki_note", "draft_task_entry", "draft_incident_report", "draft_pr_summary", "draft_strategy_pause"}
     if action_type not in allowed_actions:
         raise HTTPException(status_code=400, detail=f"Unsupported action type: {action_type}")
-        
-    # Safeguard assert to verify no execution of dangerous operations
+
+    # Safeguard assert to verify no execution of dangerous operations.
+    # NOTE: pausing a strategy is a non-trade status flip (stops new entries); it is NOT
+    # an order/trade action, so it stays within Hermes' safety bounds.
     for keyword in ("order", "trade", "buy", "sell", "cancel", "broker", "live_enabled", "keys"):
         if keyword in action_type.lower():
             raise HTTPException(status_code=400, detail="Action type violates safety bounds")
@@ -1283,10 +1435,42 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
     elif action_type == "draft_pr_summary":
         title = params.get("title")
         body_markdown = params.get("body_markdown")
-        
+
         if not title or not body_markdown:
             raise HTTPException(status_code=400, detail="title and body_markdown are required")
-            
+
+    elif action_type == "draft_strategy_pause":
+        # HSB-10: approval-gated, non-trade status flip — pauses a strategy so it stops
+        # emitting new entries (e.g. on a loss streak). Never closes/places trades.
+        strategy_id = params.get("strategy_id")
+        reason = (params.get("reason") or "Paused by Hermes (founder-approved)").strip()
+        if not strategy_id:
+            raise HTTPException(status_code=400, detail="strategy_id is required")
+
+        strat = await db.strategies.find_one({"id": strategy_id, "user_id": user["id"]})
+        if not strat:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found for this account")
+
+        await db.strategies.update_one(
+            {"id": strategy_id, "user_id": user["id"]},
+            {"$set": {
+                "status": "paused",
+                "paused_reason": reason,
+                "paused_by": "hermes-agent",
+                "paused_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        # Mark any open recommendation that advised pausing this strategy as acted-on,
+        # so the HSB-09 scorer knows the advice was followed.
+        try:
+            await db.hermes_recommendations.update_many(
+                {"user_id": user["id"], "strategy_id": strategy_id, "status": "open"},
+                {"$set": {"acted_on": True}},
+            )
+        except Exception as rec_exc:
+            logger.warning("Failed to mark recommendation acted_on for pause: %s", rec_exc)
+
     await db.pending_actions.update_one(
         {"action_id": req.action_id},
         {"$set": {"status": "approved", "executed_at": datetime.now(timezone.utc).isoformat()}}

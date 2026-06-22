@@ -2334,16 +2334,9 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 *Completed and verified.*
 
-### Phase C — Web Context
+### Phase C — Web Context  ✅ DONE (see Completed Tasks)
 
-| HSB-06 | `get_external_context(query)` via **Gemini Google-Search grounding** (enable grounding in `generationConfig`), invoked ONLY by the `why-no-trade` / market-context playbooks (e.g. event/macro risk). Returns source URLs prefixed `EXTERNAL/UNVERIFIED` so prompt rules keep it out of any numeric claim. | `routes/ai.py` |
-
-### Phase D — Advisor Behavior + Self-Improvement Loop
-
-| HSB-07 | Proactive prioritized daily briefing (not a status dump): ranked top-3 "things that matter today" by impact (drawdown risk > drought > info), each with grounded source + a proposed governed action. Pushed via the sidecar morning slot. | `hermes/agent.py` |
-| HSB-08 | Recommendation ledger `db.hermes_recommendations`: every advice becomes a testable record `{what, why, predicted_outcome, confidence, date, status, acted_on}`. Foundation of the self-improvement loop (advise → record). | backend + `routes/ai.py` |
-| HSB-09 | Outcome scorer (EOD job): grades past recommendations against REAL fills/P&L → distills verdict to `db.hermes_memory` ("pausing on 5-loss streak validated 3/4 times"). **Same-day grade for action-recs, 5-day grade for structural-recs.** Closes the loop: future advice conditioned on measured hit-rate. | backend EOD job |
-| HSB-10 | Governed action `draft_strategy_pause` (approval-gated, non-trade status flip): when a strategy is on an N-loss streak, Hermes proposes pausing it. Within safety bounds (not a trade); requires founder approval. | `routes/ai.py` action framework |
+### Phase D — Advisor Behavior + Self-Improvement Loop  ✅ DONE (see Completed Tasks)
 
 ### Phase E — Strategy AutoResearch Ratchet (folded in; judge-first)
 
@@ -2426,12 +2419,17 @@ a confident overfitting machine — that is the single worst outcome and is expl
 | HSB-03 | Episodic memory tool `get_historical_context(days=N)` | feabc9d | 2026-06-22 |
 | HSB-04 | Recall layer: `db.hermes_memory` and `recall_memory` tool | feabc9d | 2026-06-22 |
 | HSB-05 | Auto-memory: daily distillation compiler to `db.hermes_memory` and wiki notes | feabc9d | 2026-06-22 |
+| HSB-06 | `get_external_context` via Gemini Google-Search grounding (EXTERNAL/UNVERIFIED, router-gated to macro/news) | (uncommitted) | 2026-06-23 |
+| HSB-07 | Proactive prioritized morning briefing (ranked top-3) + `/brief` Telegram command | (uncommitted) | 2026-06-23 |
+| HSB-08 | Recommendation ledger `db.hermes_recommendations` (RECOMMENDATION block parser) | (uncommitted) | 2026-06-23 |
+| HSB-09 | Outcome scorer EOD job: grades recs vs real fills → `db.hermes_memory` + rolling hit-rate | (uncommitted) | 2026-06-23 |
+| HSB-10 | Governed action `draft_strategy_pause` (approval-gated, non-trade status flip) | (uncommitted) | 2026-06-23 |
 
 ---
 
 *Last updated: 2026-06-22 (Hermes Second-Brain Campaign added: PRIORITY 12, HSB-01..HSB-17 — RAG/memory/advisor/self-improvement loop + folded-in strategy AutoResearch ratchet, judge-first. Backlog, below the active Win-Rate campaign.)*
 *Total tasks: 53 + 25 Hermes (H001–H025) + 17 Hermes Second-Brain (HSB-01–HSB-17) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
-*Open: 12 (HSB-06–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 84 (53 + H001–H025 + HSB-01–HSB-05)*
-*Hermes open: HSB-06–HSB-17 (PRIORITY 12, do not start until Win-Rate campaign settles)*
+*Open: 7 (HSB-11–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 89 (53 + H001–H025 + HSB-01–HSB-10)*
+*Hermes open: HSB-11–HSB-17 (PRIORITY 12 — HSB-11..16 is the strategy AutoResearch ratchet, judge-first; HSB-17 cleanup)*
 *Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
-*Recommended next build order (when unblocked): HSB-06 (Google-Search grounding) next.*
+*Recommended next build order (when unblocked): HSB-11 (historical_chains TTL index + data-volume audit) — gates the HSB-12 OOS judge.*

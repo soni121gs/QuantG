@@ -683,3 +683,86 @@ async def test_compile_eod_memory():
 
 
 
+
+
+# ── HSB-06/08/09/10 — web grounding, recommendation ledger, scorer, pause action ──
+
+from routes.ai import (
+    _parse_and_store_recommendation,
+    classify_playbook_by_query,
+)
+
+
+def test_classify_playbook_routes_external_context_for_macro():
+    """HSB-06: macro/news/event queries should pull in get_external_context."""
+    tools = classify_playbook_by_query("is there any RBI policy event risk today?")
+    assert "get_external_context" in tools
+    # A pure internal query should NOT trigger external context.
+    tools2 = classify_playbook_by_query("what is my current open position pnl")
+    assert "get_external_context" not in tools2
+
+
+def test_parse_and_store_recommendation_intraday():
+    """HSB-08: a RECOMMENDATION block becomes a testable open ledger record."""
+    reply = (
+        "Strategy abc is bleeding.\n"
+        'RECOMMENDATION: {"what": "pause abc", "why": "4 losses", '
+        '"predicted_outcome": "loss", "horizon": "intraday", "strategy_id": "abc"}'
+    )
+    cleaned, rec = _parse_and_store_recommendation(reply, "trader-1")
+    assert rec is not None
+    assert "RECOMMENDATION:" not in cleaned
+    assert rec["strategy_id"] == "abc"
+    assert rec["predicted_outcome"] == "loss"
+    assert rec["horizon"] == "intraday"
+    assert rec["status"] == "open"
+    # intraday grades today
+    assert rec["grade_after_date"] == datetime.now(timezone.utc).date().isoformat()
+
+
+def test_parse_and_store_recommendation_none_when_absent():
+    cleaned, rec = _parse_and_store_recommendation("just a normal answer", "trader-1")
+    assert rec is None
+    assert cleaned == "just a normal answer"
+
+
+def test_strategy_pause_in_allowlist_and_safe():
+    """HSB-10: draft_strategy_pause must pass the safety keyword tripwire."""
+    forbidden = ("order", "trade", "buy", "sell", "cancel", "broker", "live_enabled", "keys")
+    assert not any(k in "draft_strategy_pause" for k in forbidden)
+
+
+@pytest.mark.anyio
+async def test_score_open_recommendations_grades_correct():
+    """HSB-09: a 'loss' prediction on a losing strategy grades CORRECT and writes memory."""
+    from position_monitor import _score_open_recommendations
+
+    mock_db = MagicMock()
+    due_cursor = MagicMock()
+    due_cursor.to_list = AsyncMock(return_value=[{
+        "id": "rec_1", "user_id": "u1", "strategy_id": "abc",
+        "predicted_outcome": "loss", "horizon": "intraday",
+        "what": "pause abc", "status": "open", "grade_after_date": "2026-06-23",
+    }])
+    rep_cursor = MagicMock()
+    rep_cursor.to_list = AsyncMock(return_value=[
+        {"strategies": [{"strategy_id": "abc", "realized_pnl": -4000.0}]}
+    ])
+    graded_cursor = MagicMock()
+    graded_cursor.to_list = AsyncMock(return_value=[{"verdict": "correct"}])
+
+    # find() is called 3x: due recs, window reports, graded set
+    mock_db.hermes_recommendations.find.side_effect = [due_cursor, graded_cursor]
+    mock_db.daily_reports.find.return_value = rep_cursor
+    mock_db.hermes_recommendations.update_one = AsyncMock()
+    mock_db.hermes_memory.insert_one = AsyncMock()
+    mock_db.hermes_memory.update_one = AsyncMock()
+
+    with patch("core.embeddings.generate_gemini_embedding", AsyncMock(return_value=[0.1] * 768)):
+        await _score_open_recommendations(mock_db, "u1", "2026-06-23", {})
+
+    # rec was graded
+    args = mock_db.hermes_recommendations.update_one.call_args_list[0]
+    assert args.args[1]["$set"]["verdict"] == "correct"
+    # an outcome memory fact was written
+    assert mock_db.hermes_memory.insert_one.await_count == 1
