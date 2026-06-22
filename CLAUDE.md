@@ -18,6 +18,11 @@ QuantG is an NSE/BSE options algo-trading platform.
 ### Current Mode
 Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=false` in docker-compose.yml.
 
+### Current Operational State (updated 2026-06-22)
+- **Equity is LIVE on real data (paper).** 10 NSE_EQ strategies (RELIANCE, TCS, HDFCBANK, INFY, ICICIBANK, SBIN, AXISBANK, BHARTIARTL, KOTAKBANK, LT) trade alongside the options strategies (~24 live total). All earlier equity phantom/mock bugs are FIXED — do NOT re-apply old "equity is phantom / don't re-enable" cautions. Equity strategies use a **trend re-entry** patch in their `python_code` (re-emit the entry signal while the trend persists, so they trade more than once-at-open).
+- **Data-gathering phase tuning:** per-class daily trade caps raised (`trade_frequency._CLASS_CAPS`, default 6→20 etc.); spread `required_capital` cut to ~₹8k so spreads size to ~1–4 lots (was 4–17). These are config choices for collecting trade data, not defaults to assume elsewhere.
+- Feed/quotes, spreads, and equity all run on the real Upstox V3 + REST path — see Common Pitfalls (§6) for the colon-vs-pipe, spread-sizing, guardian-skip, and equity-candle gotchas learned here.
+
 ---
 
 ## 2. Critical File Map
@@ -95,6 +100,8 @@ cd /opt/QuantG && git pull origin main
 # IMPORTANT: restart alone does NOT reload Python code — must rebuild first
 docker-compose build backend && docker-compose up -d backend
 ```
+
+> **Known issue — mongo healthcheck flap (2026-06-22):** `quantg-mongo`'s healthcheck (a mongosh ping with a 5s timeout) intermittently reports *unhealthy* even though mongo is fully serving (mongosh sometimes takes >5s to start). Because backend `depends_on` mongo `condition: service_healthy`, `docker-compose up -d backend` can fail with `dependency failed to start: container quantg-mongo is unhealthy`. **Workaround (mongo is genuinely up — verify backend was already connected/healthy):** `docker-compose up -d --no-deps backend`. **Real fix (do OUTSIDE market hours, recreates mongo):** loosen the mongo healthcheck `timeout`/`start_period` in docker-compose.yml. Never `down -v`.
 
 **Frontend change** (JSX, CSS — requires rebuild):
 ```bash
@@ -224,6 +231,12 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | Owner-role check on per-user account ops | Only use owner check for cross-account operations (user approval, full reset) |
 | Creating phantom SHORT from duplicate SELL fills | Check for CLOSED/EXITING LONG before creating new position from a SELL fill |
 | Mark-to-market `update_one` on `strategy_positions` with no status filter | Always filter the write on `status: {"$in": [...]}` matching what you queried — guardian (5s) and monitor (30s) run concurrently and can close a position mid-await; an unguarded `$set` will restamp stale ltp/pnl onto an already-CLOSED doc (fixed 2026-06-21 in `position_monitor.py`/`position_guardian.py`) |
+| Looking up Upstox quote response by the pipe instrument key | Upstox **REST** `/market-quote/*` returns its `data` dict keyed by `EXCHANGE:SYMBOL` (**colon**, e.g. `NSE_INDEX:Nifty 50`), NOT the pipe key you sent. The **WS V3** feed uses pipe keys. Match both/colon/suffix or you silently get None → fallback (caused the "Simulated feed" bug, fixed 2026-06-22 `822f062`) |
+| Running single-leg staleness/LTP logic on spreads in `position_guardian` | The guardian must **skip** `structure in (credit_spread, debit_spread)` — spreads have no top-level `instrument_key` but DO carry a top-level `option_type`, which trips the single-leg staleness guard → entry-price fallback → force-close at 300s at a loss. `position_monitor._process_spread_position` owns spreads (prices both legs via REST). Fixed 2026-06-22 `635add2` |
+| Spreads are NOT 1-lot capped | Single-leg trades obey the "1 contract" max-lot cap; **spreads bypass it** and size by `required_capital` via `core/spread_builder.lots_for_risk` (lots = budget ÷ per-lot-max-loss). To change spread size edit the strategy's `required_capital`, not the lot cap |
+| Changing the per-strategy DAILY_CAP via `max_trades_day` | The live DAILY_CAP gate is in `trade_frequency.py` `_CLASS_CAPS` (class-based: scalper/momentum/trend/swing/default, env-overridable `FREQ_CAP_*`). The `max_trades_day` field does NOT drive it (red herring). Spread/unclassified strategies = "default" class |
+| Equity intraday candles only fetched via V2 `/historical-candle/intraday` | That endpoint returns **today only** → <20 bars early in the session → silent `mock-5minute` fallback (entries on fake prices). Equity uses **V3 multi-day historical + today's V3 intraday merged** (`get_historical_candles`, clamp lookback ≤25 days — Upstox rejects minute-history >~1 month, `UDAPI1148`). Fixed 2026-06-22 `372751b`/`7e57536` |
+| `parse_iso_dt` used in monitor/guardian without importing it | Import from `core.position_lifecycle` (NameError crashed the staleness path, fixed 2026-06-22 `e406d10`) |
 
 ---
 

@@ -23,8 +23,9 @@ QuantG is an NSE options algo-trading platform running on a VPS (82.180.145.183)
 
 - **Backend**: FastAPI + Motor (async MongoDB). Main logic in `backend/server.py` (~15k lines) plus modules in `backend/core/`, `backend/routes/`, `backend/brokers/`.
 - **Frontend**: React + Tailwind. Modular architecture: thin page orchestrators in `frontend/src/pages/`, presenter components in `frontend/src/components/{dashboard,strategies,ops,wiki,aibot}/`, centralized state via `frontend/src/contexts/ExecutionStateContext.jsx`.
-- **Broker**: Upstox V3 only. WebSocket feed + REST orders.
+- **Broker**: Upstox V3 only. WebSocket feed + REST orders. (Gotcha: REST `/market-quote/*` returns COLON-keyed data `NSE_INDEX:Nifty 50`; WS V3 uses PIPE keys `NSE_INDEX|Nifty 50`.)
 - **Mode right now**: Paper trading. Live trading is disabled (`CORE_ENGINE_LIVE_ENABLED=false`).
+- **Equity is LIVE on real data (paper)** as of 2026-06-22 — 10 NSE_EQ strategies trade alongside options (~24 live total). Old "equity is phantom / don't re-enable" cautions are obsolete; do NOT re-apply them. Equity strategies carry a trend re-entry patch in their `python_code`.
 - **Database**: MongoDB at `mongodb://mongo:27017`, db name `quantg`.
 
 For full architecture details → see `CLAUDE.md`.
@@ -90,6 +91,8 @@ ssh -i C:\Users\MG\.ssh\codex_quantg_vps root@82.180.145.183 \
 ```
 For frontend changes add: `docker-compose build frontend && docker-compose up -d frontend`
 
+> **Known issue — mongo healthcheck flap:** `docker-compose up -d backend` can fail with `dependency failed to start: container quantg-mongo is unhealthy` even though mongo is fine (its mongosh-ping healthcheck times out at 5s). Workaround: `docker-compose up -d --no-deps backend` (verify backend was already connected first). Real fix is loosening the healthcheck in docker-compose.yml — do that OUTSIDE market hours; never `down -v`.
+
 ---
 
 ## 5. What You Must Never Do
@@ -139,6 +142,20 @@ price = pos["average_price"]
 
 # CORRECT
 price = pos.get("average_price") or pos.get("average_buy_price") or 0
+
+# WRONG — read an Upstox REST quote by the pipe key you sent
+node = quotes["data"]["NSE_INDEX|Nifty 50"]      # REST returns COLON keys → None
+
+# CORRECT — REST is colon-keyed; match colon/pipe/suffix
+node = quotes["data"].get("NSE_INDEX|Nifty 50") or quotes["data"].get("NSE_INDEX:Nifty 50")
+
+# WRONG — run single-leg LTP/staleness logic on a spread (it has option_type but no top-level instrument_key)
+# CORRECT — skip spreads in position_guardian; position_monitor._process_spread_position owns them
+if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
+    return
+
+# Spread size is set by required_capital (lots_for_risk), NOT the 1-lot cap.
+# The DAILY_CAP gate is trade_frequency._CLASS_CAPS (FREQ_CAP_*), NOT the max_trades_day field.
 ```
 
 ---
@@ -248,7 +265,7 @@ works this program the same way.
 
 ---
 
-*Last updated: 2026-06-20*
+*Last updated: 2026-06-22*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
 
 ---
