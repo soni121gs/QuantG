@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import { usePolling } from "../hooks/usePolling";
 import { Link } from "react-router-dom";
 import {
   Activity,
@@ -88,11 +89,7 @@ export default function Strategies() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePolling(load, 30000, { hiddenMs: 0 });
 
   const filtered = useMemo(() => {
     let result = [...list];

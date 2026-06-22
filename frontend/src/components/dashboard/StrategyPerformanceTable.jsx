@@ -5,7 +5,7 @@ const money = (value) => `INR ${formatINR(value ?? 0)}`;
 const toneClass = (value) => ((value ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]");
 const profitFactorLabel = (value) => (value == null ? "No losses" : Number(value).toFixed(2));
 
-export const StrategyPerformanceTable = ({ rows }) => (
+export const StrategyPerformanceTable = React.memo(({ rows }) => (
   <div className="overflow-x-auto">
     <table className="w-full text-left text-xs">
       <thead className="bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] uppercase font-mono">
@@ -72,6 +72,7 @@ export const StrategyPerformanceTable = ({ rows }) => (
       </tbody>
     </table>
   </div>
-);
+));
+StrategyPerformanceTable.displayName = "StrategyPerformanceTable";
 
 export default StrategyPerformanceTable;

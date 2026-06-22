@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
+import { usePolling } from "../hooks/usePolling";
 import { Activity, AlertTriangle, BookOpen, HeartPulse, RefreshCw, ShieldCheck, Sparkles, SquareArrowOutUpRight } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
@@ -42,11 +43,7 @@ export default function MarketHub() {
     if (iv.data) setIvRank(iv.data);
   }, [underlying]);
 
-  useEffect(() => {
-    load().catch(() => {});
-    const t = setInterval(() => load().catch(() => {}), 60000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePolling(load, 60000, { hiddenMs: 0 });
 
   const squareOff = async () => {
     if (!window.confirm("Square off all open positions now?")) return;

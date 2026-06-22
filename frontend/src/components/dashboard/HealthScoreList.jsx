@@ -1,6 +1,6 @@
 import React from "react";
 
-export const HealthScoreList = ({ rows }) => (
+export const HealthScoreList = React.memo(({ rows }) => (
   <div className="space-y-3">
     {rows.length === 0 ? (
       <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">No health scores yet.</div>
@@ -25,6 +25,7 @@ export const HealthScoreList = ({ rows }) => (
       })
     )}
   </div>
-);
+));
+HealthScoreList.displayName = "HealthScoreList";
 
 export default HealthScoreList;

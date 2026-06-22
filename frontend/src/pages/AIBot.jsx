@@ -186,32 +186,25 @@ export default function AIBot() {
   }[chatSpan] || "lg:col-span-8";
 
   return (
-    <div className="flex flex-col gap-4" data-testid="ai-bot-page">
-      {/* Compact Inline Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--qd-border)]/45 pb-3">
-        <div className="flex items-center gap-3">
-          <div className="w-8.5 h-8.5 rounded-lg bg-[var(--qd-accent)] flex items-center justify-center shadow-xs">
-            <Bot size={16} className="text-[var(--qd-accent-contrast)]" />
+    <div className="flex flex-col gap-2" data-testid="ai-bot-page">
+      {/* Ultra-compact single-line header to maximize chat workspace */}
+      <div className="flex items-center justify-between gap-2 pb-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-6 h-6 rounded-md bg-[var(--qd-accent)] flex items-center justify-center shrink-0">
+            <Bot size={13} className="text-[var(--qd-accent-contrast)]" />
           </div>
-          <div>
-            <h1 className="font-head text-base font-extrabold text-[var(--qd-text)] flex items-center gap-2">
-              Hermes Analyst Co-Pilot
-              <StatusBadge tone={profile?.paper_mode ? "paper" : "live"} className="h-5 px-1.5 text-[9px] font-mono font-bold">
-                {profile?.paper_mode ? "Paper" : "Live"}
-              </StatusBadge>
-            </h1>
-            <p className="text-[11px] text-[var(--qd-text-2)] font-sans">
-              Governance-gated operations and research co-pilot grounded in live terminal context.
-            </p>
-          </div>
+          <h1 className="font-head text-sm font-extrabold text-[var(--qd-text)] truncate">Hermes Analyst Co-Pilot</h1>
+          <StatusBadge tone={profile?.paper_mode ? "paper" : "live"} className="h-4 px-1 text-[9px] font-mono font-bold shrink-0">
+            {profile?.paper_mode ? "Paper" : "Live"}
+          </StatusBadge>
         </div>
-        <div className="hidden sm:flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] font-semibold border border-[var(--qd-border)] px-2.5 py-1 rounded-full bg-[var(--qd-surface-2)]/30">
+        <div className="hidden sm:flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-wider text-[var(--qd-text-3)] font-semibold shrink-0">
           <span className={`h-1.5 w-1.5 rounded-full ${profile?.paper_mode ? "bg-amber-400" : "bg-emerald-400"}`} />
-          {profile?.paper_mode ? "Paper Mode Active" : "Live Broker Connected"}
+          {profile?.paper_mode ? "Paper Mode" : "Live Broker"}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-130px)] lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-3 lg:h-[calc(100vh-92px)] lg:grid-cols-12">
         {/* Left Sidebar: Conversations list */}
         {showHistory && (
           <div className="hidden lg:block lg:col-span-3 lg:h-full lg:min-h-0 animate-fade-in">
@@ -226,10 +219,10 @@ export default function AIBot() {
         )}
 
         {/* Center Panel: Chat workspace */}
-        <div className={`flex min-h-[62vh] flex-col overflow-hidden qd-card ${chatSpanClass} lg:min-h-0 lg:h-full transition-all duration-300`}>
+        <div className={`flex min-h-[80vh] flex-col overflow-hidden qd-card ${chatSpanClass} lg:min-h-0 lg:h-full transition-all duration-300`}>
 
           {/* Header: tabs & sidebar toggles */}
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-4 py-3 bg-[var(--qd-surface-2)]/40 backdrop-blur-xs">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-3 py-2 bg-[var(--qd-surface-2)]/40 backdrop-blur-xs">
             <div className="flex min-w-0 items-center gap-4">
               <button
                 type="button"
@@ -309,7 +302,7 @@ export default function AIBot() {
           {activeTab === "chat" ? (
             <>
               {/* Messages */}
-              <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6" data-testid="messages">
+              <div className="flex-1 space-y-3 overflow-y-auto p-3 md:p-4" data-testid="messages">
                 {messages.length === 0 ? (
                   <EmptyState onPick={send} />
                 ) : (
@@ -324,20 +317,20 @@ export default function AIBot() {
                 {messages.length > 0 && showSuggestions && !text.trim() && (
                   <PromptSuggestionsPanel onPick={send} busy={busy} onClose={() => setShowSuggestions(false)} />
                 )}
-                <div className="p-4">
-                  <div className="group relative rounded-xl border border-[var(--qd-border)] bg-[var(--qd-surface)] shadow-xs focus-within:border-[var(--qd-border-strong)] focus-within:ring-2 focus-within:ring-[var(--qd-focus)] transition-all flex flex-col">
+                <div className="p-2.5">
+                  <div className="group relative rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface)] shadow-xs focus-within:border-[var(--qd-border-strong)] focus-within:ring-2 focus-within:ring-[var(--qd-focus)] transition-all flex flex-col">
                     <textarea
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      onKeyDown={(e) => { 
-                        if (e.key === "Enter" && !e.shiftKey) { 
-                          e.preventDefault(); 
-                          send(); 
-                        } 
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          send();
+                        }
                       }}
                       rows={2}
                       placeholder="Ask about positions, risk or feed health — or say 'lower my daily loss limit to 6000'."
-                      className="w-full border-0 bg-transparent px-4 py-3 text-[14px] leading-relaxed text-[var(--qd-text)] outline-none shadow-none resize-none font-sans placeholder-[var(--qd-text-3)]"
+                      className="w-full border-0 bg-transparent px-3 py-2 text-[13px] leading-relaxed text-[var(--qd-text)] outline-none shadow-none resize-none font-sans placeholder-[var(--qd-text-3)]"
                       data-testid="ai-input"
                       disabled={busy}
                     />

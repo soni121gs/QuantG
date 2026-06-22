@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
+import { usePolling } from "../hooks/usePolling";
 import { 
   Activity, AlertTriangle, RefreshCw, ShieldAlert, Pause, Trash2,
   Wifi, Power, Play, SquareArrowOutUpRight, Key, CheckCircle2,
@@ -109,17 +110,14 @@ export default function OpsConsole() {
     }
   }, []);
 
-  useEffect(() => {
-    load().catch(() => toast.error("Failed to load operations data"));
-    loadPendingUsers().catch(() => {});
-    loadNeedsReview().catch(() => {});
-    const t = setInterval(() => {
-      load().catch(() => {});
-      loadPendingUsers().catch(() => {});
-      loadNeedsReview().catch(() => {});
-    }, 15000);
-    return () => clearInterval(t);
-  }, [user, load, loadPendingUsers, loadNeedsReview]);
+  const loadOps = useCallback(async () => {
+    await Promise.all([
+      load().catch(() => {}),
+      loadPendingUsers().catch(() => {}),
+      loadNeedsReview().catch(() => {}),
+    ]);
+  }, [load, loadPendingUsers, loadNeedsReview]);
+  usePolling(loadOps, 15000, { hiddenMs: 0 });
 
   const run = async (key, url, confirmText) => {
     if (confirmText && !window.confirm(confirmText)) return;

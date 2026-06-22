@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Activity,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { api, formatINR, pctFmt } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
+import { usePolling } from "../hooks/usePolling";
 import { KpiCard } from "../components/dashboard/KpiCard";
 import { NiftyPulseChart } from "../components/dashboard/NiftyPulseChart";
 import { StrategyPerformanceTable } from "../components/dashboard/StrategyPerformanceTable";
@@ -36,12 +37,6 @@ const PROBLEM_ORDER_STATES = ["FAILED", "REJECTED", "BROKER_NOT_FOUND", "STALE"]
 
 const asStatus = (value) => String(value || "").toUpperCase();
 const hasQty = (value) => Math.abs(parseInt(value || 0, 10)) > 0;
-
-const quoteTime = (value) => {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleTimeString();
-};
 
 const quoteAge = (value) => (value == null ? "-" : `${Math.round(Number(value) || 0)}s`);
 
@@ -91,7 +86,6 @@ export default function Dashboard() {
     summary: executionSummary,
     upstoxDataHealth,
     brokerReconciliation,
-    refresh: refreshExecution,
   } = useExecutionState({ pollMs: 15000 });
   const [watch, setWatch] = useState([]);
   const positions = execPositions;
@@ -117,7 +111,8 @@ export default function Dashboard() {
         api.get("/strategies/leaderboard"),
         api.get("/upstox/option-chain", { params: { underlying: "NIFTY" } }).catch(() => ({ data: null })),
       ]);
-      await refreshExecution();
+      // Execution/positions/PnL are already kept fresh by the global
+      // ExecutionStateContext (15s poll) — no need to re-fetch them here.
       setWatch(w.data);
       setFunds(f.data);
       setTelemetry(t.data);
@@ -128,13 +123,9 @@ export default function Dashboard() {
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
     }
-  }, [refreshExecution]);
+  }, []);
 
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 60000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePolling(load, 60000, { hiddenMs: 0 });
 
   const loadNiftyCandles = useCallback(async () => {
     const key = encodeURIComponent("NSE_INDEX|Nifty 50");
@@ -151,11 +142,7 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    loadNiftyCandles();
-    const t = setInterval(loadNiftyCandles, 60000);
-    return () => clearInterval(t);
-  }, [loadNiftyCandles]);
+  usePolling(loadNiftyCandles, 60000, { hiddenMs: 0 });
 
   const pnl = executionSummary.net_pnl ?? 0;
   const grossPnl = executionSummary.gross_pnl ?? pnl;
@@ -445,57 +432,34 @@ export default function Dashboard() {
             />
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <div className="qd-card p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <div className="qd-section-title">// Upstox</div>
-                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Data Health</h2>
-                </div>
-                <StatusPill tone={upstoxDataHealth?.readiness === "READY" ? "good" : "warn"}>{upstoxDataHealth?.readiness || "UNKNOWN"}</StatusPill>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Websocket" value={upstoxDataHealth?.connected ? "Connected" : "Disconnected"} tone={upstoxDataHealth?.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} />
-                <Field label="Snapshot" value={upstoxDataHealth?.snapshot_received ? "Received" : "Waiting"} tone={upstoxDataHealth?.snapshot_received ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
-                <Field label="Quote Age" value={quoteAge(upstoxDataHealth?.quote_age_sec)} tone={upstoxDataHealth?.quote_stale ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
-                <Field label="Latest Tick" value={quoteTime(upstoxDataHealth?.latest_tick_time)} />
-              </div>
+          {/* Compact diagnostics strip — Data Health / Reconciliation / Skipped.
+              Low-priority telemetry condensed into one slim bar to free up space. */}
+          <section className="qd-card flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 text-[11px]">
+            <div className="flex items-center gap-2">
+              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Feed</span>
+              <StatusPill tone={upstoxDataHealth?.readiness === "READY" ? "good" : "warn"}>{upstoxDataHealth?.readiness || "UNKNOWN"}</StatusPill>
+              <span className={upstoxDataHealth?.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{upstoxDataHealth?.connected ? "WS" : "WS✕"}</span>
+              <span className={upstoxDataHealth?.quote_stale ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}>age {quoteAge(upstoxDataHealth?.quote_age_sec)}</span>
             </div>
 
-            <div className="qd-card p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <div className="qd-section-title">// Broker truth</div>
-                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Reconciliation</h2>
-                </div>
-                <StatusPill tone={brokerReconciliation?.status === "OK" ? "good" : "warn"}>{brokerReconciliation?.status || "UNKNOWN"}</StatusPill>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Pending Gaps" value={brokerReconciliation?.mismatches?.pending_orders_without_broker_match ?? 0} tone={(brokerReconciliation?.mismatches?.pending_orders_without_broker_match || 0) ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
-                <Field label="Position Gaps" value={brokerReconciliation?.mismatches?.position_key_mismatches ?? 0} tone={(brokerReconciliation?.mismatches?.position_key_mismatches || 0) ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
-                <Field label="Local Live" value={brokerReconciliation?.mismatches?.local_positions ?? 0} />
-                <Field label="Broker Live" value={brokerReconciliation?.mismatches?.broker_positions ?? 0} />
-              </div>
+            <span className="hidden h-3 w-px bg-[var(--qd-border)] sm:inline-block" />
+
+            <div className="flex items-center gap-2">
+              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Recon</span>
+              <StatusPill tone={brokerReconciliation?.status === "OK" ? "good" : "warn"}>{brokerReconciliation?.status || "UNKNOWN"}</StatusPill>
+              <span className={(brokerReconciliation?.mismatches?.pending_orders_without_broker_match || brokerReconciliation?.mismatches?.position_key_mismatches) ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}>
+                gaps {(brokerReconciliation?.mismatches?.pending_orders_without_broker_match ?? 0) + (brokerReconciliation?.mismatches?.position_key_mismatches ?? 0)}
+              </span>
             </div>
 
-            <div className="qd-card p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <div className="qd-section-title">// Skipped</div>
-                  <h2 className="mt-1 font-head text-lg font-semibold text-white">Signal Reasons</h2>
-                </div>
-                <StatusPill tone={skippedSignals.length ? "warn" : "good"}>{skippedSignals.length}</StatusPill>
-              </div>
-              <div className="space-y-3">
-                {skippedSignals.length === 0 ? (
-                  <div className="text-xs text-[var(--qd-text-3)]">No skipped signals recorded.</div>
-                ) : skippedSignals.slice(0, 4).map((row) => (
-                  <div key={row.id || row.dedupe_key} className="border-b border-[var(--qd-border)] pb-2 last:border-0">
-                    <div className="font-mono text-xs text-white">{row.reason_code || row.reason || "SKIPPED"}</div>
-                    <div className="mt-1 text-[11px] text-[var(--qd-text-2)]">{row.symbol || row.strategy_id || "-"} · {row.count || 1}x</div>
-                  </div>
-                ))}
-              </div>
+            <span className="hidden h-3 w-px bg-[var(--qd-border)] sm:inline-block" />
+
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Skipped</span>
+              <StatusPill tone={skippedSignals.length ? "warn" : "good"}>{skippedSignals.length}</StatusPill>
+              <span className="truncate text-[var(--qd-text-2)]">
+                {skippedSignals.length === 0 ? "none" : (skippedSignals[0]?.reason_code || skippedSignals[0]?.reason || "skipped")}
+              </span>
             </div>
           </section>
 

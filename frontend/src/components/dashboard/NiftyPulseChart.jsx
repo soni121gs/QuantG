@@ -18,7 +18,7 @@ const buildSparkPath = (series, w, h, pad = 6) => {
     .join(" ");
 };
 
-export const NiftyPulseChart = ({ niftyLtp, sensexLtp, candles = [], marketOpen, label, feedLabel }) => {
+export const NiftyPulseChart = React.memo(({ niftyLtp, sensexLtp, candles = [], marketOpen, label, feedLabel }) => {
   const series = (candles || []).map((c) => Number(c.close ?? c.c)).filter((n) => Number.isFinite(n));
   const hasChart = series.length >= 2;
   const first = series[0];
@@ -81,6 +81,7 @@ export const NiftyPulseChart = ({ niftyLtp, sensexLtp, candles = [], marketOpen,
       </div>
     </div>
   );
-};
+});
+NiftyPulseChart.displayName = "NiftyPulseChart";
 
 export default NiftyPulseChart;

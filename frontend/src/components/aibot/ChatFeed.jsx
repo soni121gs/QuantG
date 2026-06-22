@@ -115,26 +115,26 @@ const Message = ({ m, profile, onApprove, onReject }) => {
     });
 
   return (
-    <div className={`flex gap-3.5 items-start ${isUser ? "justify-end" : ""}`}>
+    <div className={`flex gap-2.5 items-start ${isUser ? "justify-end" : ""}`}>
       {!isUser && (
         <div className="relative flex-shrink-0">
-          <div className="w-8.5 h-8.5 rounded-lg bg-[var(--qd-accent)] flex items-center justify-center shadow-md">
-            <Bot size={17} className="text-[var(--qd-accent-contrast)]" />
+          <div className="w-7 h-7 rounded-lg bg-[var(--qd-accent)] flex items-center justify-center shadow-md">
+            <Bot size={14} className="text-[var(--qd-accent-contrast)]" />
           </div>
           <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-[var(--qd-bg)] rounded-full" title="Agent Online" />
         </div>
       )}
-      <div 
-        className={`max-w-[85%] px-5 py-4 rounded-xl shadow-sm border ${
-          isUser 
-            ? "qd-force-white bg-gradient-to-br from-[var(--qd-accent)] to-[var(--qd-accent-hover)] border-none text-white" 
+      <div
+        className={`max-w-[88%] px-3.5 py-2.5 rounded-xl shadow-sm border ${
+          isUser
+            ? "qd-force-white bg-gradient-to-br from-[var(--qd-accent)] to-[var(--qd-accent-hover)] border-none text-white"
             : "bg-[var(--qd-surface)] border-[var(--qd-border)] text-[var(--qd-text)]"
         }`}
       >
         {isUser ? (
-          <div className="whitespace-pre-wrap text-[15px] leading-relaxed font-sans">{m.content}</div>
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed font-sans">{m.content}</div>
         ) : (
-          <div className="text-[15px] leading-relaxed font-sans space-y-2">{renderMarkdown(m.content)}</div>
+          <div className="text-[13px] leading-relaxed font-sans space-y-2">{renderMarkdown(m.content)}</div>
         )}
 
         {hasAction && (

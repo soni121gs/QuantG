@@ -39,6 +39,7 @@ import { api, formatINR } from "../lib/api";
 import { toast } from "sonner";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { useExecutionState } from "../hooks/useExecutionState";
+import { usePolling } from "../hooks/usePolling";
 import { Button } from "./ui/button";
 import { StatusBadge } from "./ui/app-shell";
 import ReadinessBanner from "./ReadinessBanner";
@@ -222,6 +223,54 @@ const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
   );
 };
 
+// Computes NSE market-open state from a Date (IST 09:15–15:30, Mon–Fri).
+const computeMarketOpen = (d) => {
+  const day = d.getUTCDay();
+  const totalMinutesIST = d.getUTCHours() * 60 + d.getUTCMinutes() + 330;
+  const istHours = Math.floor(totalMinutesIST / 60) % 24;
+  const istMinutes = totalMinutesIST % 60;
+  const minutes = istHours * 60 + istMinutes;
+  const isWeekday = day >= 1 && day <= 5;
+  if (!isWeekday) return false;
+  return minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
+};
+
+// Self-contained second clock — owns its own interval so it does NOT re-render
+// the entire Layout shell every second (a real mobile perf cost during market).
+const LiveTime = React.memo(function LiveTime() {
+  const [time, setTime] = useState(() =>
+    new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }),
+  );
+  useEffect(() => {
+    const t = setInterval(() => {
+      setTime(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }));
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
+      {time} IST
+    </span>
+  );
+});
+
+// Market badge only flips twice a day — recompute on a slow 20s cadence.
+const MarketBadge = React.memo(function MarketBadge() {
+  const [open, setOpen] = useState(() => computeMarketOpen(new Date()));
+  useEffect(() => {
+    const t = setInterval(() => setOpen(computeMarketOpen(new Date())), 20000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 text-xs">
+      <span className="qd-live-dot" />
+      <span className="font-head text-[11px] font-bold uppercase tracking-wide text-[var(--qd-text-2)]">
+        {open ? "MARKET OPEN" : "MARKET CLOSED"}
+      </span>
+    </div>
+  );
+});
+
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -230,7 +279,6 @@ export default function Layout({ children }) {
     wallet: executionWallet,
     refresh: refreshExecution,
   } = useExecutionState({ pollMs: 15000 });
-  const [now, setNow] = useState(new Date());
   const [funds, setFunds] = useState(null);
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -278,39 +326,17 @@ export default function Layout({ children }) {
   }, [blotterOpen]);
 
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
     document.documentElement.dataset.quantgTheme = theme;
     window.localStorage.setItem("quantg-theme-v2", theme);
   }, [theme]);
 
-  useEffect(() => {
-    const fetch = () => {
-      api.get("/funds").then((r) => setFunds(r.data)).catch(() => {});
-      api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
-    };
-    fetch();
-    const t = setInterval(fetch, 60000);
-    return () => clearInterval(t);
+  const loadShellMeta = useCallback(async () => {
+    await Promise.all([
+      api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
+      api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
+    ]);
   }, []);
-
-  const isMarketOpen = (() => {
-    const day = now.getUTCDay();
-    // Calculate IST hours and minutes
-    const totalMinutesIST = now.getUTCHours() * 60 + now.getUTCMinutes() + 330;
-    const istHours = Math.floor(totalMinutesIST / 60) % 24;
-    const istMinutes = totalMinutesIST % 60;
-    const minutes = istHours * 60 + istMinutes;
-    
-    const isWeekday = day >= 1 && day <= 5;
-    if (!isWeekday) return false;
-    
-    const nseOpen = minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
-    return nseOpen;
-  })();
+  usePolling(loadShellMeta, 60000, { hiddenMs: 0 });
 
   const [shellRefreshing, setShellRefreshing] = useState(false);
   const refreshShell = async () => {
@@ -343,11 +369,7 @@ export default function Layout({ children }) {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    loadNotifications();
-    const t = setInterval(loadNotifications, 30000);
-    return () => clearInterval(t);
-  }, [loadNotifications]);
+  usePolling(loadNotifications, 30000, { hiddenMs: 0 });
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -463,12 +485,7 @@ export default function Layout({ children }) {
                 </div>
               </div>
             </div>
-            <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 text-xs">
-              <span className="qd-live-dot" />
-              <span className="font-head text-[11px] font-bold uppercase tracking-wide text-[var(--qd-text-2)]">
-                {isMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
-              </span>
-            </div>
+            <MarketBadge />
             {profile && (
               <StatusBadge
                 tone={profile.paper_mode ? "paper" : "live"}
@@ -497,9 +514,7 @@ export default function Layout({ children }) {
                 INR {formatINR(executionSummary?.net_pnl ?? 0)}
               </span>
             </div>
-            <span className="hidden md:block font-mono text-xs text-[var(--qd-text-2)]" data-testid="top-time">
-              {now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST
-            </span>
+            <LiveTime />
             <Button variant="ghost" size="icon" onClick={refreshShell} disabled={shellRefreshing} data-testid="cmd-refresh" aria-label="Refresh">
               <RefreshCw size={15} className={shellRefreshing ? "animate-spin" : ""} />
             </Button>

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
+import { usePolling } from "../hooks/usePolling";
 import { AlertTriangle, X, KeyRound, Play } from "lucide-react";
 
 // Surfaces the two recurring "why isn't it trading?" blockers:
@@ -13,26 +14,17 @@ export default function ReadinessBanner() {
   const [liveCount, setLiveCount] = useState(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      const [u, s] = await Promise.all([
-        api.get("/upstox/status").catch(() => ({ data: { connected: false, feed_stalled: false } })),
-        api.get("/strategies").catch(() => ({ data: [] })),
-      ]);
-      if (!active) return;
-      setConnected(!!u.data?.connected);
-      setFeedStalled(!!u.data?.feed_stalled);
-      const list = Array.isArray(s.data) ? s.data : s.data?.strategies || [];
-      setLiveCount(list.filter((x) => x.status === "live").length);
-    };
-    load();
-    const t = setInterval(load, 60000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
+  const load = useCallback(async () => {
+    const [u, s] = await Promise.all([
+      api.get("/upstox/status").catch(() => ({ data: { connected: false, feed_stalled: false } })),
+      api.get("/strategies").catch(() => ({ data: [] })),
+    ]);
+    setConnected(!!u.data?.connected);
+    setFeedStalled(!!u.data?.feed_stalled);
+    const list = Array.isArray(s.data) ? s.data : s.data?.strategies || [];
+    setLiveCount(list.filter((x) => x.status === "live").length);
   }, []);
+  usePolling(load, 60000, { hiddenMs: 0 });
 
   if (dismissed || liveCount === null) return null;
   const needsToken = !connected;

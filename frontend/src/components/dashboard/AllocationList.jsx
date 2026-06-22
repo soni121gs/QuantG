@@ -1,6 +1,6 @@
 import React from "react";
 
-export const AllocationList = ({ rows }) => (
+export const AllocationList = React.memo(({ rows }) => (
   <div className="space-y-3">
     {rows.length === 0 ? (
       <div className="py-6 text-center text-xs text-[var(--qd-text-3)]">
@@ -20,6 +20,7 @@ export const AllocationList = ({ rows }) => (
       ))
     )}
   </div>
-);
+));
+AllocationList.displayName = "AllocationList";
 
 export default AllocationList;
