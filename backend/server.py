@@ -6962,8 +6962,21 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
         # lot_size to the already-expanded qty, and books a phantom EQUITY position
         # (the 2026-06-17 −16.5k loss). close_credit_spread claims OPEN/EXITING→CLOSED
         # itself, so we close here BEFORE the generic EXITING mark below.
-        if str(pos.get("structure")) == "credit_spread":
-            from core.spread_lifecycle import close_credit_spread
+        if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
+            # Spreads are never force-closed on single-leg staleness — that guard
+            # cannot price a two-leg spread (no top-level instrument_key) and
+            # closing here turns a flat/near-flat spread into a charges-only loss.
+            # position_monitor._process_spread_position owns spread exits via
+            # two-leg REST pricing; let the spread ride until a real exit reason.
+            if reason == "stale-quote-protective-exit":
+                logger.info(
+                    "spread close: ignoring stale-quote-protective-exit for spread pos=%s "
+                    "(monitor owns spread pricing)", pos.get("id"),
+                )
+                results.append({"symbol": sym, "qty": qty_net, "status": "skipped",
+                                "reason": "spread-stale-exit-ignored"})
+                continue
+            from core.spread_lifecycle import close_credit_spread, close_debit_spread
             legs = pos.get("legs") or []
             short_leg = next((l for l in legs if l.get("role") == "short"), None)
             long_leg = next((l for l in legs if l.get("role") == "long"), None)
@@ -6982,9 +6995,14 @@ async def _close_strategy_positions(user_id: str, sid: str, reason: str = "auto-
                 short_ltp = float(short_leg.get("entry_price") or short_leg.get("premium") or 0)
             if long_ltp is None:
                 long_ltp = float(long_leg.get("entry_price") or long_leg.get("premium") or 0)
-            spread_res = await close_credit_spread(
-                db, pos, reason=reason, short_ltp=float(short_ltp), long_ltp=float(long_ltp),
-            )
+            if str(pos.get("structure")) == "debit_spread":
+                spread_res = await close_debit_spread(
+                    db, pos, reason=reason, short_ltp=float(short_ltp), long_ltp=float(long_ltp),
+                )
+            else:
+                spread_res = await close_credit_spread(
+                    db, pos, reason=reason, short_ltp=float(short_ltp), long_ltp=float(long_ltp),
+                )
             results.append({"symbol": sym, "qty": qty_net, "status": "spread-closed",
                             "spread_status": spread_res.get("status"), "realized_pnl": spread_res.get("realized_pnl")})
             continue

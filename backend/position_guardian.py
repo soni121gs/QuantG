@@ -187,7 +187,14 @@ async def _guard_one(
     )
 
     # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
-    is_option_or_equity = (
+    # Spreads are excluded here too (defense-in-depth alongside the structure
+    # skip at the top of _guard_one): their top-level option_type must not trip
+    # the single-leg staleness guard. position_monitor owns spread exits.
+    is_spread = (
+        str(pos.get("structure") or "") in ("credit_spread", "debit_spread")
+        or str(pos.get("asset_type") or "").lower() == "option_spread"
+    )
+    is_option_or_equity = (not is_spread) and (
         str(pos.get("asset_type") or "").lower() in ("option", "equity")
         or pos.get("exchange") in ("NFO", "BFO", "NSE", "BSE")
         or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))

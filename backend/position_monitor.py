@@ -321,10 +321,20 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # Status-guarded: if this position was closed concurrently (e.g. by
     # position_guardian) while we were awaiting leg LTPs above, this write
     # must not resurrect stale mark-to-market fields onto a CLOSED/EXITING doc.
+    set_fields = {"spread_value": v["value"], "unrealized_pnl": v["pnl"],
+                  "last_tick_at": now_str, "updated_at": now_str}
+    # Refresh last_fresh_tick_at whenever BOTH legs priced live. The single-leg
+    # staleness guard keys off last_fresh_tick_at; a spread never gets it
+    # refreshed elsewhere (the guardian skips spreads, the single-leg monitor
+    # path skips them too), so without this the field stays at entry_time and
+    # any code that evaluates staleness on the spread's top-level option_type
+    # force-closes it at the 300s threshold (stale-quote-protective-exit). Keep
+    # it fresh so the spread is never mistaken for a dead single-leg quote.
+    if have_live:
+        set_fields["last_fresh_tick_at"] = now_str
     await db.strategy_positions.update_one(
         {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
-        {"$set": {"spread_value": v["value"], "unrealized_pnl": v["pnl"],
-                  "last_tick_at": now_str, "updated_at": now_str}},
+        {"$set": set_fields},
     )
 
     # Spreads are intraday — 15:10 IST force-close.
@@ -416,7 +426,15 @@ async def _process_one_position(
     ltp, ltp_source = await _resolve_ltp(db, pos, quote_ltp_fn, get_ltp_fn, get_settings_fn)
 
     # ── Staleness protective exit (TASK-P-EX02) ───────────────────────────────
-    is_option_or_equity = (
+    # Spreads are excluded: they have a top-level option_type ("CE"/"PE") that
+    # would trip this single-leg guard, but no top-level instrument_key to price.
+    # They are valued/exited by _process_spread_position (two-leg REST pricing)
+    # and must never be force-closed on single-leg staleness.
+    is_spread = (
+        str(pos.get("structure") or "") in ("credit_spread", "debit_spread")
+        or str(pos.get("asset_type") or "").lower() == "option_spread"
+    )
+    is_option_or_equity = (not is_spread) and (
         str(pos.get("asset_type") or "").lower() in ("option", "equity")
         or pos.get("exchange") in ("NFO", "BFO", "NSE", "BSE")
         or str(pos.get("trading_symbol") or "").endswith(("CE", "PE"))
