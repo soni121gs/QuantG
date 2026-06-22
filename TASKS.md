@@ -2287,6 +2287,84 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 
 ---
 
+## PRIORITY 12 — Hermes Second-Brain Campaign (2026-06-22)
+
+**Status: BACKLOG — do NOT start until the PRIORITY 0 Win-Rate & Expectancy campaign settles.**
+Money-correctness (win-rate fixes, clean measurement epoch) comes first; this campaign must not muddy that
+measurement window. Pick up once Win-Rate Phase 1 validation is stable.
+
+**Source**: Design session 2026-06-22 (extends the existing Hermes program H001–H025 and folds in the strategy
+AutoResearch ratchet from [[project_autoresearch]] Phases 2–5). Founder decisions this session:
+(1) RAG + prompt engineering, **no model fine-tuning** (no GPU; stays on Gemini 2.5-flash);
+(2) web context via **Gemini Google-Search grounding** (no new search API key);
+(3) **AI score = quant-grounded, LLM-narrated** — deterministic math computes every number, LLM only explains;
+(4) the strategy ratchet is **folded into this campaign** (one unified plan), judge-first;
+(5) this campaign is **lower priority** than the active Win-Rate work.
+
+### Design law (non-negotiable, applies to EVERY task below)
+> **The LLM narrates; deterministic code computes.** Every number (P&L, score, win-rate) originates in code over
+> real `db.trade_fills` / backtest data. Web/Gemini-grounding context is ALWAYS tagged `external/unverified` and can
+> never enter a numeric claim. Every answer carries source + confidence (the envelope `_run_agent_tool` already returns).
+
+### Permanent safety boundary (carried from H-series)
+Hermes **cannot edit application code** and **cannot place/cancel/modify trades**, flip `CORE_ENGINE_LIVE_ENABLED`,
+or touch broker keys. Its ONLY write path stays the approval-gated `draft_*` action framework (H018–H020). New
+governed actions added here (`draft_strategy_pause`, `draft_experiment`) are non-trade status/candidate writes that
+still require in-app founder approval and never auto-execute. Code changes still route through Claude Code + review.
+
+### Architecture — three rings
+- **Truth ring (deterministic, mostly built):** `core/strategy_scorecard.py`, `core/metrics.py`, `core/options_backtest.py`, `ops_live_readiness`, real `trade_fills`.
+- **Memory ring (the upgrade):** episodic (daily history) + semantic (wiki/Decisions) + recall (vector retrieval over `db.hermes_memory`).
+- **Reasoning ring (Gemini 2.5-flash):** query→playbook router, narrate + cite + confidence, bounded Google-Search grounding at the edge.
+
+### Critical path (judge-first — DO NOT build the proposer before the judge exists)
+HSB-01/02 (truth+routing) → HSB-03/04/05 (memory) → HSB-07/08/09 (advisor + self-improvement loop) →
+HSB-11 (data audit) → **HSB-12 (OOS judge) → HSB-13 (ratchet gate) → HSB-14 (paper-forward)** → HSB-15 (Hermes proposer) → HSB-16 (unify).
+**WARNING from [[project_autoresearch]]: in-sample backtest Sharpe LIES. The ratchet MUST clamp on out-of-sample /
+walk-forward / paper-forward, never in-sample. Letting the proposer (HSB-15) run before the judge (HSB-12/13) builds
+a confident overfitting machine — that is the single worst outcome and is explicitly forbidden by sequencing.**
+
+---
+
+### Phase A — Truth & Grounding (read-only, low risk)
+
+*Completed and verified.*
+
+### Phase B — Memory Ring
+
+| HSB-03 | Episodic memory tool `get_historical_context(days=N)`: reads `daily_reports` + `core_events` + alert history so the brain can say "drought 4 sessions running" / "BANKNIFTY ATM worst structure 5 weeks". Time-awareness. | `routes/ai.py` |
+| HSB-04 | Recall layer: new `db.hermes_memory` collection (one atomic fact/doc: `{text, type, date, embedding, source_refs}`) + Gemini embeddings (same API key) + `recall_memory(query)` tool doing in-process cosine top-k. **Decision: time-decay weighting, NOT deletion** — old facts down-weighted so stale regime calls don't haunt. | `routes/ai.py`, new collection |
+| HSB-05 | Auto-memory: EOD `compile_memory` step distills the day into 1–3 atomic facts → `db.hermes_memory`, and auto-drafts a "session memory" wiki note via the existing `draft_wiki_note` (approval-gated). Mirrors the MEMORY.md pattern; compounds over time. | `hermes/agent.py` or backend EOD job |
+
+### Phase C — Web Context
+
+| HSB-06 | `get_external_context(query)` via **Gemini Google-Search grounding** (enable grounding in `generationConfig`), invoked ONLY by the `why-no-trade` / market-context playbooks (e.g. event/macro risk). Returns source URLs prefixed `EXTERNAL/UNVERIFIED` so prompt rules keep it out of any numeric claim. | `routes/ai.py` |
+
+### Phase D — Advisor Behavior + Self-Improvement Loop
+
+| HSB-07 | Proactive prioritized daily briefing (not a status dump): ranked top-3 "things that matter today" by impact (drawdown risk > drought > info), each with grounded source + a proposed governed action. Pushed via the sidecar morning slot. | `hermes/agent.py` |
+| HSB-08 | Recommendation ledger `db.hermes_recommendations`: every advice becomes a testable record `{what, why, predicted_outcome, confidence, date, status, acted_on}`. Foundation of the self-improvement loop (advise → record). | backend + `routes/ai.py` |
+| HSB-09 | Outcome scorer (EOD job): grades past recommendations against REAL fills/P&L → distills verdict to `db.hermes_memory` ("pausing on 5-loss streak validated 3/4 times"). **Same-day grade for action-recs, 5-day grade for structural-recs.** Closes the loop: future advice conditioned on measured hit-rate. | backend EOD job |
+| HSB-10 | Governed action `draft_strategy_pause` (approval-gated, non-trade status flip): when a strategy is on an N-loss streak, Hermes proposes pausing it. Within safety bounds (not a trade); requires founder approval. | `routes/ai.py` action framework |
+
+### Phase E — Strategy AutoResearch Ratchet (folded in; judge-first)
+
+| HSB-11 | `db.historical_chains` hardening: add capped/TTL index (flagged missing in [[project_autoresearch]]) + audit actual accumulated data volume (days × strikes). **Gating check: confirms whether HSB-12 walk-forward is buildable now or still data-collection.** | `backend/server.py`, Mongo index |
+| HSB-12 | **Phase 2 — THE JUDGE:** walk-forward backtester over `db.historical_chains` with train/test split, **deflated-Sharpe + complexity penalty** (clamps on OOS, never in-sample). Pure deterministic, no LLM. Everything else depends on this. | new `backend/core/walkforward.py` |
+| HSB-13 | **Phase 3 — THE GATE:** ratchet loop `propose-config → OOS backtest (HSB-12) → keep iff beats incumbent → log to db.experiments`. | `backend/core/`, `db.experiments` |
+| HSB-14 | **Phase 4 — REALITY CHECK:** paper-forward promotion gate — an OOS winner must also survive N days live-paper before it joins the live set. | backend promotion job |
+| HSB-15 | **Phase 5 — Hermes proposer:** governed action `draft_experiment` — Gemini proposes config changes BOUNDED to the config schema; every proposal enters the HSB-13 ratchet as a candidate, NEVER production. Only safe after HSB-12/13/14 exist. | `routes/ai.py` action framework |
+
+### Phase F — Unify
+
+| HSB-16 | Unify into ONE ratchet engine pointed at two targets: (a) strategy config (HSB-13 experiments) and (b) Hermes's own advice/playbooks (HSB-08/09 recommendation outcomes). Both distill accepted/rejected verdicts into `db.hermes_memory`, so the brain self-improves across trading AND its own advice. | backend |
+
+### Cleanup (opportunistic)
+
+| HSB-17 | Wire or remove the dead `draft_pr_summary` action (currently validates then no-ops on approval in `approve_agent_action`). | `routes/ai.py` |
+
+---
+
 ## Completed Tasks
 
 *(Move tasks here when done — include commit hash)*
@@ -2345,12 +2423,14 @@ Update `docs/DEPLOY_HERMES.md` + `.env.hermes.example` with the new env vars (dr
 | TASK-H021 | Automated incident timeline | 16dd5fe | 2026-06-20 |
 | TASK-H022 | Postmortem generator | 16dd5fe | 2026-06-20 |
 | TASK-H024 | Proactive behavioral alerts (drought / drawdown / loss-streak) | 1243636 | 2026-06-20 |
+| HSB-01 | `get_strategy_score_explained` read-only tool with threshold warning | be8d7d4 | 2026-06-22 |
+| HSB-02 | Query-aware playbook router filtering executed tools | be8d7d4 | 2026-06-22 |
 
 ---
 
-*Last updated: 2026-06-21 (Equity Phase Campaign added: EQ-01..EQ-06, full-universe footprint, founder decision 06-21. Backtester already fenced equity↔options + wired to real OHLC: commits 5ec2b53, 3905ae2.)*
-*Total tasks: 53 + 25 Hermes (H001–H025) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
-*Open: 0 · Blocked: 0 · In progress: 0 · Done: 79 (53 + H001/H002/H003/H004/H005/H006/H007/H008/H009/H010/H011/H012/H013/H014/H015/H016/H017/H018/H019/H020/H021/H022/H023/H024/H025)*
-*Hermes open: none*
-*Founder decisions 2026-06-20: (1) build two-way Telegram (H023–H025); (2) Hermes program is official in TASKS.md; (3) stay on Gemini 2.5-flash for now; (4) Stage 7 APPROVED — H018→H019→H020 is the recommended next code priority.*
-*Recommended next build order: none (Hermes backlog complete).*
+*Last updated: 2026-06-22 (Hermes Second-Brain Campaign added: PRIORITY 12, HSB-01..HSB-17 — RAG/memory/advisor/self-improvement loop + folded-in strategy AutoResearch ratchet, judge-first. Backlog, below the active Win-Rate campaign.)*
+*Total tasks: 53 + 25 Hermes (H001–H025) + 17 Hermes Second-Brain (HSB-01–HSB-17) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
+*Open: 15 (HSB-03–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 81 (53 + H001–H025 + HSB-01–HSB-02)*
+*Hermes open: HSB-03–HSB-17 (PRIORITY 12, do not start until Win-Rate campaign settles)*
+*Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
+*Recommended next build order (when unblocked): HSB-03 (episodic memory tool) next.*
