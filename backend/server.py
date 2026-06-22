@@ -2152,16 +2152,16 @@ NIFTY_VWAP_TREND_BREAKOUT_CODE = """def run(data):
             recent_high = max(highs[i-6:i])
             recent_low = min(lows[i-6:i])
             bullish_continuation = (
-                closes[i] > vwap[i] * 1.0005
-                and closes[i] >= recent_high * 0.999
+                closes[i] > vwap[i] * 0.999
+                and closes[i] >= recent_high * 0.997
                 and closes[i] > closes[i-1]
-                and body >= range_avg * 0.18
+                and body >= range_avg * 0.08
             )
             bearish_continuation = (
-                closes[i] < vwap[i] * 0.9995
-                and closes[i] <= recent_low * 1.001
+                closes[i] < vwap[i] * 1.001
+                and closes[i] <= recent_low * 1.003
                 and closes[i] < closes[i-1]
-                and body >= range_avg * 0.18
+                and body >= range_avg * 0.08
             )
             bullish_trigger = bullish_trigger or bullish_continuation
             bearish_trigger = bearish_trigger or bearish_continuation
@@ -2346,15 +2346,15 @@ SENSEX_RSI_PULLBACK_CODE = """def run(data):
         trend_up   = closes[i] > vwap[i] and ema12[i] > ema12[i-3]
         trend_down = closes[i] < vwap[i] and ema12[i] < ema12[i-3]
 
-        slope_extreme = abs(vwap[i] - vwap[max(0, i-10)]) > vwap[i] * 0.012
+        slope_extreme = abs(vwap[i] - vwap[max(0, i-10)]) > vwap[i] * 0.02
 
         was_oversold  = any(rsi[j] <= 42 for j in range(max(0, i-8), i + 1))
         was_overbought= any(rsi[j] >= 58 for j in range(max(0, i-8), i + 1))
 
-        bullish = (trend_up and was_oversold and rsi[i] >= rsi[i-1] and rsi[i] >= 41
+        bullish = (trend_up and was_oversold and rsi[i] >= rsi[i-1] and rsi[i] >= 38
                    and closes[i] > closes[i-1] and not slope_extreme
                    and cooldown == 0 and not gap_down)
-        bearish = (trend_down and was_overbought and rsi[i] <= rsi[i-1] and rsi[i] <= 59
+        bearish = (trend_down and was_overbought and rsi[i] <= rsi[i-1] and rsi[i] <= 62
                    and closes[i] < closes[i-1] and not slope_extreme and cooldown == 0)
 
         if position == "LONG":
@@ -2488,8 +2488,14 @@ NIFTY_MICRO_TREND_CODE = """def run(data):
         buffer = closes[i] * 0.0006
         outside_buffer = abs(closes[i] - ema20[i]) > buffer or abs(closes[i] - vwap[i]) > buffer
         
-        bullish = closes[i] > ema20[i] > ema50[i] and closes[i] > vwap[i] and slope_up and outside_buffer and cooldown == 0
-        bearish = closes[i] < ema20[i] < ema50[i] and closes[i] < vwap[i] and slope_down and outside_buffer and cooldown == 0
+        bullish = (
+            ((closes[i] > ema20[i] and ema20[i] >= ema50[i] * 0.999) or (closes[i] > vwap[i] and closes[i] > closes[i-1] > closes[i-2]))
+            and slope_up and outside_buffer and cooldown == 0
+        )
+        bearish = (
+            ((closes[i] < ema20[i] and ema20[i] <= ema50[i] * 1.001) or (closes[i] < vwap[i] and closes[i] < closes[i-1] < closes[i-2]))
+            and slope_down and outside_buffer and cooldown == 0
+        )
 
         if position == "LONG":
             if bearish or closes[i] < ema20[i]:
@@ -3063,11 +3069,11 @@ NIFTY_QUICK_EMA_SCALPER_CODE = """def run(data):
         # the exact EMA cross candle, which left the strategy idle after restart.
         bullish_cross = ema3[i] > ema9[i] and ema3[i-1] <= ema9[i-1]
         bearish_cross = ema3[i] < ema9[i] and ema3[i-1] >= ema9[i-1]
-        bullish_aligned = ema3[i] > ema9[i] and closes[i] >= ema3[i] and closes[i] >= closes[i-1]
-        bearish_aligned = ema3[i] < ema9[i] and closes[i] <= ema3[i] and closes[i] <= closes[i-1]
+        bullish_aligned = ema3[i] > ema9[i] * 0.999 and closes[i] >= ema3[i] * 0.999 and closes[i] >= closes[i-1]
+        bearish_aligned = ema3[i] < ema9[i] * 1.001 and closes[i] <= ema3[i] * 1.001 and closes[i] <= closes[i-1]
         
-        bullish = (bullish_cross or bullish_aligned) and closes[i] > vwap[i] * 0.999 and body > range_avg * 0.20 and vol_ok
-        bearish = (bearish_cross or bearish_aligned) and closes[i] < vwap[i] * 1.001 and body > range_avg * 0.20 and vol_ok
+        bullish = (bullish_cross or bullish_aligned) and closes[i] > vwap[i] * 0.998 and body > range_avg * 0.08 and vol_ok
+        bearish = (bearish_cross or bearish_aligned) and closes[i] < vwap[i] * 1.002 and body > range_avg * 0.08 and vol_ok
 
         if position == "LONG":
             if bearish_cross or i - last_entry_i >= 6:
@@ -4026,10 +4032,10 @@ DEFAULT_OPTION_STRATEGIES = [
         tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
         atr_now = max(0.01, atr[i])
         news_trigger = (
-            closes[i] >= recent_high * 0.999
+            closes[i] >= recent_high * 0.995
             and closes[i] > closes[i-1]
-            and (closes[i] > donchian_high or closes[i] - closes[i-1] >= atr_now * 0.25)
-            and tod_vol >= 0.85
+            and (closes[i] > donchian_high * 0.997 or closes[i] - closes[i-1] >= atr_now * 0.12)
+            and tod_vol >= 0.65
         )
         
         if position == "NONE":
@@ -4493,9 +4499,9 @@ DEFAULT_OPTION_STRATEGIES = [
             
         crossover_buy = (
             ema20[i] > ema50[i] * 0.999
-            and ema20[i] >= ema20[i-2]
-            and closes[i] >= ema20[i] * 0.999
-            and closes[i] >= closes[i-1]
+            and ema20[i] >= ema20[i-3] * 0.999
+            and closes[i] >= ema20[i] * 0.997
+            and closes[i] >= min(closes[i-1], closes[i-2])
         )
         crossover_sell = ema20[i] < ema50[i]
         
@@ -16508,7 +16514,7 @@ async def startup():
     async def _migrate_strategy_code_versions():
         """Silently update python_code for any user who still has stale strategy code.
 
-        Bumped to 2.2 to re-push live-market participation tuning:
+        Bumped to 2.3 to re-push live-market participation tuning:
         (1) option buyers accept valid current continuation setups instead of
             only exact cross/retest candles, and
         (2) equity templates are included in the versioned migration so live
@@ -16525,7 +16531,7 @@ async def startup():
                         "name": name,
                         "$or": [
                             {"strategy_logic_version": {"$exists": False}},
-                            {"strategy_logic_version": {"$lt": "2.2"}},
+                            {"strategy_logic_version": {"$lt": "2.3"}},
                             {"strategy_logic_version": "1.0"},
                         ],
                     },
@@ -16533,13 +16539,13 @@ async def startup():
                         "python_code": code,
                         "risk_style": _cat,
                         "visual_config.risk.risk_style": _cat,
-                        "strategy_logic_version": "2.2",
+                        "strategy_logic_version": "2.3",
                         "code_migrated_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
                 updated += result.modified_count
             if updated:
-                logger.info("DB migration: updated python_code for %d strategy documents to v2.2", updated)
+                logger.info("DB migration: updated python_code for %d strategy documents to v2.3", updated)
         except Exception as _mig_err:
             logger.warning("Strategy code migration failed: %s", _mig_err)
 
