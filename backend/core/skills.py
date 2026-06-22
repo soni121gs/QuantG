@@ -26,7 +26,7 @@ HERMES_SKILL_PACK: Dict[str, Dict[str, Any]] = {
     "quantg-strategy-loss-review": {
         "name": "quantg-strategy-loss-review",
         "description": "Evaluates strategy performance, drawdown streaks, and win-rates.",
-        "composes_tools": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot"],
+        "composes_tools": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained"],
         "playbook": (
             "Check realized P&L and drawdown metrics from the scorecard. Spot loss streaks, win-rate degradation, "
             "and suggest adjustments if capital buffers or daily loss limits are close to breach."

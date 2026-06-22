@@ -72,6 +72,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_backtest_summary",
     "get_core_events",
     "get_agent_tool_audit",
+    "get_strategy_score_explained",
 ]
 
 
@@ -351,6 +352,100 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 {"_id": 0}
             ).sort("created_at", -1).to_list(100)
             source = "db.agent_tool_audit"
+        elif name == "get_strategy_score_explained":
+            strategy_id = kwargs.get("strategy_id")
+            if not strategy_id and query:
+                import re
+                try:
+                    strats = await db.strategies.find({"user_id": user["id"]}, {"id": 1}).to_list(1000)
+                    for s in strats:
+                        sid = s.get("id")
+                        if sid and (sid in query or sid.replace("_", " ") in query.lower()):
+                            strategy_id = sid
+                            break
+                except Exception as e_strats:
+                    logger.warning("Failed to lookup strategies in get_strategy_score_explained: %s", e_strats)
+            
+            if not strategy_id:
+                data = {"error": "strategy_id could not be resolved from query or kwargs. Please specify strategy_id."}
+                warnings.append("No specific strategy_id identified.")
+            else:
+                from core.strategy_scorecard import build_scorecard
+                rows = await build_scorecard(db, user_id=user["id"])
+                row = next((r for r in rows if r.get("strategy_id") == strategy_id), None)
+                
+                strat_doc = await db.strategies.find_one({"user_id": user["id"], "id": strategy_id})
+                
+                if not row:
+                    if not strat_doc:
+                        data = {"error": f"Strategy {strategy_id} not found."}
+                    else:
+                        vc = strat_doc.get("visual_config") or {}
+                        from routes.market import watchlist, commodity_watchlist
+                        from server import _market_score_for_strategy
+                        try:
+                            m_rows = await watchlist(user=user)
+                            c_rows = await commodity_watchlist(user=user)
+                            market_by_symbol = {r["symbol"]: r for r in [*m_rows, *c_rows]}
+                            regime_fit_res = _market_score_for_strategy(strat_doc, market_by_symbol)
+                        except Exception as reg_exc:
+                            regime_fit_res = {"score": 50.0, "reason": f"Failed to compute: {reg_exc}"}
+                        
+                        data = {
+                            "strategy_id": strategy_id,
+                            "name": strat_doc.get("name", "?"),
+                            "structure": ((vc.get("options") or {}).get("structure")) or "single_leg",
+                            "strategy_type": strat_doc.get("strategy_type", "?"),
+                            "status": strat_doc.get("status", "?"),
+                            "grade": "INSUFFICIENT",
+                            "total_trades": 0,
+                            "total_pnl": 0.0,
+                            "wins": 0,
+                            "losses": 0,
+                            "win_rate": 0.0,
+                            "expectancy": 0.0,
+                            "sharpe": 0.0,
+                            "sortino": 0.0,
+                            "regime_fit": regime_fit_res
+                        }
+                else:
+                    from routes.market import watchlist, commodity_watchlist
+                    from server import _market_score_for_strategy
+                    try:
+                        m_rows = await watchlist(user=user)
+                        c_rows = await commodity_watchlist(user=user)
+                        market_by_symbol = {r["symbol"]: r for r in [*m_rows, *c_rows]}
+                        regime_fit_res = _market_score_for_strategy(strat_doc or {}, market_by_symbol)
+                    except Exception as reg_exc:
+                        regime_fit_res = {"score": 50.0, "reason": f"Failed to compute: {reg_exc}"}
+                        
+                    data = {
+                        "strategy_id": strategy_id,
+                        "name": row.get("name", "?"),
+                        "structure": row.get("structure", "?"),
+                        "strategy_type": row.get("strategy_type", "?"),
+                        "status": row.get("status", "?"),
+                        "grade": row.get("grade"),
+                        "total_trades": row.get("total_trades", 0),
+                        "total_pnl": row.get("total_pnl", 0.0),
+                        "wins": row.get("wins", 0),
+                        "losses": row.get("losses", 0),
+                        "win_rate": row.get("win_rate", 0.0),
+                        "expectancy": row.get("expectancy", 0.0),
+                        "sharpe": row.get("sharpe", 0.0),
+                        "sortino": row.get("sortino", 0.0),
+                        "regime_fit": regime_fit_res
+                    }
+                
+                sample_size = data.get("total_trades", 0)
+                if sample_size < 10:
+                    stale = False
+                    confidence = 0.3
+                    warnings.append(f"provisional, {sample_size}-trade sample (A's promising NOT proven)")
+                else:
+                    stale = False
+                    confidence = 1.0
+            source = "db.strategies / core.strategy_scorecard"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -728,6 +823,84 @@ async def ai_chat(req: ChatReq, user=Depends(get_current_user)):
     return {k: v for k, v in bot_msg.items() if k not in {"_id", "user_id", "session_id"}}
 
 
+def classify_playbook_by_query(query: str) -> List[str]:
+    q = query.lower()
+    
+    playbook_tools = {
+        "live-readiness": ["get_live_readiness", "get_feed_status", "get_token_status", "get_upstox_status"],
+        "why-no-trade": [
+            "get_skipped_signals", "get_market_data_status", "get_active_strategies", 
+            "get_logs_errors", "get_today_orders", "get_today_fills", "get_recent_alerts"
+        ],
+        "strategy-loss-review": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained"],
+        "feed-token-diagnosis": ["get_upstox_status", "get_market_data_status", "get_feed_status", "get_token_status"],
+        "eod-report": ["get_daily_report", "get_risk_snapshot", "get_today_fills", "get_today_orders"],
+        "backtest-review": ["get_backtest_summary", "get_active_strategies"],
+        "vps-deploy-check": ["get_live_readiness", "get_logs_errors", "get_recent_alerts"],
+        "incident-postmortem": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit"],
+    }
+    
+    wiki_keywords = ["wiki", "document", "documentation", "rule", "rules", "policy", "guideline", "decisions", "transcripts"]
+    strategy_words = ["score", "grade", "performance", "sharpe", "sortino", "expectancy"]
+    
+    matched_tools = set()
+    has_matches = False
+    
+    if any(w in q for w in strategy_words):
+        matched_tools.update(playbook_tools["strategy-loss-review"])
+        has_matches = True
+        
+    if any(w in q for w in ["readiness", "ready", "pre-flight", "live readiness", "live ready", "oauth"]):
+        matched_tools.update(playbook_tools["live-readiness"])
+        has_matches = True
+        
+    if any(w in q for w in ["why", "no trade", "no trades", "not trade", "not trading", "no fills", "no entry", "skipped", "filtered", "rejected", "drought"]):
+        matched_tools.update(playbook_tools["why-no-trade"])
+        has_matches = True
+        
+    if any(w in q for w in ["feed", "token", "websocket", "tick", "ticks", "stale", "stalled", "connection", "disconnect"]):
+        matched_tools.update(playbook_tools["feed-token-diagnosis"])
+        has_matches = True
+        
+    if any(w in q for w in ["eod", "daily report", "summary", "end of day", "today pnl", "pnl today", "session close", "fills"]):
+        matched_tools.update(playbook_tools["eod-report"])
+        has_matches = True
+        
+    if any(w in q for w in ["backtest", "backtests", "historical", "ohlc", "simulation"]):
+        matched_tools.update(playbook_tools["backtest-review"])
+        has_matches = True
+        
+    if any(w in q for w in ["vps", "deploy", "deployment", "container", "docker", "health", "restart"]):
+        matched_tools.update(playbook_tools["vps-deploy-check"])
+        has_matches = True
+        
+    if any(w in q for w in ["incident", "postmortem", "outage", "timeline", "crash", "post-mortem"]):
+        matched_tools.update(playbook_tools["incident-postmortem"])
+        has_matches = True
+        
+    if any(w in q for w in wiki_keywords):
+        matched_tools.add("search_wiki")
+        has_matches = True
+        
+    if not has_matches:
+        matched_tools.update([
+            "get_risk_snapshot",
+            "get_open_positions",
+            "get_active_strategies",
+            "get_today_orders",
+            "get_recent_alerts",
+        ])
+        
+    # Always include baseline/essential state tools:
+    matched_tools.update([
+        "get_risk_snapshot",
+        "get_open_positions",
+        "get_active_strategies",
+    ])
+    
+    return [t for t in READ_ONLY_AGENT_TOOLS if t in matched_tools]
+
+
 @agent_router.post("/chat")
 async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     content = req.message.strip()
@@ -750,7 +923,8 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     ).sort("created_at", -1).to_list(8)
     recent_messages = list(reversed(recent_messages))
 
-    tool_results = await asyncio.gather(*[_run_agent_tool(name, user, query=content) for name in READ_ONLY_AGENT_TOOLS])
+    active_tools = classify_playbook_by_query(content)
+    tool_results = await asyncio.gather(*[_run_agent_tool(name, user, query=content) for name in active_tools])
     reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
     
     # Parse and store proposed action
@@ -1065,7 +1239,8 @@ async def ai_strategy_scores(user=Depends(get_current_user)):
     rows = await db.strategies.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(500)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from server import watchlist, commodity_watchlist, _market_score_for_strategy
+    from routes.market import watchlist, commodity_watchlist
+    from server import _market_score_for_strategy
     
     market_rows = await watchlist(user=user)
     commodity_rows = await commodity_watchlist(user=user)
@@ -1094,7 +1269,8 @@ async def ai_market_analysis(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(50)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from server import watchlist, _market_score_for_strategy, _google_ai_reply
+    from routes.market import watchlist
+    from server import _market_score_for_strategy, _google_ai_reply
     
     market_rows = await watchlist(user=user)
     scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in market_rows}) for row in strategies]
@@ -1121,7 +1297,8 @@ async def ai_training_context(user=Depends(get_current_user)):
     recent_scores = await db.strategy_ai_scores.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("generated_at", -1).to_list(100)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from server import watchlist, commodity_watchlist, _strategy_out
+    from routes.market import watchlist, commodity_watchlist
+    from server import _strategy_out
     
     return {
         "purpose": "Context-feed payload for Gemini prompts and offline fine-tuning experiments.",

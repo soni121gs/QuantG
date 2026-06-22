@@ -191,6 +191,7 @@ async def test_agent_chat_api_response():
 
     with patch("routes.ai.db", mock_db), \
          patch("routes.ai.READ_ONLY_AGENT_TOOLS", ["get_orders"]), \
+         patch("routes.ai.classify_playbook_by_query", return_value=["get_orders"]), \
          patch("routes.ai._run_agent_tool", AsyncMock(return_value=mock_envelope)), \
          patch("routes.ai._gemini_agent_reply", AsyncMock(return_value="Here is your info.")):
              
@@ -447,5 +448,101 @@ async def test_approve_incident_report_action():
         expected_filename, "Incidents", "Details about the stall", ["incident", "hermes-draft"], {"source": "hermes-agent", "incident_title": "Outage feed stall"}
     )
     mock_rebuild_links.assert_called_once_with("test-trader-1")
+
+
+@pytest.mark.anyio
+async def test_run_agent_tool_get_strategy_score_explained():
+    """Verify that get_strategy_score_explained fetches strategy details, computes metrics, and sets proper confidence."""
+    mock_db = MagicMock()
+    mock_db.agent_tool_audit.insert_one = AsyncMock()
+    
+    # Mock strategies collection find_one method
+    mock_db.strategies.find_one = AsyncMock(return_value={
+        "id": "strat-1",
+        "name": "NIFTY EMA Scalper",
+        "strategy_type": "Option Buying",
+        "status": "live",
+        "visual_config": {"options": {"structure": "single_leg"}}
+    })
+    
+    # Mock strategies collection find method for query parsing
+    mock_cursor_find = MagicMock()
+    mock_cursor_find.to_list = AsyncMock(return_value=[{"id": "strat-1"}])
+    mock_db.strategies.find.return_value = mock_cursor_find
+    
+    # Mock build_scorecard response
+    mock_scorecard_rows = [
+        {
+            "strategy_id": "strat-1",
+            "name": "NIFTY EMA Scalper",
+            "structure": "single_leg",
+            "strategy_type": "Option Buying",
+            "status": "live",
+            "grade": "A",
+            "total_trades": 8, # < 10 threshold
+            "total_pnl": 5000.0,
+            "wins": 6,
+            "losses": 2,
+            "win_rate": 0.75,
+            "expectancy": 625.0,
+            "sharpe": 1.8,
+            "sortino": 2.1
+        }
+    ]
+    
+    # Mock watchlist and _market_score_for_strategy
+    mock_watchlist = AsyncMock(return_value=[{"symbol": "NIFTY", "price": 24000.0, "pct": 0.5, "source": "test"}])
+    mock_market_score = MagicMock(return_value={"score": 85.0, "reason": "test fit"})
+    
+    user = {"id": "test-trader-1"}
+    
+    with patch("routes.ai.db", mock_db), \
+         patch("core.strategy_scorecard.build_scorecard", AsyncMock(return_value=mock_scorecard_rows)), \
+         patch("routes.market.watchlist", mock_watchlist), \
+         patch("routes.market.commodity_watchlist", AsyncMock(return_value=[])), \
+         patch("server._market_score_for_strategy", mock_market_score):
+             
+        # Fails without strategy_id resolved
+        res_fail = await _run_agent_tool("get_strategy_score_explained", user, query="Show score")
+        assert "error" in res_fail["data"]
+        
+        # Succeeds with strategy_id
+        res = await _run_agent_tool("get_strategy_score_explained", user, query="what is the score of strat-1")
+        
+    assert res["status"] == "ok"
+    assert res["source"] == "db.strategies / core.strategy_scorecard"
+    assert res["confidence"] == 0.3  # < 10 trades => 0.3 confidence
+    assert any("provisional" in w for w in res["warnings"])
+    assert res["data"]["strategy_id"] == "strat-1"
+    assert res["data"]["grade"] == "A"
+    assert res["data"]["regime_fit"]["score"] == 85.0
+
+
+def test_classify_playbook_by_query():
+    """Verify that classify_playbook_by_query matches the correct subset of tools."""
+    from routes.ai import classify_playbook_by_query
+    
+    # Test query on readiness
+    tools_readiness = classify_playbook_by_query("Is live trading ready?")
+    assert "get_live_readiness" in tools_readiness
+    assert "get_feed_status" in tools_readiness
+    # Should contain general tools too
+    assert "get_risk_snapshot" in tools_readiness
+    
+    # Test query on why no trade
+    tools_why = classify_playbook_by_query("why didn't we trade today?")
+    assert "get_skipped_signals" in tools_why
+    assert "get_logs_errors" in tools_why
+    
+    # Test query on scorecard/drawdown
+    tools_scorecard = classify_playbook_by_query("Show me strategy loss streaks and score explained for strat-1")
+    assert "get_strategy_scorecard" in tools_scorecard
+    assert "get_strategy_score_explained" in tools_scorecard
+    
+    # Test default fallback for query with no matches
+    tools_default = classify_playbook_by_query("Hello there")
+    assert len(tools_default) < 10 # Should be small targeted subset, not all 24 tools
+    assert "get_risk_snapshot" in tools_default
+
 
 
