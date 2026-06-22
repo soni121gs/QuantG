@@ -369,7 +369,12 @@ class UpstoxGateway:
             _v3_step = {"5minute": 5, "1minute": 1, "minute": 1,
                         "15minute": 15, "30minute": 30}.get(interval, 5)
             _now = datetime.now()
-            _from = (_now - timedelta(days=max(days, 10))).strftime("%Y-%m-%d")
+            # Upstox V3 minute-history caps the range at ~1 month (UDAPI1148
+            # "Invalid date range" beyond ~30 days). Callers pass days=60, so
+            # clamp the lookback; 25 days of 5-min bars is ~1300 bars — far more
+            # than any indicator needs — while staying safely under the cap.
+            _lookback = min(max(days, 10), 25)
+            _from = (_now - timedelta(days=_lookback)).strftime("%Y-%m-%d")
             _to = _now.strftime("%Y-%m-%d")
             _v3_hist: List[Dict[str, Any]] = []
             _v3_intra: List[Dict[str, Any]] = []
