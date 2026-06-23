@@ -4,11 +4,50 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from core import db, get_current_user
 
 router = APIRouter(tags=["Readiness"])
+
+
+def _ist_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+
+def _preopen_check(
+    check_id: str,
+    label: str,
+    ok: bool,
+    *,
+    severity: str = "critical",
+    detail: str = "",
+    hint: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "label": label,
+        "ok": bool(ok),
+        "severity": severity,
+        "detail": detail,
+        "hint": hint,
+    }
+
+
+def _overall_status(checks: list[dict[str, Any]]) -> str:
+    if any((not c.get("ok")) and c.get("severity") == "critical" for c in checks):
+        return "BLOCKED"
+    if any(not c.get("ok") for c in checks):
+        return "WARNING"
+    return "READY"
+
+
+def _check_summary(checks: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "ok": sum(1 for c in checks if c.get("ok")),
+        "warning": sum(1 for c in checks if not c.get("ok") and c.get("severity") == "warning"),
+        "critical": sum(1 for c in checks if not c.get("ok") and c.get("severity") == "critical"),
+    }
 
 
 @router.get("/strategy-readiness")
@@ -94,6 +133,204 @@ async def paper_readiness(user=Depends(get_current_user)):
             }
             for o in recent_orders[:10]
         ],
+    }
+
+
+@router.get("/ops/pre-open-readiness")
+async def pre_open_readiness(user=Depends(get_current_user)):
+    from server import (
+        _build_strategy_readiness_rows,
+        get_trading_day_window_ist,
+        get_user_settings,
+        get_user_upstox_status,
+    )
+
+    user_id = user["id"]
+    now_ist = _ist_now()
+    minutes_now = now_ist.hour * 60 + now_ist.minute
+    is_weekday = now_ist.weekday() < 5
+    market_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    pre_open_window = is_weekday and (8 * 60 + 45) <= minutes_now < (9 * 60 + 15)
+    start, end = get_trading_day_window_ist()
+
+    settings = await get_user_settings(user_id)
+    upstox = await get_user_upstox_status(user_id)
+    gateway = upstox.get("gateway") or {}
+    feed_status = gateway.get("feed_status") or upstox.get("feed_status") or {}
+    if not isinstance(feed_status, dict):
+        feed_status = {"state": str(feed_status)}
+    strategy_rows = await _build_strategy_readiness_rows(user_id)
+
+    active_paper_count = sum(
+        1
+        for row in strategy_rows
+        if row.get("runtime_status") == "live" and row.get("mode") == "paper"
+    )
+    blocked_strategy_count = sum(
+        1 for row in strategy_rows if row.get("status") in {"BLOCKED", "QUARANTINED"}
+    )
+    paused_strategy_count = await db.strategies.count_documents({
+        "user_id": user_id,
+        "status": {"$in": ["paused", "draft"]},
+    })
+    old_open_positions = await db.strategy_positions.count_documents({
+        "user_id": user_id,
+        "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+        "created_at": {"$lt": start},
+    })
+    unknown_orders_count = await db.orders.count_documents({
+        "user_id": user_id,
+        "status": "UNKNOWN_NEEDS_REVIEW",
+    })
+    phantom_today_count = await db.strategy_positions.count_documents({
+        "user_id": user_id,
+        "$or": [
+            {
+                "updated_at": {"$gte": start, "$lt": end},
+                "last_error": {"$regex": "PHANTOM_LTP_REJECTED"},
+            },
+            {
+                "equity_ltp_diagnostic.checked_at": {"$gte": start, "$lt": end},
+            },
+        ],
+    })
+    kill_switch = await db.risk_state.find_one({"_id": "global_kill_switch"})
+    kill_active = bool(kill_switch and kill_switch.get("active"))
+
+    token_valid = bool(upstox.get("connected") and (upstox.get("token_valid") or upstox.get("authenticated")))
+    feed_ok = bool(
+        upstox.get("connected")
+        and not upstox.get("feed_stalled")
+        and (feed_status.get("connected") or gateway.get("ws_running") or gateway.get("last_tick_at"))
+    )
+    paper_mode = bool(settings.get("paper_mode", True))
+
+    checks = [
+        _preopen_check(
+            "upstox_token",
+            "Upstox session valid",
+            token_valid,
+            detail=f"connected={bool(upstox.get('connected'))}, token_valid={bool(upstox.get('token_valid') or upstox.get('authenticated'))}",
+            hint="Reconnect Upstox before market open." if not token_valid else None,
+        ),
+        _preopen_check(
+            "upstox_feed",
+            "Upstox realtime feed live",
+            feed_ok,
+            detail=f"ws_running={bool(gateway.get('ws_running'))}, last_tick_at={gateway.get('last_tick_at')}, stalled={bool(upstox.get('feed_stalled'))}",
+            hint="Restart or reconnect the Upstox V3 feed before strategies scan." if not feed_ok else None,
+        ),
+        _preopen_check(
+            "paper_mode",
+            "Paper mode enabled",
+            paper_mode,
+            detail=f"paper_mode={paper_mode}, CORE_ENGINE_LIVE_ENABLED={os.environ.get('CORE_ENGINE_LIVE_ENABLED')}",
+            hint="Keep paper mode on unless founder explicitly enables live." if not paper_mode else None,
+        ),
+        _preopen_check(
+            "active_strategies",
+            "Paper strategies active",
+            active_paper_count > 0,
+            detail=f"active_paper={active_paper_count}, paused_or_draft={paused_strategy_count}",
+            hint="Resume selected paper strategies before open." if active_paper_count == 0 else None,
+        ),
+        _preopen_check(
+            "strategy_blockers",
+            "No blocked or quarantined strategies",
+            blocked_strategy_count == 0,
+            severity="warning",
+            detail=f"blocked_or_quarantined={blocked_strategy_count}",
+            hint="Review /api/strategy-readiness before market open." if blocked_strategy_count else None,
+        ),
+        _preopen_check(
+            "stale_positions",
+            "No stale open positions from earlier sessions",
+            old_open_positions == 0,
+            detail=f"old_open_positions={old_open_positions}",
+            hint="Resolve old open strategy_positions before new entries." if old_open_positions else None,
+        ),
+        _preopen_check(
+            "unknown_orders",
+            "No orders needing manual review",
+            unknown_orders_count == 0,
+            detail=f"orders_needing_review={unknown_orders_count}",
+            hint="Run broker/order reconciliation before scanning." if unknown_orders_count else None,
+        ),
+        _preopen_check(
+            "kill_switch",
+            "Global kill switch inactive",
+            not kill_active,
+            detail=f"kill_switch_active={kill_active}",
+            hint="Clear the global kill switch only after checking risk state." if kill_active else None,
+        ),
+        _preopen_check(
+            "equity_phantom_guard",
+            "No equity phantom quote rejects today",
+            phantom_today_count == 0,
+            severity="warning",
+            detail=f"phantom_rejects_today={phantom_today_count}",
+            hint="Check /api/ops/equity-quote-diagnostics before trusting equity marks." if phantom_today_count else None,
+        ),
+    ]
+    status = _overall_status(checks)
+    return {
+        "status": status,
+        "ready": status == "READY",
+        "market": {
+            "ist_now": now_ist.isoformat(),
+            "market_open": market_open,
+            "pre_open_window": pre_open_window,
+            "session_start": start,
+            "session_end": end,
+        },
+        "summary": _check_summary(checks),
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ops/equity-quote-diagnostics")
+async def equity_quote_diagnostics(
+    limit: int = Query(default=25, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    user_id = user["id"]
+    rows = await db.strategy_positions.find(
+        {
+            "user_id": user_id,
+            "$or": [
+                {"last_error": {"$regex": "PHANTOM_LTP_REJECTED"}},
+                {"equity_ltp_diagnostic": {"$exists": True}},
+            ],
+        },
+        {
+            "_id": 0,
+            "id": 1,
+            "strategy_id": 1,
+            "symbol": 1,
+            "trading_symbol": 1,
+            "instrument_key": 1,
+            "status": 1,
+            "last_error": 1,
+            "last_ltp": 1,
+            "ltp_source": 1,
+            "average_buy_price": 1,
+            "average_price": 1,
+            "entry_price": 1,
+            "updated_at": 1,
+            "equity_ltp_diagnostic": 1,
+        },
+    ).sort("updated_at", -1).limit(limit).to_list(limit)
+    by_source: dict[str, int] = {}
+    for row in rows:
+        diag = row.get("equity_ltp_diagnostic") or {}
+        source = str(diag.get("source") or row.get("ltp_source") or "UNKNOWN")
+        by_source[source] = by_source.get(source, 0) + 1
+    return {
+        "count": len(rows),
+        "by_source": by_source,
+        "rows": rows,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

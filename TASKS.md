@@ -84,10 +84,10 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 6 — Operational / data hygiene (P2)
-- `[ ]` **WR-61** Root-cause the equity phantom-quote SOURCE (why the open emits ½/2× ticks) — guards are a net; fix the feed.
-- `[ ]` **WR-62** Add index on `strategies.id` (currently COLLSCAN every eval; minor).
-- `[ ]` **WR-63** Clean contaminated lifetime stats (pre-2026-06-18 oversizing/phantom era still pollutes win/loss counts).
-- `[ ]` **WR-64** Pre-open readiness check (token valid + feed live + strategies live) so mornings don't silently fail.
+- `[x]` **WR-61** Root-cause the equity phantom-quote SOURCE (why the open emits 1/2x/2x ticks) — added source diagnostics on both equity phantom guards plus `/api/ops/equity-quote-diagnostics` for source/instrument/deviation review.
+- `[x]` **WR-62** Add index on `strategies.id` (currently COLLSCAN every eval; minor) — startup now creates a non-unique `strategies.id` index.
+- `[x]` **WR-63** Clean contaminated lifetime stats (pre-2026-06-18 oversizing/phantom era still pollutes win/loss counts) — `/api/ops/risk-scorecard` now defaults to clean stats since `2026-06-17T18:30:00+00:00`; pass `clean=false` for lifetime.
+- `[x]` **WR-64** Pre-open readiness check (token valid + feed live + strategies live) so mornings don't silently fail — added `/api/ops/pre-open-readiness` with token/feed/strategy/position/order/kill-switch/phantom checks.
 
 ---
 

@@ -8,6 +8,7 @@ scores are directly comparable.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,10 @@ logger = logging.getLogger("quantg.scorecard")
 
 # Fixed notional base so every strategy's Sharpe/return is comparable on one scale.
 SCORECARD_BASE_CAPITAL = 100_000.0
+CLEAN_STATS_DEFAULT_SINCE = os.environ.get(
+    "QUANTG_CLEAN_STATS_SINCE",
+    "2026-06-17T18:30:00+00:00",
+)
 
 
 def _trade_pnl(t: Dict[str, Any]) -> float:
@@ -39,6 +44,7 @@ async def build_scorecard(
     user_id: Optional[str] = None,
     since_iso: Optional[str] = None,
     mode: Optional[str] = None,
+    clean: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return one risk-adjusted row per strategy that has realized trades.
 
@@ -46,15 +52,24 @@ async def build_scorecard(
         user_id: scope to one account (None = all).
         since_iso: only trades with exit_time >= this ISO string (clean-window analysis).
         mode: 'paper' / 'live' filter, if set.
+        clean: when true, default to the post-contamination baseline if since_iso
+            is not supplied.
     Rows are sorted best-first by (sharpe, expectancy).
     """
+    if clean and not since_iso:
+        since_iso = CLEAN_STATS_DEFAULT_SINCE
+
     query: Dict[str, Any] = {}
     if user_id:
         query["user_id"] = user_id
     if mode:
         query["mode"] = mode
     if since_iso:
-        query["exit_time"] = {"$gte": since_iso}
+        query["$or"] = [
+            {"exit_time": {"$gte": since_iso}},
+            {"closed_at": {"$gte": since_iso}},
+            {"created_at": {"$gte": since_iso}},
+        ]
 
     trades = await db.trades.find(query).to_list(length=200_000)
 
@@ -91,6 +106,9 @@ async def build_scorecard(
             "strategy_type": info.get("strategy_type", "?"),
             "status": info.get("status", "?"),
             "underlying": info.get("underlying"),
+            "stats_window": "clean" if since_iso else "lifetime",
+            "since": since_iso,
+            "clean_epoch": bool(since_iso),
             "grade": grade(m),
             **m,
         })

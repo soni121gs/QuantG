@@ -15901,6 +15901,7 @@ async def startup():
         ("users", "email", {"unique": True}),
         ("broker_keys", [("user_id", 1), ("broker", 1)], {"unique": True}),
         ("strategies", "user_id", {}),
+        ("strategies", "id", {}),
         ("strategies", [("status", 1)], {}),
         ("orders", [("user_id", 1), ("created_at", -1)], {}),
         ("orders", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),

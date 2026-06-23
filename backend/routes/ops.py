@@ -129,19 +129,38 @@ async def ops_scorecard(days: int = 7, scope: str = "me", user=Depends(get_curre
 
 
 @router.get("/risk-scorecard")
-async def ops_risk_scorecard(since: Optional[str] = None, scope: str = "me", user=Depends(get_current_user)):
+async def ops_risk_scorecard(
+    since: Optional[str] = None,
+    scope: str = "me",
+    clean: bool = True,
+    user=Depends(get_current_user),
+):
     """Risk-adjusted scorecard from REALIZED trades (db.trades): Sharpe, Sortino,
     profit-factor, expectancy, max-drawdown and an A–F grade per strategy — ranks
     strategies by EDGE, not raw P&L. `since` (ISO) scores only a clean window;
     scope=all is owner-only."""
-    from core.strategy_scorecard import build_scorecard as build_risk_scorecard, summarize_by_structure
+    from core.strategy_scorecard import (
+        CLEAN_STATS_DEFAULT_SINCE,
+        build_scorecard as build_risk_scorecard,
+        summarize_by_structure,
+    )
     uid: Optional[str] = user["id"]
     if scope == "all":
         if user.get("role") != "owner":
             raise HTTPException(status_code=403, detail="scope=all requires owner role")
         uid = None
-    rows = await build_risk_scorecard(db, user_id=uid, since_iso=since)
-    return {"rows": rows, "by_structure": summarize_by_structure(rows)}
+    effective_since = since or (CLEAN_STATS_DEFAULT_SINCE if clean else None)
+    rows = await build_risk_scorecard(db, user_id=uid, since_iso=effective_since, clean=clean)
+    return {
+        "rows": rows,
+        "by_structure": summarize_by_structure(rows),
+        "stats_window": {
+            "mode": "clean" if effective_since else "lifetime",
+            "since": effective_since,
+            "clean_default_since": CLEAN_STATS_DEFAULT_SINCE,
+            "lifetime_available": True,
+        },
+    }
 
 
 @router.post("/options-backtest")

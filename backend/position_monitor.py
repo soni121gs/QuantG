@@ -707,6 +707,17 @@ async def _process_one_position(
         _entry_ref = float(pos.get("average_buy_price") or pos.get("average_price") or pos.get("entry_price") or 0)
         if _entry_ref > 0 and abs(float(ltp) / _entry_ref - 1.0) > _EQUITY_LTP_MAX_DEV:
             _dev = abs(float(ltp) / _entry_ref - 1.0)
+            _checked_at = datetime.now(timezone.utc).isoformat()
+            _diagnostic = {
+                "source": ltp_source,
+                "rejected_ltp": float(ltp),
+                "entry_ref": _entry_ref,
+                "deviation_pct": round(_dev * 100, 2),
+                "symbol": symbol,
+                "instrument_key": pos.get("instrument_key") or pos.get("instrument_token"),
+                "checked_at": _checked_at,
+                "guard": "position_monitor",
+            }
             logger.warning(
                 "position_monitor: rejecting phantom equity ltp=%.2f for %s (entry=%.2f dev=%.0f%% src=%s) — skipping exit/mark",
                 float(ltp), symbol, _entry_ref, _dev * 100, ltp_source,
@@ -714,7 +725,13 @@ async def _process_one_position(
             await db.strategy_positions.update_one(
                 {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
                 {"$set": {"last_error": f"PHANTOM_LTP_REJECTED: {float(ltp):.2f} vs entry {_entry_ref:.2f} ({_dev * 100:.0f}%)",
-                          "updated_at": datetime.now(timezone.utc).isoformat()}},
+                          "equity_ltp_diagnostic": _diagnostic,
+                          "phantom_ltp_rejected_at": _checked_at,
+                          "phantom_ltp_source": ltp_source,
+                          "phantom_ltp_value": float(ltp),
+                          "phantom_ltp_entry_ref": _entry_ref,
+                          "phantom_ltp_deviation_pct": round(_dev * 100, 2),
+                          "updated_at": _checked_at}},
             )
             return
 
