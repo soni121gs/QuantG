@@ -104,10 +104,17 @@ class InstrumentResolver:
             self._diag(stage="index_spot_price", reason="using_paper_spot_hint", spot=spot)
 
         target_strike = _round_to_strike(spot, interval)
+        # Strike offset MUST account for option side. Moneyness is inverted for puts:
+        #   CE: ITM1 = ATM - interval (lower strike), OTM1 = ATM + interval
+        #   PE: ITM1 = ATM + interval (higher strike), OTM1 = ATM - interval
+        # The previous offset was direction-blind (always the CE convention), so every
+        # PE/bearish trade got the inverted strike — an ITM1_BUY put was actually bought
+        # OTM (the WR-22 "config=ITM1_BUY but trades OTM" bug, fixed 2026-06-23).
+        is_pe = str(option_side or "").upper() == "PE"
         if strike_rule == "OTM1":
-            target_strike += interval
+            target_strike += (-interval if is_pe else interval)
         elif strike_rule == "ITM1":
-            target_strike -= interval
+            target_strike += (interval if is_pe else -interval)
         target_strike = _round_to_strike(target_strike, interval)
 
         if gw and getattr(gw, "connected", True):

@@ -48,6 +48,13 @@ SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
 # the entry when the latest equity close deviates more than this from the recent
 # median — well beyond any NSE large-cap circuit band (≤20%), so no real move trips it.
 EQUITY_PHANTOM_MAX_DEV = float(os.environ.get("EQUITY_PHANTOM_MAX_DEV", "0.35"))
+# Signal-exit min-hold debounce: a fresh position must not be closed by its own
+# opposite-direction signal before this many seconds — a real SL/TP exit (owned by
+# the position monitor) still fires anytime. Spreads need a long hold to collect
+# theta (the 2026-06-23 churn: 43/47 spreads closed <5min, never reached TP);
+# single-leg buyers get a short debounce just to stop same-candle flip-flop.
+SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC", "1200"))
+SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC", "180"))
 NON_ERROR_ENTRY_BLOCKS = (
     "cooldown-active",
     "duplicate-buy-dropped",
@@ -768,6 +775,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 ltp_val = None
 
                             exit_tag = f"strategy-{action.lower()}-signal"
+                            sl_triggered = False
                             if ltp_val is not None:
                                 from core.position_lifecycle import position_risk_prices
                                 prices = position_risk_prices(active_position, ltp=ltp_val)
@@ -778,6 +786,42 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                     is_triggered = (ltp_val >= stop_loss) if side == "SHORT" else (ltp_val <= stop_loss)
                                     if is_triggered:
                                         exit_tag = "trailing-sl" if trailing_sl else "stop-loss"
+                                        sl_triggered = True
+
+                            # Min-hold debounce: suppress a PURE opposite-signal exit on a
+                            # fresh position so spreads ride to theta TP instead of churning.
+                            # A real SL/TP exit (sl_triggered) is never blocked — the monitor
+                            # owns those, so risk is always honored.
+                            if not sl_triggered:
+                                _is_spread = str(active_position.get("structure") or "") in ("credit_spread", "debit_spread")
+                                _min_hold = SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC if _is_spread else SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC
+                                _opened_raw = active_position.get("entry_time") or active_position.get("created_at")
+                                _opened_dt = None
+                                if isinstance(_opened_raw, str):
+                                    try:
+                                        _opened_dt = datetime.fromisoformat(_opened_raw.replace("Z", "+00:00"))
+                                    except ValueError:
+                                        _opened_dt = None
+                                elif isinstance(_opened_raw, datetime):
+                                    _opened_dt = _opened_raw
+                                if _opened_dt is not None:
+                                    if _opened_dt.tzinfo is None:
+                                        _opened_dt = _opened_dt.replace(tzinfo=timezone.utc)
+                                    _held_sec = (datetime.now(timezone.utc) - _opened_dt).total_seconds()
+                                    if _held_sec < _min_hold:
+                                        await db.strategies.update_one(
+                                            {"id": s["id"]},
+                                            {"$set": {**eval_set,
+                                                      "last_signal_action": action,
+                                                      "last_signals_count": signals_count,
+                                                      "last_filter_reason": (
+                                                          f"{action} signal exit suppressed — min-hold "
+                                                          f"{int(_held_sec)}s/{_min_hold}s ({'spread' if _is_spread else 'single-leg'}); "
+                                                          f"letting TP/SL ride."
+                                                      )},
+                                             "$inc": inc_set},
+                                        )
+                                        continue
 
                             await close_strategy_fn(s["user_id"], s["id"], reason=exit_tag)
                             await db.strategies.update_one(
