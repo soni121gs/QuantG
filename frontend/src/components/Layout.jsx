@@ -7,10 +7,8 @@ import {
   Blocks,
   Bot,
   ListOrdered,
-  PieChart,
   Calendar,
   LogOut,
-  Wallet,
   Menu,
   X,
   UserCircle,
@@ -29,8 +27,6 @@ import {
   ChevronDown,
   ExternalLink,
   AlertTriangle,
-  PanelRight,
-  PanelRightClose,
   BookOpen,
   BarChart3,
 } from "lucide-react";
@@ -50,8 +46,7 @@ const NAV_GROUPS = [
     items: [
       { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", id: "nav-dashboard" },
       { to: "/strategies", icon: Blocks, label: "Strategies", id: "nav-strategies" },
-      { to: "/orders", icon: ListOrdered, label: "Orders", id: "nav-orders" },
-      { to: "/positions", icon: PieChart, label: "Positions", id: "nav-positions" },
+      { to: "/orders", icon: ListOrdered, label: "Execution", id: "nav-orders" },
       { to: "/analytics", icon: BarChart3, label: "Analytics", id: "nav-analytics" },
     ],
   },
@@ -156,73 +151,6 @@ const formatNotificationTime = (value) => {
   });
 };
 
-const MiniBlotterDock = ({ funds, wallet, summary, profile, onCollapse }) => {
-  const pnl = summary?.net_pnl ?? 0;
-  const cash = funds?.available_cash ?? wallet?.balance ?? 0;
-  const usedMargin = Number(funds?.used_margin ?? 0);
-  const marginPct = cash ? Math.min(100, Math.max(0, (usedMargin / Math.max(1, Number(cash))) * 100)) : 0;
-  const activePositions = summary?.open_positions ?? 0;
-  const pnlPositive = Number(pnl || 0) >= 0;
-
-  return (
-    <aside className="qd-mini-blotter" data-testid="mini-blotter">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="qd-section-title">Mini Blotter</div>
-          <div className="mt-1 text-xs text-[var(--qd-text-2)]">Always-on account context</div>
-        </div>
-        <button
-          type="button"
-          onClick={onCollapse}
-          className="rounded-[var(--qd-radius-sm)] p-1 text-[var(--qd-text-3)] hover:bg-[var(--qd-surface-2)] hover:text-[var(--qd-text)]"
-          title="Collapse account rail"
-          data-testid="blotter-collapse"
-        >
-          <PanelRightClose size={17} />
-        </button>
-      </div>
-      <div className="mt-4 grid gap-3">
-        <div className="qd-blotter-metric">
-          <span>Net Liq.</span>
-          <strong>INR {formatINR(cash)}</strong>
-        </div>
-        <div className="qd-blotter-metric">
-          <span>Session P&L</span>
-          <strong className={pnlPositive ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>INR {formatINR(pnl ?? 0)}</strong>
-        </div>
-        <div className="flex items-center justify-between rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">P&L Flow</div>
-            <div className="font-mono text-xs text-[var(--qd-text-2)]">{pnlPositive ? "Positive" : "Negative"} session</div>
-          </div>
-          <PnlTrend positive={pnlPositive} />
-        </div>
-        <div>
-          <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">
-            <span>Margin Usage</span>
-            <span className="font-mono">{marginPct.toFixed(0)}%</span>
-          </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--qd-surface-3)]">
-            <div className="h-full rounded-full bg-[var(--qd-accent)]" style={{ width: `${marginPct}%` }} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Positions</div>
-            <div className="mt-1 font-mono text-lg font-bold text-[var(--qd-text)]">{activePositions}</div>
-          </div>
-          <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--qd-text-3)]">Mode</div>
-            <div className={`mt-1 font-mono text-lg font-bold ${profile?.paper_mode ? "text-[var(--qd-warn)]" : "text-[var(--qd-loss)]"}`}>
-              {profile?.paper_mode ? "PAPER" : "LIVE"}
-            </div>
-          </div>
-        </div>
-      </div>
-    </aside>
-  );
-};
-
 // Computes NSE market-open state from a Date (IST 09:15–15:30, Mon–Fri).
 const computeMarketOpen = (d) => {
   const day = d.getUTCDay();
@@ -276,10 +204,8 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const {
     summary: executionSummary,
-    wallet: executionWallet,
     refresh: refreshExecution,
   } = useExecutionState({ pollMs: 15000 });
-  const [funds, setFunds] = useState(null);
   const [profile, setProfile] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
@@ -314,16 +240,7 @@ export default function Layout({ children }) {
     const saved = window.localStorage.getItem("quantg-theme-v2") || "daylight";
     return VALID_THEME_IDS.has(saved) ? saved : "daylight";
   });
-  const [blotterOpen, setBlotterOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("quantg-blotter-open") === "true";
-  });
   const [pendingActionsCount, setPendingActionsCount] = useState(0);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem("quantg-blotter-open", blotterOpen ? "true" : "false");
-  }, [blotterOpen]);
 
   useEffect(() => {
     document.documentElement.dataset.quantgTheme = theme;
@@ -331,10 +248,7 @@ export default function Layout({ children }) {
   }, [theme]);
 
   const loadShellMeta = useCallback(async () => {
-    await Promise.all([
-      api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
-      api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
-    ]);
+    await api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
   }, []);
   usePolling(loadShellMeta, 60000, { hiddenMs: 0 });
 
@@ -344,7 +258,6 @@ export default function Layout({ children }) {
     try {
       await Promise.all([
         refreshExecution(),
-        api.get("/funds").then((r) => setFunds(r.data)).catch(() => {}),
         api.get("/profile").then((r) => setProfile(r.data)).catch(() => {}),
       ]);
     } catch {
@@ -761,7 +674,7 @@ export default function Layout({ children }) {
 
         {/* Main */}
         <main className="flex-1 min-w-0 qd-grid-bg">
-          <div className={`grid gap-4 p-3 pb-24 md:p-5 lg:pb-5 ${blotterOpen ? "lg:grid-cols-[minmax(0,1fr)_240px] xl:grid-cols-[minmax(0,1fr)_260px]" : "lg:grid-cols-1"}`}>
+          <div className="grid gap-4 p-3 pb-24 md:p-5 lg:pb-5 lg:grid-cols-1">
             <div className="min-w-0">
               <ReadinessBanner />
               {children}
@@ -774,28 +687,7 @@ export default function Layout({ children }) {
                 <ShieldAlert size={13} /> F&O Risk Disclosure
               </button>
             </div>
-            {blotterOpen && (
-              <MiniBlotterDock
-                funds={funds}
-                wallet={executionWallet}
-                summary={executionSummary}
-                profile={profile}
-                onCollapse={() => setBlotterOpen(false)}
-              />
-            )}
           </div>
-
-          {!blotterOpen && (
-            <button
-              type="button"
-              onClick={() => setBlotterOpen(true)}
-              className="hidden lg:flex fixed right-0 top-28 z-40 items-center gap-2 rounded-l-[var(--qd-radius-sm)] border border-r-0 border-[var(--qd-border)] bg-[var(--qd-surface)] px-2 py-3 text-[var(--qd-text-2)] shadow-sm hover:text-[var(--qd-text)]"
-              title="Show account rail"
-              data-testid="blotter-expand"
-            >
-              <PanelRight size={16} />
-            </button>
-          )}
         </main>
       </div>
 

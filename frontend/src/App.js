@@ -18,7 +18,6 @@ const PythonEditor = React.lazy(() => import("./pages/PythonEditor"));
 const VisualBuilder = React.lazy(() => import("./pages/VisualBuilder"));
 const AIBot = React.lazy(() => import("./pages/AIBot"));
 const Orders = React.lazy(() => import("./pages/Orders"));
-const Positions = React.lazy(() => import("./pages/Positions"));
 const Profile = React.lazy(() => import("./pages/Profile"));
 const OpsConsole = React.lazy(() => import("./pages/OpsConsole"));
 const MarketHub = React.lazy(() => import("./pages/MarketHub"));
@@ -65,7 +64,7 @@ export default function App() {
             <Route path="/visual" element={<Protected><VisualBuilder /></Protected>} />
             <Route path="/ai-bot" element={<Protected><AIBot /></Protected>} />
             <Route path="/orders" element={<Protected><Orders /></Protected>} />
-            <Route path="/positions" element={<Protected><Positions /></Protected>} />
+            <Route path="/positions" element={<Protected><Orders /></Protected>} />
             <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
             <Route path="/market-hub" element={<Protected><MarketHub /></Protected>} />
             <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />

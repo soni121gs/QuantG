@@ -489,45 +489,6 @@ tbody tr:hover {
   letter-spacing: 0.05em;
 }
 
-.qd-mini-blotter {
-  position: sticky;
-  top: 84px;
-  align-self: start;
-  display: none;
-  border: 1px solid var(--qd-border);
-  border-radius: var(--qd-radius);
-  background: var(--qd-panel);
-  box-shadow: none;
-  padding: 12px;
-}
-
-.qd-blotter-metric {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid var(--qd-border);
-  border-radius: var(--qd-radius-sm);
-  background: var(--qd-surface-2);
-  padding: 10px;
-}
-
-.qd-blotter-metric span {
-  color: var(--qd-text-3);
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.qd-blotter-metric strong {
-  color: var(--qd-text);
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
-}
-
 .qd-card > *,
 .qd-card-tight > *,
 .glass-card > *,
@@ -749,11 +710,5 @@ tbody tr:hover {
   /* Give main content breathing room above bottom nav + safe area */
   main {
     padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-  }
-}
-
-@media (min-width: 1024px) {
-  .qd-mini-blotter {
-    display: block;
   }
 }

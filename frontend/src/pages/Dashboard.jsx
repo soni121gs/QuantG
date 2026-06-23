@@ -3,10 +3,8 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   Bot,
   Layers,
-  LineChart,
   PieChart,
   RefreshCw,
   Shield,
@@ -17,7 +15,7 @@ import {
   Zap,
   Power,
 } from "lucide-react";
-import { api, formatINR, pctFmt } from "../lib/api";
+import { api, formatINR } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { usePolling } from "../hooks/usePolling";
 import { KpiCard } from "../components/dashboard/KpiCard";
@@ -63,20 +61,6 @@ const filledOrder = (status) => {
   return ["COMPLETE", "FILLED", "TRADED"].includes(s);
 };
 
-const MarketRow = ({ item }) => (
-  <div className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3 hover:bg-[var(--qd-surface-2)]">
-    <div className="min-w-0">
-      <div className="font-mono text-sm font-semibold text-white">{item.symbol}</div>
-      <div className="truncate text-xs text-[var(--qd-text-3)]">{item.name}</div>
-    </div>
-    <div className="text-right">
-      <div className="font-mono text-sm font-bold text-white">{money(item.price)}</div>
-      <div className={`font-mono text-xs font-semibold ${toneClass(item.change)}`}>
-        {item.change >= 0 ? "UP" : "DN"} {pctFmt(item.pct)}
-      </div>
-    </div>
-  </div>
-);
 export default function Dashboard() {
   const {
     positions: execPositions,
@@ -87,7 +71,6 @@ export default function Dashboard() {
     upstoxDataHealth,
     brokerReconciliation,
   } = useExecutionState({ pollMs: 15000 });
-  const [watch, setWatch] = useState([]);
   const positions = execPositions;
   const orders = execOrders;
   const [funds, setFunds] = useState(null);
@@ -103,8 +86,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [w, f, t, c, s, leaderboard] = await Promise.all([
-        api.get("/market/watchlist"),
+      const [f, t, c, s, leaderboard] = await Promise.all([
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
         api.get("/market/session-status"),
@@ -113,7 +95,6 @@ export default function Dashboard() {
       ]);
       // Execution/positions/PnL are already kept fresh by the global
       // ExecutionStateContext (15s poll) — no need to re-fetch them here.
-      setWatch(w.data);
       setFunds(f.data);
       setTelemetry(t.data);
       setMarketSession(c.data);
@@ -154,7 +135,6 @@ export default function Dashboard() {
   const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;
   const marketStatusLabel = marketSession?.global_status || (marketOpen ? "OPEN" : "CLOSED");
   const firstRisk = strategies[0]?.risk_settings || {};
-  const topWatch = useMemo(() => watch.slice(0, 8), [watch]);
   const openOrders = useMemo(() => orders.filter((o) => BROKER_OPEN_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
   const failedOrders = useMemo(() => orders.filter((o) => PROBLEM_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
   const openStrategyPositions = useMemo(() => positions.filter((p) => hasQty(p.qty)), [positions]);
@@ -642,7 +622,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <section>
             {/* Strategy summaries and engines */}
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
@@ -681,40 +661,6 @@ export default function Dashboard() {
 
               </div>
             </div>
-
-            {/* Sidebar columns */}
-            <aside className="space-y-4">
-              {/* Watchlist */}
-              <div className="qd-card overflow-hidden">
-                <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-4 py-3">
-                  <h2 className="flex items-center gap-2 font-head text-sm font-semibold text-white">
-                    <BarChart3 size={15} /> Primary Watchlist
-                  </h2>
-                  <span className="qd-live-dot" />
-                </div>
-                <div className="max-h-[300px] divide-y divide-[var(--qd-border)] overflow-auto">
-                  {topWatch.map((item) => <MarketRow key={item.symbol} item={item} />)}
-                </div>
-              </div>
-
-              {/* Telemetry */}
-              <div className="qd-card p-4">
-                <h2 className="flex items-center gap-2 font-head text-sm font-semibold text-white mb-3">
-                  <LineChart size={15} /> Live Feeds
-                </h2>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="NIFTY Index" value={telemetry?.market_status?.nifty?.ltp ? money(telemetry.market_status.nifty.ltp) : "Waiting"} />
-                  <Field label="SENSEX Index" value={telemetry?.market_status?.sensex?.ltp ? money(telemetry.market_status.sensex.ltp) : "Waiting"} />
-                  <Field label="Last Tick Time" value={telemetry?.market_status?.last_tick_time ? new Date(telemetry.market_status.last_tick_time).toLocaleTimeString() : "-"} />
-                  <Field label="Telemetry Source" value={telemetry?.market_status?.feed_source_label || telemetry?.market_status?.data_source || "Upstox Feed"} />
-                </div>
-                {telemetry?.market_status?.simulated_warning && (
-                  <div className="mt-3 rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)]">
-                    Simulated feed active - paper results are not market-valid.
-                  </div>
-                )}
-              </div>
-            </aside>
           </section>
 
           {/* Master Open Positions table */}
@@ -779,7 +725,7 @@ export default function Dashboard() {
 
       {activeTab === "equity" && (
         <div className="space-y-5">
-          <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <section>
             {/* Left Stock Positions */}
             <div className="qd-card overflow-hidden">
               <div className="border-b border-[var(--qd-border)] px-4 py-3">
@@ -811,19 +757,6 @@ export default function Dashboard() {
                   </table>
                 </div>
               )}
-            </div>
-
-            {/* Right stock watch */}
-            <div className="qd-card overflow-hidden">
-              <div className="border-b border-[var(--qd-border)] px-4 py-3 flex items-center justify-between">
-                <h2 className="font-head text-sm font-semibold text-white">Stock Watchlist</h2>
-                <span className="qd-live-dot" />
-              </div>
-              <div className="max-h-[300px] divide-y divide-[var(--qd-border)] overflow-auto">
-                {topWatch.map((item) => (
-                  <MarketRow key={item.symbol} item={item} />
-                ))}
-              </div>
             </div>
           </section>
 

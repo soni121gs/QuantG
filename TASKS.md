@@ -2433,3 +2433,22 @@ a confident overfitting machine — that is the single worst outcome and is expl
 *Hermes open: HSB-11–HSB-17 (PRIORITY 12 — HSB-11..16 is the strategy AutoResearch ratchet, judge-first; HSB-17 cleanup)*
 *Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
 *Recommended next build order (when unblocked): HSB-11 (historical_chains TTL index + data-volume audit) — gates the HSB-12 OOS judge.*
+# Frontend Trading-Cockpit Polish Task - 2026-06-23
+
+### TASK-UI-01 - Remove cockpit clutter and simplify trading surfaces
+- **Status**: `[x]` commit 5d4c897 · 2026-06-24
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Files to touch**: `frontend/src/components/Layout.jsx`, `frontend/src/pages/Dashboard.jsx`, `frontend/src/index.css`, `frontend/src/pages/Orders.jsx`, `frontend/src/pages/Calendar.jsx`, `frontend/src/pages/MarketHub.jsx`, `frontend/src/App.js`, `wiki/memory.md`
+
+**Problem**: Dashboard and shell still show duplicated/low-value side widgets: mini blotter rail, Primary Watchlist, Live Feeds, and watchlist panels. These repeat top-bar/Market Hub data and make the trading cockpit feel cluttered.
+
+**Exact steps**:
+1. Remove the global mini blotter rail, its expand/collapse affordance, localStorage state, and supporting component code.
+2. Remove Dashboard Primary Watchlist, Live Feeds, and secondary Stock Watchlist cards.
+3. Keep important feed/readiness state in the top bar, readiness banner, Market Hub, and Hermes brief instead of duplicating it on Dashboard.
+4. Preserve the merged Execution workspace, Calendar day-summary expansion, and Hermes market brief changes from the current frontend pass.
+
+**Verify**: run `CI=false npm run build` from `frontend/`; inspect `/dashboard`, `/orders`, `/positions`, `/calendar`, and `/market-hub` locally before deploy.
+
+---

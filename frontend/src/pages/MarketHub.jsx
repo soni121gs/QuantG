@@ -76,8 +76,16 @@ export default function MarketHub() {
   const runAnalysis = async () => {
     setAnalysisBusy(true);
     try {
-      const r = await api.get("/ai/market-analysis");
-      setAnalysis(r.data);
+      const r = await api.post("/agent/chat", {
+        session_id: `market-brief-${new Date().toISOString().slice(0, 10)}`,
+        message: "Generate a concise QuantG AI market brief for the current session. Use internal live tools for P&L, positions, active strategies, feed health, skipped signals, and risk state. Mention uncertainty if a source is stale or missing. Do not make numeric claims unless they come from tool data.",
+      });
+      setAnalysis({
+        provider: "hermes-agent",
+        content: r.data.content,
+        tools_used: r.data.tools_used,
+        generated_at: new Date().toISOString(),
+      });
     } catch (e) {
       setAnalysis({ content: `Error: ${e.response?.data?.detail || e.message}` });
     } finally {
@@ -251,8 +259,8 @@ export default function MarketHub() {
       <section className="qd-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between border-b border-[var(--qd-border)]/50 pb-4 mb-4">
           <div>
-            <h2 className="font-head text-lg text-white flex items-center gap-2"><Sparkles size={16} className="text-[var(--qd-accent)]" /> AI Market Brief</h2>
-            <p className="mt-1 text-xs text-[var(--qd-text-2)]">Gemini evaluates live strategy scores, index trend structure, and Upstox feed state.</p>
+            <h2 className="font-head text-lg text-white flex items-center gap-2"><Sparkles size={16} className="text-[var(--qd-accent)]" /> QuantG AI Market Brief</h2>
+            <p className="mt-1 text-xs text-[var(--qd-text-2)]">Hermes uses read-only QuantG tools for P&L, positions, strategy state, feed health, and risk context.</p>
           </div>
           <button
             onClick={runAnalysis}
@@ -266,9 +274,14 @@ export default function MarketHub() {
         {analysis?.content ? (
           <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-bg)] p-4 text-sm leading-relaxed text-[var(--qd-text-2)]">
             {renderMarkdown(analysis.content)}
+            {analysis.tools_used && (
+              <div className="mt-4 border-t border-[var(--qd-border)] pt-3 font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                Hermes sources: {Object.keys(analysis.tools_used).join(", ") || "none returned"}
+              </div>
+            )}
           </div>
         ) : (
-          <div className="text-xs font-mono text-[var(--qd-text-3)]">Generate a Gemini summary of current market structure and your strategy scores.</div>
+          <div className="text-xs font-mono text-[var(--qd-text-3)]">Generate a Hermes brief grounded in current execution, risk, strategy, and feed data.</div>
         )}
       </section>
 
