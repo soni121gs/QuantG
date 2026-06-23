@@ -19,7 +19,6 @@ import { api, formatINR } from "../lib/api";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { usePolling } from "../hooks/usePolling";
 import { KpiCard } from "../components/dashboard/KpiCard";
-import { NiftyPulseChart } from "../components/dashboard/NiftyPulseChart";
 import { StrategyPerformanceTable } from "../components/dashboard/StrategyPerformanceTable";
 import { StrategyLedgerRow, Field, StatusPill } from "../components/dashboard/StrategyLedgerRow";
 import { HealthScoreList } from "../components/dashboard/HealthScoreList";
@@ -82,7 +81,6 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState("");
   const [busyStrategy, setBusyStrategy] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
-  const [niftyCandles, setNiftyCandles] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -107,23 +105,6 @@ export default function Dashboard() {
   }, []);
 
   usePolling(load, 60000, { hiddenMs: 0 });
-
-  const loadNiftyCandles = useCallback(async () => {
-    const key = encodeURIComponent("NSE_INDEX|Nifty 50");
-    try {
-      let res = await api.get(`/market/candles/${key}`, { params: { interval: "30minute" } });
-      let candles = res?.data?.candles || [];
-      if (!candles.length) {
-        res = await api.get(`/market/candles/${key}`, { params: { interval: "1day" } });
-        candles = res?.data?.candles || [];
-      }
-      setNiftyCandles(candles.slice(-64));
-    } catch {
-      setNiftyCandles([]);
-    }
-  }, []);
-
-  usePolling(loadNiftyCandles, 60000, { hiddenMs: 0 });
 
   const pnl = executionSummary.net_pnl ?? 0;
   const grossPnl = executionSummary.gross_pnl ?? pnl;
@@ -259,106 +240,77 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-5" data-testid="dashboard-page">
-      {/* Top Header Card */}
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_0.9fr]">
-        <div className="qd-card qd-hero-panel qd-dashboard-hero overflow-hidden">
-          <div className="border-b border-[var(--qd-border)] p-5">
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-center">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="qd-chip">Control Room</span>
-                  <span className="qd-chip">{marketStatusLabel}</span>
-                  <span className="qd-chip">{openPositions} Active</span>
-                </div>
-                <h1 className="mt-4 font-head text-3xl font-extrabold tracking-tight text-[var(--qd-text)] md:text-4xl">QuantG Dashboard</h1>
-                <p className="mt-2 max-w-2xl text-sm text-[var(--qd-text-2)]">
-                  Live portfolio state, NIFTY telemetry, and focused controls for strategy execution.
-                </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleRefresh}
-                    disabled={refreshing}
-                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
-                    title="Refresh data"
-                  >
-                    <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh
-                  </button>
-                  <Link
-                    to="/ai-bot"
-                    className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
-                  >
-                    <Bot size={15} /> AI Bot
-                  </Link>
-                  <Link
-                    to="/strategies"
-                    className="qd-force-white flex items-center gap-2 rounded-[var(--qd-radius-sm)] bg-[var(--qd-accent)] px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wider hover:bg-[var(--qd-accent-hover)]"
-                    data-testid="new-strategy-btn"
-                  >
-                    <Zap size={15} /> Strategy
-                  </Link>
-                </div>
-              </div>
-              <NiftyPulseChart
-                niftyLtp={telemetry?.market_status?.nifty?.ltp}
-                sensexLtp={telemetry?.market_status?.sensex?.ltp}
-                candles={niftyCandles}
-                marketOpen={marketOpen}
-                label={marketStatusLabel}
-                feedLabel={telemetry?.market_status?.feed_source_label}
-              />
+    <div className="space-y-3 qd-dashboard-compact" data-testid="dashboard-page">
+      <section className="qd-card overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-[var(--qd-border)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="font-head text-base font-bold text-[var(--qd-text)]">Dashboard</h1>
+              <StatusPill tone={marketOpen ? "good" : "warn"}>{marketStatusLabel}</StatusPill>
+              <StatusPill>{openPositions} Positions</StatusPill>
+              <StatusPill>{liveStrategies}/{strategyCount} Live</StatusPill>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4 xl:grid-cols-6">
+              <Field label="Session P&L" value={money(pnl)} tone={toneClass(pnl)} />
+              <Field label="Account Cash" value={money(funds?.available_cash)} />
+              <Field label="Used Margin" value={money(funds?.used_margin)} />
+              <Field label="Open Orders" value={openOrders.length} tone={openOrders.length ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-2)]"} />
+              <Field label="Failed" value={failedOrders.length} tone={failedOrders.length ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+              <Field label="Kill Gate" value={firstRisk.kill_switch_enabled ? "ARMED" : "CLEAR"} tone={firstRisk.kill_switch_enabled ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
             </div>
           </div>
-
-          <div className="grid grid-cols-2 gap-px bg-[var(--qd-border)] md:grid-cols-4">
-            <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Market Status" value={marketStatusLabel} tone={marketOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"} />
-            </div>
-            <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Session Net P&L" value={money(pnl)} tone={toneClass(pnl)} />
-            </div>
-            <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Active Automations" value={`${liveStrategies}/${strategyCount} systems`} />
-            </div>
-            <div className="bg-[var(--qd-surface)] p-4">
-              <Field label="Total Positions" value={`${openPositions} active`} />
-            </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex h-8 items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 font-mono text-[11px] uppercase text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
+              title="Refresh data"
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} /> Refresh
+            </button>
+            <Link
+              to="/ai-bot"
+              className="flex h-8 items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 font-mono text-[11px] uppercase text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+            >
+              <Bot size={13} /> AI
+            </Link>
+            <Link
+              to="/strategies"
+              className="qd-force-white flex h-8 items-center gap-2 rounded-[var(--qd-radius-sm)] bg-[var(--qd-accent)] px-3 font-mono text-[11px] font-semibold uppercase hover:bg-[var(--qd-accent-hover)]"
+              data-testid="new-strategy-btn"
+            >
+              <Zap size={13} /> Strategy
+            </Link>
+            <button
+              type="button"
+              onClick={killSwitch}
+              className="flex h-8 items-center gap-2 rounded bg-[var(--qd-loss)] px-3 font-mono text-[11px] font-bold uppercase text-white hover:opacity-90"
+            >
+              <Power size={13} /> Kill
+            </button>
+            <button
+              type="button"
+              onClick={exitAllUpstox}
+              className="flex h-8 items-center gap-2 rounded border border-[rgba(255,59,48,0.42)] px-3 font-mono text-[11px] font-bold uppercase text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.1)]"
+            >
+              <AlertTriangle size={13} /> Exit All
+            </button>
           </div>
         </div>
-
-        {/* Emergency Stop card */}
-        <div className="qd-card border-l-2 border-l-[var(--qd-loss)] p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="qd-section-title">Risk Control</div>
-              <h2 className="mt-2 font-head text-xl font-semibold text-white">Emergency Stop</h2>
-              <p className="mt-2 text-sm text-[var(--qd-text-2)]">
-                Flipping this immediately halts all active strategy loops, switches executing accounts to PAPER, and locks safety gates.
-              </p>
-            </div>
-            <Shield size={20} className="text-[var(--qd-loss)]" />
+        <div className="grid grid-cols-2 gap-px bg-[var(--qd-border)] text-xs md:grid-cols-4">
+          <div className="bg-[var(--qd-surface)] px-3 py-2">
+            <Field label="Max Lot" value="1 contract" />
           </div>
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <Field label="Max lot limit" value="1 contract" />
-            <Field label="Cooldown delay" value={`${strategies[0]?.cooldown_minutes ?? 25} min`} />
-            <Field label="Loss cutoff" value={money(firstRisk.daily_loss_limit || 0)} />
-            <Field label="Kill gate" value={firstRisk.kill_switch_enabled ? "ARMED" : "CLEAR"} tone={firstRisk.kill_switch_enabled ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+          <div className="bg-[var(--qd-surface)] px-3 py-2">
+            <Field label="Cooldown" value={`${strategies[0]?.cooldown_minutes ?? 25} min`} />
           </div>
-          <button
-            type="button"
-            onClick={killSwitch}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded bg-[var(--qd-loss)] px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-white hover:opacity-90"
-          >
-            <Power size={15} /> Trigger Kill Switch
-          </button>
-          <button
-            type="button"
-            onClick={exitAllUpstox}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[rgba(255,59,48,0.42)] px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.1)]"
-          >
-            <AlertTriangle size={15} /> Upstox Exit All
-          </button>
+          <div className="bg-[var(--qd-surface)] px-3 py-2">
+            <Field label="Loss Cutoff" value={money(firstRisk.daily_loss_limit || 0)} />
+          </div>
+          <div className="bg-[var(--qd-surface)] px-3 py-2">
+            <Field label="Protection" value={`${missingProtectionCount}/${openStrategyPositions.length} missing`} tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+          </div>
         </div>
       </section>
 
@@ -375,7 +327,7 @@ export default function Dashboard() {
       )}
 
       {/* Modern Accented Glassmorphism Tabs */}
-      <div className="flex border-b border-[var(--qd-border)] gap-2 overflow-x-auto pb-px">
+      <div className="flex gap-2 overflow-x-auto border-b border-[var(--qd-border)] pb-px">
         {[
           { id: "overview", label: "General Console" },
           { id: "equity", label: "Equity Spot" },          { id: "fo", label: "Derivatives (F&O)" },
@@ -384,7 +336,7 @@ export default function Dashboard() {
             key={t.id}
             type="button"
             onClick={() => setActiveTab(t.id)}
-            className={`px-4 py-2.5 font-head font-semibold text-xs transition-all border-b-2 border-transparent uppercase tracking-widest whitespace-nowrap ${
+            className={`whitespace-nowrap border-b-2 border-transparent px-3 py-2 font-head text-[11px] font-semibold uppercase transition-all ${
               activeTab === t.id
                 ? "text-white border-[var(--qd-cyan)] qd-tab-active"
                 : "text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
@@ -397,9 +349,9 @@ export default function Dashboard() {
 
       {/* Panel Render Logic */}
       {activeTab === "overview" && (
-        <div className="space-y-5">
+        <div className="space-y-3">
           {/* Main summary grid */}
-          <section className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <KpiCard label="Account Balance" value={money(funds?.available_cash)} icon={Wallet} sub={funds?.source === "live" ? "Live Account Balance" : "Simulated Paper Cash"} />
             <KpiCard label="Utilized Margin" value={money(funds?.used_margin)} icon={Layers} sub={funds?.source === "live" ? "Live Blocked Margin" : "Paper Blocked Margin"} />
             <KpiCard label="Net P&L" value={money(pnl)} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={toneClass(pnl)} sub={`Gross ${money(grossPnl)} after charges ${money(charges)}`} />
@@ -416,7 +368,7 @@ export default function Dashboard() {
               Low-priority telemetry condensed into one slim bar to free up space. */}
           <section className="qd-card flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 text-[11px]">
             <div className="flex items-center gap-2">
-              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Feed</span>
+              <span className="font-mono uppercase text-[var(--qd-text-3)]">Feed</span>
               <StatusPill tone={upstoxDataHealth?.readiness === "READY" ? "good" : "warn"}>{upstoxDataHealth?.readiness || "UNKNOWN"}</StatusPill>
               <span className={upstoxDataHealth?.connected ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{upstoxDataHealth?.connected ? "WS" : "WS✕"}</span>
               <span className={upstoxDataHealth?.quote_stale ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}>age {quoteAge(upstoxDataHealth?.quote_age_sec)}</span>
@@ -425,7 +377,7 @@ export default function Dashboard() {
             <span className="hidden h-3 w-px bg-[var(--qd-border)] sm:inline-block" />
 
             <div className="flex items-center gap-2">
-              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Recon</span>
+              <span className="font-mono uppercase text-[var(--qd-text-3)]">Recon</span>
               <StatusPill tone={brokerReconciliation?.status === "OK" ? "good" : "warn"}>{brokerReconciliation?.status || "UNKNOWN"}</StatusPill>
               <span className={(brokerReconciliation?.mismatches?.pending_orders_without_broker_match || brokerReconciliation?.mismatches?.position_key_mismatches) ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}>
                 gaps {(brokerReconciliation?.mismatches?.pending_orders_without_broker_match ?? 0) + (brokerReconciliation?.mismatches?.position_key_mismatches ?? 0)}
@@ -435,7 +387,7 @@ export default function Dashboard() {
             <span className="hidden h-3 w-px bg-[var(--qd-border)] sm:inline-block" />
 
             <div className="flex min-w-0 items-center gap-2">
-              <span className="font-mono uppercase tracking-wide text-[var(--qd-text-3)]">Skipped</span>
+              <span className="font-mono uppercase text-[var(--qd-text-3)]">Skipped</span>
               <StatusPill tone={skippedSignals.length ? "warn" : "good"}>{skippedSignals.length}</StatusPill>
               <span className="truncate text-[var(--qd-text-2)]">
                 {skippedSignals.length === 0 ? "none" : (skippedSignals[0]?.reason_code || skippedSignals[0]?.reason || "skipped")}
@@ -443,7 +395,7 @@ export default function Dashboard() {
             </div>
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-4">
             <KpiCard
               label="Best Strategy"
               value={bestStrategy?.strategy_name || "-"}
@@ -482,12 +434,12 @@ export default function Dashboard() {
               </span>
               <span className="font-mono text-xs text-[var(--qd-accent)]">Open</span>
             </summary>
-            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
+            <section className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1.4fr_0.6fr]">
               <div className="qd-card overflow-hidden">
-              <div className="flex items-center justify-between border-b border-[var(--qd-border)] p-5">
+              <div className="flex items-center justify-between border-b border-[var(--qd-border)] p-3">
                 <div>
                   <div className="qd-section-title">// Closed trade performance</div>
-                  <h2 className="mt-1 font-head text-xl font-semibold text-white">Strategy Leaderboard</h2>
+                  <h2 className="mt-1 font-head text-sm font-semibold text-white">Strategy Leaderboard</h2>
                 </div>
                 <StatusPill tone={strategyAnalytics?.data_quality?.included_closed_trades ? "good" : "neutral"}>
                   {strategyAnalytics?.data_quality?.included_closed_trades || 0} Trades
@@ -495,29 +447,29 @@ export default function Dashboard() {
               </div>
               <StrategyPerformanceTable rows={leaderboardRows} />
               {(strategyAnalytics?.data_quality?.excluded_missing_strategy || strategyAnalytics?.data_quality?.excluded_unknown_strategy || strategyAnalytics?.data_quality?.excluded_missing_close_time) ? (
-                <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-warn)]">
+                <div className="border-t border-[var(--qd-border)] px-3 py-2 font-mono text-[11px] uppercase text-[var(--qd-warn)]">
                   Excluded rows: {strategyAnalytics?.data_quality?.excluded_missing_strategy || 0} missing strategy, {strategyAnalytics?.data_quality?.excluded_unknown_strategy || 0} unknown strategy, {strategyAnalytics?.data_quality?.excluded_missing_close_time || 0} missing close time.
                 </div>
               ) : null}
             </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                <div className="qd-card p-5">
-                <div className="mb-4 flex items-center justify-between">
+              <div className="grid grid-cols-1 gap-3">
+                <div className="qd-card p-3">
+                <div className="mb-3 flex items-center justify-between">
                   <div>
                     <div className="qd-section-title">// Score 0-100</div>
-                    <h2 className="mt-1 font-head text-lg font-semibold text-white">Health Scores</h2>
+                    <h2 className="mt-1 font-head text-sm font-semibold text-white">Health Scores</h2>
                   </div>
                   <Shield size={18} className="text-[var(--qd-text-3)]" />
                 </div>
                 <HealthScoreList rows={strategyAnalytics?.health_scores || []} />
               </div>
 
-                <div className="qd-card p-5">
-                <div className="mb-4 flex items-center justify-between">
+                <div className="qd-card p-3">
+                <div className="mb-3 flex items-center justify-between">
                   <div>
                     <div className="qd-section-title">// Recommendation only</div>
-                    <h2 className="mt-1 font-head text-lg font-semibold text-white">Capital Allocation</h2>
+                    <h2 className="mt-1 font-head text-sm font-semibold text-white">Capital Allocation</h2>
                   </div>
                   <Wallet size={18} className="text-[var(--qd-text-3)]" />
                 </div>
@@ -526,29 +478,29 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <div className="qd-card p-5">
+            <section className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
+            <div className="qd-card p-3">
               <div className="qd-section-title">// Winners</div>
-              <h2 className="mt-1 font-head text-lg font-semibold text-white">Top Performers</h2>
-              <div className="mt-4 space-y-3">
+              <h2 className="mt-1 font-head text-sm font-semibold text-white">Top Performers</h2>
+              <div className="mt-3 space-y-2">
                 {(strategyAnalytics?.top_performers || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No closed winners yet.</div> : strategyAnalytics.top_performers.map((row) => (
                   <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.net_pnl)} tone={toneClass(row.lifetime?.net_pnl)} />
                 ))}
               </div>
             </div>
-            <div className="qd-card p-5">
+            <div className="qd-card p-3">
               <div className="qd-section-title">// Losers</div>
-              <h2 className="mt-1 font-head text-lg font-semibold text-white">Worst Performers</h2>
-              <div className="mt-4 space-y-3">
+              <h2 className="mt-1 font-head text-sm font-semibold text-white">Worst Performers</h2>
+              <div className="mt-3 space-y-2">
                 {(strategyAnalytics?.worst_performers || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No closed losers yet.</div> : strategyAnalytics.worst_performers.map((row) => (
                   <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.net_pnl)} tone={toneClass(row.lifetime?.net_pnl)} />
                 ))}
               </div>
             </div>
-            <div className="qd-card p-5">
+            <div className="qd-card p-3">
               <div className="qd-section-title">// Drawdown</div>
-              <h2 className="mt-1 font-head text-lg font-semibold text-white">Drawdown Monitor</h2>
-              <div className="mt-4 space-y-3">
+              <h2 className="mt-1 font-head text-sm font-semibold text-white">Drawdown Monitor</h2>
+              <div className="mt-3 space-y-2">
                 {(strategyAnalytics?.drawdown_monitor || []).length === 0 ? <div className="text-xs text-[var(--qd-text-3)]">No drawdown history yet.</div> : strategyAnalytics.drawdown_monitor.map((row) => (
                   <Field key={row.strategy_id} label={row.strategy_name} value={money(row.lifetime?.max_drawdown)} tone={row.lifetime?.max_drawdown > 0 ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
                 ))}
@@ -558,13 +510,13 @@ export default function Dashboard() {
           </details>
 
           {/* Position Integrity Status */}
-          <div className="qd-card p-5">
-            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
+          <div className="qd-card p-3">
+            <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-2">
               <div>
                 <div className="qd-section-title">// HEALTH CHECK</div>
-                <h2 className="mt-1 font-head text-xl font-semibold text-white">Position Integrity</h2>
+                <h2 className="mt-1 font-head text-sm font-semibold text-white">Position Integrity</h2>
               </div>
-              <span className={`inline-flex items-center rounded border px-2.5 py-1 font-mono text-xs font-bold uppercase tracking-wider ${
+              <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase ${
                 (executionSummary.summary?.position_integrity?.orphans || 0) === 0 &&
                 (executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 &&
                 (executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 &&
@@ -583,63 +535,58 @@ export default function Dashboard() {
               </span>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 mt-4 md:grid-cols-5 text-center font-mono">
-              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Orphans</div>
-                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-center font-mono md:grid-cols-5">
+              <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
+                <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Orphans</div>
+                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.orphans ?? 0}
                 </div>
-                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
-              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing SL</div>
-                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+              <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
+                <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Missing SL</div>
+                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_sl ?? 0}
                 </div>
-                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
-              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Missing TP</div>
-                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+              <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
+                <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Missing TP</div>
+                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_tp ?? 0}
                 </div>
-                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
-              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Ledger Mismatches</div>
-                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+              <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
+                <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Mismatches</div>
+                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.strategy_mismatches ?? 0}
                 </div>
-                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
-              <div className="bg-[var(--qd-surface-2)] p-3 rounded border border-[var(--qd-border)]">
-                <div className="text-[11px] text-[var(--qd-text-3)] uppercase tracking-wider">Failed Orders</div>
-                <div className={`text-2xl font-bold mt-2 ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+              <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
+                <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Failed</div>
+                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.failed_orders ?? 0}
                 </div>
-                <div className="text-[11px] text-[var(--qd-text-3)] mt-1">Target: 0</div>
               </div>
             </div>
           </div>
 
           <section>
             {/* Strategy summaries and engines */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-3">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-2">
                 <div>
                   <div className="qd-section-title">// Runtime ledger states</div>
-                  <h2 className="mt-1 font-head text-xl font-semibold text-white">Strategy Position Ledger</h2>
+                  <h2 className="mt-1 font-head text-sm font-semibold text-white">Strategy Position Ledger</h2>
                 </div>
-                <Link to="/strategies" className="font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:text-[var(--qd-text)]">
+                <Link to="/strategies" className="font-mono text-[11px] uppercase text-[var(--qd-accent)] hover:text-[var(--qd-text)]">
                   Manage strategies
                 </Link>
               </div>
               <div className="qd-card overflow-hidden">
                 <div className="grid grid-cols-2 gap-px bg-[var(--qd-border)] md:grid-cols-5">
                   {strategySummary.map((item) => (
-                    <div key={item.label} className="bg-[var(--qd-bg)] p-4">
+                    <div key={item.label} className="bg-[var(--qd-bg)] p-2.5">
                       <div className="qd-section-title">{item.label}</div>
-                      <div className={`mt-2 font-mono text-2xl font-bold ${
+                      <div className={`mt-1 font-mono text-lg font-bold ${
                         item.tone === "good" ? "text-[var(--qd-profit)]" :
                         item.tone === "warn" ? "text-[var(--qd-warn)]" :
                         item.tone === "bad" ? "text-[var(--qd-loss)]" :
@@ -651,7 +598,7 @@ export default function Dashboard() {
 
                 <div>
                   {strategiesWithExecution.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-xs text-[var(--qd-text-3)]">No strategies loaded.</div>
+                    <div className="px-4 py-5 text-center text-xs text-[var(--qd-text-3)]">No strategies loaded.</div>
                   ) : (
                     strategiesWithExecution.map((row) => (
                       <StrategyLedgerRow key={row.strategy_id} row={row} onToggle={toggleStrategy} onExit={exitStrategy} />
@@ -673,7 +620,7 @@ export default function Dashboard() {
               </div>
             </div>
             {positions.length === 0 ? (
-              <div className="p-10 text-center">
+              <div className="p-5 text-center">
                 <Target className="mx-auto mb-2 text-[var(--qd-text-3)]" size={20} />
                 <div className="text-xs text-[var(--qd-text-2)]">No active trades currently open.</div>
               </div>
@@ -681,7 +628,7 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                       <th className="px-4 py-3">Strategy</th>
                       <th className="px-4 py-3">Symbol</th>
                       <th className="px-4 py-3">Qty</th>
@@ -724,7 +671,7 @@ export default function Dashboard() {
       )}
 
       {activeTab === "equity" && (
-        <div className="space-y-5">
+        <div className="space-y-3">
           <section>
             {/* Left Stock Positions */}
             <div className="qd-card overflow-hidden">
@@ -737,7 +684,7 @@ export default function Dashboard() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                      <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                         <th className="px-3 py-2">Symbol</th>
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">LTP</th>
@@ -771,7 +718,7 @@ export default function Dashboard() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                    <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                       <th className="px-3 py-2">Symbol</th>
                       <th className="px-3 py-2">Side</th>
                       <th className="px-3 py-2">Qty</th>
@@ -798,8 +745,8 @@ export default function Dashboard() {
       )}
 
       {activeTab === "fo" && (
-        <div className="space-y-5">
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <div className="space-y-3">
+          <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.2fr_0.8fr]">
             {/* F&O strategies */}
             <div className="space-y-4">
               <div className="border-b border-[var(--qd-border)] pb-2 flex items-center justify-between">
@@ -837,7 +784,7 @@ export default function Dashboard() {
                   <div className="overflow-x-auto border-b border-[var(--qd-border)]">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                           <th className="px-3 py-2">Strike</th>
                           <th className="px-3 py-2">Call</th>
                           <th className="px-3 py-2">Put</th>
@@ -863,7 +810,7 @@ export default function Dashboard() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                        <tr className="border-b border-[var(--qd-border)] text-left font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                           <th className="px-3 py-2">Symbol</th>
                           <th className="px-3 py-2">Qty</th>
                           <th className="px-3 py-2 text-right">PnL</th>

@@ -21,8 +21,8 @@ const BROKER_OPEN_ORDER_STATES = [
 
 export const Field = ({ label, value, tone }) => (
   <div className="min-w-0">
-    <div className="qd-section-title text-[11px]">{label}</div>
-    <div className={`mt-1 truncate font-mono text-sm font-semibold ${tone || "text-white"}`}>{value}</div>
+    <div className="qd-section-title text-[10px]">{label}</div>
+    <div className={`mt-0.5 truncate font-mono text-xs font-semibold ${tone || "text-white"}`}>{value}</div>
   </div>
 );
 
@@ -34,7 +34,7 @@ export const StatusPill = ({ children, tone = "neutral" }) => {
     neutral: "border-[var(--qd-border)] bg-[var(--qd-surface-2)] text-[var(--qd-text-2)]",
   };
   return (
-    <span className={`inline-flex items-center rounded border px-2 py-1 font-mono text-[11px] uppercase tracking-wider ${tones[tone]}`}>
+    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase ${tones[tone]}`}>
       {children}
     </span>
   );
@@ -47,7 +47,7 @@ export const QualityPill = ({ score, readiness }) => {
     : readiness === "BLOCK" || n < 45
       ? "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
       : "border-[rgba(255,209,102,0.38)] bg-[rgba(255,209,102,0.1)] text-[var(--qd-warn)]";
-  return <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[11px] font-bold ${tone}`}>Q {n}</span>;
+  return <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold ${tone}`}>Q {n}</span>;
 };
 
 export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
@@ -74,13 +74,13 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
       : telemetry.last_error || telemetry.last_filter_reason || telemetry.last_data_reason || telemetry.last_data_source;
 
   return (
-    <div className="grid gap-3 border-t border-[var(--qd-border)] px-4 py-3 lg:grid-cols-[minmax(220px,1.1fr)_minmax(260px,1.35fr)_minmax(180px,0.9fr)_auto] lg:items-center">
+    <div className="grid gap-2 border-t border-[var(--qd-border)] px-3 py-2 lg:grid-cols-[minmax(200px,1.1fr)_minmax(240px,1.35fr)_minmax(170px,0.9fr)_auto] lg:items-center">
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-white">{row.name}</div>
-        <div className="mt-1 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
+        <div className="truncate text-xs font-semibold text-white">{row.name}</div>
+        <div className="mt-0.5 font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{shortId(row.strategy_id)}</div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Field label="Position" value={positionOpen ? position.symbol : "Flat"} tone={positionOpen ? "text-white" : "text-[var(--qd-text-3)]"} />
         <Field label="Qty" value={positionOpen ? position.qty : "0"} tone={positionOpen ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"} />
         <Field label="SL" value={position?.stop_loss != null ? money(position.stop_loss) : "-"} tone={slMissing ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"} />
@@ -94,14 +94,14 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
           {slMissing && <StatusPill tone="bad">No SL</StatusPill>}
           {pendingOrder && <StatusPill tone="warn">Broker sync</StatusPill>}
         </div>
-        <div className={`mt-2 font-mono text-xs font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
-        {detail && <div className="mt-1 max-w-[260px] truncate text-[11px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
+        <div className={`mt-1 font-mono text-[11px] font-semibold ${toneClass(pnl)}`}>{money(pnl)}</div>
+        {detail && <div className="mt-0.5 max-w-[260px] truncate text-[10px] text-[var(--qd-text-3)]" title={detail}>{detail}</div>}
       </div>
 
       <div className="flex items-center justify-end gap-2">
         <button
           onClick={() => onToggle(row.strategy_id)}
-          className={`flex h-11 w-11 items-center justify-center rounded border transition-all ${
+          className={`flex h-8 w-8 items-center justify-center rounded border transition-all ${
             live
               ? "border-[rgba(255,159,10,0.4)] text-[var(--qd-warn)] hover:bg-[rgba(255,159,10,0.1)]"
               : "border-[rgba(0,230,118,0.4)] text-[var(--qd-profit)] hover:bg-[rgba(0,230,118,0.1)]"
@@ -114,7 +114,7 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
         <button
           onClick={() => onExit(row.strategy_id)}
           disabled={!positionOpen}
-          className="flex h-11 w-11 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+          className="flex h-8 w-8 items-center justify-center rounded border border-[var(--qd-warn)] text-[var(--qd-warn)] transition-all hover:bg-[var(--qd-warn)] hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
           title={positionOpen ? "Square Off Strategy Positions" : "No open position for this strategy"}
           data-testid={`dashboard-exit-${row.strategy_id}`}
         >

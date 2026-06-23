@@ -2452,3 +2452,21 @@ a confident overfitting machine — that is the single worst outcome and is expl
 **Verify**: run `CI=false npm run build` from `frontend/`; inspect `/dashboard`, `/orders`, `/positions`, `/calendar`, and `/market-hub` locally before deploy.
 
 ---
+
+### TASK-UI-02 - Compact dashboard density and refresh app fonts
+- **Status**: `[~]` Codex in progress
+- **Tier**: 2
+- **Session size**: ~1 hour
+- **Files to touch**: `frontend/src/pages/Dashboard.jsx`, `frontend/src/components/dashboard/KpiCard.jsx`, `frontend/src/components/dashboard/StrategyLedgerRow.jsx`, `frontend/src/index.css`, `wiki/memory.md`
+
+**Problem**: Dashboard uses too much vertical space for the hero, KPI cards, health checks, and strategy ledger. The serif heading treatment also makes the product feel heavier than a focused trading console.
+
+**Exact steps**:
+1. Replace the oversized Dashboard hero/NIFTY chart banner with a compact control/status strip.
+2. Reduce KPI cards, health check metrics, and strategy ledger rows while keeping values readable.
+3. Refresh global typography to a cleaner UI sans + mono pair and remove decorative serif headings.
+4. Verify the frontend production build before commit/deploy.
+
+**Verify**: run `CI=false npm run build` from `frontend/`; inspect `/dashboard` desktop/mobile after deploy.
+
+---
