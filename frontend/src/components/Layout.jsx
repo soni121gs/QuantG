@@ -408,14 +408,30 @@ export default function Layout({ children }) {
     if (!fresh.length) return;
 
     fresh.slice(0, 3).forEach((item) => {
-      const note = new Notification(item.title || "QuantG notification", {
+      const title = item.title || "QuantG notification";
+      const options = {
         body: item.message || "Open QuantG for details.",
         tag: item.id,
-      });
-      note.onclick = () => {
-        window.focus();
-        if (item.action_url) navigate(item.action_url);
       };
+      // Android Chrome forbids `new Notification()` ("Illegal constructor") and
+      // only allows notifications via the service worker. Prefer that path; fall
+      // back to the constructor on desktop. Wrap everything so a notification
+      // failure can never crash the app.
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+          navigator.serviceWorker.ready
+            .then((reg) => reg.showNotification(title, options))
+            .catch(() => {});
+        } else {
+          const note = new Notification(title, options);
+          note.onclick = () => {
+            window.focus();
+            if (item.action_url) navigate(item.action_url);
+          };
+        }
+      } catch {
+        /* notifications unsupported on this browser — ignore */
+      }
     });
 
     const next = [...fresh.map((item) => item.id), ...alertedNotificationIds].slice(0, 120);
