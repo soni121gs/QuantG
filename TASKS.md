@@ -2436,7 +2436,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 # Frontend Trading-Cockpit Polish Task - 2026-06-23
 
 ### TASK-UI-01 - Remove cockpit clutter and simplify trading surfaces
-- **Status**: `[x]` commit 5d4c897 · 2026-06-24
+- **Status**: `[x]` commit 511d19a · 2026-06-24
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Files to touch**: `frontend/src/components/Layout.jsx`, `frontend/src/pages/Dashboard.jsx`, `frontend/src/index.css`, `frontend/src/pages/Orders.jsx`, `frontend/src/pages/Calendar.jsx`, `frontend/src/pages/MarketHub.jsx`, `frontend/src/App.js`, `wiki/memory.md`
