@@ -2454,7 +2454,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 ---
 
 ### TASK-UI-02 - Compact dashboard density and refresh app fonts
-- **Status**: `[~]` Codex in progress
+- **Status**: `[x]` commit 127f91b · 2026-06-24
 - **Tier**: 2
 - **Session size**: ~1 hour
 - **Files to touch**: `frontend/src/pages/Dashboard.jsx`, `frontend/src/components/dashboard/KpiCard.jsx`, `frontend/src/components/dashboard/StrategyLedgerRow.jsx`, `frontend/src/index.css`, `wiki/memory.md`
