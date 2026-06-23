@@ -35,8 +35,8 @@ _STRATEGY_CLASSES: Dict[str, str] = {
     "BANKNIFTY HFT Momentum Scalper":   "scalper",
     "NIFTY Quick EMA Scalper":          "scalper",
     # Momentum / Breakout
-    "UPSTOX NIFTY ATM Option Momentum Buyer":    "momentum",
-    "UPSTOX BANKNIFTY ATM Option Breakout Buyer":"momentum",
+    "NIFTY Momentum Buyer":                     "momentum",
+    "BANKNIFTY Breakout Buyer":                 "momentum",
     "BANKNIFTY Volatility Breakout":             "momentum",
     # Trend / Retest
     "NIFTY VWAP Trend Breakout":        "trend_retest",

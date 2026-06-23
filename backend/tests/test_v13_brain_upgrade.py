@@ -95,8 +95,8 @@ def generate_test_candles(pattern_type="uptrend", count=100):
 def test_all_9_default_strategies_exist_and_no_mcx():
     names = {s["name"] for s in server.DEFAULT_OPTION_STRATEGIES}
     expected_names = {
-        "UPSTOX NIFTY ATM Option Momentum Buyer",
-        "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+        "NIFTY Momentum Buyer",
+        "BANKNIFTY Breakout Buyer",
         "NIFTY VWAP Trend Breakout",
         "SENSEX Swing RSI Pullback",
         "NIFTY Micro-Lot Trend Follower",
@@ -104,16 +104,16 @@ def test_all_9_default_strategies_exist_and_no_mcx():
         "BANKNIFTY HFT Momentum Scalper",
         "NIFTY Quick EMA Scalper",
         "BANKNIFTY Volatility Breakout",
-        "UPSTOX RELIANCE Advanced Momentum Trend Rider",
-        "UPSTOX SBIN Macro Short Seller",
-        "UPSTOX HDFCBANK Range Mean Reversion",
-        "UPSTOX ICICIBANK News & Volatility Catalyst",
-        "UPSTOX TCS Defensive Swing Accumulator",
-        "UPSTOX INFY VWAP Pullback Buyer",
-        "UPSTOX AXISBANK Macro Trend Follower",
-        "UPSTOX LT Infrastructure Momentum Rider",
-        "UPSTOX BHARTIARTL Defensive Intraday Trend",
-        "UPSTOX KOTAKBANK RSI Rebound Swing",
+        "RELIANCE Trend Rider",
+        "SBIN Short Seller",
+        "HDFCBANK Range Rebound",
+        "ICICIBANK Volatility Breakout",
+        "TCS Swing Accumulator",
+        "INFY VWAP Pullback",
+        "AXISBANK Trend Follower",
+        "LT Momentum Rider",
+        "BHARTIARTL Intraday Trend",
+        "KOTAKBANK RSI Rebound",
     }
     assert names == expected_names
     assert len(server.DEFAULT_OPTION_STRATEGIES) == 19
@@ -226,7 +226,7 @@ async def test_v13_strategy_brain_dry_run_endpoint_reports_upgrade():
         {
             "_id": "mongo-id-2",
             "id": "strat-2",
-            "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
+            "name": "NIFTY Momentum Buyer",
             "status": "paused",
             "mode": "paper",
             "python_code": "def run(data):\n    return []",

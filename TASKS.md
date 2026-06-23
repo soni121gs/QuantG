@@ -44,8 +44,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 1 — Validate on clean data (P0 — BLOCKS all tuning below)
-- `[ ]` **WR-11** At next open, grep logs for `PHANTOM_CANDLE` / `PHANTOM_LTP_REJECTED` — confirm guards fire, no 1-second equity stop-losses at ~½ entry.
-- `[ ]` **WR-12** Confirm credit spreads hold past 5 min and win rate flips 11–18% → ~70% (the stale-exit-fix payoff). Query closed spreads by exit_reason.
+- `[x]` **WR-11** Phantom-equity validation clean on 2026-06-23 (`a94f5ab` VPS): backend log grep for `PHANTOM_CANDLE` / `PHANTOM_LTP_REJECTED` returned no hits, and today's paper fills had no single-leg/equity loss over ₹1,000. No 1-second half-entry equity stop-loss pattern observed.
+- `[~]` **WR-12** Credit-spread validation measured 2026-06-23, but needs one more open-session check after `1ed9def` spread signal-flip debounce. Today: 52 credit-spread closes, 31 wins / 21 losses (~60% win), +₹2,590.78 realized; 4 `spread-tp` closes (+₹2,086.75, avg hold ~32m) prove 50%-profit close fires. Blocker: 46 credit-spread `strategy-sell-signal` exits were near flat overall (-₹83.39) but churned fast (43 under 5m, median ~3.85m). Root cause was pre-debounce opposite-signal exits; commit `1ed9def` now suppresses pure spread signal exits for 1,200s, deployed after today's market window. Validate next open before WR-31.
 - `[ ]` **WR-13** Confirm ADX gate stands spreads down in trends (fewer signals on trending bars; check last_filter_reason + signal counts).
 - `[ ]` **WR-14** Tune thresholds only if over/under-firing: `EQUITY_LTP_MAX_DEV`, `EQUITY_PHANTOM_MAX_DEV`, `FREQ_CAP_*`, `CREDIT_SPREAD_*`.
 
@@ -60,8 +60,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 3 — Economics / strike tuning (P1 — AFTER Phase 1 confirms)
-- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. Do AFTER baseline so the change is attributable.
-- `[ ]` **WR-32** Verify 50%-profit close (`SPREAD_TP_FRAC=0.5`) actually fires post-bugfix on live spreads.
+- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. BLOCKED until WR-12 is re-validated under `1ed9def` so the change is attributable.
+- `[ ]` **WR-32** Verify 50%-profit close (`SPREAD_TP_FRAC=0.5`) actually fires post-bugfix on live spreads. Evidence observed 2026-06-23: 4 `spread-tp` credit-spread closes, +₹2,086.75, avg hold ~32m; keep open until WR-12 next-session validation confirms no signal-churn contamination.
 - `[ ]` **WR-33** Let momentum winners run: raise `target_R`, enable trailing — fixes expectancy.
 
 ---

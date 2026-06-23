@@ -32,7 +32,7 @@ async def test_frequency_gate_counts_buy_entries_only_and_boosts_profitable_stra
     ok, reason = await check_frequency_gate(
         _DB(),
         strategy_id="strat-1",
-        strategy_name="UPSTOX NIFTY ATM Option Momentum Buyer",
+        strategy_name="NIFTY Momentum Buyer",
         user_id="user-1",
         freq_multiplier=0.5,
     )
@@ -47,7 +47,7 @@ async def test_frequency_gate_counts_buy_entries_only_and_boosts_profitable_stra
 async def test_frequency_gate_blocks_when_true_buy_entries_hit_boosted_cap():
     class _Orders:
         async def count_documents(self, query):
-            return 6
+            return 10
 
     class _Strategies:
         find_one = AsyncMock(return_value={"today_pnl": 1200.0})
@@ -63,11 +63,11 @@ async def test_frequency_gate_blocks_when_true_buy_entries_hit_boosted_cap():
     ok, reason = await check_frequency_gate(
         _DB(),
         strategy_id="strat-1",
-        strategy_name="UPSTOX NIFTY ATM Option Momentum Buyer",
+        strategy_name="NIFTY Momentum Buyer",
         user_id="user-1",
         freq_multiplier=0.5,
     )
 
     assert not ok
-    assert "DAILY_CAP: 6/6" in reason
+    assert "DAILY_CAP: 10/10" in reason
     assert "profit_boost=2" in reason

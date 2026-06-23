@@ -3348,7 +3348,7 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
 
 DEFAULT_OPTION_STRATEGIES = [
     {
-        "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
+        "name": "NIFTY Momentum Buyer",
         "description": "Upstox-compatible single-leg NIFTY ATM option buying strategy. Uses live NIFTY candles, resolves the exact Upstox option instrument_key, enters on momentum, and exits through the same order manager.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "structure": "debit_spread", "spread_width": 2,
@@ -3391,7 +3391,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Upstox live trend and momentum",
     },
     {
-        "name": "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+        "name": "BANKNIFTY Breakout Buyer",
         "description": "Upstox-compatible single-leg BANKNIFTY ATM option buying strategy. It avoids multi-leg selling, resolves the exact Upstox option instrument_key, and lets the order manager place one BUY/exit cycle.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "structure": "debit_spread", "spread_width": 2,
@@ -3667,7 +3667,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Volatile Retail Momentum",
     },
     {
-        "name": "UPSTOX RELIANCE Advanced Momentum Trend Rider",
+        "name": "RELIANCE Trend Rider",
         "description": "Rides strong bull trends using double EMA (9/21) filtered by index direction and tod_vol_ratio to ensure high volume participation. Uses trailing ATR stops.",
         "underlying": "RELIANCE",
         "strategy_type": "Equity Intraday",
@@ -3768,7 +3768,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Strong Bull Markets & Intraday Momentum",
     },
     {
-        "name": "UPSTOX SBIN Macro Short Seller",
+        "name": "SBIN Short Seller",
         "description": "Short-selling intraday strategy for bear markets. Enters when price drops below VWAP and sloping 200 EMA, utilizing volume-backed breakdowns.",
         "underlying": "SBIN",
         "strategy_type": "Equity Intraday",
@@ -3882,7 +3882,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Bear Markets & Intraday Short Breakdown",
     },
     {
-        "name": "UPSTOX HDFCBANK Range Mean Reversion",
+        "name": "HDFCBANK Range Rebound",
         "description": "Mean reversion strategy for rangebound/low volatility environments. Uses Bollinger Bands compression/reversals with RSI filters.",
         "underlying": "HDFCBANK",
         "strategy_type": "Equity Intraday",
@@ -3979,7 +3979,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Flat, Consolidating, and Rangebound Markets",
     },
     {
-        "name": "UPSTOX ICICIBANK News & Volatility Catalyst",
+        "name": "ICICIBANK Volatility Breakout",
         "description": "High-volatility intraday breakout strategy designed to capture sharp news-driven and earnings catalysts. Enters on extreme volume and ATR spikes.",
         "underlying": "ICICIBANK",
         "strategy_type": "Equity Intraday",
@@ -4084,7 +4084,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "High Volatility, Earnings Release, and News Catalysts",
     },
     {
-        "name": "UPSTOX TCS Defensive Swing Accumulator",
+        "name": "TCS Swing Accumulator",
         "description": "Swing delivery strategy built to accumulate defensive IT giant during global corrections/macro selloffs. Enters when daily RSI is extremely oversold.",
         "underlying": "TCS",
         "strategy_type": "Equity Delivery",
@@ -4152,7 +4152,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "World Affairs, Global Risk-Off & Macro Reversals",
     },
     {
-        "name": "UPSTOX INFY VWAP Pullback Buyer",
+        "name": "INFY VWAP Pullback",
         "description": "Intraday pullback buyer. Waits for price to pull back below VWAP inside a strong EMA 50 uptrend, entering on VWAP breakout recovery.",
         "underlying": "INFY",
         "strategy_type": "Equity Intraday",
@@ -4260,7 +4260,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Intraday Pullback in Uptrends",
     },
     {
-        "name": "UPSTOX AXISBANK Macro Trend Follower",
+        "name": "AXISBANK Trend Follower",
         "description": "Macro EMA filter trend follower. Enters when 9/21 EMA crossover aligns with slope of 200 EMA.",
         "underlying": "AXISBANK",
         "strategy_type": "Equity Intraday",
@@ -4359,7 +4359,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Intraday Trending Markets",
     },
     {
-        "name": "UPSTOX LT Infrastructure Momentum Rider",
+        "name": "LT Momentum Rider",
         "description": "Intraday momentum strategy designed for capital goods sector (L&T). Captures breakouts of Donchian channels with dynamic trailing stops.",
         "underlying": "LT",
         "strategy_type": "Equity Intraday",
@@ -4449,7 +4449,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Intraday Breakout & Sector Momentum",
     },
     {
-        "name": "UPSTOX BHARTIARTL Defensive Intraday Trend",
+        "name": "BHARTIARTL Intraday Trend",
         "description": "Defensive intraday trend following on low-beta telecom giant. Minimizes whipsaw losses using smoothed moving averages.",
         "underlying": "BHARTIARTL",
         "strategy_type": "Equity Intraday",
@@ -4550,7 +4550,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "market_suitability": "Low Volatility Stable Trend Markets",
     },
     {
-        "name": "UPSTOX KOTAKBANK RSI Rebound Swing",
+        "name": "KOTAKBANK RSI Rebound",
         "description": "Swing delivery strategy designed for Kotak Bank. Enters on daily RSI recovery above 30 from oversold zones.",
         "underlying": "KOTAKBANK",
         "strategy_type": "Equity Delivery",
@@ -5832,7 +5832,7 @@ CRUDEOIL_HFT_MEAN_REVERSION_CODE = """def run(data):
 
 STANDARD_STRATEGY_CATALOG = [
     {
-        "name": "UPSTOX MCX Crude Mini EMA Option Buyer",
+        "name": "MCX Crude EMA Buyer",
         "description": "Upstox MCX CRUDEOILM long-option scalper using fast EMA momentum on live 5-minute futures candles. One mini lot by default.",
         "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 6000.0, "instrument_group": "MCX",
@@ -5840,7 +5840,7 @@ STANDARD_STRATEGY_CATALOG = [
         "market_suitability": "Fast intraday crude mini momentum",
     },
     {
-        "name": "UPSTOX MCX Crude Mini RSI Option Buyer",
+        "name": "MCX Crude RSI Buyer",
         "description": "Upstox MCX CRUDEOILM long-option reversal strategy for stretched RSI moves. One mini lot by default.",
         "underlying": "CRUDEOILM", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 6000.0, "instrument_group": "MCX",
@@ -5848,7 +5848,7 @@ STANDARD_STRATEGY_CATALOG = [
         "market_suitability": "Mean reversion after sharp crude mini moves",
     },
     {
-        "name": "UPSTOX MCX Natural Gas Breakout Option Buyer",
+        "name": "MCX Natural Gas Breakout",
         "description": "Upstox MCX NATURALGAS long-option breakout strategy using volatility bands on live 5-minute futures candles.",
         "underlying": "NATURALGAS", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 18000.0, "instrument_group": "MCX",
@@ -5856,7 +5856,7 @@ STANDARD_STRATEGY_CATALOG = [
         "market_suitability": "Natural gas volatility expansion",
     },
     {
-        "name": "UPSTOX MCX Crude Volatility Option Buyer",
+        "name": "MCX Crude Volatility Buyer",
         "description": "Upstox MCX CRUDEOIL long-option breakout strategy for compression-to-expansion crude oil moves.",
         "underlying": "CRUDEOIL", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "MCX",
@@ -5872,8 +5872,8 @@ _DEFAULT_STRATEGY_CODE_BY_NAME = {
 }
 
 UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
-    "UPSTOX NIFTY ATM Option Momentum Buyer": (NIFTY_ATM_MOMENTUM_CODE, "momentum", "Upstox live trend and momentum with true EMA, volume, time and exit guards"),
-    "UPSTOX BANKNIFTY ATM Option Breakout Buyer": (BANKNIFTY_ATM_BREAKOUT_CODE, "breakout", "BANKNIFTY range breakout with ATR, volume, duplicate-sensitive exit controls"),
+    "NIFTY Momentum Buyer": (NIFTY_ATM_MOMENTUM_CODE, "momentum", "NIFTY live trend and momentum with true EMA, volume, time and exit guards"),
+    "BANKNIFTY Breakout Buyer": (BANKNIFTY_ATM_BREAKOUT_CODE, "breakout", "BANKNIFTY range breakout with ATR, volume, duplicate-sensitive exit controls"),
     "NIFTY VWAP Trend Breakout": (NIFTY_VWAP_TREND_BREAKOUT_CODE, "breakout", "NIFTY VWAP breakout with volume, no-trade zone and internal exits"),
     "SENSEX Swing RSI Pullback": (SENSEX_RSI_PULLBACK_CODE, "pullback", "SENSEX RSI pullback with trend filter and internal exits"),
     "NIFTY Micro-Lot Trend Follower": (NIFTY_MICRO_TREND_CODE, "momentum", "NIFTY baseline trend follower with no-trade zone and trailing exits"),
@@ -5881,16 +5881,16 @@ UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
     "BANKNIFTY HFT Momentum Scalper": (BANKNIFTY_STD_BAND_SCALPER_CODE, "breakout", "BANKNIFTY standard-deviation breakout with volume and exit controls"),
     "NIFTY Quick EMA Scalper": (NIFTY_QUICK_EMA_SCALPER_CODE, "micro_scalp", "True EMA quick scalp with noise, volume, cooldown and time guards"),
     "BANKNIFTY Volatility Breakout": (BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE, "volatile_breakout", "Sensitive BANKNIFTY volatility breakout with volume and exit controls"),
-    "UPSTOX RELIANCE Advanced Momentum Trend Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX RELIANCE Advanced Momentum Trend Rider"], "equity_trend", "Equity trend participation with EMA continuation"),
-    "UPSTOX SBIN Macro Short Seller": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX SBIN Macro Short Seller"], "equity_short", "Equity short participation with VWAP/EMA continuation"),
-    "UPSTOX HDFCBANK Range Mean Reversion": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX HDFCBANK Range Mean Reversion"], "equity_mean_reversion", "Equity range mean reversion"),
-    "UPSTOX ICICIBANK News & Volatility Catalyst": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX ICICIBANK News & Volatility Catalyst"], "equity_breakout", "Equity volatility continuation breakout"),
-    "UPSTOX TCS Defensive Swing Accumulator": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX TCS Defensive Swing Accumulator"], "equity_swing", "Equity defensive RSI accumulation"),
-    "UPSTOX INFY VWAP Pullback Buyer": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX INFY VWAP Pullback Buyer"], "equity_pullback", "Equity VWAP pullback participation"),
-    "UPSTOX AXISBANK Macro Trend Follower": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX AXISBANK Macro Trend Follower"], "equity_trend", "Equity macro trend participation"),
-    "UPSTOX LT Infrastructure Momentum Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX LT Infrastructure Momentum Rider"], "equity_breakout", "Equity Donchian momentum participation"),
-    "UPSTOX BHARTIARTL Defensive Intraday Trend": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX BHARTIARTL Defensive Intraday Trend"], "equity_trend", "Equity defensive EMA participation"),
-    "UPSTOX KOTAKBANK RSI Rebound Swing": (_DEFAULT_STRATEGY_CODE_BY_NAME["UPSTOX KOTAKBANK RSI Rebound Swing"], "equity_swing", "Equity RSI rebound participation"),
+    "RELIANCE Trend Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["RELIANCE Trend Rider"], "equity_trend", "Equity trend participation with EMA continuation"),
+    "SBIN Short Seller": (_DEFAULT_STRATEGY_CODE_BY_NAME["SBIN Short Seller"], "equity_short", "Equity short participation with VWAP/EMA continuation"),
+    "HDFCBANK Range Rebound": (_DEFAULT_STRATEGY_CODE_BY_NAME["HDFCBANK Range Rebound"], "equity_mean_reversion", "Equity range mean reversion"),
+    "ICICIBANK Volatility Breakout": (_DEFAULT_STRATEGY_CODE_BY_NAME["ICICIBANK Volatility Breakout"], "equity_breakout", "Equity volatility continuation breakout"),
+    "TCS Swing Accumulator": (_DEFAULT_STRATEGY_CODE_BY_NAME["TCS Swing Accumulator"], "equity_swing", "Equity defensive RSI accumulation"),
+    "INFY VWAP Pullback": (_DEFAULT_STRATEGY_CODE_BY_NAME["INFY VWAP Pullback"], "equity_pullback", "Equity VWAP pullback participation"),
+    "AXISBANK Trend Follower": (_DEFAULT_STRATEGY_CODE_BY_NAME["AXISBANK Trend Follower"], "equity_trend", "Equity macro trend participation"),
+    "LT Momentum Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["LT Momentum Rider"], "equity_breakout", "Equity Donchian momentum participation"),
+    "BHARTIARTL Intraday Trend": (_DEFAULT_STRATEGY_CODE_BY_NAME["BHARTIARTL Intraday Trend"], "equity_trend", "Equity defensive EMA participation"),
+    "KOTAKBANK RSI Rebound": (_DEFAULT_STRATEGY_CODE_BY_NAME["KOTAKBANK RSI Rebound"], "equity_swing", "Equity RSI rebound participation"),
 }
 
 
@@ -5931,6 +5931,25 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _risk = {}
         _template["risk"] = _risk
     _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
+
+STRATEGY_DISPLAY_NAME_RENAMES = {
+    "UPSTOX NIFTY ATM Option Momentum Buyer": "NIFTY Momentum Buyer",
+    "UPSTOX BANKNIFTY ATM Option Breakout Buyer": "BANKNIFTY Breakout Buyer",
+    "UPSTOX RELIANCE Advanced Momentum Trend Rider": "RELIANCE Trend Rider",
+    "UPSTOX SBIN Macro Short Seller": "SBIN Short Seller",
+    "UPSTOX HDFCBANK Range Mean Reversion": "HDFCBANK Range Rebound",
+    "UPSTOX ICICIBANK News & Volatility Catalyst": "ICICIBANK Volatility Breakout",
+    "UPSTOX TCS Defensive Swing Accumulator": "TCS Swing Accumulator",
+    "UPSTOX INFY VWAP Pullback Buyer": "INFY VWAP Pullback",
+    "UPSTOX AXISBANK Macro Trend Follower": "AXISBANK Trend Follower",
+    "UPSTOX LT Infrastructure Momentum Rider": "LT Momentum Rider",
+    "UPSTOX BHARTIARTL Defensive Intraday Trend": "BHARTIARTL Intraday Trend",
+    "UPSTOX KOTAKBANK RSI Rebound Swing": "KOTAKBANK RSI Rebound",
+    "UPSTOX MCX Crude Mini EMA Option Buyer": "MCX Crude EMA Buyer",
+    "UPSTOX MCX Crude Mini RSI Option Buyer": "MCX Crude RSI Buyer",
+    "UPSTOX MCX Natural Gas Breakout Option Buyer": "MCX Natural Gas Breakout",
+    "UPSTOX MCX Crude Volatility Option Buyer": "MCX Crude Volatility Buyer",
+}
 
 LEGACY_DEFAULT_STRATEGY_NAMES = {
     "NIFTY Intraday Theta Straddle",
@@ -6155,6 +6174,20 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
     if not docs:
         return 0
+
+
+async def migrate_strategy_display_names(user_id: str) -> int:
+    updated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for old_name, new_name in STRATEGY_DISPLAY_NAME_RENAMES.items():
+        result = await db.strategies.update_many(
+            {"user_id": user_id, "name": old_name},
+            {"$set": {"name": new_name, "display_name_migrated_at": now}},
+        )
+        updated += int(result.modified_count or 0)
+    if updated:
+        logger.info("Renamed %d strategy display name(s) for user %s", updated, user_id)
+    return updated
     try:
         await db.strategies.insert_many(docs)
         logger.info(f"Seeded {len(docs)} default option strategies for user {user_id}")
@@ -16008,6 +16041,7 @@ async def startup():
     try:
         async for user_row in db.users.find({}, {"id": 1}):
             user_id = user_row["id"]
+            await migrate_strategy_display_names(user_id)
             await seed_default_strategies_for_user(user_id)
             await migrate_user_to_v12_upstox(user_id)
             await migrate_user_to_upstox_quality_system(user_id)
@@ -16587,8 +16621,8 @@ async def startup():
     async def _migrate_debit_spread_structure():
         await asyncio.sleep(6)
         _debit_names = [
-            "UPSTOX NIFTY ATM Option Momentum Buyer",
-            "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+            "NIFTY Momentum Buyer",
+            "BANKNIFTY Breakout Buyer",
             "BANKNIFTY Volatility Breakout",
         ]
         try:

@@ -8,8 +8,8 @@ from server import DEFAULT_OPTION_STRATEGIES, RETAIL_LIVE_STATE_CODE, UPGRADED_D
 
 
 EXPECTED_DEFAULT_NAMES = {
-    "UPSTOX NIFTY ATM Option Momentum Buyer",
-    "UPSTOX BANKNIFTY ATM Option Breakout Buyer",
+    "NIFTY Momentum Buyer",
+    "BANKNIFTY Breakout Buyer",
     "NIFTY VWAP Trend Breakout",
     "SENSEX Swing RSI Pullback",
     "NIFTY Micro-Lot Trend Follower",
@@ -17,16 +17,16 @@ EXPECTED_DEFAULT_NAMES = {
     "BANKNIFTY HFT Momentum Scalper",
     "NIFTY Quick EMA Scalper",
     "BANKNIFTY Volatility Breakout",
-    "UPSTOX RELIANCE Advanced Momentum Trend Rider",
-    "UPSTOX SBIN Macro Short Seller",
-    "UPSTOX HDFCBANK Range Mean Reversion",
-    "UPSTOX ICICIBANK News & Volatility Catalyst",
-    "UPSTOX TCS Defensive Swing Accumulator",
-    "UPSTOX INFY VWAP Pullback Buyer",
-    "UPSTOX AXISBANK Macro Trend Follower",
-    "UPSTOX LT Infrastructure Momentum Rider",
-    "UPSTOX BHARTIARTL Defensive Intraday Trend",
-    "UPSTOX KOTAKBANK RSI Rebound Swing",
+    "RELIANCE Trend Rider",
+    "SBIN Short Seller",
+    "HDFCBANK Range Rebound",
+    "ICICIBANK Volatility Breakout",
+    "TCS Swing Accumulator",
+    "INFY VWAP Pullback",
+    "AXISBANK Trend Follower",
+    "LT Momentum Rider",
+    "BHARTIARTL Intraday Trend",
+    "KOTAKBANK RSI Rebound",
 }
 
 
@@ -101,7 +101,7 @@ def test_default_strategy_templates_are_sandbox_runnable():
 
 def test_ema_named_default_strategies_use_true_ema_formula():
     ema_names = {
-        "UPSTOX NIFTY ATM Option Momentum Buyer",
+        "NIFTY Momentum Buyer",
         "NIFTY Quick EMA Scalper",
     }
 

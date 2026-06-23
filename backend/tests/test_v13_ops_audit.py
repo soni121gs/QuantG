@@ -219,7 +219,7 @@ async def test_ops_default_strategy_catalog_audit():
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["total_default_strategies"] == 9
+    assert data["total_default_strategies"] == 19
     assert data["mcx_crude_naturalgas_excluded"] is True
     
     # Confirm names are returned
@@ -261,7 +261,7 @@ async def test_ops_v13_strategy_brain_dry_run_is_readonly():
         {
             "_id": "mongo-id-2",
             "id": "strategy-uuid-2",
-            "name": "UPSTOX NIFTY ATM Option Momentum Buyer",
+            "name": "NIFTY Momentum Buyer",
             "status": "paused",
             "mode": "paper",
             "python_code": "def run(data):\n    return []",
@@ -285,19 +285,19 @@ async def test_ops_v13_strategy_brain_dry_run_is_readonly():
     data = response.json()
     assert data["ok"] is True
     
-    # Inserts: 9 default strategies total - 2 present in DB = 7 to insert
-    assert len(data["strategies_to_insert"]) == 7
+    # Inserts: 19 default strategies total - 2 present in DB = 17 to insert
+    assert len(data["strategies_to_insert"]) == 17
     # Updates: 2 present in DB
     assert len(data["strategies_to_update_by_name"]) == 2
     assert "NIFTY VWAP Trend Breakout" in data["strategies_to_update_by_name"]
-    assert "UPSTOX NIFTY ATM Option Momentum Buyer" in data["strategies_to_update_by_name"]
+    assert "NIFTY Momentum Buyer" in data["strategies_to_update_by_name"]
     
     # Old versions map
     assert data["old_default_versions"]["NIFTY VWAP Trend Breakout"] == "retail-balanced-v3"
     
     # Exits & Metadata
-    assert "UPSTOX NIFTY ATM Option Momentum Buyer" in data["strategies_that_use_signal_only_exit"]
-    assert "UPSTOX NIFTY ATM Option Momentum Buyer" in data["missing_v13_signal_metadata"]
+    assert "NIFTY Momentum Buyer" in data["strategies_that_use_signal_only_exit"]
+    assert "NIFTY Momentum Buyer" in data["missing_v13_signal_metadata"]
     
     # Confirm DB was never updated
     assert mock_db.strategies.insert_many.call_count == 0

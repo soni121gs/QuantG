@@ -31,9 +31,9 @@ def main():
 
     # 2. Pause/trim the three underperforming single-leg buyer strategies
     to_pause = [
-        "UPSTOX NIFTY ATM Option Momentum Buyer",
+        "NIFTY Momentum Buyer",
         "NIFTY Quick EMA Scalper",
-        "UPSTOX BANKNIFTY ATM Option Breakout Buyer"
+        "BANKNIFTY Breakout Buyer"
     ]
     
     print("\n2. Pausing underperforming single-leg buyer strategies:")
@@ -46,7 +46,7 @@ def main():
         
         for strategy in strategies:
             # Set structure to debit_spread for the NIFTY Momentum Buyer as part of TASK-048
-            if name == "UPSTOX NIFTY ATM Option Momentum Buyer":
+            if name == "NIFTY Momentum Buyer":
                 db.strategies.update_one(
                     {"id": strategy["id"]},
                     {"$set": {

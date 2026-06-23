@@ -83,8 +83,8 @@ async def prep_tomorrow_paper():
             }}
         )
         
-        # Enable UPSTOX NIFTY ATM Option Momentum Buyer as live in paper mode
-        nifty_momentum_buyer_name = "UPSTOX NIFTY ATM Option Momentum Buyer"
+        # Enable NIFTY Momentum Buyer as live in paper mode
+        nifty_momentum_buyer_name = "NIFTY Momentum Buyer"
         target_strat = await db.strategies.find_one({
             "user_id": uid,
             "name": nifty_momentum_buyer_name
