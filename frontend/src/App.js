@@ -49,8 +49,9 @@ const LazySpinner = () => (
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
         <ExecutionStateProvider>
           <Toaster theme="system" position="top-right" />
           <Suspense fallback={<LazySpinner />}>
@@ -76,7 +77,8 @@ export default function App() {
           </Routes>
         </Suspense>
         </ExecutionStateProvider>
-      </AuthProvider>
-    </BrowserRouter>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
