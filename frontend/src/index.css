@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -82,7 +82,7 @@ body,
   min-height: 100%;
   background: var(--qd-bg);
   color: var(--qd-text);
-  font-family: 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -94,13 +94,13 @@ body {
 }
 
 .font-mono {
-  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 /* font-head stays sans (used on tiny uppercase labels too) */
 .font-head {
-  font-family: 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   letter-spacing: 0;
 }
 
@@ -108,15 +108,15 @@ body {
 h1,
 h2,
 h3 {
-  font-family: 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   letter-spacing: 0;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 h4,
 h5,
 h6 {
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
   letter-spacing: 0;
 }
 
@@ -124,8 +124,8 @@ h6 {
    Type scale — single source of truth for text sizing.
    Compact, with an 11px floor for readability.
    ───────────────────────────────────────────────────────────── */
-.t-display { font-family: 'Instrument Sans',system-ui,sans-serif; font-size: 1.4rem;  line-height: 1.7rem; font-weight: 700; letter-spacing: 0; }
-.t-title   { font-family: 'Instrument Sans',system-ui,sans-serif; font-size: 1.05rem; line-height: 1.35rem; font-weight: 700; letter-spacing: 0; }
+.t-display { font-family: 'Manrope',system-ui,sans-serif; font-size: 1.4rem;  line-height: 1.7rem; font-weight: 600; letter-spacing: 0; }
+.t-title   { font-family: 'Manrope',system-ui,sans-serif; font-size: 1.05rem; line-height: 1.35rem; font-weight: 600; letter-spacing: 0; }
 .t-body    { font-size: 0.9rem;  line-height: 1.35rem; }     /* ~11.7px */
 .t-label   { font-size: 0.84rem; line-height: 1.15rem; }     /* ~11px */
 .t-meta    { font-size: 0.84rem; line-height: 1.05rem; }     /* ~11px floor */
@@ -361,9 +361,9 @@ a:focus-visible {
 
 .qd-section-title {
   color: var(--qd-text-3);
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -415,9 +415,9 @@ tbody tr:hover {
   border: 1px solid var(--qd-border);
   border-radius: 999px;
   padding: 3px 9px;
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0;
 }
@@ -463,9 +463,9 @@ tbody tr:hover {
   display: block;
   margin-top: 2px;
   color: var(--qd-text);
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .qd-artboard {
@@ -482,7 +482,7 @@ tbody tr:hover {
   background: var(--qd-surface-2);
   color: var(--qd-text-2);
   padding: 4px 9px;
-  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-family: 'Manrope', system-ui, sans-serif;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -596,7 +596,7 @@ tbody tr:hover {
   background: var(--qd-profit);
   color: #ffffff;
   border: 1px solid color-mix(in srgb, var(--qd-profit) 75%, transparent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .qd-btn-buy:hover {
@@ -607,7 +607,7 @@ tbody tr:hover {
   background: var(--qd-loss);
   color: #ffffff;
   border: 1px solid color-mix(in srgb, var(--qd-loss) 75%, transparent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .qd-btn-sell:hover {
@@ -638,9 +638,9 @@ tbody tr:hover {
   gap: 5px;
   border-radius: 999px;
   padding: 2px 8px;
-  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 9px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
 }

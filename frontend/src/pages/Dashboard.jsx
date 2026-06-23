@@ -245,7 +245,7 @@ export default function Dashboard() {
         <div className="flex flex-col gap-3 border-b border-[var(--qd-border)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-head text-base font-bold text-[var(--qd-text)]">Dashboard</h1>
+              <h1 className="font-head text-base font-semibold text-[var(--qd-text)]">Dashboard</h1>
               <StatusPill tone={marketOpen ? "good" : "warn"}>{marketStatusLabel}</StatusPill>
               <StatusPill>{openPositions} Positions</StatusPill>
               <StatusPill>{liveStrategies}/{strategyCount} Live</StatusPill>
@@ -285,14 +285,14 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={killSwitch}
-              className="flex h-8 items-center gap-2 rounded bg-[var(--qd-loss)] px-3 font-mono text-[11px] font-bold uppercase text-white hover:opacity-90"
+              className="flex h-8 items-center gap-2 rounded bg-[var(--qd-loss)] px-3 font-mono text-[11px] font-semibold uppercase text-white hover:opacity-90"
             >
               <Power size={13} /> Kill
             </button>
             <button
               type="button"
               onClick={exitAllUpstox}
-              className="flex h-8 items-center gap-2 rounded border border-[rgba(255,59,48,0.42)] px-3 font-mono text-[11px] font-bold uppercase text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.1)]"
+              className="flex h-8 items-center gap-2 rounded border border-[rgba(255,59,48,0.42)] px-3 font-mono text-[11px] font-semibold uppercase text-[var(--qd-loss)] hover:bg-[rgba(255,59,48,0.1)]"
             >
               <AlertTriangle size={13} /> Exit All
             </button>
@@ -516,7 +516,7 @@ export default function Dashboard() {
                 <div className="qd-section-title">// HEALTH CHECK</div>
                 <h2 className="mt-1 font-head text-sm font-semibold text-white">Position Integrity</h2>
               </div>
-              <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase ${
+              <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-semibold uppercase ${
                 (executionSummary.summary?.position_integrity?.orphans || 0) === 0 &&
                 (executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 &&
                 (executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 &&
@@ -538,31 +538,31 @@ export default function Dashboard() {
             <div className="mt-3 grid grid-cols-2 gap-2 text-center font-mono md:grid-cols-5">
               <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
                 <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Orphans</div>
-                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                <div className={`mt-1 text-base font-semibold ${(executionSummary.summary?.position_integrity?.orphans || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.orphans ?? 0}
                 </div>
               </div>
               <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
                 <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Missing SL</div>
-                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                <div className={`mt-1 text-base font-semibold ${(executionSummary.summary?.position_integrity?.missing_sl || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_sl ?? 0}
                 </div>
               </div>
               <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
                 <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Missing TP</div>
-                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                <div className={`mt-1 text-base font-semibold ${(executionSummary.summary?.position_integrity?.missing_tp || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.missing_tp ?? 0}
                 </div>
               </div>
               <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
                 <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Mismatches</div>
-                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                <div className={`mt-1 text-base font-semibold ${(executionSummary.summary?.position_integrity?.strategy_mismatches || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.strategy_mismatches ?? 0}
                 </div>
               </div>
               <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2">
                 <div className="text-[10px] uppercase text-[var(--qd-text-3)]">Failed</div>
-                <div className={`mt-1 text-base font-bold ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
+                <div className={`mt-1 text-base font-semibold ${(executionSummary.summary?.position_integrity?.failed_orders || 0) === 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>
                   {executionSummary.summary?.position_integrity?.failed_orders ?? 0}
                 </div>
               </div>
@@ -586,7 +586,7 @@ export default function Dashboard() {
                   {strategySummary.map((item) => (
                     <div key={item.label} className="bg-[var(--qd-bg)] p-2.5">
                       <div className="qd-section-title">{item.label}</div>
-                      <div className={`mt-1 font-mono text-lg font-bold ${
+                      <div className={`mt-1 font-mono text-lg font-semibold ${
                         item.tone === "good" ? "text-[var(--qd-profit)]" :
                         item.tone === "warn" ? "text-[var(--qd-warn)]" :
                         item.tone === "bad" ? "text-[var(--qd-loss)]" :
@@ -730,7 +730,7 @@ export default function Dashboard() {
                     {equityOrders.map((o) => (
                       <tr key={o.id} className="border-b border-[var(--qd-border)]">
                         <td className="px-3 py-2 text-white">{o.symbol}</td>
-                        <td className={`px-3 py-2 font-bold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
+                        <td className={`px-3 py-2 font-semibold ${o.side === "BUY" ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{o.side}</td>
                         <td className="px-3 py-2 text-[var(--qd-text-2)]">{o.qty}</td>
                         <td className="px-3 py-2 text-[var(--qd-text-3)]">{money(o.price)}</td>
                         <td className="px-3 py-2"><StatusPill tone={filledOrder(o.status) ? "good" : "warn"}>{o.status}</StatusPill></td>
@@ -757,7 +757,7 @@ export default function Dashboard() {
                 {foStrategies.map((row) => (
                   <div key={row.strategy_id} className="qd-card p-4">
                     <div className="flex items-center justify-between">
-                      <div className="font-head text-sm font-bold text-white">{row.name}</div>
+                      <div className="font-head text-sm font-semibold text-white">{row.name}</div>
                       <StatusPill tone={row.state === "OPEN" ? "good" : "neutral"}>{row.state}</StatusPill>
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2 font-mono text-[11px] text-[var(--qd-text-2)]">

@@ -47,7 +47,7 @@ export const QualityPill = ({ score, readiness }) => {
     : readiness === "BLOCK" || n < 45
       ? "border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.1)] text-[var(--qd-loss)]"
       : "border-[rgba(255,209,102,0.38)] bg-[rgba(255,209,102,0.1)] text-[var(--qd-warn)]";
-  return <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold ${tone}`}>Q {n}</span>;
+  return <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${tone}`}>Q {n}</span>;
 };
 
 export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
