@@ -449,6 +449,16 @@ class SignalManager:
         if not strategy:
             return False, "strategy-not-found", 1.0
 
+        # 0. Day profit lock — once a strategy (or the whole book) has booked its
+        # gains for the day, position_monitor flags day_profit_locked and squares
+        # off. Block any re-entry for the rest of that IST day. (See core/profit_lock.)
+        if strategy.get("day_profit_locked"):
+            today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+            if strategy.get("day_profit_locked_date") == today_ist:
+                logger.info("[LIMITS] strategy=%s blocked: day-profit-locked (%s)",
+                            strategy_id, strategy.get("day_profit_locked_reason"))
+                return False, "profit-locked-day", 1.0
+
         risk_cfg = (
             (strategy.get("visual_config") or {}).get("risk")
             or (visual_config or {}).get("risk")

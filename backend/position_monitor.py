@@ -33,6 +33,7 @@ from core.position_lifecycle import (
     position_risk_prices,
 )
 from core.portfolio_ledger import get_strategy_pnl_today
+from core.profit_lock import evaluate_and_apply_locks
 from core.spread_lifecycle import (
     value_credit_spread, spread_exit_reason, close_credit_spread,
     value_debit_spread, debit_spread_exit_reason, close_debit_spread,
@@ -520,6 +521,15 @@ async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
                 "position_monitor: unhandled error on pos=%s user=%s symbol=%s: %s",
                 pos.get("id"), pos.get("user_id"), pos.get("target_symbol"), pos_exc,
             )
+
+    # ── Day-level profit lock ────────────────────────────────────────────────
+    # Runs after every open position is marked-to-market above, so unrealized_pnl
+    # is fresh. In-hours only — after the 15:10 square-off the book is flat anyway.
+    if in_hours:
+        try:
+            await evaluate_and_apply_locks(db, close_fn)
+        except Exception as lock_exc:
+            logger.warning("position_monitor: profit-lock eval error: %s", lock_exc)
 
 
 async def _resolve_ltp(
