@@ -546,6 +546,8 @@ async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depen
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.get("approved", True) and user.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="Your registration is pending approval by the owner.")
     return user
 
 
@@ -8452,7 +8454,7 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
             "last_skip_reason_code": "",
             "last_error": "",
         })
-    await db.strategies.update_one({"id": sid}, {"$set": update_fields})
+    await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update_fields})
     if new_status == "live":
         _sync_option_ledger_strategy({**row, **update_fields})
         option_ledger.set_kill_switch(False, strategy_id=sid)
@@ -8569,7 +8571,7 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
         )
     # Update strategy telemetry so the card shows the manual fire
     await db.strategies.update_one(
-        {"id": sid},
+        {"id": sid, "user_id": user["id"]},
         {"$set": {"last_signal_at": datetime.now(timezone.utc).isoformat(),
                   "last_signal_action": f"MANUAL {action}"},
          "$inc": {"signals_fired": 1}},
@@ -8694,7 +8696,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             source=f"test-run:strategy:{sid}",
                         )
                     await db.strategies.update_one(
-                        {"id": sid},
+                        {"id": sid, "user_id": user["id"]},
                         {"$set": {
                             "last_signal_at": datetime.now(timezone.utc).isoformat(),
                             "last_signal_action": action,
@@ -8929,7 +8931,7 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     losses = [t for t in trades if t.get("pnl", 0) < 0]
     win_rate = round(len(wins) / max(1, len(wins) + len(losses)) * 100, 2)
     if req.strategy_id:
-        await db.strategies.update_one({"id": req.strategy_id}, {"$set": {
+        await db.strategies.update_one({"id": req.strategy_id, "user_id": user["id"]}, {"$set": {
             "last_pnl": total_pnl,
             "last_data_source": history.get("source"),
             "last_data_live": bool(history.get("is_live")),
@@ -16150,7 +16152,7 @@ async def startup():
                         logger.warning("Archived removed MCX strategy %s during startup cleanup", s.get("id"))
                     
                     if s_updates:
-                        await db.strategies.update_one({"id": s["id"]}, {"$set": s_updates})
+                        await db.strategies.update_one({"id": s["id"], "user_id": user_id}, {"$set": s_updates})
                 
                 logger.info("Startup audit and safety configuration completed for user %s", user_id)
             except Exception as audit_err:

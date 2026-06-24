@@ -340,7 +340,7 @@ async def backtest(req: BacktestReq, user=Depends(get_current_user)):
     losses = [t for t in trades if t.get("pnl", 0) < 0]
     win_rate = round(len(wins) / max(1, len(wins) + len(losses)) * 100, 2)
     if req.strategy_id:
-        await db.strategies.update_one({"id": req.strategy_id}, {"$set": {
+        await db.strategies.update_one({"id": req.strategy_id, "user_id": user["id"]}, {"$set": {
             "last_pnl": total_pnl,
             "last_data_source": history.get("source"),
             "last_data_live": bool(history.get("is_live")),
@@ -630,7 +630,7 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
             "last_skip_reason_code": "",
             "last_error": "",
         })
-    await db.strategies.update_one({"id": sid}, {"$set": update_fields})
+    await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update_fields})
     if new_status == "live":
         _sync_option_ledger_strategy({**row, **update_fields})
         option_ledger.set_kill_switch(False, strategy_id=sid)
@@ -757,7 +757,7 @@ async def manual_strategy_order(sid: str, req: ManualOrderReq, user=Depends(get_
             order_type="MARKET", product=None, source=f"manual:strategy:{sid}",
         )
     await db.strategies.update_one(
-        {"id": sid},
+        {"id": sid, "user_id": user["id"]},
         {"$set": {"last_signal_at": datetime.now(timezone.utc).isoformat(),
                   "last_signal_action": f"MANUAL {action}"},
          "$inc": {"signals_fired": 1}},
@@ -868,7 +868,7 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
                             source=f"test-run:strategy:{sid}",
                         )
                     await db.strategies.update_one(
-                        {"id": sid},
+                        {"id": sid, "user_id": user["id"]},
                         {"$set": {
                             "last_signal_at": datetime.now(timezone.utc).isoformat(),
                             "last_signal_action": action,

@@ -6,6 +6,7 @@ This file is a persistent memory ledger. AI agents (Claude, Codex, Gemini) are r
 
 | Date | Agent | Session Summary & Core Decisions | Key Technical Challenges & Solutions |
 |---|---|---|---|
+| 2026-06-24 | Codex | Hardened multi-user access control by blocking unapproved non-owner accounts in both active `get_current_user` dependency paths and tightening strategy telemetry/status writes to include `user_id` with strategy IDs. | Avoided editing `backend/core_legacy.py` per repository rules by overriding the exported dependency in `backend/core/__init__.py`; verified with `py_compile`, grep checks, a focused strategy toggle test, and one-off pending-user auth checks returning 403. |
 | 2026-06-24 | Codex | Implemented `TASK-UI-03`, `TASK-UI-04`, and `TASK-UI-05` frontend polish: Strategies/modals token consistency, Hermes/AIBot density cleanup, and shared mobile/theme leakage fixes. | Verified with `$env:CI='false'; npm run build` after each pass and `git diff --check`; browser visual QA was blocked by the local browser connector and no standalone Playwright install was present. |
 | 2026-06-24 | Codex | Added frontend polish planning tasks `TASK-UI-03`, `TASK-UI-04`, and `TASK-UI-05` to `TASKS.md` for Strategies/modals consistency, Hermes/AIBot polish, and mobile/theme leakage QA. | Kept the work as task-queue planning only; no frontend implementation or deployment was performed in this session. |
 | 2026-06-18 | Codex | Stage 1A Event Bus Redesign & route extraction completed. | Extracted remaining API routes out of `server.py` to modularize code. |
