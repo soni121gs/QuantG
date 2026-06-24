@@ -33,8 +33,8 @@ _STRATEGY_CLASSES: Dict[str, str] = {
     # Scalpers (ORB = NIFTY HFT Quick Scalper)
     "NIFTY HFT Quick Scalper":          "scalper",
     "BANKNIFTY HFT Momentum Scalper":   "scalper",
-    "NIFTY Quick EMA Scalper":          "scalper",
     # Momentum / Breakout
+    "NIFTY Quick EMA Scalper":                  "momentum",  # converted to debit spread 2026-06-24
     "NIFTY Momentum Buyer":                     "momentum",
     "BANKNIFTY Breakout Buyer":                 "momentum",
     "BANKNIFTY Volatility Breakout":             "momentum",

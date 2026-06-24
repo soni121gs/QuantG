@@ -3624,9 +3624,17 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "NIFTY Quick EMA Scalper",
-        "description": "Super low-capital (INR 5,000) retail option buying scalp. Uses a fast 5-minute EMA crossover (3 EMA crossing 9 EMA) to catch quick momentum swings.",
+        "description": "Capital-efficient (INR 8,000) NIFTY debit-spread momentum strategy. Uses a fast 5-minute EMA crossover (3 EMA crossing 9 EMA) to catch momentum swings, expressed as an ATM debit spread so theta does not bleed the position on chop.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "strategy_type": "Option Buying", "required_capital": 5000.0, "instrument_group": "NFO",
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 8000.0, "instrument_group": "NFO",
+        "risk": {
+            "stop_loss_pct": 8, "take_profit_pct": 12,
+            "trail_trigger_pct": 5, "trail_step_pct": 2.8,
+            "cooldown_minutes": 8, "max_trades_day": 6,
+            "time_exit_minutes": 18, "daily_loss_limit": 1200,
+            "strategy_category": "intraday", "target_r_multiple": 1.45,
+        },
         "python_code": """def run(data):
     if len(data) < 20: return []
     closes = [d['close'] for d in data]
@@ -5879,7 +5887,7 @@ UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME = {
     "NIFTY Micro-Lot Trend Follower": (NIFTY_MICRO_TREND_CODE, "momentum", "NIFTY baseline trend follower with no-trade zone and trailing exits"),
     "NIFTY HFT Quick Scalper": (NIFTY_QUICK_SCALPER_CODE, "micro_scalp", "Candle-based quick scalper with noise, volume, cooldown and time guards"),
     "BANKNIFTY HFT Momentum Scalper": (BANKNIFTY_STD_BAND_SCALPER_CODE, "breakout", "BANKNIFTY standard-deviation breakout with volume and exit controls"),
-    "NIFTY Quick EMA Scalper": (NIFTY_QUICK_EMA_SCALPER_CODE, "micro_scalp", "True EMA quick scalp with noise, volume, cooldown and time guards"),
+    "NIFTY Quick EMA Scalper": (NIFTY_QUICK_EMA_SCALPER_CODE, "momentum", "EMA momentum expressed as an ATM debit spread (theta-safe); volume, cooldown and time guards"),
     "BANKNIFTY Volatility Breakout": (BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE, "volatile_breakout", "Sensitive BANKNIFTY volatility breakout with volume and exit controls"),
     "RELIANCE Trend Rider": (_DEFAULT_STRATEGY_CODE_BY_NAME["RELIANCE Trend Rider"], "equity_trend", "Equity trend participation with EMA continuation"),
     "SBIN Short Seller": (_DEFAULT_STRATEGY_CODE_BY_NAME["SBIN Short Seller"], "equity_short", "Equity short participation with VWAP/EMA continuation"),
