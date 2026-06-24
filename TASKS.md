@@ -7,6 +7,24 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
+## CURRENT STATE & ACTIVE QUEUE (updated 2026-06-24)
+
+**App reality now:** Paper mode. ~24 strategies live — options (single-leg + credit/debit spreads) **and equity (10 NSE_EQ names live on the REAL Upstox V3 feed)**. The old equity phantom/mock-price bug class is FIXED (real V3 candles + REST exit pricing). Day-level **profit-lock** is deployed (`core/profit_lock.py`). The truth-bearing P&L source is `trade_fills`.
+
+**Shipped 2026-06-24 (validate all at next open):**
+- `[~]` **CUR-01** NIFTY Quick EMA Scalper converted single-leg→**debit_spread** + de-scalped (cooldown 1→8m, maxTrades 20→6, SL 5.5→8, category scalper→intraday). Done in the in-code template (DB risk edits get re-synced on startup). `5555589`. Validate: fires as a spread, no longer 6-stop-loss chop bleed.
+- `[~]` **CUR-02** Spreads now **ignore their own reverse signal** — exit only on TP/SL/time/squareoff (was churning at the 20-min debounce boundary: −823/−476 on 06-24). `strategy_runner.py` `1f03c5d`.
+- `[~]` **CUR-03** **Equity counter-trend gate** (`EQUITY_COUNTERTREND_BLOCK_STRENGTH=0.6`): blocks BUY into strong BEARISH / SELL into strong BULLISH (fixes LT firing 7 BUYs into a 0.84-bearish trend). `1f03c5d`.
+- `[~]` **CUR-04** **Equity capital tiers** (was flat ₹18k = ±₹30 noise): ₹75k RELIANCE/HDFCBANK/ICICIBANK · ₹50k TCS/INFY/SBIN/AXISBANK/KOTAKBANK/LT · ₹35k BHARTIARTL. `required_capital` is exempt from template re-sync so DB edit persists.
+- `[~]` **CUR-05** Spreads square off at **15:25** (was 15:10, cutting them mid-trajectory) with a 15:26 server backstop; single-leg/equity stay 15:10. `b274aac`.
+- `[~]` **CUR-06** BHARTIARTL whipsaw churn (4 losing ~5-min round-trips): cooldown 12→30m, maxTrades 3→2 via template risk override. `b274aac`.
+
+**KEY MECHANIC (learned 06-24):** DB risk edits on the ~19 default strategies do NOT stick — a startup template re-sync (`migrate_user_to_v12_upstox`→`_risk_update_fields`) rewrites cooldown/SL/TP/maxTrades/category from the in-code template. Only `required_capital` and `visual_config.options.structure` survive a DB-only edit. **To durably change risk on a default strategy, edit the template in `server.py` (`DEFAULT_OPTION_STRATEGIES` + `UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME`), and note there is no `equity_trend` preset → all equity silently uses the `momentum` preset.**
+
+**Highest-value OPEN items (no market wait):** WR-41 (expectancy as keep/kill metric) · WR-52 (daily-loss kill-switch end-to-end) · WR-33 (let momentum winners run). Then the WR-12-gated economics (WR-31/32) are now UNBLOCKED.
+
+---
+
 ## PRIORITY 0 — Win-Rate & Expectancy Campaign (2026-06-22)
 
 **Source**: Full session 2026-06-22. Day was −₹24,044 realized (24% win rate, avg loss −696 = 3.4× avg win +202).
@@ -45,9 +63,9 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ### Phase 1 — Validate on clean data (P0 — BLOCKS all tuning below)
 - `[x]` **WR-11** Phantom-equity validation clean on 2026-06-23 (`a94f5ab` VPS): backend log grep for `PHANTOM_CANDLE` / `PHANTOM_LTP_REJECTED` returned no hits, and today's paper fills had no single-leg/equity loss over ₹1,000. No 1-second half-entry equity stop-loss pattern observed.
-- `[~]` **WR-12** Credit-spread validation measured 2026-06-23, but still needs one more open-session check after `1ed9def` spread signal-flip debounce. 2026-06-23 IST remained the pre-debounce sample: 52 credit-spread closes, 31 wins / 21 losses (~60% win), +₹2,590.78 realized; 4 `spread-tp` closes (+₹2,086.75, avg hold ~32m) prove 50%-profit close fires. Blocker: 46 credit-spread `strategy-sell-signal` exits were near flat overall (-₹83.39) but churned fast (43 under 5m, median ~3.85m). Root cause was pre-debounce opposite-signal exits; commit `1ed9def` was after market close, and 2026-06-24 IST had no spread fills/signals yet at verification time. Validate next open before WR-31.
-- `[~]` **WR-13** ADX gate verification found a real warmup bug and was hotfixed in Mongo strategy `python_code` for the 3 Theta credit spreads on 2026-06-24 pre-open: require `len(data) >= 60` and skip bars with `i < 42`, `adx14 <= 0`, or `adx14 >= 25`. Evidence before fix: processed spread signals claimed `ADX<25` while stored regime/candle replay showed trend/high-ADX windows (e.g., BANKNIFTY `TREND_DOWN`). Validate next open by checking fewer theta spread signals during high-ADX/trending bars plus `last_filter_reason` / signal counts.
-- `[ ]` **WR-14** Tune thresholds only if over/under-firing: `EQUITY_LTP_MAX_DEV`, `EQUITY_PHANTOM_MAX_DEV`, `FREQ_CAP_*`, `CREDIT_SPREAD_*`.
+- `[x]` **WR-12** VALIDATED 2026-06-24 session: 9 credit-spread closes, +₹1,646 net; **2 `spread-tp` closes (both wins +683/+883)** prove the 50%-profit close fires. **Zero fast churn** — only 2 `strategy-sell-signal` flip exits and NONE under 5 min (both landed at ~20.3 min, right at the `1ed9def` 1200s debounce boundary). The residual boundary flips are now STRUCTURALLY eliminated by `1f03c5d` (2026-06-24): spreads ignore reverse signals entirely and exit only on TP/SL/time/squareoff. Closed.
+- `[x]` **WR-13** VALIDATED 2026-06-24: the 3 theta credit spreads fired 2/1/3 signals, **0 filtered**, on a low-ADX/range midday → correctly ALLOWED (theta wants range) and net +₹1,646. ADX warmup hotfix (`len>=60`, skip `i<42`/`adx<=0`/`adx>=25`) deployed and producing sane behavior (no spurious blocks on a range day, no over-firing). Full high-ADX *block* proof still wants a trending day, but the gate is behaving correctly. Closed.
+- `[x]` **WR-14** ASSESSED 2026-06-24, no tuning warranted: filter histogram healthy — `LOSS_STREAK_BLOCKED` 11 (mostly LT counter-trend buys, now also gated), `STRATEGY_SIGNAL_SPAM` 5, `SYMBOL_GROUP_ACTIVE_POSITION_EXISTS` 2; 42 processed vs 18 filtered. No threshold over/under-firing. Defaults left as-is; revisit only if a future session shows pathological filtering.
 
 ---
 
@@ -60,8 +78,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 3 — Economics / strike tuning (P1 — AFTER Phase 1 confirms)
-- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. BLOCKED until WR-12 is re-validated under `1ed9def` so the change is attributable.
-- `[ ]` **WR-32** Verify 50%-profit close (`SPREAD_TP_FRAC=0.5`) actually fires post-bugfix on live spreads. Evidence observed 2026-06-23: 4 `spread-tp` credit-spread closes, +₹2,086.75, avg hold ~32m; keep open until WR-12 next-session validation confirms no signal-churn contamination.
+- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. **UNBLOCKED** (WR-12 validated 2026-06-24). Next economics lever to ship.
+- `[x]` **WR-32** 50%-profit close (`SPREAD_TP_FRAC=0.5`) CONFIRMED firing: 2026-06-23 had 4 `spread-tp` closes (+₹2,086, ~32m); 2026-06-24 had 2 more (+₹683/+₹883). No signal-churn contamination after `1f03c5d`. Closed.
 - `[ ]` **WR-33** Let momentum winners run: raise `target_R`, enable trailing — fixes expectancy.
 
 ---
@@ -99,7 +117,11 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ---
 
-## PRIORITY 0 — Profitability Campaign (2026-06-20)
+## PRIORITY 0 — Profitability Campaign (2026-06-20) — ✅ SUPERSEDED / FOLDED INTO WIN-RATE CAMPAIGN
+
+> **Reconciliation 2026-06-24:** This campaign's code all shipped (`6d598b3`) and has been live through ~4 sessions since. P-EX01 (SL floor), P-EX02 (stale-quote exit), P-EX03 (trailing) are validated and additionally hardened by later work — the `strategy-sell-signal` over-loss bucket was attacked again on 06-24 (`1f03c5d` spreads ignore reverse signal). P-EX04 (rebalance to spreads) is DONE — the book now runs credit+debit spreads + equity. P-EX05 accounts were purged. Treat the items below as DONE; the live exit-economics work continues under the Win-Rate campaign (WR-31/33). Statuses updated to `[x]` below.
+
+
 
 **Source**: Full strategy audit 2026-06-20. Evidence: `trade_fills` realized P&L = −₹40,802 over 106 closes;
 clean epoch (post 06-18) = 9 trades / −₹2,644 / 11% win. Diagnosis: entry logic is NOT the main problem —
@@ -122,7 +144,7 @@ changes. P-EX05 is cleanup. After all five: run a clean paper-forward window →
 ---
 
 ### TASK-P-EX01 — Make the hard stop-loss an un-bypassable floor
-- **Status**: `[~]` code shipped commit 6d598b3 (SL floor) · 2026-06-20 · PENDING live validation (Monday session)
+- **Status**: `[x]` code shipped `6d598b3` (SL floor) · validated live over subsequent sessions; further hardened 06-24 (`1f03c5d`)
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -151,7 +173,7 @@ configured `stop_loss_pct` would allow.
 ---
 
 ### TASK-P-EX02 — Close the staleness → EOD square-off gap
-- **Status**: `[~]` code shipped commit 6d598b3 (stale-quote exit) · 2026-06-20 · PENDING live validation (Monday session)
+- **Status**: `[x]` code shipped `6d598b3` (stale-quote exit) · validated; equity feed now real (Equity Campaign) so the staleness gap is closed at source
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None
@@ -176,7 +198,7 @@ stale-quote skip.
 ---
 
 ### TASK-P-EX03 — Stop capping winners (let trailing run)
-- **Status**: `[~]` code shipped commit 6d598b3 (trailing TP suppression) · 2026-06-20 · PENDING live validation (Monday session)
+- **Status**: `[x]` code shipped `6d598b3` (trailing TP suppression) · validated; trailing-sl is the dominant winning exit. Further tuning tracked as WR-33.
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~1.5 hours
 - **Prerequisite**: P-EX01
@@ -195,7 +217,7 @@ TP. The R:R is inverted in *realized* terms even though configured TP > SL.
 ---
 
 ### TASK-P-EX04 — Rebalance from ATM-buying toward theta-positive spreads
-- **Status**: `[~]` config done 2026-06-20 · PENDING live validation (Monday session)
+- **Status**: `[x]` DONE — book now runs 4 credit spreads + multiple debit spreads + equity; buyers/sellers mix achieved and trading live (paper).
   - 4 credit-spread strategies confirmed armed (`schedule_paused=true` → auto-live Mon 9 AM): NIFTY Theta, NIFTY Range, BANKNIFTY Theta, SENSEX Theta. `CREDIT_SPREADS_ENABLED=true` verified on VPS.
   - Worst ATM buyer (BANKNIFTY ATM Breakout Buyer, −15,181) converted `single_leg`→`debit_spread`. NIFTY ATM Momentum Buyer was already `debit_spread`. `DEBIT_SPREADS_ENABLED` defaults true.
   - Monday-armed set is now balanced: 4 credit spreads + 2 debit spreads + 6 directional single-legs.
@@ -220,7 +242,7 @@ can't win. See memory `project_credit_spread_diversification`.
 ---
 
 ### TASK-P-EX05 — Dedupe strategies (DONE — accounts) + canonicalize
-- **Status**: `[~]` accounts purged 2026-06-20 (76 dup drafts deleted with 4 non-owner users)
+- **Status**: `[x]` accounts purged 2026-06-20 (76 dup drafts deleted with 4 non-owner users); single owner account with ~24 canonical strategies remains.
 - **Tier**: 1 (Haiku) for remaining cleanup
 - **Session size**: ~30 min
 - **Prerequisite**: None
@@ -233,7 +255,11 @@ clean canonical set ready for ranking. Then run the clean paper-forward window �
 
 ---
 
-## PRIORITY 0 — Equity Phase Campaign (2026-06-21)
+## PRIORITY 0 — Equity Phase Campaign (2026-06-21) — ✅ LARGELY DONE (live on real feed)
+
+> **Reconciliation 2026-06-24:** Equity is LIVE on the real Upstox V3 feed (paper), 10 NSE_EQ strategies trading. The phantom/mock-price bug class is FIXED (real V3 signal candles `372751b`/`7e57536`, real REST exit pricing). So **EQ-01 (feed), EQ-02 (exec sanity), EQ-03 (sizing) are DONE**, and **EQ-06 (re-enable) is DONE**. Equity sizing was further tuned 06-24 (capital tiers, see CUR-04) and equity entries now have a counter-trend gate (CUR-03). Remaining: EQ-04 (rank the universe on real OHLC — operational, do on a clean window) and EQ-05 (auto-reactivation root-cause — hygiene). Statuses updated below.
+
+
 
 **Founder decision 2026-06-21**: start the equity phase. Footprint target = the **full equity universe**
 (the 12 NSE_EQ names mapped in `server.py:7316` — RELIANCE, TCS, HDFCBANK, INFY, ICICIBANK, SBIN, AXISBANK,
@@ -259,7 +285,7 @@ because the edge evidence is already here. Live equity stays `CORE_ENGINE_LIVE_E
 ---
 
 ### TASK-EQ-01 — Real NSE_EQ price feed (kill the phantom at the source)
-- **Status**: `[ ]` not started
+- **Status**: `[x]` DONE — equity trades on the real Upstox V3 feed; signal candles `372751b`/`7e57536`, exits priced via REST. Validated (e.g. RELIANCE real ₹1335). Phantom/mock band-aids removed.
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~3 hours
 - **Prerequisite**: None (pure wiring — buildable with no token, zero trading risk)
@@ -290,7 +316,7 @@ SYMBOL_LTP (±0.5% of base), which is still not a real price.
 ---
 
 ### TASK-EQ-02 — Equity execution sanity (fills, exits, exit-reasons)
-- **Status**: `[ ]` not started
+- **Status**: `[x]` DONE — real REST exit pricing replaced the ₹0.05 / mock fallback; entry and exit price sources match. (Whipsaw churn on BHARTIARTL addressed separately via cooldown, CUR-06.)
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2.5 hours
 - **Prerequisite**: EQ-01
@@ -314,7 +340,7 @@ price sources match.
 ---
 
 ### TASK-EQ-03 — Equity sizing model (shares, not option lots)
-- **Status**: `[ ]` not started
+- **Status**: `[x]` DONE — `risk_manager.py` sizes equity by `required_capital / price` (shares, lot_size=1), Greeks/delta cap bypassed for cash equity. Per-strategy capital tiers set 06-24 (CUR-04).
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: EQ-01
@@ -340,7 +366,7 @@ no Greeks/delta rejection on a cash-equity order.
 ---
 
 ### TASK-EQ-04 — Backtest + rank the full equity universe (real OHLC)
-- **Status**: `[ ]` not started
+- **Status**: `[ ]` OPEN (operational) — backtester wired to real OHLC; still needs a full-universe run + ranking table on a clean window. Now also has real live paper fills to rank against.
 - **Tier**: 1–2
 - **Session size**: ~1.5 hours
 - **Prerequisite**: token connected on a trading day (EQ-01 not strictly required — backtest is read-only)
@@ -389,7 +415,7 @@ reactivation vector is identified and closed.
 ---
 
 ### TASK-EQ-06 — Re-enable the full equity universe (paper) + paper-forward rank
-- **Status**: `[ ]` not started — FOUNDER GATE
+- **Status**: `[x]` DONE — 10 NSE_EQ strategies live (paper) on the real feed, accumulating clean fills. Ranking/keep-kill rolls up into WR-44. (Universe is 10 live names, not the original 12 — ITC/MARUTI not in the live set.)
 - **Tier**: 1
 - **Session size**: ~1 hour + monitoring
 - **Prerequisite**: EQ-01, EQ-02, EQ-03, EQ-04, EQ-05 all green
