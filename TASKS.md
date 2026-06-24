@@ -85,7 +85,7 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 4 — Portfolio construction & measurement (P1 — the real strategy)
-- `[ ]` **WR-41** Switch north-star metric from win rate → expectancy + Sharpe + profit factor as the keep/kill driver (scorecard already computes these).
+- `[x]` **WR-41** DONE 2026-06-24 (`874521e`) — `grade()` was already pure expectancy/Sharpe/PF (win rate unused); added explicit `keep_kill_verdict` (KEEP/WATCH/KILL + reason) and `summarize_verdicts` roll-up on `GET /ops/risk-scorecard`. Never KILLs on a thin sample (`SCORECARD_KILL_MIN_TRADES`, default 15) per the don't-kill-on-1-2-days rule. 5 new pure tests. Auto-pause action is WR-54.
 - `[ ]` **WR-42** Weight book toward measured-positive edge (equity momentum A/B, theta-selling); de-weight measured-negative (ATM option buying grade F). Data-driven.
 - `[ ]` **WR-43** Build portfolio of UNCORRELATED archetypes (theta=range, mean-reversion=stat-arb-lite, trend=momentum) so regimes hedge each other.
 - `[ ]` **WR-44** Run the ratchet: backtest OOS → paper-forward → keep/kill by expectancy. Keep only 2–3 survivors.
@@ -95,7 +95,7 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ### Phase 5 — Risk management (P1 — the actual product)
 - `[ ]` **WR-51** Size each bet by risk (fraction-of-Kelly / fixed-fractional), not fixed lots.
-- `[ ]` **WR-52** Hard daily-loss kill-switch per strategy + portfolio-wide (verify `daily_loss_limit` enforced end-to-end).
+- `[x]` **WR-52** DONE 2026-06-24 (`874521e`) — `core/loss_killswitch.py` (sibling of profit_lock), actively enforced from the monitor tick (fires even with no new order, unlike the entry-only preflight guard). Per-strategy: day P&L ≤ −`daily_loss_limit` → square off + stand down for the IST day (`day_loss_locked`, read by the signal_manager gate). Whole-book: aggregate ≤ −`PORTFOLIO_DAILY_LOSS_LIMIT` (env, default ₹20k) → square off entire book + stand down. ⚠️ Per-strategy floors currently inherit the small momentum-preset value (₹650 equity / ₹650–1200 options) — may want raising vs the new equity sizing.
 - `[ ]` **WR-53** Cap per-underlying concentration (extend the symbol-group guard to aggregate exposure).
 - `[ ]` **WR-54** Auto-pause a strategy on max-drawdown breach.
 
