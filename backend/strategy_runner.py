@@ -55,6 +55,11 @@ EQUITY_PHANTOM_MAX_DEV = float(os.environ.get("EQUITY_PHANTOM_MAX_DEV", "0.35"))
 # single-leg buyers get a short debounce just to stop same-candle flip-flop.
 SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC", "1200"))
 SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC", "180"))
+# Equity brains (Donchian/RSI/VWAP) only see OHLC and can emit a BUY on a minor
+# bounce inside a strong downtrend (or a SELL into a strong uptrend). trend_context
+# is only computed in the runner, so the runner is the earliest place to block a
+# direction-misaligned EQUITY entry at the source. Strength scale is 0..1.
+EQUITY_COUNTERTREND_BLOCK_STRENGTH = float(os.environ.get("EQUITY_COUNTERTREND_BLOCK_STRENGTH", "0.6"))
 NON_ERROR_ENTRY_BLOCKS = (
     "cooldown-active",
     "duplicate-buy-dropped",
@@ -702,6 +707,41 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             )
                             continue
 
+                    # ── Equity counter-trend gate ─────────────────────────────
+                    # An equity brain (Donchian/RSI/VWAP) sees only OHLC and can emit
+                    # a BUY on a minor bounce inside a strong downtrend (the 2026-06-24
+                    # LT case: 7 BUYs while trend_context read BEARISH 0.84), or a SELL
+                    # into a strong uptrend. trend_context is computed here in the
+                    # runner, so this is the earliest point we can block a misaligned
+                    # equity entry at the source. Options strategies keep their own
+                    # CE/PE regime gate above and are untouched.
+                    _eq_opt = (vc or {}).get("options") or {}
+                    if not bool(_eq_opt.get("enabled")):
+                        _tr = signal_validation.get("trend") or {}
+                        _tr_dir = str(_tr.get("trend") or "").upper()
+                        try:
+                            _tr_str = float(_tr.get("strength") or 0.0)
+                        except (TypeError, ValueError):
+                            _tr_str = 0.0
+                        _counter = (
+                            (action == "BUY" and _tr_dir == "BEARISH") or
+                            (action == "SELL" and _tr_dir == "BULLISH")
+                        )
+                        if _counter and _tr_str >= EQUITY_COUNTERTREND_BLOCK_STRENGTH:
+                            _reason = (
+                                f"COUNTERTREND_GATE: {action} blocked — trend {_tr_dir} "
+                                f"strength {_tr_str:.2f} ≥ {EQUITY_COUNTERTREND_BLOCK_STRENGTH:.2f}"
+                            )
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "COUNTERTREND_GATE", _reason)
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set, "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _reason},
+                                 "$inc": inc_set},
+                            )
+                            continue
+
                     # Apply hold_multiplier to max_hold_minutes
                     _hm = float(_regime.get("hold_multiplier", 1.0))
                     if _hm != 1.0 and last_sig.get("max_hold_minutes"):
@@ -794,7 +834,26 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             # owns those, so risk is always honored.
                             if not sl_triggered:
                                 _is_spread = str(active_position.get("structure") or "") in ("credit_spread", "debit_spread")
-                                _min_hold = SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC if _is_spread else SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC
+                                if _is_spread:
+                                    # Spreads never exit on an opposite strategy signal. The
+                                    # position monitor owns their TP/SL (legs priced via REST)
+                                    # and EOD square-off owns time — so they ride to theta TP
+                                    # instead of churning the moment the brain flips bias.
+                                    # (2026-06-24: the 20-min min-hold let flips slip out just
+                                    # past the window — NIFTY bearish spread −823, debit −476.)
+                                    await db.strategies.update_one(
+                                        {"id": s["id"]},
+                                        {"$set": {**eval_set,
+                                                  "last_signal_action": action,
+                                                  "last_signals_count": signals_count,
+                                                  "last_filter_reason": (
+                                                      f"{action} signal ignored for spread — holding to "
+                                                      f"TP/SL/time (no reverse-signal churn)."
+                                                  )},
+                                         "$inc": inc_set},
+                                    )
+                                    continue
+                                _min_hold = SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC
                                 _opened_raw = active_position.get("entry_time") or active_position.get("created_at")
                                 _opened_dt = None
                                 if isinstance(_opened_raw, str):
@@ -816,7 +875,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                       "last_signals_count": signals_count,
                                                       "last_filter_reason": (
                                                           f"{action} signal exit suppressed — min-hold "
-                                                          f"{int(_held_sec)}s/{_min_hold}s ({'spread' if _is_spread else 'single-leg'}); "
+                                                          f"{int(_held_sec)}s/{_min_hold}s (single-leg); "
                                                           f"letting TP/SL ride."
                                                       )},
                                              "$inc": inc_set},
