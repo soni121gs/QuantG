@@ -34,10 +34,10 @@ export const SUGGESTIONS = [
 
 export function PromptSuggestionsPanel({ onPick, busy, onClose }) {
   return (
-    <div className="flex gap-2 px-4 py-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)]/30 items-center justify-between">
+    <div className="flex gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)]/30 px-3 py-2 items-center justify-between">
       <div className="flex gap-2 items-center overflow-x-auto scrollbar-none flex-1 py-0.5">
         <span className="t-meta mr-1 text-[var(--qd-text-3)] font-bold uppercase tracking-widest flex items-center gap-1 font-mono flex-shrink-0">
-          <Sparkles size={11} className="text-[var(--qd-accent)]" /> Quick Suggestions:
+          <Sparkles size={11} className="text-[var(--qd-accent)]" /> Suggestions
         </span>
         {SUGGESTIONS.map((s) => (
           <button
@@ -45,7 +45,7 @@ export function PromptSuggestionsPanel({ onPick, busy, onClose }) {
             type="button"
             onClick={() => onPick(s.prompt)}
             disabled={busy}
-            className="rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-1 text-[11px] text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] disabled:opacity-50 transition-all active:scale-95 font-sans cursor-pointer flex items-center gap-1.5 flex-shrink-0"
+            className="rounded-full border border-[var(--qd-border)] bg-[var(--qd-surface)] px-3 py-1 text-[11px] text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-[var(--qd-text)] disabled:opacity-50 transition-all active:scale-95 font-sans cursor-pointer flex items-center gap-1.5 flex-shrink-0"
           >
             <s.icon size={10} className="text-[var(--qd-text-3)]" />
             <span>{s.title}</span>
@@ -69,7 +69,7 @@ export function PromptSuggestionsPanel({ onPick, busy, onClose }) {
 
 export function EmptyState({ onPick }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center px-4 py-12 md:py-16 h-full max-w-2xl mx-auto animate-fade-in">
+    <div className="flex flex-col items-center justify-center text-center px-4 py-10 md:py-14 h-full max-w-2xl mx-auto animate-fade-in">
       <div className="relative mb-6">
         <div className="w-15 h-15 rounded-2xl bg-[var(--qd-accent)]/10 border border-[var(--qd-accent)]/20 flex items-center justify-center">
           <Sparkles className="text-[var(--qd-accent)]" size={28} />
@@ -80,19 +80,19 @@ export function EmptyState({ onPick }) {
         </span>
       </div>
       
-      <h3 className="font-head text-2xl font-extrabold text-[var(--qd-text)] tracking-tight">
+      <h3 className="font-head text-xl font-semibold text-[var(--qd-text)]">
         How can I protect your trading setup?
       </h3>
       <p className="mt-2.5 max-w-md text-sm text-[var(--qd-text-2)] font-sans leading-relaxed">
         I am your live risk and execution analyst. I examine active orders, positions, capital usage, and Upstox feed health to give data-grounded answers.
       </p>
       
-      <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3.5 w-full">
+      <div className="mt-7 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
         {SUGGESTIONS.map((s) => (
           <button
             key={s.title}
             onClick={() => onPick(s.prompt)}
-            className={`group text-left border rounded-xl p-4 transition-all duration-200 cursor-pointer flex gap-3.5 items-start ${s.color} hover:-translate-y-0.5 hover:shadow-md`}
+            className={`group text-left border rounded-[var(--qd-radius)] p-3.5 transition-colors cursor-pointer flex gap-3 items-start ${s.color}`}
           >
             <div className="p-2 rounded-lg bg-[var(--qd-surface)] border border-[var(--qd-border)] group-hover:border-[var(--qd-accent)]/30 shadow-sm flex-shrink-0 text-[var(--qd-text-2)] group-hover:text-[var(--qd-accent)] transition-colors">
               <s.icon size={16} />

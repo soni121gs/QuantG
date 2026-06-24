@@ -498,15 +498,21 @@ tbody tr:hover {
 }
 
 .qd-card [class*="bg-black/"],
-.qd-card [class*="bg-white/["],
+.qd-card [class*="bg-white/"],
 .qd-stat-panel [class*="bg-black/"],
-.qd-stat-panel [class*="bg-white/["] {
+.qd-stat-panel [class*="bg-white/"] {
   background: var(--qd-surface-2) !important;
 }
 
 .qd-card [class*="border-white/"],
 .qd-stat-panel [class*="border-white/"] {
   border-color: var(--qd-border) !important;
+}
+
+.qd-card .text-white,
+.qd-card-tight .text-white,
+.qd-stat-panel .text-white {
+  color: var(--qd-text) !important;
 }
 
 .qd-card input,

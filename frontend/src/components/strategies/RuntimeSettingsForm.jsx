@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Shield, RefreshCw, CheckCircle2 } from "lucide-react";
+import { RefreshCw, CheckCircle2 } from "lucide-react";
 
 export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
   const risk = s.visual_config?.risk || {};
   const options = s.visual_config?.options || {};
-  
+
   const [form, setForm] = useState({
     target_pct: risk.target_pct ?? "",
     stoploss_pct: risk.stoploss_pct ?? "",
@@ -79,65 +79,65 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="mt-3 bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded-md p-3.5 space-y-3.5">
-      <div className="grid grid-cols-2 gap-3">
+    <form onSubmit={handleSubmit} className="mt-3 rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 space-y-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Target profit (TP %)</label>
-          <input 
-            type="number" 
-            step="0.01" 
-            value={form.target_pct} 
+          <input
+            type="number"
+            step="0.01"
+            value={form.target_pct}
             onChange={(e) => setForm({ ...form, target_pct: e.target.value })}
-            placeholder="e.g. 2.5" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-white"
+            placeholder="e.g. 2.5"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2.5 py-1.5 text-xs text-[var(--qd-text)]"
           />
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Stop loss (SL %)</label>
-          <input 
-            type="number" 
-            step="0.01" 
-            value={form.stoploss_pct} 
+          <input
+            type="number"
+            step="0.01"
+            value={form.stoploss_pct}
             onChange={(e) => setForm({ ...form, stoploss_pct: e.target.value })}
-            placeholder="e.g. 1.2" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-white"
+            placeholder="e.g. 1.2"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2.5 py-1.5 text-xs text-[var(--qd-text)]"
           />
         </div>
       </div>
 
       <div className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2.5 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)]">Trailing Stop Loss</span>
-          <input 
-            type="checkbox" 
-            checked={form.trailing_sl_enabled} 
+          <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)]">Trailing stop</span>
+          <input
+            type="checkbox"
+            checked={form.trailing_sl_enabled}
             onChange={(e) => setForm({ ...form, trailing_sl_enabled: e.target.checked })}
-            className="w-3.5 h-3.5 accent-indigo-500 bg-[var(--qd-surface-2)] border-[var(--qd-border)] cursor-pointer"
+            className="w-3.5 h-3.5 accent-[var(--qd-accent)] bg-[var(--qd-surface-2)] border-[var(--qd-border)] cursor-pointer"
           />
         </div>
-        
+
         {form.trailing_sl_enabled && (
-          <div className="grid grid-cols-2 gap-2 pt-1">
+          <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
             <div>
               <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Trigger %</label>
-              <input 
-                type="number" 
-                step="0.01" 
-                value={form.trail_trigger_pct} 
+              <input
+                type="number"
+                step="0.01"
+                value={form.trail_trigger_pct}
                 onChange={(e) => setForm({ ...form, trail_trigger_pct: e.target.value })}
-                placeholder="e.g. 1.0" 
-                className="w-full bg-[var(--qd-surface-3)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                placeholder="e.g. 1.0"
+                className="w-full bg-[var(--qd-surface-3)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
               />
             </div>
             <div>
               <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Trail Step %</label>
-              <input 
-                type="number" 
-                step="0.01" 
-                value={form.trail_step_pct} 
+              <input
+                type="number"
+                step="0.01"
+                value={form.trail_step_pct}
                 onChange={(e) => setForm({ ...form, trail_step_pct: e.target.value })}
-                placeholder="e.g. 0.2" 
-                className="w-full bg-[var(--qd-surface-3)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                placeholder="e.g. 0.2"
+                className="w-full bg-[var(--qd-surface-3)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
               />
             </div>
           </div>
@@ -156,7 +156,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
               setForm({ ...form, strategy_category: cat });
             }
           }}
-          className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
         >
           <option value="scalper">SCALPER — high frequency (cooldown ≤ 3m, ≥ 5 trades/day)</option>
           <option value="intraday">INTRADAY — moderate frequency</option>
@@ -164,7 +164,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         </select>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Cooldown (Min)</label>
           <input
@@ -172,48 +172,48 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
             value={form.cooldown_minutes}
             onChange={(e) => setForm({ ...form, cooldown_minutes: e.target.value })}
             placeholder="30"
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
           />
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Max Trades/Day</label>
-          <input 
-            type="number" 
-            value={form.max_trades_day} 
+          <input
+            type="number"
+            value={form.max_trades_day}
             onChange={(e) => setForm({ ...form, max_trades_day: e.target.value })}
-            placeholder="5" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+            placeholder="5"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
           />
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Loss Limit (INR)</label>
-          <input 
-            type="number" 
-            value={form.daily_loss_limit} 
+          <input
+            type="number"
+            value={form.daily_loss_limit}
             onChange={(e) => setForm({ ...form, daily_loss_limit: e.target.value })}
-            placeholder="5000" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+            placeholder="5000"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
           />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-[var(--qd-border)] pt-2.5">
+      <div className="grid grid-cols-1 gap-2 border-t border-[var(--qd-border)] pt-2.5 sm:grid-cols-2">
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Time Exit (Min)</label>
-          <input 
-            type="number" 
-            value={form.time_exit_minutes} 
+          <input
+            type="number"
+            value={form.time_exit_minutes}
             onChange={(e) => setForm({ ...form, time_exit_minutes: e.target.value })}
-            placeholder="360" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white"
+            placeholder="360"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           />
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Exit Mode</label>
-          <select 
-            value={form.exit_mode} 
+          <select
+            value={form.exit_mode}
             onChange={(e) => setForm({ ...form, exit_mode: e.target.value })}
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           >
             <option value="SQUARE_OFF">SQUARE OFF</option>
             <option value="REVERSE">REVERSE</option>
@@ -222,23 +222,23 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 border-t border-[var(--qd-border)] pt-2.5">
+      <div className="grid grid-cols-1 gap-2 border-t border-[var(--qd-border)] pt-2.5 sm:grid-cols-3">
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Execution Broker</label>
-          <select 
-            value={form.broker} 
+          <select
+            value={form.broker}
             onChange={(e) => setForm({ ...form, broker: e.target.value })}
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           >
             <option value="upstox">Upstox (HFT Enabled)</option>
           </select>
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Deployment Mode</label>
-          <select 
-            value={form.mode} 
+          <select
+            value={form.mode}
             onChange={(e) => setForm({ ...form, mode: e.target.value })}
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           >
             <option value="paper">Paper Trading (Simulated)</option>
             <option value="live">Live Trading (Production)</option>
@@ -246,10 +246,10 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         </div>
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Product Type</label>
-          <select 
-            value={form.product} 
+          <select
+            value={form.product}
             onChange={(e) => setForm({ ...form, product: e.target.value })}
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           >
             <option value="MIS">MIS (Intraday)</option>
             <option value="CNC">CNC (Delivery)</option>
@@ -258,38 +258,38 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 pt-1">
+      <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
         <div>
           <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Allocated Capital (INR)</label>
-          <input 
-            type="number" 
-            value={form.required_capital} 
+          <input
+            type="number"
+            value={form.required_capital}
             onChange={(e) => setForm({ ...form, required_capital: e.target.value })}
-            placeholder="50000" 
-            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+            placeholder="50000"
+            className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
           />
         </div>
         <div className="flex flex-col justify-end pb-1.5">
           <div className="flex items-center justify-between px-1">
-            <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">Indicator Exit</span>
-            <input 
-              type="checkbox" 
-              checked={form.indicator_exit_enabled} 
+            <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)]">Indicator exit</span>
+            <input
+              type="checkbox"
+              checked={form.indicator_exit_enabled}
               onChange={(e) => setForm({ ...form, indicator_exit_enabled: e.target.checked })}
-              className="w-3.5 h-3.5 accent-indigo-500 cursor-pointer"
+              className="w-3.5 h-3.5 accent-[var(--qd-accent)] cursor-pointer"
             />
           </div>
         </div>
       </div>
 
       {s.visual_config?.options?.enabled && (
-        <div className="grid grid-cols-3 gap-2 pt-1">
+        <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-3">
           <div>
             <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">Structure</label>
             <select
               value={form.structure}
               onChange={(e) => setForm({ ...form, structure: e.target.value })}
-              className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
               data-testid="settings-structure"
             >
               <option value="single_leg">Single Leg</option>
@@ -307,7 +307,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
                   type="number" step="0.05" min="0.05" max="0.95"
                   value={form.short_delta}
                   onChange={(e) => setForm({ ...form, short_delta: e.target.value })}
-                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
                   data-testid="settings-short-delta"
                 />
               </div>
@@ -317,7 +317,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
                   type="number" min="1" max="20"
                   value={form.spread_width}
                   onChange={(e) => setForm({ ...form, spread_width: e.target.value })}
-                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-white"
+                  className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
                   data-testid="settings-spread-width"
                 />
               </div>

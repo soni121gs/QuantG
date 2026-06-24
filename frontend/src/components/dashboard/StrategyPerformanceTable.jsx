@@ -38,13 +38,13 @@ export const StrategyPerformanceTable = React.memo(({ rows }) => (
               <tr key={row.strategy_id} className="hover:bg-[var(--qd-surface)]/30">
                 <td className="px-4 py-3 font-mono text-[var(--qd-text-2)]">#{row.rank}</td>
                 <td className="px-4 py-3">
-                  <div className="font-semibold text-white">{row.strategy_name}</div>
+                  <div className="font-semibold text-[var(--qd-text)]">{row.strategy_name}</div>
                   <div className="mt-1 font-mono text-[11px] uppercase text-[var(--qd-text-3)]">
                     {row.recommendation || "NO_DATA"}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-right font-mono text-white">{lifetime.total_trades || 0}</td>
-                <td className="px-4 py-3 text-right font-mono text-white">
+                <td className="px-4 py-3 text-right font-mono text-[var(--qd-text)]">{lifetime.total_trades || 0}</td>
+                <td className="px-4 py-3 text-right font-mono text-[var(--qd-text)]">
                   {Number(lifetime.win_rate || 0).toFixed(1)}%
                 </td>
                 <td className={`px-4 py-3 text-right font-mono ${toneClass(last7.net_pnl)}`}>
@@ -56,7 +56,7 @@ export const StrategyPerformanceTable = React.memo(({ rows }) => (
                 <td className={`px-4 py-3 text-right font-mono font-bold ${toneClass(lifetime.net_pnl)}`}>
                   {money(lifetime.net_pnl)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono text-white">
+                <td className="px-4 py-3 text-right font-mono text-[var(--qd-text)]">
                   {profitFactorLabel(lifetime.profit_factor)}
                 </td>
                 <td className={`px-4 py-3 text-right font-mono ${toneClass(row.risk_adjusted_return)}`}>

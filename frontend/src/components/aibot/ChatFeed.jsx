@@ -17,7 +17,7 @@ const ToolCitationCard = ({ tool }) => {
   const isOk = tool.status === "ok";
   const hasWarnings = tool.warnings && tool.warnings.length > 0;
   const isStale = tool.stale === true;
-  
+
   const formatToolName = (name) => {
     return name
       .replace(/^get_/, "")
@@ -25,15 +25,15 @@ const ToolCitationCard = ({ tool }) => {
       .replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
-  const statusColorClass = !isOk 
-    ? "text-rose-400 bg-rose-950/20 border-rose-500/20" 
+  const statusColorClass = !isOk
+    ? "text-[var(--qd-loss)] bg-rose-500/10 border-rose-500/25"
     : isStale || hasWarnings
-      ? "text-amber-400 bg-amber-950/20 border-amber-500/20"
-      : "text-emerald-400 bg-emerald-950/20 border-emerald-500/20";
+      ? "text-[var(--qd-warn)] bg-amber-500/10 border-amber-500/25"
+      : "text-[var(--qd-profit)] bg-emerald-500/10 border-emerald-500/25";
 
   return (
-    <div 
-      className="cursor-pointer space-y-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-3)]/35 p-3 transition-all hover:bg-[var(--qd-surface-3)]/60 hover:scale-[1.01] hover:shadow-sm" 
+    <div
+      className="cursor-pointer space-y-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2.5 transition-colors hover:border-[var(--qd-border-strong)]"
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center justify-between gap-1.5">
@@ -48,14 +48,14 @@ const ToolCitationCard = ({ tool }) => {
       <div className="t-meta flex flex-col font-mono leading-snug text-[var(--qd-text-3)]">
         <div className="truncate">Source: <span className="text-[var(--qd-text-2)]">{tool.source || "System"}</span></div>
         {tool.confidence !== undefined && (
-          <div>Confidence: <span className={tool.confidence >= 0.8 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+          <div>Confidence: <span className={tool.confidence >= 0.8 ? "text-[var(--qd-profit)] font-bold" : "text-[var(--qd-warn)] font-bold"}>
             {Math.round(tool.confidence * 100)}%
           </span></div>
         )}
       </div>
 
       {hasWarnings && tool.warnings && (
-        <div className="t-meta mt-1 space-y-0.5 rounded border border-amber-500/10 bg-amber-500/5 p-1.5 font-mono leading-snug text-amber-300">
+        <div className="t-meta mt-1 space-y-0.5 rounded border border-amber-500/20 bg-amber-500/10 p-1.5 font-mono leading-snug text-[var(--qd-warn)]">
           {tool.warnings.map((w, idx) => (
             <div key={idx} className="flex items-start gap-1">
               <span>•</span>
@@ -125,9 +125,9 @@ const Message = ({ m, profile, onApprove, onReject }) => {
         </div>
       )}
       <div
-        className={`max-w-[88%] px-3.5 py-2.5 rounded-xl shadow-sm border ${
+        className={`max-w-[92%] px-3 py-2.5 rounded-[var(--qd-radius)] border ${
           isUser
-            ? "qd-force-white bg-gradient-to-br from-[var(--qd-accent)] to-[var(--qd-accent-hover)] border-none text-white"
+            ? "qd-force-white bg-[var(--qd-accent)] border-[var(--qd-accent)] text-white"
             : "bg-[var(--qd-surface)] border-[var(--qd-border)] text-[var(--qd-text)]"
         }`}
       >
@@ -138,8 +138,8 @@ const Message = ({ m, profile, onApprove, onReject }) => {
         )}
 
         {hasAction && (
-          <div className="mt-4 rounded-xl border border-[var(--qd-border-strong)] bg-[var(--qd-surface-2)]/60 overflow-hidden shadow-md">
-            <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-3)]/40 px-4 py-2.5">
+          <div className="mt-4 overflow-hidden rounded-[var(--qd-radius)] border border-[var(--qd-border-strong)] bg-[var(--qd-surface-2)]">
+            <div className="flex flex-col gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-3)]/40 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
               <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)] font-bold flex items-center gap-1.5">
                 <ShieldCheck size={13} className="text-[var(--qd-accent)]" /> Governance Proposal · Action Required
               </div>
@@ -151,7 +151,7 @@ const Message = ({ m, profile, onApprove, onReject }) => {
             </div>
 
             {m.pending_action.status === "pending" && (
-              <div className="flex gap-2.5 p-4 pt-0">
+              <div className="flex flex-col gap-2.5 p-3 pt-0 sm:flex-row">
                 <Button onClick={() => onApprove(m.pending_action.id)} className="flex-1 font-mono text-[10px] uppercase tracking-wider h-9 transition-all active:scale-95 hover:scale-[1.01]" variant="success" size="sm">
                   <CheckCircle2 size={13} /> Approve Proposal
                 </Button>
@@ -162,14 +162,14 @@ const Message = ({ m, profile, onApprove, onReject }) => {
             )}
 
             {m.pending_action.status === "approved" && (
-              <div className="m-4 mt-0 py-2.5 px-3.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-emerald-400 text-xs font-mono">
+              <div className="m-3 mt-0 py-2.5 px-3 rounded-md bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-[var(--qd-profit)] text-xs font-mono">
                 <CheckCircle2 size={14} className="flex-shrink-0" />
                 <span className="font-semibold">Approved and committed to terminal settings.</span>
               </div>
             )}
 
             {m.pending_action.status === "rejected" && (
-              <div className="m-4 mt-0 py-2.5 px-3.5 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-rose-400 text-xs font-mono">
+              <div className="m-3 mt-0 py-2.5 px-3 rounded-md bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-[var(--qd-loss)] text-xs font-mono">
                 <XCircle size={14} className="flex-shrink-0" />
                 <span className="font-semibold">Proposal rejected and discarded.</span>
               </div>
@@ -185,14 +185,14 @@ const Message = ({ m, profile, onApprove, onReject }) => {
               type="button"
             >
               <span className="flex items-center gap-1.5">
-                <Sparkles size={11} className="text-[var(--qd-accent)]" /> 
+                <Sparkles size={11} className="text-[var(--qd-accent)]" />
                 Context Citations ({m.tools_used.length} sources)
               </span>
               <span className="text-[10px] font-semibold">
                 {citationsExpanded ? "Hide Sources" : "Show Sources"}
               </span>
             </button>
-            
+
             {citationsExpanded && (
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 animate-fade-in">
                 {m.tools_used.map((tool, idx) => (
@@ -220,14 +220,14 @@ const Message = ({ m, profile, onApprove, onReject }) => {
 
 export default function ChatFeed({ messages, profile, onApprove, onReject }) {
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {messages.map((m, i) => (
-        <Message 
-          key={m.id || `m-${i}`} 
-          m={m} 
-          profile={profile} 
-          onApprove={onApprove} 
-          onReject={onReject} 
+        <Message
+          key={m.id || `m-${i}`}
+          m={m}
+          profile={profile}
+          onApprove={onApprove}
+          onReject={onReject}
         />
       ))}
     </div>

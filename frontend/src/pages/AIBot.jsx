@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { Bot, Send, Plus, PanelRight, PanelRightClose, PanelLeft, PanelLeftClose, X, ShieldCheck } from "lucide-react";
 import { Button } from "../components/ui/button";
-import { PageHeader, StatusBadge } from "../components/ui/app-shell";
+import { StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
 import ChatFeed from "../components/aibot/ChatFeed";
 import AgentContextPanel, { ConversationHistoryCard, RiskPostureCard, CapabilitiesCard } from "../components/aibot/AgentContextPanel";
@@ -193,7 +193,7 @@ export default function AIBot() {
           <div className="w-6 h-6 rounded-md bg-[var(--qd-accent)] flex items-center justify-center shrink-0">
             <Bot size={13} className="text-[var(--qd-accent-contrast)]" />
           </div>
-          <h1 className="font-head text-sm font-extrabold text-[var(--qd-text)] truncate">Hermes Analyst Co-Pilot</h1>
+          <h1 className="font-head text-sm font-semibold text-[var(--qd-text)] truncate">Hermes Analyst Co-Pilot</h1>
           <StatusBadge tone={profile?.paper_mode ? "paper" : "live"} className="h-4 px-1 text-[9px] font-mono font-bold shrink-0">
             {profile?.paper_mode ? "Paper" : "Live"}
           </StatusBadge>
@@ -222,8 +222,8 @@ export default function AIBot() {
         <div className={`flex min-h-[80vh] flex-col overflow-hidden qd-card ${chatSpanClass} lg:min-h-0 lg:h-full transition-all duration-300`}>
 
           {/* Header: tabs & sidebar toggles */}
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--qd-border)] px-3 py-2 bg-[var(--qd-surface-2)]/40 backdrop-blur-xs">
-            <div className="flex min-w-0 items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)]/40 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
                 onClick={() => setShowHistory(!showHistory)}
@@ -233,26 +233,26 @@ export default function AIBot() {
                 {showHistory ? <PanelLeftClose size={15} /> : <PanelLeft size={15} />}
               </button>
 
-              <div className="flex min-w-0 items-center gap-3">
+              <div className="flex min-w-0 items-center gap-2">
                 <button
                   onClick={() => setActiveTab("chat")}
-                  className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                  className={`rounded-[var(--qd-radius-sm)] border px-2.5 py-1.5 font-head text-xs font-semibold transition-colors cursor-pointer ${
                     activeTab === "chat"
-                      ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
-                      : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
+                      ? "border-[var(--qd-border-strong)] bg-[var(--qd-surface)] text-[var(--qd-text)]"
+                      : "border-transparent text-[var(--qd-text-3)] hover:border-[var(--qd-border)] hover:text-[var(--qd-text-2)]"
                   }`}
                 >
-                  Co-Pilot Chat
+                  Chat
                 </button>
                 <button
                   onClick={() => { setActiveTab("approvals"); fetchPendingActions(); }}
-                  className={`pb-1 border-b-2 font-head text-sm font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  className={`flex items-center gap-1.5 rounded-[var(--qd-radius-sm)] border px-2.5 py-1.5 font-head text-xs font-semibold transition-colors cursor-pointer ${
                     activeTab === "approvals"
-                      ? "border-[var(--qd-accent)] text-[var(--qd-text)]"
-                      : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text-2)]"
+                      ? "border-[var(--qd-border-strong)] bg-[var(--qd-surface)] text-[var(--qd-text)]"
+                      : "border-transparent text-[var(--qd-text-3)] hover:border-[var(--qd-border)] hover:text-[var(--qd-text-2)]"
                   }`}
                 >
-                  Approvals Queue
+                  Approvals
                   {pendingActions.length > 0 && (
                     <span className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[9px] font-bold text-white px-1 shadow-sm">
                       {pendingActions.length}
@@ -345,12 +345,12 @@ export default function AIBot() {
                       <button 
                         onClick={() => send()} 
                         disabled={busy || !text.trim()} 
-                        className="rounded-lg bg-[var(--qd-accent)] hover:bg-[var(--qd-accent-hover)] text-white p-2 flex items-center justify-center transition-all active:scale-95 hover:scale-105 disabled:opacity-40 disabled:scale-100 disabled:pointer-events-none cursor-pointer shadow-sm"
+                        className="rounded-md bg-[var(--qd-accent)] p-2 flex items-center justify-center transition-all hover:bg-[var(--qd-accent-hover)] active:scale-95 disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
                         data-testid="ai-send-btn" 
                         aria-label="Send message"
                         type="button"
                       >
-                        <Send size={14} className="text-white" />
+                        <Send size={14} className="text-[var(--qd-accent-contrast)]" />
                       </button>
                     </div>
                   </div>
@@ -359,7 +359,7 @@ export default function AIBot() {
             </>
           ) : (
             /* Approvals Queue */
-            <div className="flex-1 space-y-4 overflow-y-auto p-4" data-testid="approvals-queue">
+            <div className="flex-1 space-y-4 overflow-y-auto p-3 md:p-4" data-testid="approvals-queue">
               {pendingActions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                   <ShieldCheck size={40} className="text-emerald-500/70" />
@@ -367,9 +367,9 @@ export default function AIBot() {
                   <p className="mt-1 text-sm text-[var(--qd-text-2)]">Hermes hasn't proposed any non-trading actions requiring review.</p>
                 </div>
               ) : (
-                <div className="grid gap-4">
+                <div className="grid gap-3">
                   {pendingActions.map((a) => {
-                    let badgeColor = "bg-blue-500/10 text-blue-400 border border-blue-500/20";
+                    let badgeColor = "bg-[var(--qd-surface-3)] text-[var(--qd-accent)] border border-[var(--qd-border)]";
                     let actionTitle = a.action_type;
                     if (a.action_type === "draft_wiki_note") {
                       badgeColor = "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20";
@@ -392,8 +392,8 @@ export default function AIBot() {
                     const bodyText = a.params?.body_markdown || a.params?.content || JSON.stringify(a.params, null, 2);
 
                     return (
-                      <div key={a.action_id} className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4 shadow-sm">
-                        <div className="flex items-start justify-between gap-4">
+                      <div key={a.action_id} className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 shadow-sm">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0">
                             <span className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider ${badgeColor}`}>
                               {actionTitle}
@@ -405,7 +405,7 @@ export default function AIBot() {
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 sm:shrink-0">
                             <Button
                               variant="secondary"
                               size="sm"

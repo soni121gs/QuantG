@@ -2496,3 +2496,57 @@ a confident overfitting machine — that is the single worst outcome and is expl
 **Verify**: run `CI=false npm run build` from `frontend/`; inspect `/dashboard` desktop/mobile after deploy.
 
 ---
+
+### TASK-UI-03 - Strategies and modals consistency pass
+- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Tier**: 2
+- **Session size**: ~1.5 hours
+- **Files to touch**: `frontend/src/pages/Strategies.jsx`, `frontend/src/components/strategies/StrategyCard.jsx`, `frontend/src/components/strategies/RuntimeSettingsForm.jsx`, `frontend/src/components/strategies/AboutStrategyModal.jsx`, `frontend/src/index.css`, `wiki/memory.md`
+
+**Problem**: The Strategies surface still carries older dense styling in nested controls and modals: hardcoded white text, indigo focus states, cramped grids, all-caps label noise, and modal/action styling that does not fully match the compact trading-console direction.
+
+**Exact steps**:
+1. Normalize strategy cards, runtime settings inputs/selects, and About modal sections to the shared `qd-*` tokens and current Manrope/mono typography.
+2. Remove hardcoded `text-white`, legacy indigo focus colors, and old dark utility leakage where shared tokens already exist.
+3. Tighten modal spacing and mobile scroll behavior while preserving the existing About, test/backtest, runtime edit, enable/disable, and strategy action flows.
+4. Keep all strategy data, risk controls, and broker/trading behavior unchanged.
+
+**Verify**: run `$env:CI='false'; npm run build` from `frontend/`; inspect `/strategies` desktop/mobile, including runtime settings expansion and About modal scroll/action states.
+
+---
+
+### TASK-UI-04 - Hermes and AIBot polish
+- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Tier**: 2
+- **Session size**: ~1.5 hours
+- **Files to touch**: `frontend/src/pages/AIBot.jsx`, `frontend/src/components/aibot/ChatFeed.jsx`, `frontend/src/components/aibot/AgentContextPanel.jsx`, `frontend/src/components/aibot/PromptSuggestionsPanel.jsx`, `frontend/src/index.css`, `wiki/memory.md`
+
+**Problem**: Hermes Analyst Co-Pilot is powerful but visually dense. The chat, context rail, citations, suggestions, and approvals queue need a calmer operator layout with better empty/loading/error states and mobile handling.
+
+**Exact steps**:
+1. Polish the chat header, input area, message spacing, citation/tool cards, and approvals queue to match the compact `qd-*` design system.
+2. Improve empty, loading, streaming, and error states without adding in-app explanatory copy or changing Hermes safety semantics.
+3. Verify the context rail and prompt suggestions behave cleanly on desktop and mobile, including long chats and narrow viewports.
+4. Preserve the read-only tool boundary and approval-gated action behavior; no backend or trading behavior changes.
+
+**Verify**: run `$env:CI='false'; npm run build` from `frontend/`; inspect `/ai-bot` desktop/mobile, including chat, citations, suggestions, context rail, and pending approvals tab.
+
+---
+
+### TASK-UI-05 - Mobile QA and theme leakage cleanup
+- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Tier**: 2
+- **Session size**: ~2 hours
+- **Files to touch**: `frontend/src/index.css`, `frontend/src/components/Layout.jsx`, and only the page/component files required by the QA findings; `wiki/memory.md`
+
+**Problem**: After the cockpit cleanup and dashboard compaction, the remaining risk is cross-page polish drift: mobile overflow, clipped controls, bottom-nav overlap, table scroll issues, modal scroll regressions, and old theme utility classes leaking through nested forms or cards.
+
+**Exact steps**:
+1. QA `/dashboard`, `/orders`, `/positions`, `/strategies`, `/market-hub`, `/calendar`, `/wiki`, and `/ai-bot` at mobile and desktop widths.
+2. Fix only evidenced visual issues: text wrapping, overflow, clipped buttons, modal scroll, table scroll, bottom-nav overlap, and old `bg-black/*`, `bg-white/*`, `border-white/*`, `text-white`, or legacy focus-color leakage.
+3. Prefer shared `index.css` token fixes for repeated leakage; use page-level edits only where the issue is local.
+4. Do not remove routes, data, trading actions, or safety/readiness surfaces.
+
+**Verify**: run `$env:CI='false'; npm run build` from `frontend/`; inspect all listed routes locally at mobile and desktop widths before any deploy, then rebuild the frontend container if deployed.
+
+---

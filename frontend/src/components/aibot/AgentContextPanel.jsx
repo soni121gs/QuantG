@@ -22,15 +22,15 @@ export function ConversationHistoryCard({
   onDelete,
 }) {
   return (
-    <div className="qd-card flex flex-col p-4 h-full lg:min-h-0 lg:flex-1">
-      <div className="flex items-center justify-between border-b border-[var(--qd-border)]/60 pb-3">
+    <div className="qd-card flex flex-col p-3 h-full lg:min-h-0 lg:flex-1">
+      <div className="flex items-center justify-between border-b border-[var(--qd-border)]/60 pb-2.5">
         <h2 className="qd-section-title flex items-center gap-2 font-mono">
           <MessageSquare size={14} className="text-[var(--qd-accent)]" /> Conversations
         </h2>
         <button
           type="button"
           onClick={onNew}
-          className="t-meta inline-flex items-center gap-1 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2 py-1 font-semibold text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] cursor-pointer"
+          className="t-meta inline-flex items-center gap-1 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2 py-1 font-semibold text-[var(--qd-text-2)] hover:border-[var(--qd-border-strong)] hover:text-[var(--qd-text)] cursor-pointer"
           data-testid="ai-new-chat"
         >
           <Plus size={13} /> New
@@ -48,7 +48,7 @@ export function ConversationHistoryCard({
               key={s.id}
               className={`group flex items-center gap-2 rounded-[var(--qd-radius-sm)] border px-3 py-2.5 transition-all ${
                 active
-                  ? "border-[var(--qd-border-strong)] bg-[var(--qd-surface-3)]/80 shadow-xs"
+                  ? "border-[var(--qd-border-strong)] bg-[var(--qd-surface-3)]/80"
                   : "border-transparent hover:bg-[var(--qd-surface-2)]/60"
               }`}
             >
@@ -93,7 +93,7 @@ export function RiskPostureCard({ profile, executionSummary }) {
   const textColor = tone === "rose" ? "text-rose-400" : tone === "amber" ? "text-amber-400" : "text-emerald-400";
 
   return (
-    <div className="qd-card p-4">
+    <div className="qd-card p-3">
       <div className="flex items-center justify-between">
         <h2 className="qd-section-title flex items-center gap-2 font-mono">
           <ShieldCheck size={14} className="text-emerald-400" /> Risk Posture
@@ -135,7 +135,7 @@ export function CapabilitiesCard({ profile }) {
       <button
         type="button"
         onClick={() => setCapsOpen((v) => !v)}
-        className="flex w-full items-center justify-between p-4 cursor-pointer"
+        className="flex w-full items-center justify-between p-3 cursor-pointer"
         aria-expanded={capsOpen}
       >
         <span className="qd-section-title flex items-center gap-2 font-mono">
@@ -144,7 +144,7 @@ export function CapabilitiesCard({ profile }) {
         <ChevronDown size={15} className={`text-[var(--qd-text-3)] transition-transform ${capsOpen ? "rotate-180" : ""}`} />
       </button>
       {capsOpen && (
-        <div className="space-y-3 px-4 pb-4 border-t border-[var(--qd-border)]/40 pt-3">
+        <div className="space-y-3 px-3 pb-3 border-t border-[var(--qd-border)]/40 pt-3">
           <div>
             <div className="t-meta flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider text-emerald-400">
               <ShieldCheck size={12} /> Live Read Scope

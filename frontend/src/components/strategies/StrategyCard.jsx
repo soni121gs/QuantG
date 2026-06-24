@@ -44,7 +44,7 @@ function Metric({ label, value, tone, compact = false }) {
   return (
     <div className="min-w-0">
       <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
-      <div className={`${compact ? "text-xs" : "text-sm"} mt-0.5 truncate font-mono font-semibold ${tone || "text-white"}`}>{value}</div>
+      <div className={`${compact ? "text-xs" : "text-sm"} mt-0.5 truncate font-mono font-semibold ${tone || "text-[var(--qd-text)]"}`}>{value}</div>
     </div>
   );
 }

@@ -521,7 +521,7 @@ export default function Layout({ children }) {
                   <span className={`text-[11px] uppercase tracking-widest mt-0.5 px-1.5 py-0.5 rounded-sm border font-semibold ${
                     user.role === "owner" 
                       ? "bg-[rgba(255,159,10,0.08)] text-[var(--qd-warn)] border-[var(--qd-warn)]/30" 
-                      : "bg-indigo-500/10 text-indigo-300 border-indigo-500/20"
+                      : "bg-[var(--qd-surface-2)] text-[var(--qd-text-2)] border-[var(--qd-border)]"
                   }`}>
                     {user.role}
                   </span>
@@ -849,13 +849,13 @@ export default function Layout({ children }) {
             to={n.to}
             data-testid={n.id}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-0.5 py-3 text-[11px] font-mono uppercase tracking-wider transition-colors relative ${
+              `flex min-w-0 flex-col items-center justify-center gap-0.5 py-2.5 text-[10px] font-mono uppercase tracking-wide transition-colors relative ${
                 isActive ? "text-[var(--qd-accent)] bg-[var(--qd-surface)]/20" : "text-[var(--qd-text-2)]"
               }`
             }
           >
             <n.icon size={18} strokeWidth={1.5} />
-            <span>{n.label}</span>
+            <span className="max-w-full truncate">{n.label}</span>
             {n.id === "mnav-aibot" && pendingActionsCount > 0 && (
               <span className="qd-force-white absolute right-[25%] top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--qd-warn)] text-[9px] font-bold">
                 {pendingActionsCount}
