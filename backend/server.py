@@ -4465,6 +4465,11 @@ DEFAULT_OPTION_STRATEGIES = [
         "instrument_group": "NSE",
         "lots": 1,
         "product": "MIS",
+        # Whipsaw churn (2026-06-24: 4 losing ~5-min round-trips on EMA-cross flips).
+        # Raise the re-entry cooldown and cap daily trades so it cannot re-enter the
+        # same chop minutes after a stop-out. (Equity has no signal-exit min-hold, so
+        # cooldown is the lever — see EQUITY_COUNTERTREND_BLOCK_STRENGTH for direction.)
+        "risk": {"cooldown_minutes": 30, "max_trades_day": 2},
         "python_code": """def run(data):
     if len(data) < 55: return []
     closes = [float(d['close']) for d in data]
@@ -15510,15 +15515,22 @@ async def request_upstox_token_refresh_for_user(user_id: str) -> Dict[str, Any]:
         return {"ok": False, "reason": str(e)}
 
 
-async def _eod_square_off_all_users() -> Dict[str, Any]:
-    """EXIT GUARANTEE: 15:15 IST unconditional square-off of EVERY open position.
+async def _eod_square_off_all_users(spread_phase: bool = False) -> Dict[str, Any]:
+    """EXIT GUARANTEE: unconditional EOD square-off of open positions.
 
-    This is the last line of defense — by 15:15 IST nothing may stay open:
+    Runs in two phases so spreads can ride nearer to expiry:
+      - 15:15 (spread_phase=False): sweep single-leg/equity; spreads are EXCLUDED
+        (position_monitor force-closes them at 15:25).
+      - 15:26 (spread_phase=True): backstop sweep of EVERYTHING still open, so no
+        spread is ever left open past expiry day.
+
+    Steps each phase:
       1. Resurrect dead-end positions (STALE_NEEDS_REVIEW, CIRCUIT_BREAKER) to OPEN
          with failure counters reset, so the close path will pick them up.
       2. Revert any position stuck in EXITING back to OPEN for a fresh exit order.
       3. Call _close_strategy_positions for every (user, strategy) with live positions.
     """
+    _spread_types = ["credit_spread", "debit_spread"]
     now_str = datetime.now(timezone.utc).isoformat()
     summary: Dict[str, Any] = {"resurrected": 0, "exiting_reverted": 0, "strategies_swept": 0, "errors": []}
 
@@ -15540,10 +15552,15 @@ async def _eod_square_off_all_users() -> Dict[str, Any]:
     )
     summary["exiting_reverted"] = res.modified_count
 
-    # 3. Sweep every (user, strategy) holding live positions
+    # 3. Sweep every (user, strategy) holding live positions. At 15:15 spreads are
+    #    excluded (they square off at 15:25 via position_monitor); the 15:26 backstop
+    #    phase sweeps everything that remains.
+    _match: Dict[str, Any] = {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
+                              "open_quantity": {"$gt": 0}}
+    if not spread_phase:
+        _match["structure"] = {"$nin": _spread_types}
     pairs = await db.strategy_positions.aggregate([
-        {"$match": {"status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
-                    "open_quantity": {"$gt": 0}}},
+        {"$match": _match},
         {"$group": {"_id": {"user_id": "$user_id", "strategy_id": "$strategy_id"}}},
     ]).to_list(500)
     for pair in pairs:
@@ -15640,6 +15657,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _gateway_check_done_date: Optional[str] = None
     _lifecycle_reset_done_date: Optional[str] = None
     _squareoff_done_date: Optional[str] = None
+    _spread_squareoff_done_date: Optional[str] = None
     _vix_last_snapshot_minute: Optional[str] = None
     _chain_last_snapshot_minute: Optional[str] = None
     _candle_backfill_done_date: Optional[str] = None
@@ -15833,11 +15851,25 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 and (hour == 15 and 15 <= minute < 30)
             ):
                 _squareoff_done_date = today
-                logger.info("Daily scheduler: 15:15 IST — EOD unconditional square-off starting")
+                logger.info("Daily scheduler: 15:15 IST — EOD square-off (single-leg/equity; spreads ride to 15:25)")
                 try:
-                    await _eod_square_off_all_users()
+                    await _eod_square_off_all_users(spread_phase=False)
                 except Exception as _sq_err:
                     logger.error("EOD square-off run failed: %s", _sq_err)
+
+            # 15:26 IST — spread backstop sweep. Spreads square off at 15:25 via
+            # position_monitor; this guarantees any straggler is closed before close.
+            if (
+                ist.weekday() < 5
+                and _spread_squareoff_done_date != today
+                and (hour == 15 and 26 <= minute < 30)
+            ):
+                _spread_squareoff_done_date = today
+                logger.info("Daily scheduler: 15:26 IST — spread backstop square-off starting")
+                try:
+                    await _eod_square_off_all_users(spread_phase=True)
+                except Exception as _sq_err:
+                    logger.error("Spread backstop square-off run failed: %s", _sq_err)
         except Exception as e:
             logger.warning("Daily scheduler error: %s", e)
         # Sleep in 10-second slices for responsive shutdown

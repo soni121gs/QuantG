@@ -63,6 +63,12 @@ _EQUITY_LTP_MAX_DEV = float(os.environ.get("EQUITY_LTP_MAX_DEV", "0.35"))
 # Force-close all positions at this IST minute-of-day (15:10 = 910 minutes)
 _SQUAREOFF_MINUTE_IST = 15 * 60 + 10
 
+# Spreads square off later (15:25) than single-leg/equity (15:10) so they ride
+# nearer to expiry and collect theta instead of being cut mid-trajectory. A 15:26
+# server-side backstop (_eod_square_off_all_users spread_phase) guarantees nothing
+# is left open. Env-overridable.
+_SPREAD_SQUAREOFF_MINUTE_IST = int(os.environ.get("SPREAD_SQUAREOFF_MINUTE_IST", str(15 * 60 + 25)))
+
 # EOD aggregation fires once per day at 15:35 IST (market settled, squareoff done)
 _EOD_AGGREGATION_MINUTE_IST = 15 * 60 + 35
 _eod_aggregation_done_date: str | None = None  # tracks which calendar date was already run
@@ -88,6 +94,14 @@ def _squareoff_due() -> bool:
     if ist.weekday() >= 5:
         return False
     return ist.hour * 60 + ist.minute >= _SQUAREOFF_MINUTE_IST
+
+
+def _spread_squareoff_due() -> bool:
+    """True when IST time has reached or passed the spread square-off minute (15:25)."""
+    ist = _ist_now()
+    if ist.weekday() >= 5:
+        return False
+    return ist.hour * 60 + ist.minute >= _SPREAD_SQUAREOFF_MINUTE_IST
 
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
@@ -608,14 +622,15 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         {"$set": set_fields},
     )
 
-    # Spreads are intraday — 15:10 IST force-close.
-    if squareoff:
-        logger.info("spread monitor: squareoff-1510 closing pos=%s", pos.get("id"))
+    # Spreads ride later than single-leg (15:25 vs 15:10) so theta is collected
+    # nearer to expiry instead of cutting them mid-trajectory at 15:10.
+    if _spread_squareoff_due():
+        logger.info("spread monitor: squareoff-1525 closing pos=%s", pos.get("id"))
         if structure == "debit_spread":
-            await close_debit_spread(db, pos, reason="intraday-squareoff-1510",
+            await close_debit_spread(db, pos, reason="intraday-squareoff-1525",
                                      short_ltp=short_ltp, long_ltp=long_ltp)
         else:
-            await close_credit_spread(db, pos, reason="intraday-squareoff-1510",
+            await close_credit_spread(db, pos, reason="intraday-squareoff-1525",
                                       short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
