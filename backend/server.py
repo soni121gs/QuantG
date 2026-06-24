@@ -361,6 +361,13 @@ class StrategyOut(BaseModel):
     broker: Optional[str] = "upstox"
     mode: Optional[str] = "paper"
     market_suitability: Optional[str] = "Any Market Condition"
+    today_pnl: Optional[float] = None
+    # Day-level lock state (core/profit_lock, core/loss_killswitch) — surfaced so the
+    # UI can show a stood-down badge when a strategy has booked its day or hit its loss floor.
+    day_profit_locked: Optional[bool] = None
+    day_profit_locked_date: Optional[str] = None
+    day_loss_locked: Optional[bool] = None
+    day_loss_locked_date: Optional[str] = None
 
 
 
@@ -6150,10 +6157,16 @@ def _strategy_type(row: Dict[str, Any]) -> str:
 
 
 def _strategy_required_capital(row: Dict[str, Any]) -> float:
+    # Prefer the nested risk/options capital — that is what the risk manager
+    # actually sizes on (core/risk_manager.py). The top-level required_capital is a
+    # legacy field the template re-sync keeps at the template default, so it can be
+    # stale (e.g. equity tiers live in visual_config.risk.required_capital). Reading
+    # it first made the UI show ₹15k while the engine traded ₹75k. Nested wins.
+    visual_config = row.get("visual_config") or {}
     for value in (
+        (visual_config.get("risk") or {}).get("required_capital"),
+        (visual_config.get("options") or {}).get("required_capital"),
         row.get("required_capital"),
-        ((row.get("visual_config") or {}).get("risk") or {}).get("required_capital"),
-        (((row.get("visual_config") or {}).get("options") or {}).get("required_capital")),
     ):
         if value is not None:
             try:

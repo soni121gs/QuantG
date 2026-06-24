@@ -57,6 +57,12 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
   const isSpreadCard = cardOpts.structure === "credit_spread" || cardOpts.structure === "debit_spread";
   const maxTd = s.visual_config?.risk?.max_trades_day;
   const tradesToday = s.order_count_today ?? 0;
+  // Day-level stand-down (profit_lock / loss_killswitch). Only flag when the lock
+  // is dated today (IST), so a prior day's lock never lingers on the card.
+  const istToday = new Date(Date.now() + (new Date().getTimezoneOffset() + 330) * 60000)
+    .toISOString().slice(0, 10);
+  const lossLockedToday = s.day_loss_locked && s.day_loss_locked_date === istToday;
+  const profitLockedToday = s.day_profit_locked && s.day_profit_locked_date === istToday;
   const atCap = maxTd != null && tradesToday >= maxTd;
   const notice = noticeFor(s);
   const editPath = s.kind === "python" ? `/python?id=${s.id}` : `/visual?id=${s.id}`;
@@ -142,6 +148,14 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
             title="Trades today / daily cap"
           >
             {tradesToday}/{maxTd}
+          </span>
+        )}
+        {(lossLockedToday || profitLockedToday) && (
+          <span
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border ${lossLockedToday ? "bg-rose-500/10 border-rose-500/30 text-[var(--qd-loss)]" : "bg-emerald-500/10 border-emerald-500/30 text-[var(--qd-profit)]"}`}
+            title={lossLockedToday ? "Daily loss floor hit — stood down for the day" : "Day's profit locked — stood down for the day"}
+          >
+            {lossLockedToday ? "LOSS-LOCKED" : "PROFIT-LOCKED"}
           </span>
         )}
       </div>

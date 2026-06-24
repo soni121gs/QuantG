@@ -27,8 +27,15 @@ const MAP = {
   "stop-loss": { label: "Stop loss", tone: "loss" },
   "trailing-sl": { label: "Trailing stop", tone: "profit", hint: "Locked-in profit via trailing stop." },
   "time-exit": { label: "Time exit", tone: "warn", hint: "Held to the max time and squared off." },
-  "intraday-squareoff": { label: "EOD square-off", tone: "warn", hint: "Intraday positions force-closed near 15:10 IST." },
+  "intraday-squareoff": { label: "EOD square-off", tone: "warn", hint: "Intraday positions force-closed before close (15:10 IST; spreads 15:25)." },
   "risk-trigger": { label: "Risk exit", tone: "loss" },
+  // ── day-level locks (profit_lock / loss_killswitch) ──
+  "profit-lock": { label: "Profit locked", tone: "profit", hint: "Day's open profit booked instead of riding it back down." },
+  "profit-locked-day": { label: "Stood down · profit locked", tone: "profit", hint: "Already booked the day's gains — no re-entry until tomorrow." },
+  "daily-loss-killswitch": { label: "Daily loss limit hit", tone: "loss", hint: "Squared off — the day's loss reached the configured floor." },
+  "loss-locked-day": { label: "Stood down · daily loss limit", tone: "loss", hint: "Hit the daily loss floor — no re-entry until tomorrow." },
+  // ── source-aligned entry gate ──
+  "countertrend_gate": { label: "Blocked · counter-trend", tone: "info", hint: "Entry was against a strong prevailing trend (buy into downtrend / sell into uptrend)." },
   // ── Phase 2 entry gates ──
   "iv_rank_high": { label: "Blocked · IV too rich", tone: "info", hint: "IV rank above the buy cap — option premium is expensive." },
   "iv_rank_gate": { label: "Blocked · IV too rich", tone: "info", hint: "IV-rank gate blocked option buying." },
