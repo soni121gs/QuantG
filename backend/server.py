@@ -3676,6 +3676,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "RELIANCE Trend Rider",
+        "risk": {"daily_loss_limit": 2500},  # equity loss floor ~3.3% of ₹75k tier (WR-52)
         "description": "Rides strong bull trends using double EMA (9/21) filtered by index direction and tod_vol_ratio to ensure high volume participation. Uses trailing ATR stops.",
         "underlying": "RELIANCE",
         "strategy_type": "Equity Intraday",
@@ -3777,6 +3778,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "SBIN Short Seller",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Short-selling intraday strategy for bear markets. Enters when price drops below VWAP and sloping 200 EMA, utilizing volume-backed breakdowns.",
         "underlying": "SBIN",
         "strategy_type": "Equity Intraday",
@@ -3891,6 +3893,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "HDFCBANK Range Rebound",
+        "risk": {"daily_loss_limit": 2500},  # equity loss floor ~3.3% of ₹75k tier (WR-52)
         "description": "Mean reversion strategy for rangebound/low volatility environments. Uses Bollinger Bands compression/reversals with RSI filters.",
         "underlying": "HDFCBANK",
         "strategy_type": "Equity Intraday",
@@ -3988,6 +3991,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "ICICIBANK Volatility Breakout",
+        "risk": {"daily_loss_limit": 2500},  # equity loss floor ~3.3% of ₹75k tier (WR-52)
         "description": "High-volatility intraday breakout strategy designed to capture sharp news-driven and earnings catalysts. Enters on extreme volume and ATR spikes.",
         "underlying": "ICICIBANK",
         "strategy_type": "Equity Intraday",
@@ -4093,6 +4097,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "TCS Swing Accumulator",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Swing delivery strategy built to accumulate defensive IT giant during global corrections/macro selloffs. Enters when daily RSI is extremely oversold.",
         "underlying": "TCS",
         "strategy_type": "Equity Delivery",
@@ -4161,6 +4166,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "INFY VWAP Pullback",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Intraday pullback buyer. Waits for price to pull back below VWAP inside a strong EMA 50 uptrend, entering on VWAP breakout recovery.",
         "underlying": "INFY",
         "strategy_type": "Equity Intraday",
@@ -4269,6 +4275,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "AXISBANK Trend Follower",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Macro EMA filter trend follower. Enters when 9/21 EMA crossover aligns with slope of 200 EMA.",
         "underlying": "AXISBANK",
         "strategy_type": "Equity Intraday",
@@ -4368,6 +4375,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "LT Momentum Rider",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Intraday momentum strategy designed for capital goods sector (L&T). Captures breakouts of Donchian channels with dynamic trailing stops.",
         "underlying": "LT",
         "strategy_type": "Equity Intraday",
@@ -4469,7 +4477,7 @@ DEFAULT_OPTION_STRATEGIES = [
         # Raise the re-entry cooldown and cap daily trades so it cannot re-enter the
         # same chop minutes after a stop-out. (Equity has no signal-exit min-hold, so
         # cooldown is the lever — see EQUITY_COUNTERTREND_BLOCK_STRENGTH for direction.)
-        "risk": {"cooldown_minutes": 30, "max_trades_day": 2},
+        "risk": {"cooldown_minutes": 30, "max_trades_day": 2, "daily_loss_limit": 1200},  # ~3.4% of ₹35k tier (WR-52)
         "python_code": """def run(data):
     if len(data) < 55: return []
     closes = [float(d['close']) for d in data]
@@ -4564,6 +4572,7 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "KOTAKBANK RSI Rebound",
+        "risk": {"daily_loss_limit": 1800},  # equity loss floor ~3.6% of ₹50k tier (WR-52)
         "description": "Swing delivery strategy designed for Kotak Bank. Enters on daily RSI recovery above 30 from oversold zones.",
         "underlying": "KOTAKBANK",
         "strategy_type": "Equity Delivery",
