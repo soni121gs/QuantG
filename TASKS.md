@@ -2498,7 +2498,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 ---
 
 ### TASK-UI-03 - Strategies and modals consistency pass
-- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Status**: `[x]` commit edb4949 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
 - **Tier**: 2
 - **Session size**: ~1.5 hours
 - **Files to touch**: `frontend/src/pages/Strategies.jsx`, `frontend/src/components/strategies/StrategyCard.jsx`, `frontend/src/components/strategies/RuntimeSettingsForm.jsx`, `frontend/src/components/strategies/AboutStrategyModal.jsx`, `frontend/src/index.css`, `wiki/memory.md`
@@ -2516,7 +2516,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 ---
 
 ### TASK-UI-04 - Hermes and AIBot polish
-- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Status**: `[x]` commit edb4949 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
 - **Tier**: 2
 - **Session size**: ~1.5 hours
 - **Files to touch**: `frontend/src/pages/AIBot.jsx`, `frontend/src/components/aibot/ChatFeed.jsx`, `frontend/src/components/aibot/AgentContextPanel.jsx`, `frontend/src/components/aibot/PromptSuggestionsPanel.jsx`, `frontend/src/index.css`, `wiki/memory.md`
@@ -2534,7 +2534,7 @@ a confident overfitting machine — that is the single worst outcome and is expl
 ---
 
 ### TASK-UI-05 - Mobile QA and theme leakage cleanup
-- **Status**: `[x]` commit 7cad3c9 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
+- **Status**: `[x]` commit edb4949 Â· 2026-06-24 Â· build verified; browser QA blocked by local connector
 - **Tier**: 2
 - **Session size**: ~2 hours
 - **Files to touch**: `frontend/src/index.css`, `frontend/src/components/Layout.jsx`, and only the page/component files required by the QA findings; `wiki/memory.md`
