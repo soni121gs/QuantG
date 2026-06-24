@@ -459,6 +459,16 @@ class SignalManager:
                             strategy_id, strategy.get("day_profit_locked_reason"))
                 return False, "profit-locked-day", 1.0
 
+        # 0b. Day loss kill-switch — once a strategy (or the whole book) breaches its
+        # daily loss floor, position_monitor flags day_loss_locked and squares off.
+        # Block any re-entry for the rest of that IST day. (See core/loss_killswitch.)
+        if strategy.get("day_loss_locked"):
+            today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+            if strategy.get("day_loss_locked_date") == today_ist:
+                logger.info("[LIMITS] strategy=%s blocked: day-loss-locked (%s)",
+                            strategy_id, strategy.get("day_loss_locked_reason"))
+                return False, "loss-locked-day", 1.0
+
         risk_cfg = (
             (strategy.get("visual_config") or {}).get("risk")
             or (visual_config or {}).get("risk")

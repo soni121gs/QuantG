@@ -34,6 +34,7 @@ from core.position_lifecycle import (
 )
 from core.portfolio_ledger import get_strategy_pnl_today
 from core.profit_lock import evaluate_and_apply_locks
+from core.loss_killswitch import evaluate_loss_killswitch
 from core.spread_lifecycle import (
     value_credit_spread, spread_exit_reason, close_credit_spread,
     value_debit_spread, debit_spread_exit_reason, close_debit_spread,
@@ -544,6 +545,13 @@ async def _monitor_tick(db, close_fn, quote_ltp_fn, get_ltp_fn, get_settings_fn)
             await evaluate_and_apply_locks(db, close_fn)
         except Exception as lock_exc:
             logger.warning("position_monitor: profit-lock eval error: %s", lock_exc)
+        # ── Day-level loss kill-switch (hard stop) ───────────────────────────
+        # Active enforcement: fires off fresh marked-to-market unrealized P&L even
+        # when no new order is attempted (the preflight guard only trips on entry).
+        try:
+            await evaluate_loss_killswitch(db, close_fn)
+        except Exception as ks_exc:
+            logger.warning("position_monitor: loss-killswitch eval error: %s", ks_exc)
 
 
 async def _resolve_ltp(

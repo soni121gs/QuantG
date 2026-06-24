@@ -143,6 +143,7 @@ async def ops_risk_scorecard(
         CLEAN_STATS_DEFAULT_SINCE,
         build_scorecard as build_risk_scorecard,
         summarize_by_structure,
+        summarize_verdicts,
     )
     uid: Optional[str] = user["id"]
     if scope == "all":
@@ -154,6 +155,7 @@ async def ops_risk_scorecard(
     return {
         "rows": rows,
         "by_structure": summarize_by_structure(rows),
+        "verdicts": summarize_verdicts(rows),
         "stats_window": {
             "mode": "clean" if effective_since else "lifetime",
             "since": effective_since,
