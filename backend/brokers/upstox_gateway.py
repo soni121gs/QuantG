@@ -45,7 +45,7 @@ class UpstoxGateway:
         self.api_key = api_key or os.environ.get("UPSTOX_API_KEY")
         self.api_secret = api_secret or os.environ.get("UPSTOX_API_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get("UPSTOX_REDIRECT_URI")
-        self.timeout = float(timeout or os.environ.get("UPSTOX_TIMEOUT_SEC", "15"))
+        self.timeout = float(timeout or os.environ.get("UPSTOX_TIMEOUT_SEC", "5"))
         self.last_error: Optional[str] = None
         self.last_request_at: Optional[str] = None
         self.last_order_response: Optional[Any] = None

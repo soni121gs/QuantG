@@ -96,12 +96,12 @@ def _enrich_tod_ratios(data: List[dict]) -> List[dict]:
     return data
 
 
-def _safe_run(code: str, data: List[dict]) -> List[dict]:
+def _safe_run(code: str, data: List[dict], strategy_id: str = "", strategy_name: str = "") -> List[dict]:
     """Run user strategy via shared AST-validated sandbox. Returns [] on error."""
     try:
         return safe_run_strategy(code, data)
     except Exception as e:
-        logger.warning(f"strategy code error: {e}")
+        logger.warning("strategy code error [%s | %s]: %s", strategy_name or "?", strategy_id or "?", e)
         return []
 
 
@@ -397,12 +397,31 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
     option_contract kwarg.
     """
     logger.info(f"Strategy runner starting (tick={TICK_SECONDS}s, pod={POD_ID})")
+    _lifecycle_reset_done_date: str = ""
     while not stop_event.is_set():
         # Global market hours gate: do nothing outside 9:00 AM – 3:35 PM IST Mon–Fri.
         # This prevents all DB reads/writes and lock acquisition when the market is closed.
         if not is_trading_session_active():
             await _sleep_or_stop(stop_event, TICK_SECONDS)
             continue
+        # Safety net: if the daily lifecycle reset (scheduled at 8:50 AM) was missed
+        # because the container started after that time, run it on the first active tick.
+        from datetime import date
+        _today_str = date.today().isoformat()
+        if _lifecycle_reset_done_date != _today_str:
+            _lifecycle_reset_done_date = _today_str
+            try:
+                from server import _daily_paper_lifecycle_for_user, db as _sdb
+                users_lc = await _sdb.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                for _row in users_lc:
+                    try:
+                        _summary = await _daily_paper_lifecycle_for_user(_row["id"])
+                        if any(_summary.values()):
+                            logger.info("Runner first-tick lifecycle reset user=%s: %s", _row["id"], _summary)
+                    except Exception as _ue:
+                        logger.warning("Runner first-tick lifecycle failed user=%s: %s", _row["id"], _ue)
+            except Exception as _lc_err:
+                logger.warning("Runner first-tick lifecycle scan failed: %s", _lc_err)
         owns_lock = await _acquire_lock(db)
         if not owns_lock:
             # Another pod is leader; skip this tick.
@@ -498,7 +517,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
                 data = _enrich_tod_ratios(data)
-                signals = _safe_run(code, data)
+                signals = _safe_run(code, data, strategy_id=s.get("id", ""), strategy_name=s.get("name", ""))
                 signals_count = len(signals)
                 if not signals:
                     await db.strategies.update_one({"id": s["id"]},

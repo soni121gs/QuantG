@@ -599,14 +599,14 @@ class UpstoxMarketDataFeedV3:
                     self._state = "reconnecting"
                     self._consecutive_failures += 1
                 logger.warning("Upstox V3 feed connection failed attempt=%s error=%s consecutive_failures=%s", self._reconnects, exc, self._consecutive_failures)
-                # Give up after too many consecutive failures
-                if self._consecutive_failures >= _RECONNECT_MAX_CONSECUTIVE_FAILURES:
-                    logger.error("Upstox V3 feed giving up after %s consecutive failures; stopping reconnect loop", self._consecutive_failures)
-                    with self._lock:
-                        self._running = False
-                        self._state = "dead"
-                        self._last_error = f"{_RECONNECT_MAX_CONSECUTIVE_FAILURES} consecutive failures, giving up"
-                    break
+                # Log a prominent alert every 10 failures so ops can see feed is stuck,
+                # but never give up — the token may be refreshed externally at any time.
+                if self._consecutive_failures % 10 == 0:
+                    logger.error(
+                        "Upstox V3 feed still retrying after %s consecutive failures — "
+                        "reconnect will continue indefinitely until token is valid",
+                        self._consecutive_failures,
+                    )
                 # Exponential backoff with jitter
                 delay = min(delay * 1.5, _RECONNECT_MAX_DELAY)
                 jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)

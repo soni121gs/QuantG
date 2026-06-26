@@ -11557,6 +11557,14 @@ async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
             "daily_lifecycle_at": now,
         }},
     )
+    # Reset loss streaks daily so strategies blocked by consecutive SL hits
+    # on previous days are not permanently frozen. Streaks only block for the day
+    # they accumulate; each new session starts clean.
+    reset_streaks = await db.strategy_loss_streaks.update_many(
+        {"user_id": user_id, "current_streak": {"$gt": 0}},
+        {"$set": {"current_streak": 0, "paused_until": None, "reset_at": now}},
+    )
+
     await db.paper_session_state.update_one(
         {"user_id": user_id},
         {"$set": {
@@ -11569,6 +11577,7 @@ async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
             "stale_positions": stale_positions.modified_count,
             "history_orders_marked": archived_orders.modified_count,
             "strategies_reset": reset_strategies.modified_count,
+            "loss_streaks_reset": reset_streaks.modified_count,
         }},
         upsert=True,
     )
@@ -11577,6 +11586,7 @@ async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
         "stale_positions": stale_positions.modified_count,
         "history_orders_marked": archived_orders.modified_count,
         "strategies_reset": reset_strategies.modified_count,
+        "loss_streaks_reset": reset_streaks.modified_count,
     }
 
 
@@ -16610,6 +16620,13 @@ async def startup():
     # available immediately after restart, not only after the first strategy signal.
     async def _subscribe_open_position_tokens_on_startup():
         await asyncio.sleep(8)  # wait for gateways to authenticate
+        # Always subscribe these baseline index tokens so strategies can evaluate
+        # entries even on days with no overnight open positions.
+        _BASELINE_TOKENS = [
+            "NSE_INDEX|Nifty 50",
+            "NSE_INDEX|Nifty Bank",
+            "BSE_INDEX|SENSEX",
+        ]
         try:
             users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(200)
             for user_row in users:
@@ -16619,6 +16636,8 @@ async def startup():
                     continue
                 # Start index feed (NIFTY/BANKNIFTY/SENSEX) so the WS is running
                 await _start_user_upstox_ticker(uid)
+                # Always subscribe baseline index tokens regardless of open positions
+                await asyncio.to_thread(gateway.start_market_data_ws, _BASELINE_TOKENS, "full")
                 # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
@@ -16630,7 +16649,9 @@ async def startup():
                 ]
                 if tokens:
                     await asyncio.to_thread(gateway.start_market_data_ws, tokens, "full")
-                    logger.info("Startup: subscribed %d open-position tokens for user %s", len(tokens), uid)
+                    logger.info("Startup: subscribed %d open-position tokens + %d baseline for user %s", len(tokens), len(_BASELINE_TOKENS), uid)
+                else:
+                    logger.info("Startup: subscribed %d baseline tokens for user %s (no open positions)", len(_BASELINE_TOKENS), uid)
         except Exception as _sub_err:
             logger.warning("Startup option token subscription failed: %s", _sub_err)
 
