@@ -3446,6 +3446,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "NIFTY VWAP Trend Breakout",
         "description": "Directional index option buying triggered by volume-backed VWAP breakouts on NIFTY 5-minute charts.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 40: return []
@@ -3476,6 +3477,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "SENSEX Swing RSI Pullback",
         "description": "Swing trading pullback entries on SENSEX triggered by extreme RSI levels overbought/oversold recoveries.",
         "underlying": "SENSEX", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 25000.0, "instrument_group": "BFO",
         "python_code": """def run(data):
     if len(data) < 30: return []
@@ -3573,6 +3575,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "NIFTY Micro-Lot Trend Follower",
         "description": "Low-capital NIFTY ATM option buying trend-follower. Capital required: 10,000.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 30: return []
@@ -3592,6 +3595,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "NIFTY HFT Quick Scalper",
         "description": "High-frequency index option scalper targeting micro-breakouts on NIFTY 1-minute and 5-minute charts using HFT execution templates.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 20: return []
@@ -3612,6 +3616,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "BANKNIFTY HFT Momentum Scalper",
         "description": "Adaptive HFT option buying scalper for BANKNIFTY using dynamic standard deviation bands.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 25: return []
