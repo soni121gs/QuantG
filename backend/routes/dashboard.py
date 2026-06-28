@@ -64,10 +64,12 @@ async def risk_dashboard(user=Depends(get_current_user)):
 async def trade_journal(user=Depends(get_current_user)):
     from server import (
         _fill_ledger_summary, canonical_order_status,
-        ORDER_FILLED, ORDER_CLOSED,
+        ORDER_FILLED, ORDER_CLOSED, get_trading_day_window_ist,
     )
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    skipped = await db.skipped_signals.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
+    _today_start, _ = get_trading_day_window_ist()
+    # Reset daily: only show signals skipped during the current trading day.
+    skipped = await db.skipped_signals.find({"user_id": user["id"], "last_seen_at": {"$gte": _today_start}}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
     fill_summary = await _fill_ledger_summary(user["id"])
     completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
     failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]

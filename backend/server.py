@@ -9527,24 +9527,24 @@ async def _execution_preflight(
     try:
         if _intent_is_entry(intent.intent):
             risk_cfg = ((strategy_row or {}).get("visual_config") or {}).get("risk") or {}
-            daily_loss_enabled = bool(
-                settings.get("daily_loss_kill_switch_enabled")
-                or settings.get("daily_loss_guard_enabled")
-                or risk_cfg.get("daily_loss_enabled")
-                or risk_cfg.get("daily_loss_kill_switch_enabled")
+            _mode = "paper" if paper else "live"
+            # Account-level daily-loss kill switch. Single source of truth =
+            # Trading Preferences MAX DAILY LOSS (settings.max_daily_loss): setting
+            # a value > 0 AUTO-ARMS it account-wide (force-close all open positions
+            # + block new entries for the day). No separate enable toggle — the
+            # value the user sets in the profile IS the switch. An optional
+            # mode-specific override (daily_loss_limit_paper/live, on settings or
+            # the strategy risk config) can only tighten the limit, never loosen it.
+            _account_limit = float(settings.get("max_daily_loss") or 0)
+            _mode_override = (
+                float(settings.get(f"daily_loss_limit_{_mode}") or 0)
+                or float(risk_cfg.get(f"daily_loss_limit_{_mode}") or 0)
             )
-            if daily_loss_enabled:
-                # Mode-specific limit: daily_loss_limit_paper / daily_loss_limit_live
-                # fall back to legacy daily_loss_limit for backward-compat.
-                # Set these on the strategy's risk config or user settings.
-                _mode = "paper" if paper else "live"
-                _limit_key = f"daily_loss_limit_{_mode}"
-                _limit = (
-                    float(risk_cfg.get(_limit_key) or 0)
-                    or float(settings.get(_limit_key) or 0)
-                    or float(risk_cfg.get("daily_loss_limit") or 0)
-                    or float(settings.get("max_daily_loss") or 0)
-                )
+            if _mode_override > 0 and _account_limit > 0:
+                _limit = min(_account_limit, _mode_override)
+            else:
+                _limit = _mode_override or _account_limit
+            if _limit > 0:
                 await _check_daily_loss_guard(user_id, _limit, mode=_mode)
     except HTTPException as exc:
         return _preflight_response(
@@ -13829,7 +13829,8 @@ async def risk_dashboard(user=Depends(get_current_user)):
 # moved to routes/dashboard.py
 async def trade_journal(user=Depends(get_current_user)):
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    skipped = await db.skipped_signals.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
+    _today_start, _ = get_trading_day_window_ist()
+    skipped = await db.skipped_signals.find({"user_id": user["id"], "last_seen_at": {"$gte": _today_start}}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
     fill_summary = await _fill_ledger_summary(user["id"])
     completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
     failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]

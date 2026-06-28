@@ -341,8 +341,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 "user_id": user["id"],
                 "status": {"$in": ["FILTERED", "REJECTED", "SKIPPED_SIGNAL", "BLOCKED", "skipped", "filtered", "rejected"]}
             }, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(50)
+            from server import get_trading_day_window_ist
+            _today_start, _ = get_trading_day_window_ist()
             agg_skips = await db.skipped_signals.find({
-                "user_id": user["id"]
+                "user_id": user["id"],
+                "last_seen_at": {"$gte": _today_start},
             }, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(50)
             data = {
                 "signals_skipped": signals_skips,

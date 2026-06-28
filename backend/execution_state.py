@@ -152,9 +152,13 @@ class ExecutionStateManager:
             "gross_pnl": round(net_realized + charges, 2),
         }
 
-    async def _load_skipped_signals(self, user_id: str) -> List[Dict[str, Any]]:
+    async def _load_skipped_signals(self, user_id: str, since: Optional[str] = None) -> List[Dict[str, Any]]:
+        query: Dict[str, Any] = {"user_id": user_id, "visibility": {"$ne": "hidden"}}
+        if since:
+            # Reset daily: only surface skips seen during the current trading day.
+            query["last_seen_at"] = {"$gte": since}
         rows = await self._db.skipped_signals.find(
-            {"user_id": user_id, "visibility": {"$ne": "hidden"}},
+            query,
             {"_id": 0, "user_id": 0},
         ).sort("last_seen_at", -1).to_list(200)
         strategy_ids = {str(row.get("strategy_id")) for row in rows if row.get("strategy_id")}
@@ -463,7 +467,7 @@ class ExecutionStateManager:
                 today_start=today.get("start"),
                 today_end=today.get("end"),
             ),
-            self._load_skipped_signals(user_id),
+            self._load_skipped_signals(user_id, today.get("start")),
             self._db.paper_wallets.find_one({"user_id": user_id}, {"_id": 0}),
             self._db.upstox_reconciliation_state.find_one({"_id": "latest"}, {"_id": 0}),
             self._db.strategies.count_documents({"user_id": user_id, "status": "live"}),
@@ -556,6 +560,16 @@ class ExecutionStateManager:
                 "charges": day_pnl["charges"],
                 "net_pnl": day_pnl["net_pnl"],
                 "realized_pnl": day_pnl["realized_pnl"],
+                # Account-level daily-loss kill switch state, synced to the
+                # Trading Preferences MAX DAILY LOSS (settings.max_daily_loss).
+                # Same realized-P&L basis the entry guard enforces, so the
+                # cockpit and the actual kill switch never disagree.
+                "account_daily_loss_limit": round(float(settings.get("max_daily_loss") or 0), 2),
+                "account_daily_loss_armed": float(settings.get("max_daily_loss") or 0) > 0,
+                "account_daily_loss_breached": (
+                    float(settings.get("max_daily_loss") or 0) > 0
+                    and float(day_pnl["realized_pnl"]) <= -abs(float(settings.get("max_daily_loss") or 0))
+                ),
                 "position_integrity": {
                     "orphans": orphan_positions_count,
                     "missing_sl": missing_sl_count,

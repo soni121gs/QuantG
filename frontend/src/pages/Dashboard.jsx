@@ -116,6 +116,10 @@ export default function Dashboard() {
   const marketOpen = marketSession ? marketSession.global_status === "OPEN" : telemetry?.market_status?.is_open;
   const marketStatusLabel = marketSession?.global_status || (marketOpen ? "OPEN" : "CLOSED");
   const firstRisk = strategies[0]?.risk_settings || {};
+  // Account-level daily-loss kill switch, synced to Trading Preferences MAX DAILY LOSS.
+  const acctLossLimit = executionSummary.account_daily_loss_limit || 0;
+  const acctLossArmed = !!executionSummary.account_daily_loss_armed;
+  const acctLossBreached = !!executionSummary.account_daily_loss_breached;
   const openOrders = useMemo(() => orders.filter((o) => BROKER_OPEN_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
   const failedOrders = useMemo(() => orders.filter((o) => PROBLEM_ORDER_STATES.includes(asStatus(o.execution_status || o.status))), [orders]);
   const openStrategyPositions = useMemo(() => positions.filter((p) => hasQty(p.qty)), [positions]);
@@ -256,7 +260,7 @@ export default function Dashboard() {
               <Field label="Used Margin" value={money(funds?.used_margin)} />
               <Field label="Open Orders" value={openOrders.length} tone={openOrders.length ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-2)]"} />
               <Field label="Failed" value={failedOrders.length} tone={failedOrders.length ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
-              <Field label="Kill Gate" value={firstRisk.kill_switch_enabled ? "ARMED" : "CLEAR"} tone={firstRisk.kill_switch_enabled ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
+              <Field label="Kill Gate" value={!acctLossArmed ? "OFF" : (acctLossBreached ? "TRIPPED" : "ARMED")} tone={acctLossBreached ? "text-[var(--qd-loss)]" : (acctLossArmed ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]")} />
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
@@ -306,7 +310,7 @@ export default function Dashboard() {
             <Field label="Cooldown" value={`${strategies[0]?.cooldown_minutes ?? 25} min`} />
           </div>
           <div className="bg-[var(--qd-surface)] px-3 py-2">
-            <Field label="Loss Cutoff" value={money(firstRisk.daily_loss_limit || 0)} />
+            <Field label="Loss Cutoff" value={money(acctLossLimit)} />
           </div>
           <div className="bg-[var(--qd-surface)] px-3 py-2">
             <Field label="Protection" value={`${missingProtectionCount}/${openStrategyPositions.length} missing`} tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
