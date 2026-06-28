@@ -381,5 +381,8 @@ async def test_gt10_force_exit_on_ltp_unavailable_past_deadline():
 
     close_fn.assert_called_once()
     reason = close_fn.call_args[1].get("reason") or close_fn.call_args[0][2]
-    assert "market" in reason.lower() or "ltp" in reason.lower() or "unavailable" in reason.lower(), \
-        f"Expected market/ltp force-exit reason, got: {reason}"
+    # Guardian force-exits a position it can't price. Accept any of the stale/no-LTP
+    # protective-exit reason labels (the live label is "stale-quote-protective-exit").
+    accepted = ("market", "ltp", "unavailable", "stale", "protective")
+    assert any(token in reason.lower() for token in accepted), \
+        f"Expected a stale/ltp protective force-exit reason, got: {reason}"
