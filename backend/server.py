@@ -3928,8 +3928,9 @@ DEFAULT_OPTION_STRATEGIES = [
         
     signals = []
     position = "NONE"
-    
-    for i in range(20, len(data)):
+    last_entry = -99
+
+    for i in range(50, len(data)):
         clock = str(data[i].get('date', ''))[11:16]
         if clock and clock > '15:05':
             if position != "NONE":
@@ -3958,16 +3959,22 @@ DEFAULT_OPTION_STRATEGIES = [
         var = sum((x - sma) ** 2 for x in chunk) / 20
         std = var ** 0.5
         lower_band = sma - 2 * std
-        
+        sma50 = sum(closes[i-49:i+1]) / 50
+        # v2.1 fix: mean-revert the lower band ONLY when not in a clear downtrend
+        # (price at/above the 50-SMA). The old code bought every lower-band touch
+        # and got run over on HDFCBANK downtrends. Cooldown + hard trend-break bail
+        # cap the damage when a "range" turns into a trend.
+        not_downtrend = closes[i] >= sma50 * 0.995
+
         if position == "NONE":
-            if rsi[i] < 30 and closes[i] <= lower_band:
+            if not_downtrend and rsi[i] < 32 and closes[i] <= lower_band and (i - last_entry) >= 8:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "mean_reversion",
                     "confidence": 80.0,
-                    "entry_reason": "Bollinger lower band buy",
+                    "entry_reason": "Lower-band rebound in non-downtrend",
                     "target_R": 1.8,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.2,
@@ -3976,18 +3983,19 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "range",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "LONG"
+                last_entry = i
         elif position == "LONG":
-            if closes[i] >= sma or rsi[i] > 70:
+            if closes[i] >= sma or rsi[i] > 68 or closes[i] < sma50 * 0.97:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "mean_reversion",
                     "confidence": 80.0,
-                    "entry_reason": "SMA target exit",
+                    "entry_reason": "SMA target / RSI / trend-break exit",
                     "target_R": 1.8,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.2,
@@ -3996,7 +4004,7 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "range",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "NONE"
     return signals
@@ -4133,45 +4141,55 @@ DEFAULT_OPTION_STRATEGIES = [
     signals = []
     position = "NONE"
     
-    for i in range(20, len(data)):
+    def sma_at(p, i):
+        return sum(closes[i-p+1:i+1]) / p
+
+    last_entry = -99
+    for i in range(50, len(data)):
+        sma50 = sma_at(50, i)
+        # v2.1 fix: only accumulate an oversold bounce while the HIGHER trend is up
+        # (close > SMA50) and RSI is turning back up — never buy RSI<25 in a
+        # downtrend (the old falling-knife bleed). Cooldown stops same-dip churn.
+        uptrend = closes[i] > sma50
         if position == "NONE":
-            if rsi[i] < 25:
+            if uptrend and rsi[i-1] < 35 and rsi[i] > rsi[i-1] and (i - last_entry) >= 8:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "defensive_accumulation",
-                    "confidence": 85.0,
-                    "entry_reason": "Macro RSI extreme oversold",
-                    "target_R": 3.0,
+                    "confidence": 80.0,
+                    "entry_reason": "Oversold bounce in uptrend",
+                    "target_R": 2.5,
                     "initial_stop_R": 1.0,
-                    "trail_after_R": 2.0,
+                    "trail_after_R": 1.5,
                     "max_hold_minutes": 1440,
                     "invalidation_rule": "time_or_stop",
                     "regime_required": "any",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "LONG"
+                last_entry = i
         elif position == "LONG":
-            if rsi[i] > 60:
+            if rsi[i] > 62 or closes[i] < sma50:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "defensive_accumulation",
-                    "confidence": 85.0,
-                    "entry_reason": "Macro RSI overbought recovery",
-                    "target_R": 3.0,
+                    "confidence": 80.0,
+                    "entry_reason": "RSI strength exit / trend break",
+                    "target_R": 2.5,
                     "initial_stop_R": 1.0,
-                    "trail_after_R": 2.0,
+                    "trail_after_R": 1.5,
                     "max_hold_minutes": 1440,
                     "invalidation_rule": "time_or_stop",
                     "regime_required": "any",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "NONE"
     return signals
@@ -4214,7 +4232,8 @@ DEFAULT_OPTION_STRATEGIES = [
     ema50 = ema(closes, 50)
     signals = []
     position = "NONE"
-    
+    last_entry = -99
+
     for i in range(50, len(data)):
         clock = str(data[i].get('date', ''))[11:16]
         if clock and clock > '15:05':
@@ -4239,19 +4258,25 @@ DEFAULT_OPTION_STRATEGIES = [
                 position = "NONE"
             continue
             
-        trend_bullish = closes[i] > ema50[i]
+        # v2.1 fix: require a RISING EMA50 (not just price above it), volume
+        # confirmation on the recovery bar, and a cooldown — the old code fired on
+        # EVERY bar whose low tagged VWAP and closed above it, churning on each
+        # touch. Exit when price loses VWAP, not only on a full EMA50 break.
+        avg_vol = sum(vols[i-20:i]) / 20
+        trend_bullish = closes[i] > ema50[i] and ema50[i] > ema50[i-10]
         pulled_back = lows[i] <= vwap[i]
-        recovered = closes[i] > vwap[i]
-        
+        recovered = closes[i] > vwap[i] and closes[i] > closes[i-1]
+        vol_ok = vols[i] > avg_vol
+
         if position == "NONE":
-            if trend_bullish and pulled_back and recovered:
+            if trend_bullish and pulled_back and recovered and vol_ok and (i - last_entry) >= 10:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "pullback",
                     "confidence": 85.0,
-                    "entry_reason": "VWAP pullback buy",
+                    "entry_reason": "VWAP pullback recovery (rising EMA50 + volume)",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4260,18 +4285,19 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "trending",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "LONG"
+                last_entry = i
         elif position == "LONG":
-            if closes[i] < ema50[i]:
+            if closes[i] < vwap[i] or closes[i] < ema50[i]:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "pullback",
                     "confidence": 85.0,
-                    "entry_reason": "EMA trend break exit",
+                    "entry_reason": "Lost VWAP / EMA trend break exit",
                     "target_R": 2.0,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4280,7 +4306,7 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "trending",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "NONE"
     return signals
