@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from core.event_store import CoreEventStore
 from pymongo import ReturnDocument
+from trade_frequency import loss_streak_is_current
 
 logger = logging.getLogger("quantg.signal_manager")
 
@@ -523,9 +524,13 @@ class SignalManager:
         # 3. Loss-streak throttling
         streak_doc = await db.strategy_loss_streaks.find_one(
             {"strategy_id": strategy_id, "user_id": user_id},
-            {"current_streak": 1, "_id": 0},
+            {"current_streak": 1, "last_sl_at": 1, "_id": 0},
         )
         streak = int((streak_doc or {}).get("current_streak") or 0)
+        # Intraday breaker: a streak whose last SL was on a prior day does not carry
+        # over to block today's first signals (fixes the all-signals-filtered 0-trade day).
+        if streak and not loss_streak_is_current((streak_doc or {}).get("last_sl_at")):
+            streak = 0
         if streak >= 6:
             logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= 6 (blocked until next day reset)", strategy_id, streak)
             return False, "loss-streak-blocked", 1.0
@@ -996,6 +1001,17 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                     "rejection_detail": validation,
                                     "processed_at": datetime.now(timezone.utc).isoformat()
                                 }}
+                            )
+                            # Visibility: surface the limit-gate block (loss-streak /
+                            # cooldown / max-trades) on the strategy doc so the UI shows
+                            # WHY a strategy stopped trading, not just a silent zero.
+                            await db.strategies.update_one(
+                                {"id": sig["strategy_id"], "user_id": user_id},
+                                {"$set": {
+                                    "last_filter_reason": limit_reason,
+                                    "last_skip_reason_code": validation["reason_code"],
+                                    "last_filter_at": datetime.now(timezone.utc).isoformat(),
+                                }},
                             )
                             sig["status"] = "FILTERED"
                             sig["rejection_reason"] = limit_reason

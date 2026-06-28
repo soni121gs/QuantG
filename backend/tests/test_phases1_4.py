@@ -280,7 +280,9 @@ def test_07_loss_streak_throttle():
             async def count_documents(self, *a, **kw): return 1
         class _StreakDoc:
             async def find_one(self, *a, **kw):
-                return {"current_streak": 3, "paused_until": future_pause}
+                # last_sl_at = now → an active same-day streak (intraday breaker honors it).
+                return {"current_streak": 3, "paused_until": future_pause,
+                        "last_sl_at": datetime.now(timezone.utc).isoformat()}
 
         ok, reason = await check_frequency_gate(
             _StreamDB(), "s1", "NIFTY HFT Quick Scalper", "u1", freq_multiplier=1.0

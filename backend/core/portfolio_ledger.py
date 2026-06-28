@@ -603,16 +603,21 @@ class PortfolioLedger:
             now_str_streak = datetime.now(timezone.utc).isoformat()
             if net_pnl < 0:
                 try:
-                    from trade_frequency import LOSS_STREAK_TRIGGER, LOSS_STREAK_PAUSE_MIN
+                    from trade_frequency import LOSS_STREAK_TRIGGER, LOSS_STREAK_PAUSE_MIN, loss_streak_is_current
                 except ImportError:
                     LOSS_STREAK_TRIGGER = 3
                     LOSS_STREAK_PAUSE_MIN = 30
+                    loss_streak_is_current = lambda _ts: True
 
                 streak_doc = await self.db.strategy_loss_streaks.find_one(
                     {"strategy_id": strategy_id, "user_id": user_id},
-                    {"current_streak": 1, "_id": 0}
+                    {"current_streak": 1, "last_sl_at": 1, "_id": 0}
                 )
-                streak = int((streak_doc or {}).get("current_streak") or 0) + 1
+                # Intraday breaker: reset a streak carried over from a prior day.
+                prior_streak = int((streak_doc or {}).get("current_streak") or 0)
+                if not loss_streak_is_current((streak_doc or {}).get("last_sl_at")):
+                    prior_streak = 0
+                streak = prior_streak + 1
                 update_fields = {
                     "current_streak": streak,
                     "updated_at": now_str_streak,

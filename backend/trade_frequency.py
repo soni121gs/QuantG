@@ -69,6 +69,29 @@ def _today_window() -> Tuple[str, str]:
     return start.isoformat(), (start + timedelta(days=1)).isoformat()
 
 
+def loss_streak_is_current(last_sl_at: Optional[str]) -> bool:
+    """True only if the last SL hit falls within the current IST trading day.
+
+    The loss streak is an INTRADAY circuit breaker. A streak whose last SL was on a
+    previous day must reset to zero — it must never carry over to block (or inflate)
+    today's signals. Without this, a strategy that ended a past day on a 6+ streak
+    stays blocked from the first signal every subsequent day (the 0-trade-day bug).
+    """
+    if not last_sl_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(last_sl_at).replace("Z", "+00:00"))
+    except Exception:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    def _ist_day(d: datetime) -> str:
+        return (d.astimezone(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+
+    return _ist_day(dt) == _ist_day(datetime.now(timezone.utc))
+
+
 def _strategy_class(strategy_name: str) -> str:
     return _STRATEGY_CLASSES.get(strategy_name, "default")
 
@@ -133,6 +156,9 @@ async def check_frequency_gate(
 
     if streak_doc:
         streak = int(streak_doc.get("current_streak") or 0)
+        # Ignore a stale streak carried over from a previous trading day.
+        if streak and not loss_streak_is_current(streak_doc.get("last_sl_at")):
+            streak = 0
         paused_until_str = streak_doc.get("paused_until")
         if streak >= LOSS_STREAK_TRIGGER and paused_until_str:
             try:
@@ -161,7 +187,11 @@ async def record_sl_hit(db, strategy_id: str, user_id: str) -> None:
         doc = await db.strategy_loss_streaks.find_one(
             {"strategy_id": strategy_id, "user_id": user_id}, {"_id": 0}
         )
-        streak = int((doc or {}).get("current_streak") or 0) + 1
+        # Intraday breaker: a streak from a prior day resets before counting today's hit.
+        prior = int((doc or {}).get("current_streak") or 0)
+        if not loss_streak_is_current((doc or {}).get("last_sl_at")):
+            prior = 0
+        streak = prior + 1
         update: Dict[str, Any] = {
             "current_streak": streak,
             "last_sl_at": now.isoformat(),
