@@ -80,7 +80,14 @@ async def save_broker_keys(req: BrokerKeyReq, user=Depends(get_current_user)):
             redirect_uri = "https://www.quantgtrade.com/api/broker/upstox/callback"
         doc["redirect_uri"] = redirect_uri
         doc["is_sandbox"] = bool(req.is_sandbox)
-        _UPSTOX_GATEWAYS.pop(user["id"], None)
+        # Stop the prior feed before evicting, otherwise its daemon thread keeps
+        # reconnecting forever (orphaned feed).
+        _old_gw = _UPSTOX_GATEWAYS.pop(user["id"], None)
+        if _old_gw is not None:
+            try:
+                await asyncio.to_thread(_old_gw.stop_market_data_ws)
+            except Exception:
+                pass
     await db.broker_keys.update_one(
         {"user_id": user["id"], "broker": broker},
         {"$set": doc},

@@ -14626,6 +14626,15 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
 async def get_user_upstox_gateway(user_id: str, fresh: bool = False) -> Optional[UpstoxGateway]:
     if not fresh and user_id in _UPSTOX_GATEWAYS:
         return _UPSTOX_GATEWAYS[user_id]
+    if fresh:
+        # Evicting a cached gateway without stopping its feed leaves an orphaned
+        # daemon thread reconnecting forever. Stop the old feed before replacing it.
+        old_gateway = _UPSTOX_GATEWAYS.pop(user_id, None)
+        if old_gateway is not None:
+            try:
+                await asyncio.to_thread(old_gateway.stop_market_data_ws)
+            except Exception as exc:
+                logger.warning("Failed to stop prior Upstox feed for user=%s: %s", user_id, exc)
     keys = await db.broker_keys.find_one({"user_id": user_id, "broker": "upstox"})
     api_key = os.environ.get("UPSTOX_API_KEY") or (decrypt_secret(keys.get("api_key")) if keys else None)
     api_secret = os.environ.get("UPSTOX_API_SECRET") or (decrypt_secret(keys.get("api_secret")) if keys else None)

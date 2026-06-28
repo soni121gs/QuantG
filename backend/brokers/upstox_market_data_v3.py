@@ -25,6 +25,13 @@ except Exception:  # pragma: no cover - exercised by runtime environments withou
 
 logger = logging.getLogger("quantg.upstox_feed_v3")
 
+# websocket-client (the "websocket" logger) emits an ERROR for every rejected
+# handshake — e.g. a 401 each time the daily Upstox token has expired. We produce
+# our own structured, backoff-aware diagnostics in _run_forever, so silence the
+# library's duplicate output to prevent log storms while the feed waits for a
+# valid token. This only affects the third-party logger, not "quantg.*".
+logging.getLogger("websocket").setLevel(logging.CRITICAL)
+
 SUPPORTED_MODES = {"ltpc", "full", "option_chain", "option_greeks", "full_d30"}
 
 
@@ -276,6 +283,9 @@ _last_warn_time: Dict[str, float] = {}
 
 _RECONNECT_BASE_DELAY = 2.0
 _RECONNECT_MAX_DELAY = 60.0
+# Auth/token failures (expired daily token, missing token) are only resolved by an
+# external re-login, so probe slowly rather than hammering Upstox every minute.
+_RECONNECT_AUTH_MAX_DELAY = 300.0
 _RECONNECT_JITTER_FACTOR = 0.25
 _RECONNECT_MAX_CONSECUTIVE_FAILURES = 50
 
@@ -443,6 +453,10 @@ class UpstoxMarketDataFeedV3:
         self._consecutive_failures = 0
         self._first_tick_logged = False
         self._connected_at = None
+        # True once on_open fires within the current run_forever session; lets the
+        # reconnect loop tell a real connection (clean close => fast retry) apart
+        # from a rejected handshake (failure => exponential backoff).
+        self._session_opened = False
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -573,9 +587,15 @@ class UpstoxMarketDataFeedV3:
                     break
                 self._state = "reconnecting"
                 self._reconnects += 1
+                self._session_opened = False
+            error: Optional[Exception] = None
             try:
                 if websocket is None:
                     raise RuntimeError("websocket-client is not installed. Run pip install -r backend/requirements.txt.")
+                # Skip the network entirely when there is no token — re-login will
+                # provision one and restart the feed.
+                if not self._access_token_getter():
+                    raise RuntimeError("Upstox access token is missing")
                 url = self.authorize_url()
                 logger.info("Upstox V3 feed connecting attempt=%s", self._reconnects)
                 self._ws_app = websocket.WebSocketApp(
@@ -587,40 +607,57 @@ class UpstoxMarketDataFeedV3:
                     on_close=self._on_close,
                 )
                 self._ws_app.run_forever(skip_utf8_validation=True, ping_interval=20, ping_timeout=10)
-                # If we get here, the connection closed cleanly — reset delay
+            except Exception as exc:
+                error = exc
+
+            with self._lock:
+                opened = self._session_opened
+                self._connected = False
+                self._connected_at = None
+                self._state = "reconnecting" if self._running else "disconnected"
+                if error is not None:
+                    self._last_error = str(error)[:1000]
+                last_error_text = self._last_error or ""
+
+            if opened and error is None:
+                # We had a live session that closed cleanly (e.g. server cycle).
+                # Reset backoff and reconnect promptly.
                 with self._lock:
                     self._consecutive_failures = 0
                 delay = _RECONNECT_BASE_DELAY
-            except Exception as exc:
-                with self._lock:
-                    self._last_error = str(exc)[:1000]
-                    self._connected = False
-                    self._connected_at = None
-                    self._state = "reconnecting"
-                    self._consecutive_failures += 1
-                logger.warning("Upstox V3 feed connection failed attempt=%s error=%s consecutive_failures=%s", self._reconnects, exc, self._consecutive_failures)
-                # Log a prominent alert every 10 failures so ops can see feed is stuck,
-                # but never give up — the token may be refreshed externally at any time.
-                if self._consecutive_failures % 10 == 0:
-                    logger.error(
-                        "Upstox V3 feed still retrying after %s consecutive failures — "
-                        "reconnect will continue indefinitely until token is valid",
-                        self._consecutive_failures,
-                    )
-                # Exponential backoff with jitter
-                delay = min(delay * 1.5, _RECONNECT_MAX_DELAY)
-                jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)
-                actual_delay = max(0.5, delay + jitter)
-                logger.info("Upstox V3 feed reconnecting in %.1fs (attempt %s)", actual_delay, self._reconnects)
-                with self._lock:
-                    should_run = self._running
-                if should_run:
-                    time.sleep(actual_delay)
+                sleep_for = _RECONNECT_BASE_DELAY
             else:
+                # run_forever returned without ever opening (handshake rejected),
+                # or an exception was raised: this is a real failure. Engage
+                # exponential backoff so we never hammer Upstox while the token is
+                # invalid — the previous code mistook a rejected handshake for a
+                # clean close and retried every 2s indefinitely.
                 with self._lock:
-                    should_run = self._running
-                if should_run:
-                    time.sleep(_RECONNECT_BASE_DELAY)
+                    self._consecutive_failures += 1
+                    failures = self._consecutive_failures
+                detail = str(error) if error is not None else (last_error_text or "websocket handshake rejected")
+                is_auth = any(
+                    marker in detail
+                    for marker in ("access token is missing", "authorize failed 4", "Unauthorized", "Invalid token", "401")
+                )
+                max_delay = _RECONNECT_AUTH_MAX_DELAY if is_auth else _RECONNECT_MAX_DELAY
+                delay = min(max(delay, _RECONNECT_BASE_DELAY) * 1.5, max_delay)
+                jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)
+                sleep_for = max(0.5, delay + jitter)
+                # Throttle: detail on the first few failures, then only a periodic
+                # heartbeat, so an all-day-invalid token cannot flood the logs.
+                if failures <= 3 or failures % 20 == 0:
+                    level = logging.ERROR if failures % 20 == 0 else logging.WARNING
+                    logger.log(
+                        level,
+                        "Upstox V3 feed not connected attempt=%s auth=%s failures=%s next_retry=%.0fs error=%s",
+                        self._reconnects, is_auth, failures, sleep_for, detail,
+                    )
+
+            with self._lock:
+                should_run = self._running
+            if should_run:
+                time.sleep(sleep_for)
 
     def _on_open(self, ws: Any) -> None:
         with self._lock:
@@ -629,6 +666,7 @@ class UpstoxMarketDataFeedV3:
             self._state = "connected"
             self._last_error = None
             self._consecutive_failures = 0
+            self._session_opened = True
             modes: Dict[str, list[str]] = {}
             for key, mode in self._subscribed.items():
                 modes.setdefault(mode, []).append(key)
