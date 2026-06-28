@@ -3855,6 +3855,7 @@ DEFAULT_OPTION_STRATEGIES = [
         bearish_entry = (
             closes[i] < vwap[i] * 1.001
             and closes[i] < ema50[i] * 1.001
+            and ema50[i] < ema50[i-10]
             and tod_vol >= 0.8
             and closes[i] <= min(closes[max(0, i-6):i]) * 1.001
             and closes[i] <= closes[i-1]
@@ -4033,10 +4034,19 @@ DEFAULT_OPTION_STRATEGIES = [
     atr = [0.0] * len(closes)
     for j in range(14, len(closes)):
         atr[j] = sum(tr[j-13:j+1]) / 14
-        
+
+    def ema(values, period):
+        k = 2.0 / (period + 1)
+        out = [values[0]]
+        for val in values[1:]:
+            out.append(val * k + out[-1] * (1 - k))
+        return out
+    ema20 = ema(closes, 20)
+
     signals = []
     position = "NONE"
-    
+    last_entry = -99
+
     for i in range(20, len(data)):
         clock = str(data[i].get('date', ''))[11:16]
         if clock and clock > '15:05':
@@ -4062,18 +4072,19 @@ DEFAULT_OPTION_STRATEGIES = [
             continue
             
         donchian_high = max(highs[i-12:i])
-        recent_high = max(highs[i-6:i])
         tod_vol = float(data[i].get('tod_vol_ratio', 1.0))
-        atr_now = max(0.01, atr[i])
+        # v2.1 fix: require a GENUINE breakout (close above the 12-bar Donchian high)
+        # WITH the trend (close > rising EMA20) and real volume + cooldown. The old
+        # 0.12-ATR "or" trigger fired on tiny moves in any regime (failed breakouts).
         news_trigger = (
-            closes[i] >= recent_high * 0.995
+            closes[i] > donchian_high
             and closes[i] > closes[i-1]
-            and (closes[i] > donchian_high * 0.997 or closes[i] - closes[i-1] >= atr_now * 0.12)
-            and tod_vol >= 0.65
+            and closes[i] > ema20[i] and ema20[i] > ema20[i-5]
+            and tod_vol >= 0.9
         )
-        
+
         if position == "NONE":
-            if news_trigger:
+            if news_trigger and (i - last_entry) >= 8:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
@@ -4092,16 +4103,16 @@ DEFAULT_OPTION_STRATEGIES = [
                     "strategy_logic_version": "1.0"
                 })
                 position = "LONG"
+                last_entry = i
         elif position == "LONG":
-            donchian_low = min(lows[i-20:i])
-            if closes[i] < donchian_low:
+            if closes[i] < ema20[i]:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "volatility_breakout",
                     "confidence": 95.0,
-                    "entry_reason": "Breakdown exit",
+                    "entry_reason": "EMA20 trend-break exit",
                     "target_R": 2.5,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.5,
@@ -4560,11 +4571,12 @@ DEFAULT_OPTION_STRATEGIES = [
             
         crossover_buy = (
             ema20[i] > ema50[i] * 0.999
+            and ema50[i] >= ema50[i-10]
             and ema20[i] >= ema20[i-3] * 0.999
             and closes[i] >= ema20[i] * 0.997
             and closes[i] >= min(closes[i-1], closes[i-2])
         )
-        crossover_sell = ema20[i] < ema50[i]
+        crossover_sell = ema20[i] < ema50[i] or closes[i] < ema50[i] * 0.995
         
         if position == "NONE":
             if crossover_buy:
@@ -4633,20 +4645,26 @@ DEFAULT_OPTION_STRATEGIES = [
         
     signals = []
     position = "NONE"
-    
-    for i in range(20, len(data)):
+    last_entry = -99
+
+    for i in range(50, len(data)):
+        sma50 = sum(closes[i-49:i+1]) / 50
         if position == "NONE":
             recent_rsi = min(rsi[max(0, i-6):i+1])
             rebound = rsi[i] >= 34 and rsi[i] > rsi[i-1] and closes[i] >= closes[i-1]
             value_zone = recent_rsi <= 42 and closes[i] <= max(closes[max(0, i-10):i+1])
-            if rebound and value_zone:
+            # v2.1 fix: only buy the RSI rebound while the higher trend is UP
+            # (close > 50-SMA), with a cooldown. The old code rebounded in ANY
+            # regime -> caught falling knives on KOTAKBANK downtrends.
+            uptrend = closes[i] > sma50
+            if rebound and value_zone and uptrend and (i - last_entry) >= 8:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "BUY",
                     "direction": "CE",
                     "setup_type": "rsi_swing",
                     "confidence": 72.0,
-                    "entry_reason": "RSI rebound participation buy",
+                    "entry_reason": "RSI rebound in uptrend",
                     "target_R": 2.5,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.8,
@@ -4655,18 +4673,19 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "any",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "LONG"
+                last_entry = i
         elif position == "LONG":
-            if rsi[i] > 65:
+            if rsi[i] > 65 or closes[i] < sma50:
                 signals.append({
                     "date": data[i]["date"],
                     "action": "SELL",
                     "direction": "CE",
                     "setup_type": "rsi_swing",
                     "confidence": 85.0,
-                    "entry_reason": "RSI overbought target exit",
+                    "entry_reason": "RSI overbought / trend-break exit",
                     "target_R": 2.5,
                     "initial_stop_R": 1.0,
                     "trail_after_R": 1.8,
@@ -4675,7 +4694,7 @@ DEFAULT_OPTION_STRATEGIES = [
                     "regime_required": "any",
                     "option_selection_preference": "ATM",
                     "signal_version": "v13",
-                    "strategy_logic_version": "1.0"
+                    "strategy_logic_version": "2.1"
                 })
                 position = "NONE"
     return signals
