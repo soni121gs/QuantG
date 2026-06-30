@@ -212,6 +212,13 @@ async def compile_trade_attribution(db, user_id: str, date_str: str) -> int:
         async for p in db.strategy_positions.find({"id": {"$in": pos_ids}}):
             pos_by_id[p.get("id")] = p
 
+    # Resolve strategy names (neither db.trades nor the position doc stores them).
+    name_by_sid: Dict[str, str] = {}
+    sids = list({t.get("strategy_id") for t in trades if t.get("strategy_id")})
+    if sids:
+        async for s in db.strategies.find({"id": {"$in": sids}}, {"_id": 0, "id": 1, "name": 1}):
+            name_by_sid[s.get("id")] = s.get("name")
+
     written = 0
     for trade in trades:
         if not trade.get("id"):
@@ -219,6 +226,8 @@ async def compile_trade_attribution(db, user_id: str, date_str: str) -> int:
         pos = pos_by_id.get(trade.get("position_id")) or {}
         try:
             record = _build_record(trade, pos, user_id, date_str)
+            if not record.get("strategy_name"):
+                record["strategy_name"] = name_by_sid.get(record.get("strategy_id")) or record.get("strategy_id")
             await db.trade_attribution.update_one(
                 {"trade_id": record["trade_id"]},
                 {"$set": record},
