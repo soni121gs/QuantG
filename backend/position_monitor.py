@@ -323,6 +323,12 @@ Today's skipped/filtered signals:
 
     # 4. Generate embeddings and save to db.hermes_memory
     now_str = datetime.now(timezone.utc).isoformat()
+    # Unique date+TIME label (IST) for the wiki-note title. EOD can run more than once
+    # a day (e.g. after a restart), and the wiki save rejects a duplicate TITLE — so a
+    # date-only title ("Session Memory 2026-06-30") blocked approving a second note for
+    # the same day. Including HH:MM:SS makes every session-memory note uniquely
+    # approvable. (2026-06-30 fix.)
+    _ts_label = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
     for fact in facts:
         try:
             embedding = await generate_gemini_embedding(fact)
@@ -348,7 +354,7 @@ Today's skipped/filtered signals:
         strat_list.append(f"- **{s.get('name', s.get('strategy_id'))}**: realized P&L: Rs {s.get('realized_pnl', 0.0)} ({s.get('trade_count', 0)} trades)")
     strat_details_md = "\n".join(strat_list)
     
-    wiki_body = f"""# Session Memory {date_str}
+    wiki_body = f"""# Session Memory {_ts_label} IST
 
 **Compiled by Hermes Co-Pilot**
 *Topic: Daily Session Memory*
@@ -380,7 +386,7 @@ Today's skipped/filtered signals:
             "user_id": user_id,
             "action_type": "draft_wiki_note",
             "params": {
-                "title": f"Session Memory {date_str}",
+                "title": f"Session Memory {_ts_label} IST",
                 "folder": "Decisions",
                 "body_markdown": wiki_body.strip()
             },

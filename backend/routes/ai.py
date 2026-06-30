@@ -1395,14 +1395,25 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
             raise HTTPException(status_code=400, detail=f"Invalid folder. Must be one of {allowed_folders}")
             
         import re
+        from datetime import timedelta as _timedelta
+        # Auto-dedupe: a memory/wiki note must never fail to save just because a note
+        # with the same title already exists (two EOD "Session Memory <date>" notes,
+        # repeated AI drafts, etc.). Append an IST time suffix so each is uniquely
+        # saveable instead of hard-rejecting. (2026-06-30)
+        exists = await db.wiki_docs.find_one({"user_id": user["id"], "title": title})
+        if exists:
+            _suffix = (datetime.now(timezone.utc) + _timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
+            title = f"{title} ({_suffix} IST)"
+            if await db.wiki_docs.find_one({"user_id": user["id"], "title": title}):
+                title = f"{title} {uuid.uuid4().hex[:4]}"
+
         slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
         if not slug:
             slug = str(uuid.uuid4())[:8]
-            
-        exists = await db.wiki_docs.find_one({"user_id": user["id"], "title": title})
-        if exists:
-            raise HTTPException(status_code=400, detail="A document with this title already exists")
-            
+        # The slug is the wiki_doc id (primary key) — guarantee it is unique too.
+        if await db.wiki_docs.find_one({"id": slug}):
+            slug = f"{slug}-{uuid.uuid4().hex[:6]}"
+
         now_str = datetime.now(timezone.utc).isoformat()
         from routes.wiki import parse_markdown_links, save_wiki_to_disk, rebuild_all_backlinks
         links = parse_markdown_links(body_markdown)
