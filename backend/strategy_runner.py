@@ -806,6 +806,38 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 ).upper()
                 option_resolution_requested = bool(opt_cfg.get("enabled")) and instrument_type not in {"FUTURE", "FUTURES", "FUTCOM", "COMMODITY_FUTURE"}
                 option_buying_mode = option_resolution_requested and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
+
+                # ── Equity / non-option single-leg exit routing (2026-06-30 fix) ──
+                # An exit signal (entry_reason carries "exit"/"close"/"squareoff", so
+                # _is_entry is False) for a NON-option strategy must reduce-only close
+                # the open position via close_strategy_fn, which sells exactly
+                # open_quantity. The option exit-routing block below is gated on
+                # option_buying_mode, so equity exits used to fall through to the
+                # generic order path and were sized as a FRESH capital-based SELL
+                # (e.g. 29 sh vs the 17 actually long). The paper wallet then credited
+                # the oversized sell and booked phantom money (the +160k phantom
+                # "profit" of 06-29/30 while real P&L was negative). A non-entry signal
+                # that reached here already passed the open-position check above, so a
+                # position exists. Spreads/option strategies (option_resolution_requested
+                # True) keep their own handling.
+                if (not _is_entry) and (not option_resolution_requested) and close_strategy_fn:
+                    await close_strategy_fn(
+                        s["user_id"], s["id"], reason=f"strategy-{action.lower()}-signal"
+                    )
+                    await db.strategies.update_one(
+                        {"id": s["id"]},
+                        {"$set": {**eval_set,
+                                  "last_signal_action": action,
+                                  "last_signals_count": signals_count,
+                                  "last_filter_reason": (
+                                      f"{action} exit signal → reduce-only close of open "
+                                      f"position (sells open_quantity, not capital-sized)."
+                                  )},
+                         "$unset": {"last_error": ""},
+                         "$inc": inc_set},
+                    )
+                    continue
+
                 if option_buying_mode:
                     # In option-buying strategies, exit can be SELL (for CE) or BUY (for PE)
                     active_position = await db.strategy_positions.find_one(
