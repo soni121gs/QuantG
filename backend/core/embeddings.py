@@ -120,6 +120,61 @@ async def distill_daily_report_to_facts(summary_data: str) -> List[str]:
 _MIN_SAMPLE_FOR_FACT = 5
 
 
+def _parse_observation_array(text: str) -> list:
+    """Tolerant parse of a JSON array of observation objects.
+
+    Gemini occasionally truncates a long array at the token limit (yielding invalid
+    JSON). First try a clean parse; on failure, salvage every COMPLETE top-level
+    object by brace-matching and discard the trailing partial one. Returns [] if
+    nothing parseable is found.
+    """
+    text = (text or "").strip()
+    # Strip a ```json ... ``` fence if the model added one.
+    if text.startswith("```"):
+        text = text.split("```", 2)[1] if text.count("```") >= 2 else text.strip("`")
+        if text.lstrip().startswith("json"):
+            text = text.lstrip()[4:]
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        pass
+    # Salvage: walk the string, collect balanced {...} objects.
+    objs = []
+    depth = 0
+    start = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                chunk = text[start:i + 1]
+                try:
+                    objs.append(json.loads(chunk))
+                except Exception:
+                    pass
+                start = None
+    if not objs:
+        logger.warning(f"Failed to parse/salvage observations JSON: {text[:200]}")
+    return objs
+
+
 def _gemini_distill_observations_sync(attribution_json: str) -> List[dict]:
     """Distill deterministic attribution rollups into STRUCTURED observations.
 
@@ -156,6 +211,8 @@ HARD RULES (sample-size honesty — non-negotiable):
 - "dimension" is one of: structure, regime, exposure_bias, exit_reason, strategy, overall.
 - "metric" is one of: expectancy, net_pnl, win_rate, avg_R.
 
+- Keep each "claim" concise: ONE sentence, under 160 characters.
+
 Return ONLY a JSON array of objects, each:
 {{"claim": str, "dimension": str, "metric": str, "value": number, "sample_size": int, "confidence": "high"|"insufficient_sample"}}
 
@@ -167,7 +224,7 @@ Attribution data:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 1000,
+            "maxOutputTokens": 2500,
             "responseMimeType": "application/json",
         },
     }
@@ -183,11 +240,7 @@ Attribution data:
         data = res.json()
         parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
         text = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
-        try:
-            obs = json.loads(text)
-        except Exception:
-            logger.warning(f"Failed to parse Gemini observations JSON: {text[:300]}")
-            return []
+        obs = _parse_observation_array(text)
         if not isinstance(obs, list):
             return []
         clean = []
