@@ -248,6 +248,13 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                         )
                 except Exception as recon_exc:
                     logger.error("EOD wallet reconcile failed for user=%s: %s", user_id, recon_exc)
+                # HSI-12: deterministic trade-attribution (the "why" layer) MUST run
+                # before the EOD memory distillation so Stage 2 can read it.
+                try:
+                    from core.trade_attribution import compile_trade_attribution
+                    await compile_trade_attribution(db, user_id, today_str)
+                except Exception as attr_exc:
+                    logger.error("Trade attribution failed for user=%s: %s", user_id, attr_exc)
                 try:
                     await _compile_eod_memory(db, user_id, today_str, doc)
                 except Exception as mem_exc:

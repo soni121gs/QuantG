@@ -781,6 +781,16 @@ async def _dispatch_signal_via_unified_engine(
     # spread lifecycle, sized by defined risk (max loss). Bypasses the single-leg
     # risk/route path entirely. Opt-in per strategy + global CREDIT_SPREADS_ENABLED.
     _oc = option_contract or {}
+    # HSI-13: stamp the market regime at entry onto the order so attribution is exact,
+    # not reconstructed. Flows opt -> fill -> position_doc (single-leg) / passed through
+    # to the spread lifecycle (spreads).
+    _regime_at_entry = (
+        (sig.get("regime_snapshot") or {}).get("regime")
+        or sig.get("regime")
+        or "UNKNOWN"
+    )
+    if option_contract is not None:
+        option_contract["regime_at_entry"] = _regime_at_entry
     if _oc.get("structure") == "credit_spread" and _oc.get("spread"):
         from core.spread_builder import CREDIT_SPREADS_ENABLED, lots_for_risk
         from core.spread_lifecycle import open_credit_spread
@@ -798,6 +808,7 @@ async def _dispatch_signal_via_unified_engine(
             db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
             idempotency_key=idem_key, signal_id=sig["id"],
+            regime_at_entry=_regime_at_entry,
         )
 
     if _oc.get("structure") == "debit_spread" and _oc.get("spread"):
@@ -817,6 +828,7 @@ async def _dispatch_signal_via_unified_engine(
             db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
             idempotency_key=idem_key, signal_id=sig["id"],
+            regime_at_entry=_regime_at_entry,
         )
 
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"

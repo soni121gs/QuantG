@@ -339,6 +339,11 @@ class PortfolioLedger:
                 "option_type": opt.get("option_type"),
                 "underlying": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
                 "symbol_group": opt.get("underlying") or fill.get("underlying") or fill["symbol"],
+                # HSI-13: market regime stamped at entry (from the order's option_contract)
+                # so trade attribution is exact rather than reconstructed later.
+                "regime_at_entry": str(
+                    opt.get("regime_at_entry") or fill.get("regime_at_entry") or "UNKNOWN"
+                ).upper(),
                 # Snapshot of greeks/IV/OI/order-flow captured at signal time
                 # (carried on the option_contract). Analytics only — not read
                 # by any trade decision path.
@@ -376,6 +381,13 @@ class PortfolioLedger:
                     datetime.now(timezone.utc) + timedelta(minutes=time_exit_min)
                 ).isoformat()
             position_doc["tp_sl_tsl_config"] = risk_cfg
+            # HSI-13: defined risk in rupees stamped at entry = |entry - stop| x qty.
+            # None when no stop was set (R-multiple cannot be computed honestly).
+            _sl = position_doc.get("sl_price")
+            if _sl not in (None, "", 0) and price > 0 and qty > 0:
+                position_doc["planned_risk"] = round(abs((price - float(_sl)) * qty), 2)
+            else:
+                position_doc["planned_risk"] = None
 
             await self.db.strategy_positions.insert_one(position_doc)
 

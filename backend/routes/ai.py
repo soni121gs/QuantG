@@ -77,6 +77,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_historical_context",
     "recall_memory",
     "get_external_context",
+    "get_trade_attribution",
 ]
 
 
@@ -429,6 +430,50 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             else:
                 data = {"error": "No strategies found to generate daily report."}
             source = "routes.strategies.strategy_daily_report"
+        elif name == "get_trade_attribution":
+            # HSI-15: deterministic "why" layer. Returns per-dimension rollups of
+            # closed trades (n, net P&L, win-rate, avg R, expectancy) so the user can
+            # ask "why did BANKNIFTY lose this week" and get a numbers-backed table.
+            from core.trade_attribution import attribution_rollup
+            from datetime import datetime as _dt, timedelta as _td
+            q = (query or "").lower()
+            # Lookback window: default 7 IST days; "today" / "month" adjust it.
+            days = 7
+            if "today" in q:
+                days = 1
+            elif "month" in q or "30" in q:
+                days = 30
+            elif "two week" in q or "fortnight" in q or "14" in q:
+                days = 14
+            since = (_dt.utcnow() + _td(hours=5, minutes=30) - _td(days=days)).strftime("%Y-%m-%d")
+            # Which dimension to lead with, inferred from the question.
+            if "regime" in q:
+                lead = "regime"
+            elif "bias" in q or "direction" in q or "bull" in q or "bear" in q:
+                lead = "exposure_bias"
+            elif "exit" in q or "stop" in q or "target" in q:
+                lead = "exit_reason"
+            elif "hold" in q or "time" in q or "duration" in q:
+                lead = "hold_bucket"
+            elif "underlying" in q or "banknifty" in q or "nifty" in q or "sensex" in q:
+                lead = "underlying"
+            else:
+                lead = "structure"
+            data = {
+                "since": since,
+                "lookback_days": days,
+                "lead_dimension": lead,
+                "by_lead": await attribution_rollup(db, user["id"], since, lead),
+                "by_strategy": await attribution_rollup(db, user["id"], since, "strategy"),
+                "by_structure": await attribution_rollup(db, user["id"], since, "structure"),
+                "by_regime": await attribution_rollup(db, user["id"], since, "regime"),
+                "by_exit_reason": await attribution_rollup(db, user["id"], since, "exit_reason"),
+            }
+            total_n = sum(b["n"] for b in data["by_structure"])
+            if total_n == 0:
+                warnings.append("No attributed trades in the window — attribution accrues at EOD.")
+                confidence = 0.5
+            source = "db.trade_attribution"
         elif name == "get_recent_alerts":
             data = await db.notifications.find(
                 {"user_id": user["id"]},
@@ -1175,6 +1220,16 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_external_context")
         has_matches = True
         
+    # HSI-15: trade-attribution "why" layer — fires on causal/diagnostic questions
+    # about wins/losses, regime/bias/structure/exit performance.
+    if any(w in q for w in [
+        "why", "attribution", "lose", "lost", "losing", "win rate", "winning",
+        "expectancy", "r multiple", "r-multiple", "which regime", "best structure",
+        "worst", "which strategy", "exit reason", "hold time", "performed", "performance by",
+    ]):
+        matched_tools.add("get_trade_attribution")
+        has_matches = True
+
     if not has_matches:
         matched_tools.update([
             "get_risk_snapshot",

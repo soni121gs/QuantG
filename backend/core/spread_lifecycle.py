@@ -83,6 +83,7 @@ async def open_credit_spread(
     mode: str = "paper",
     idempotency_key: str,
     signal_id: Optional[str] = None,
+    regime_at_entry: str = "UNKNOWN",
 ) -> Dict[str, Any]:
     """Open a credit spread as one position with embedded legs (paper only).
 
@@ -177,6 +178,9 @@ async def open_credit_spread(
         "created_at": now,
         "updated_at": now,
         "entry_time": now,
+        # HSI-13: exact attribution inputs stamped at creation.
+        "regime_at_entry": str(regime_at_entry or "UNKNOWN").upper(),
+        "planned_risk": round(max_loss * qty, 2),
     }
     await db.strategy_positions.insert_one(position_doc)
 
@@ -404,6 +408,7 @@ async def open_debit_spread(
     mode: str = "paper",
     idempotency_key: str,
     signal_id: Optional[str] = None,
+    regime_at_entry: str = "UNKNOWN",
 ) -> Dict[str, Any]:
     """Open a debit spread as one position with embedded legs (paper only)."""
     if mode != "paper":
@@ -493,6 +498,9 @@ async def open_debit_spread(
         "created_at": now,
         "updated_at": now,
         "entry_time": now,
+        # HSI-13: exact attribution inputs stamped at creation.
+        "regime_at_entry": str(regime_at_entry or "UNKNOWN").upper(),
+        "planned_risk": round(max_loss * qty, 2),
     }
     await db.strategy_positions.insert_one(position_doc)
 
