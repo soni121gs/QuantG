@@ -677,7 +677,9 @@ async def test_compile_eod_memory():
     mock_db.pending_actions.insert_one.assert_called_once()
     action_doc = mock_db.pending_actions.insert_one.call_args[0][0]
     assert action_doc["action_type"] == "draft_wiki_note"
-    assert action_doc["params"]["title"] == "Session Memory 2026-06-22"
+    # Title carries a date+TIME (IST) stamp since b42acaf so same-day re-runs get
+    # unique, approvable wiki-note titles — assert the prefix, not an exact match.
+    assert action_doc["params"]["title"].startswith("Session Memory ")
     assert "## Daily Overview" in action_doc["params"]["body_markdown"]
 
 

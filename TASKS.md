@@ -2600,9 +2600,9 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ### Stage 2 — Grounded EOD analysis (LLM reads attribution, not raw JSON)
 **Goal**: the daily distillation produces observations backed by numbers + sample sizes instead of vague prose.
-- `[ ]` **HSI-21** Rewrite `_compile_eod_memory` input (position_monitor.py): replace the raw `json.dumps(strategies/alerts/signals)` blob with the Stage-1 `attribution_rollup` output (per-structure, per-regime, per-bias expectancy + sample sizes) + a **week-to-date** rollup for trend.
-- `[ ]` **HSI-22** Update the `distill_daily_report_to_facts` prompt (find the distiller — `core/embeddings.py` / hermes module): require each fact to cite **metric + value + sample_size + dimension**; forbid stating any claim with n<5 as fact (label "insufficient sample"); emit **structured** facts `{claim, dimension, metric, value, sample_size}` (not just prose).
-- `[ ]` **HSI-23** Store distilled observations both as embeddings (existing `hermes_memory`, keep RAG) AND as structured rows (new `hermes_observations`) for Stage 3 to score.
+- `[x]` **HSI-21** Rewrite `_compile_eod_memory` input (position_monitor.py): replace the raw `json.dumps(strategies/alerts/signals)` blob with the Stage-1 `attribution_rollup` output (per-structure, per-regime, per-bias expectancy + sample sizes) + a **week-to-date** rollup for trend.
+- `[x]` **HSI-22** Update the `distill_daily_report_to_facts` prompt (find the distiller — `core/embeddings.py` / hermes module): require each fact to cite **metric + value + sample_size + dimension**; forbid stating any claim with n<5 as fact (label "insufficient sample"); emit **structured** facts `{claim, dimension, metric, value, sample_size}` (not just prose).
+- `[x]` **HSI-23** Store distilled observations both as embeddings (existing `hermes_memory`, keep RAG) AND as structured rows (new `hermes_observations`) for Stage 3 to score.
 - **Acceptance**: EOD facts read like "BANKNIFTY credit_spread expectancy +X over n=Y (WTD)" — no n<5 claim asserted as fact.
 - **Files**: `position_monitor.py`, the distiller module, `core/trade_attribution.py`. **Deps**: Stage 1.
 

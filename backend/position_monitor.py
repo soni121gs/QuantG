@@ -279,7 +279,12 @@ async def _compile_eod_memory(db, user_id: str, date_str: str, report_doc: dict)
     import json
     import uuid
     from datetime import datetime, timedelta, timezone
-    from core.embeddings import distill_daily_report_to_facts, generate_gemini_embedding
+    from core.embeddings import (
+        distill_daily_report_to_facts,
+        distill_attribution_to_observations,
+        generate_gemini_embedding,
+    )
+    from core.trade_attribution import attribution_rollup
 
     logger.info("Starting daily memory compilation for user=%s date=%s", user_id, date_str)
     
@@ -301,34 +306,51 @@ async def _compile_eod_memory(db, user_id: str, date_str: str, report_doc: dict)
         "status": {"$in": ["FILTERED", "SKIPPED_SIGNAL", "BLOCKED", "rejected"]}
     }, {"_id": 0, "strategy_id": 1, "symbol": 1, "last_filter_reason": 1}).to_list(100)
 
-    # 2. Build summary string for Gemini
-    summary_data = f"""
+    # 2. HSI-21: feed the LLM the DETERMINISTIC Stage-1 attribution rollups (numbers +
+    # sample sizes), not a raw JSON dump. Today's rollups across the key dimensions plus
+    # a week-to-date rollup for trend. Code computes; the LLM only narrates.
+    wtd_since = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=6)).strftime("%Y-%m-%d")
+    attribution = {"date": date_str, "today": {}, "week_to_date": {"since": wtd_since}}
+    for dim in ("structure", "regime", "exposure_bias", "exit_reason", "strategy"):
+        try:
+            attribution["today"][dim] = await attribution_rollup(db, user_id, date_str, dim)
+            attribution["week_to_date"][dim] = await attribution_rollup(db, user_id, wtd_since, dim)
+        except Exception as roll_exc:
+            logger.error("attribution_rollup failed dim=%s: %s", dim, roll_exc)
+    today_n = sum(b.get("n", 0) for b in attribution["today"].get("structure", []))
+
+    # 3. HSI-22: distill into STRUCTURED, sample-size-honest observations.
+    observations = []
+    if today_n > 0:
+        try:
+            observations = await distill_attribution_to_observations(
+                json.dumps(attribution, default=str)
+            )
+        except Exception as obs_exc:
+            logger.error("Attribution distillation failed: %s", obs_exc)
+
+    # Prose fact list (for hermes_memory embeddings + the wiki note body). Derived from
+    # the structured observations; falls back to the legacy prose distiller, then a
+    # default, so the memory note never comes out empty.
+    facts = [o["claim"] for o in observations if o.get("claim")]
+    if not facts:
+        summary_data = f"""
 Daily Report for {date_str}:
 - Realized P&L: Rs {report_doc.get('total_realized_pnl', 0.0)}
-- Unrealized P&L: Rs {report_doc.get('total_unrealized_pnl', 0.0)}
 - Trades Taken: {report_doc.get('trades_taken', 0)}
-- Signals Fired: {report_doc.get('signals_fired', 0)}
-- Signals Filtered: {report_doc.get('signals_filtered', 0)}
 - Best Strategy: {report_doc.get('best_strategy')}
 - Worst Strategy: {report_doc.get('worst_strategy')}
 
-Strategies detail:
-{json.dumps(report_doc.get('strategies', []), default=str)}
-
-Today's alerts:
-{json.dumps(alerts, default=str)}
-
-Today's skipped/filtered signals:
-{json.dumps(signals, default=str)}
+Attribution rollups (deterministic):
+{json.dumps(attribution, default=str)}
 """
-
-    # 3. Call Gemini to distill into facts
-    facts = await distill_daily_report_to_facts(summary_data)
+        facts = await distill_daily_report_to_facts(summary_data)
     if not facts:
-        logger.warning("No facts distilled by Gemini. Storing default summary fact.")
+        logger.warning("No facts distilled. Storing default summary fact.")
         facts = [f"Daily session on {date_str} completed with realized P&L: Rs {report_doc.get('total_realized_pnl', 0.0)} over {report_doc.get('trades_taken', 0)} trades."]
 
-    # 4. Generate embeddings and save to db.hermes_memory
+    # 4. Store: embeddings → db.hermes_memory (RAG) AND structured rows →
+    # db.hermes_observations (HSI-23, what Stage 3 will score).
     now_str = datetime.now(timezone.utc).isoformat()
     # Unique date+TIME label (IST) for the wiki-note title. EOD can run more than once
     # a day (e.g. after a restart), and the wiki save rejects a duplicate TITLE — so a
@@ -353,6 +375,25 @@ Today's skipped/filtered signals:
             logger.info("Saved EOD memory fact for user=%s: %s", user_id, fact)
         except Exception as e_mem:
             logger.error("Failed to generate embedding or save EOD fact: %s", e_mem)
+
+    # HSI-23: persist the structured observations for Stage 3 to score over time.
+    for o in observations:
+        try:
+            await db.hermes_observations.insert_one({
+                "id": "obs_" + str(uuid.uuid4()),
+                "user_id": user_id,
+                "date": date_str,
+                "claim": o.get("claim"),
+                "dimension": o.get("dimension"),
+                "metric": o.get("metric"),
+                "value": o.get("value"),
+                "sample_size": o.get("sample_size"),
+                "confidence": o.get("confidence"),
+                "source": "eod_attribution",
+                "created_at": now_str,
+            })
+        except Exception as e_obs:
+            logger.error("Failed to save structured observation: %s", e_obs)
 
     # 5. Formulate markdown body for the session memory wiki note draft
     facts_md = "\n".join(f"- {f}" for f in facts)

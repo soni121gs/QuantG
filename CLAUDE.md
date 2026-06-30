@@ -260,6 +260,8 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | `agent_tool_audit` | Audit logs of all read-only tool executions run by Hermes |
 | `daily_reports` | End-of-day strategy performance aggregates (compiled at 15:35 IST) |
 | `ai_chats` | Chat session records, carrying the tools_used citation metadata envelopes |
+| `trade_attribution` | HSI Stage 1: one row per CLOSED trade with the "why" dimensions (bias/regime/structure/hold/exit_reason/R_multiple). Written at EOD by `core/trade_attribution.py` |
+| `hermes_observations` | HSI Stage 2: structured, sample-size-honest EOD observations distilled from attribution rollups (claim/dimension/metric/value/sample_size/confidence) — Stage 3 scores these |
 
 ---
 
