@@ -233,6 +233,21 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     "EOD aggregation user=%s date=%s realized=%.2f trades=%d",
                     user_id, today_str, total_realized, total_trades,
                 )
+                # Self-healing wallet reconciliation: the book is flat post-squareoff,
+                # so the paper wallet must equal initial + Σ realized P&L. Snap out any
+                # phantom drift against the ledger truth so the displayed balance is
+                # always REAL (kills the recurring fake-profit class at EOD even if a new
+                # over-credit bug slips in intraday).
+                try:
+                    from core.paper_broker import PaperWallet
+                    _recon = await PaperWallet(db).reconcile_if_flat(user_id)
+                    if _recon.get("healed"):
+                        logger.critical(
+                            "EOD wallet reconcile user=%s HEALED phantom drift=%.2f → balance=%.2f",
+                            user_id, _recon.get("drift", 0.0), _recon.get("truth", 0.0),
+                        )
+                except Exception as recon_exc:
+                    logger.error("EOD wallet reconcile failed for user=%s: %s", user_id, recon_exc)
                 try:
                     await _compile_eod_memory(db, user_id, today_str, doc)
                 except Exception as mem_exc:
