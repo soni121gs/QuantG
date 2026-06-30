@@ -20,7 +20,7 @@ import os
 import socket
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from pymongo import ReturnDocument
 
@@ -60,6 +60,68 @@ SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SINGLE_LEG_SIGNAL_EXIT
 # is only computed in the runner, so the runner is the earliest place to block a
 # direction-misaligned EQUITY entry at the source. Strength scale is 0..1.
 EQUITY_COUNTERTREND_BLOCK_STRENGTH = float(os.environ.get("EQUITY_COUNTERTREND_BLOCK_STRENGTH", "0.6"))
+# Directional concentration cap: max number of strategies that may hold the same
+# directional bias (BULLISH/BEARISH) on a single underlying at the same time. The
+# book's main failure mode is correlation — many index strategies on the same side
+# all lose together on one adverse move. Per-underlying, so equity (one strategy
+# per stock) is unaffected. 0 disables. Env-tunable.
+MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING = int(os.environ.get("MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING", "3"))
+_EXPOSURE_OPEN_STATUSES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]
+
+
+def _position_exposure_bias(pos: Dict[str, Any]) -> Optional[str]:
+    """BULLISH / BEARISH directional bias of an open position on its underlying.
+
+    Equity/futures long = bullish. Credit spread: a sold PUT spread (option_type PE)
+    is bullish, a sold CALL spread (CE) is bearish. Debit spread: bull-call (CE) is
+    bullish, bear-put (PE) is bearish. Single-leg option: CE long bullish / PE long
+    bearish (flipped when short). Returns None when bias can't be determined.
+    """
+    structure = str(pos.get("structure") or "").lower()
+    otype = str(pos.get("option_type") or "").upper()
+    side = str(pos.get("position_side") or "LONG").upper()
+    asset = str(pos.get("asset_type") or "").lower()
+    if structure == "credit_spread":
+        if "PE" in otype:
+            return "BULLISH"
+        if "CE" in otype:
+            return "BEARISH"
+        return None
+    if structure == "debit_spread":
+        if "CE" in otype:
+            return "BULLISH"
+        if "PE" in otype:
+            return "BEARISH"
+        return None
+    if asset == "equity" or (not otype):
+        return "BULLISH" if side != "SHORT" else "BEARISH"
+    if "CE" in otype:
+        return "BULLISH" if side != "SHORT" else "BEARISH"
+    if "PE" in otype:
+        return "BEARISH" if side != "SHORT" else "BULLISH"
+    return None
+
+
+async def _count_directional_exposure(db, user_id: str, underlying: str, bias: str,
+                                      exclude_sid: Optional[str] = None) -> int:
+    """Count open positions on `underlying` whose directional bias matches `bias`,
+    optionally excluding one strategy (the one trying to enter)."""
+    try:
+        rows = await db.strategy_positions.find(
+            {"user_id": user_id, "underlying": str(underlying).upper(),
+             "status": {"$in": _EXPOSURE_OPEN_STATUSES}},
+            {"_id": 0, "option_type": 1, "structure": 1, "position_side": 1,
+             "asset_type": 1, "strategy_id": 1},
+        ).to_list(200)
+    except Exception:
+        return 0
+    n = 0
+    for r in rows:
+        if exclude_sid and r.get("strategy_id") == exclude_sid:
+            continue
+        if _position_exposure_bias(r) == bias:
+            n += 1
+    return n
 NON_ERROR_ENTRY_BLOCKS = (
     "cooldown-active",
     "duplicate-buy-dropped",
@@ -658,6 +720,35 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     _sig_dir = (last_sig.get("direction") or "").upper()
                     _is_ce_exposure = ("CE" in _sig_dir) or (action == "BUY" and not _sig_dir)
                     _is_pe_exposure = ("PE" in _sig_dir) or (action == "SELL" and not _sig_dir)
+
+                    # ── Directional concentration cap (2026-06-30) ────────────────
+                    # The book's core failure mode is correlation: ~6-8 index
+                    # strategies all take the SAME directional side on the SAME
+                    # underlying, so one adverse move sinks every one of them at once
+                    # (06-29/30: 4-15% win rate). Cap how many strategies may hold the
+                    # same-direction exposure on one underlying at the same time, so a
+                    # single move can't wipe the whole book. Per-underlying, so equity
+                    # (one strategy per stock) is never throttled. Env-tunable.
+                    _new_bias = "BULLISH" if _is_ce_exposure else ("BEARISH" if _is_pe_exposure else None)
+                    if _new_bias and MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING > 0:
+                        _same_dir = await _count_directional_exposure(
+                            db, s["user_id"], _underlying, _new_bias, exclude_sid=s["id"]
+                        )
+                        if _same_dir >= MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING:
+                            _reason = (
+                                f"EXPOSURE_CAP: {_same_dir} strategies already {_new_bias} on "
+                                f"{_underlying} (max {MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING}) — "
+                                f"blocking correlated entry"
+                            )
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "EXPOSURE_CAP", _reason)
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set, "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _reason},
+                                 "$inc": inc_set},
+                            )
+                            continue
 
                     if _is_ce_exposure and not _long_ok:
                         _reason = f"REGIME_GATE: {_regime.get('regime','?')} — CE/long exposure blocked"

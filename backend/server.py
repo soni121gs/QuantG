@@ -3401,10 +3401,10 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "BANKNIFTY Breakout Buyer",
-        "description": "Upstox-compatible single-leg BANKNIFTY ATM option buying strategy. It avoids multi-leg selling, resolves the exact Upstox option instrument_key, and lets the order manager place one BUY/exit cycle.",
+        "description": "BANKNIFTY breakout expressed as a THETA CREDIT SPREAD (2026-06-30: converted from a directional debit spread that lost every trade in chop). A BUY signal sells a put spread, a SELL signal sells a call spread — it earns time decay if price holds, instead of needing a big directional move.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
-        "strategy_type": "Option Buying", "required_capital": 30000.0, "instrument_group": "NFO",
+        "structure": "credit_spread", "spread_width": 2,
+        "strategy_type": "Option Selling", "required_capital": 8000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 35: return []
     closes = [float(d['close']) for d in data]
@@ -3614,10 +3614,10 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "BANKNIFTY HFT Momentum Scalper",
-        "description": "Adaptive HFT option buying scalper for BANKNIFTY using dynamic standard deviation bands.",
+        "description": "BANKNIFTY std-dev band breakout expressed as a THETA CREDIT SPREAD (2026-06-30: converted from a directional debit spread that lost every trade in chop). Sells a put/call spread on the band signal and rides to TP/SL/time decay instead of needing a directional move.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
-        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
+        "structure": "credit_spread", "spread_width": 2,
+        "strategy_type": "Option Selling", "required_capital": 8000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     if len(data) < 25: return []
     closes = [d['close'] for d in data]
@@ -3638,10 +3638,10 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "NIFTY Quick EMA Scalper",
-        "description": "Capital-efficient (INR 8,000) NIFTY debit-spread momentum strategy. Uses a fast 5-minute EMA crossover (3 EMA crossing 9 EMA) to catch momentum swings, expressed as an ATM debit spread so theta does not bleed the position on chop.",
+        "description": "Capital-efficient (INR 8,000) NIFTY momentum strategy expressed as a THETA CREDIT SPREAD (2026-06-30: converted from a directional debit spread that lost every trade in chop). A fast 3/9 EMA crossover sells a put/call spread and earns time decay if price holds, instead of paying premium for a directional move.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
-        "strategy_type": "Option Buying", "required_capital": 8000.0, "instrument_group": "NFO",
+        "structure": "credit_spread", "spread_width": 2,
+        "strategy_type": "Option Selling", "required_capital": 8000.0, "instrument_group": "NFO",
         "risk": {
             "stop_loss_pct": 8, "take_profit_pct": 12,
             "trail_trigger_pct": 5, "trail_step_pct": 2.8,
@@ -16766,9 +16766,12 @@ async def startup():
     # max loss is capped at net debit instead of full premium. Idempotent.
     async def _migrate_debit_spread_structure():
         await asyncio.sleep(6)
+        # NOTE (2026-06-30): "BANKNIFTY Breakout Buyer" was removed from this list —
+        # it is now force-converted to a credit_spread by
+        # _migrate_credit_spread_structure below (it lost every directional trade in
+        # chop). Leaving it here would fight that migration on every restart.
         _debit_names = [
             "NIFTY Momentum Buyer",
-            "BANKNIFTY Breakout Buyer",
             "BANKNIFTY Volatility Breakout",
         ]
         try:
@@ -16787,6 +16790,41 @@ async def startup():
             logger.warning("Debit-spread structure migration failed: %s", _ds_err)
 
     asyncio.create_task(_migrate_debit_spread_structure())
+
+    # Credit-spread conversion (2026-06-30): the worst directional debit spreads
+    # lost EVERY trade over 06-29/30 in a choppy market (NIFTY Quick EMA Scalper
+    # -3.7k, BANKNIFTY HFT Momentum Scalper -2.2k, BANKNIFTY Breakout Buyer -1.8k).
+    # A debit spread still needs a directional move; a credit spread earns theta if
+    # price merely holds — the only structure that was green these two days. Convert
+    # the three to credit_spread (sells a put spread on BUY, a call spread on SELL)
+    # and size them at the proven ₹8k budget (≈1-2 lots). Idempotent: only writes
+    # when not already credit_spread. This is the durable owner of these three —
+    # they are excluded from _migrate_debit_spread_structure above.
+    async def _migrate_credit_spread_structure():
+        await asyncio.sleep(7)
+        _credit_names = [
+            "NIFTY Quick EMA Scalper",
+            "BANKNIFTY HFT Momentum Scalper",
+            "BANKNIFTY Breakout Buyer",
+        ]
+        try:
+            res = await db.strategies.update_many(
+                {"name": {"$in": _credit_names},
+                 "visual_config.options.structure": {"$ne": "credit_spread"}},
+                {"$set": {
+                    "visual_config.options.structure": "credit_spread",
+                    "visual_config.options.spread_width": 2,
+                    "visual_config.options.required_capital": 8000.0,
+                    "structure": "credit_spread",
+                    "strategy_type": "Option Selling",
+                }},
+            )
+            if res.modified_count:
+                logger.info("DB migration: set credit_spread structure on %d strategy documents", res.modified_count)
+        except Exception as _cs_err:
+            logger.warning("Credit-spread structure migration failed: %s", _cs_err)
+
+    asyncio.create_task(_migrate_credit_spread_structure())
 
     # Fix 3: Warn loudly at boot if running with the default JWT secret.
     # The secret is SHA-256'd so it won't crash, but forging tokens is trivial
