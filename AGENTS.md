@@ -26,6 +26,7 @@ QuantG is an NSE options algo-trading platform running on a VPS (82.180.145.183)
 - **Broker**: Upstox V3 only. WebSocket feed + REST orders. (Gotcha: REST `/market-quote/*` returns COLON-keyed data `NSE_INDEX:Nifty 50`; WS V3 uses PIPE keys `NSE_INDEX|Nifty 50`.)
 - **Mode right now**: Paper trading. Live trading is disabled (`CORE_ENGINE_LIVE_ENABLED=false`).
 - **Equity is LIVE on real data (paper)** as of 2026-06-22 — 10 NSE_EQ strategies trade alongside options (~24 live total). Old "equity is phantom / don't re-enable" cautions are obsolete; do NOT re-apply them. Equity strategies carry a trend re-entry patch in their `python_code`.
+- **P&L is now REAL (2026-06-30)**: the recurring phantom-wallet over-credit class is fixed (equity exits are reduce-only) AND guarded — `PaperWallet.reconcile_if_flat` snaps the wallet to `initial + Σ realized_pnl` at EOD and logs CRITICAL on any drift. The truth source is `db.trade_fills`; **never compute P&L from the wallet balance alone**. A **directional-exposure cap** (`MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING`) limits same-side concentration per underlying.
 - **Database**: MongoDB at `mongodb://mongo:27017`, db name `quantg`.
 
 For full architecture details → see `CLAUDE.md`.
@@ -239,11 +240,16 @@ Always include `Task: TASK-<ID>` in the commit body.
 
 ---
 
-## 11. Active Program — Architecture Redesign (read CLAUDE.md §11)
+## 11. Active Programs — what to work on now
 
-The current major initiative is the **brain / event-bus redesign** mapped in **CLAUDE.md §11**.
-That section is the single source of truth. Every agent (Claude, Codex, Antigravity, GPT, Gemini)
-works this program the same way.
+**The source of truth for "what to pick up" is the `▶ OPEN TASKS INDEX` near the top of `TASKS.md`.** Read it first. As of 2026-06-30 there are two live initiatives plus backlog:
+
+1. **🧠 Hermes Self-Improvement Loop (headline) — `HSI-11..54`** at the bottom of TASKS.md. The path to a self-improving trading brain: attribute every trade → grounded EOD analysis → scored/decaying lessons → OOS validation → human-gated advice. **START with `HSI-11` (Trade Attribution Engine)** — pure code, zero trading risk, unblocks everything. Two laws: *every claim backed by a computed number + sample size*; *no lesson influences trading until it passes an out-of-sample backtest* (judge-first). Hermes NEVER trades or edits code — read-only tools + approval-gated `pending_actions` only.
+2. **📈 Win-Rate / Expectancy — `WR-3x..WR-7x`** (PRIORITY 0). Optimize **expectancy + Sharpe**, not win rate; weight the book toward measured edge.
+
+### Backlog program — Architecture Redesign (read CLAUDE.md §11)
+
+The **brain / event-bus redesign** mapped in **CLAUDE.md §11** is a parallel backlog initiative — do NOT start it unless the founder directs. That section is its single source of truth. Every agent (Claude, Codex, Antigravity, GPT, Gemini) works it the same way.
 
 **Execution rules**
 - Work the §11.10 migration ladder **one rung per PR** (0→6). Do not batch rungs.
@@ -265,7 +271,7 @@ works this program the same way.
 
 ---
 
-*Last updated: 2026-06-22*
+*Last updated: 2026-06-30*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
 
 ---

@@ -7,21 +7,38 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
-## CURRENT STATE & ACTIVE QUEUE (updated 2026-06-24)
+## CURRENT STATE & ACTIVE QUEUE (updated 2026-06-30)
 
-**App reality now:** Paper mode. ~24 strategies live — options (single-leg + credit/debit spreads) **and equity (10 NSE_EQ names live on the REAL Upstox V3 feed)**. The old equity phantom/mock-price bug class is FIXED (real V3 candles + REST exit pricing). Day-level **profit-lock** is deployed (`core/profit_lock.py`). The truth-bearing P&L source is `trade_fills`.
+**App reality now:** Paper mode (`CORE_ENGINE_LIVE_ENABLED=false`). ~24 strategies live — index options (single-leg + **credit/debit spreads**) and **equity (10 NSE_EQ on the real Upstox V3 feed)**. Truth-bearing P&L source is `db.trade_fills`; the paper wallet now **self-heals to that ledger at EOD** (phantom-money drift is structurally eliminated). Day-level **profit-lock** (`core/profit_lock.py`) + **daily-loss kill-switch** (`core/loss_killswitch.py`) + **directional-exposure cap** are all live.
 
-**Shipped 2026-06-24 (validate all at next open):**
-- `[~]` **CUR-01** NIFTY Quick EMA Scalper converted single-leg→**debit_spread** + de-scalped (cooldown 1→8m, maxTrades 20→6, SL 5.5→8, category scalper→intraday). Done in the in-code template (DB risk edits get re-synced on startup). `5555589`. Validate: fires as a spread, no longer 6-stop-loss chop bleed.
-- `[~]` **CUR-02** Spreads now **ignore their own reverse signal** — exit only on TP/SL/time/squareoff (was churning at the 20-min debounce boundary: −823/−476 on 06-24). `strategy_runner.py` `1f03c5d`.
-- `[~]` **CUR-03** **Equity counter-trend gate** (`EQUITY_COUNTERTREND_BLOCK_STRENGTH=0.6`): blocks BUY into strong BEARISH / SELL into strong BULLISH (fixes LT firing 7 BUYs into a 0.84-bearish trend). `1f03c5d`.
-- `[~]` **CUR-04** **Equity capital tiers** (was flat ₹18k = ±₹30 noise): ₹75k RELIANCE/HDFCBANK/ICICIBANK · ₹50k TCS/INFY/SBIN/AXISBANK/KOTAKBANK/LT · ₹35k BHARTIARTL. `required_capital` is exempt from template re-sync so DB edit persists.
-- `[~]` **CUR-05** Spreads square off at **15:25** (was 15:10, cutting them mid-trajectory) with a 15:26 server backstop; single-leg/equity stay 15:10. `b274aac`.
-- `[~]` **CUR-06** BHARTIARTL whipsaw churn (4 losing ~5-min round-trips): cooldown 12→30m, maxTrades 3→2 via template risk override. `b274aac`.
+**Shipped 2026-06-30 (this session — all deployed to VPS):**
+- `[x]` **FIX-01** Phantom-wallet ROOT CAUSE fixed: equity exits were sized as fresh capital-based SELL orders (e.g. 29 sh sold vs 17 held) → wallet over-credited ~₹160k of fake "profit" while real P&L was negative. Equity exits now route through `close_strategy_fn` (reduce-only, sells `open_quantity`). `ff4fd58` + wallet reset to clean ₹500k.
+- `[x]` **FIX-02** Self-healing wallet reconciliation (`PaperWallet.reconcile_if_flat`, wired into `position_monitor` EOD): when the book is flat, balance is snapped to `initial + Σ realized_pnl`; any drift logged CRITICAL + auto-healed. Permanently kills the recurring phantom-money class. `0c3d1b2`.
+- `[x]` **FIX-03** Converted the 3 worst directional debit spreads → theta **credit spreads** (NIFTY Quick EMA Scalper / BANKNIFTY HFT Momentum Scalper / BANKNIFTY Breakout Buyer — all lost every trade in chop) via idempotent `_migrate_credit_spread_structure`. `873117a`.
+- `[x]` **WR-53** Directional-exposure cap `MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING=3`: blocks a new entry when N strategies already hold the same BULLISH/BEARISH bias on one underlying (per-position bias via `strategy_runner._position_exposure_bias`). The decorrelation lever. `873117a`.
+- `[x]` **FIX-04** Hermes session-memory wiki notes now titled `Session Memory <date> HH:MM:SS IST` + the approve path auto-dedupes title/slug → every memory is approvable (was "A document with this title already exists"). `b42acaf`.
+- `[x]` **DOC-01** Planned the 5-stage **Hermes Self-Improvement Loop** (HSI-11..54 — bottom of this file): the concrete path to a self-improving trading brain.
 
-**KEY MECHANIC (learned 06-24):** DB risk edits on the ~19 default strategies do NOT stick — a startup template re-sync (`migrate_user_to_v12_upstox`→`_risk_update_fields`) rewrites cooldown/SL/TP/maxTrades/category from the in-code template. Only `required_capital` and `visual_config.options.structure` survive a DB-only edit. **To durably change risk on a default strategy, edit the template in `server.py` (`DEFAULT_OPTION_STRATEGIES` + `UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME`), and note there is no `equity_trend` preset → all equity silently uses the `momentum` preset.**
+**Shipped 2026-06-24 (live since — folded to history):**
+- `[x]` **CUR-01..06** NIFTY Quick EMA Scalper de-scalp; spreads ignore reverse signals; equity counter-trend gate; equity capital tiers; 15:25 spread squareoff; BHARTIARTL anti-churn. `5555589`/`1f03c5d`/`b274aac`.
 
-**Highest-value OPEN items (no market wait):** WR-41 (expectancy as keep/kill metric) · WR-52 (daily-loss kill-switch end-to-end) · WR-33 (let momentum winners run). Then the WR-12-gated economics (WR-31/32) are now UNBLOCKED.
+**KEY MECHANIC (still true — read before editing any strategy):** DB risk edits on the ~19 default strategies do NOT stick — a startup template re-sync (`migrate_user_to_v12_upstox`→`_risk_update_fields`) rewrites cooldown/SL/TP/maxTrades/category from the in-code template. Only `required_capital` and `visual_config.options.structure` survive a DB-only edit (or add a dedicated idempotent startup migration, as `_migrate_credit_spread_structure` does). **To durably change risk on a default strategy, edit the template in `server.py` (`DEFAULT_OPTION_STRATEGIES` + `UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME`); note there is no `equity_trend` preset → all equity silently uses the `momentum` preset.**
+
+---
+
+### ▶ OPEN TASKS INDEX — pick from here (full detail in the sections below)
+
+> Status: `[ ]` open · `[~]` in progress (add your model name) · `[x]` done. IDs use a domain prefix (`HSI-`, `WR-`, `HSB-`, `CUR-`) — not all `TASK-###`. Start with the highest item your tier can handle; read the task's "Files / Acceptance" before coding.
+
+**🧠 Hermes Self-Improvement Loop — the headline initiative (§ bottom of file)**
+- **START HERE → `HSI-11..15`** Stage 1 Trade Attribution Engine (the "why" layer — pure code, zero trading risk, unblocks everything else)
+- `HSI-21..23` Stage 2 grounded EOD analysis · `HSI-31..34` Stage 3 scored lesson store · `HSI-41..44` Stage 4 OOS validator (⛔ needs ~3–4 wks clean attribution) · `HSI-51..54` Stage 5 gated advisor (founder-gated)
+
+**📈 Win-Rate / Expectancy (PRIORITY 0)**
+- `WR-31` tighten credit-spread short delta 0.30→0.20 · `WR-33` let momentum winners run (raise `target_R` + trailing) · `WR-42` weight book to measured edge *(partly done 06-30 via FIX-03)* · `WR-43` uncorrelated archetypes *(advanced by WR-53)* · `WR-44` OOS ratchet keep/kill · `WR-45` correlation matrix · `WR-51` risk-based sizing · `WR-54` auto-pause on drawdown
+- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-72` walk-forward harness · `WR-73` enable live on 2–3 proven *(founder gate)* · `WR-74` analytics dashboard
+
+**🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
 ---
 
@@ -86,8 +103,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ### Phase 4 — Portfolio construction & measurement (P1 — the real strategy)
 - `[x]` **WR-41** DONE 2026-06-24 (`874521e`) — `grade()` was already pure expectancy/Sharpe/PF (win rate unused); added explicit `keep_kill_verdict` (KEEP/WATCH/KILL + reason) and `summarize_verdicts` roll-up on `GET /ops/risk-scorecard`. Never KILLs on a thin sample (`SCORECARD_KILL_MIN_TRADES`, default 15) per the don't-kill-on-1-2-days rule. 5 new pure tests. Auto-pause action is WR-54.
-- `[ ]` **WR-42** Weight book toward measured-positive edge (equity momentum A/B, theta-selling); de-weight measured-negative (ATM option buying grade F). Data-driven.
-- `[ ]` **WR-43** Build portfolio of UNCORRELATED archetypes (theta=range, mean-reversion=stat-arb-lite, trend=momentum) so regimes hedge each other.
+- `[ ]` **WR-42** Weight book toward measured-positive edge (equity momentum A/B, theta-selling); de-weight measured-negative (ATM option buying grade F). Data-driven. *Partial progress 06-30 (`873117a`/FIX-03): 3 worst directional debit spreads → theta credit spreads. Full data-driven weighting waits on HSI Stage 1 attribution.*
+- `[ ]` **WR-43** Build portfolio of UNCORRELATED archetypes (theta=range, mean-reversion=stat-arb-lite, trend=momentum) so regimes hedge each other. *Advanced 06-30 by WR-53 (directional-exposure cap caps same-side concentration). Still want explicit archetype diversification + WR-45 correlation matrix.*
 - `[ ]` **WR-44** Run the ratchet: backtest OOS → paper-forward → keep/kill by expectancy. Keep only 2–3 survivors.
 - `[ ]` **WR-45** Track per-strategy correlation matrix to confirm edges are genuinely independent.
 
@@ -96,7 +113,7 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ### Phase 5 — Risk management (P1 — the actual product)
 - `[ ]` **WR-51** Size each bet by risk (fraction-of-Kelly / fixed-fractional), not fixed lots.
 - `[x]` **WR-52** DONE 2026-06-24 (`874521e`) — `core/loss_killswitch.py` (sibling of profit_lock), actively enforced from the monitor tick (fires even with no new order, unlike the entry-only preflight guard). Per-strategy: day P&L ≤ −`daily_loss_limit` → square off + stand down for the IST day (`day_loss_locked`, read by the signal_manager gate). Whole-book: aggregate ≤ −`PORTFOLIO_DAILY_LOSS_LIMIT` (env, default ₹20k) → square off entire book + stand down. ⚠️ Per-strategy floors currently inherit the small momentum-preset value (₹650 equity / ₹650–1200 options) — may want raising vs the new equity sizing.
-- `[ ]` **WR-53** Cap per-underlying concentration (extend the symbol-group guard to aggregate exposure).
+- `[x]` **WR-53** DONE 2026-06-30 (`873117a`): directional-exposure cap `MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING` (default 3) in `strategy_runner.py` — blocks a new entry when N strategies already hold the same BULLISH/BEARISH bias on one underlying. Per-position bias via `_position_exposure_bias` (equity long / credit PE=bullish CE=bearish / debit CE=bullish PE=bearish / single-leg by option_type+side). Per-underlying so equity (1 strat/stock) is never throttled.
 - `[ ]` **WR-54** Auto-pause a strategy on max-drawdown breach.
 
 ---
@@ -2548,5 +2565,74 @@ a confident overfitting machine — that is the single worst outcome and is expl
 4. Do not remove routes, data, trading actions, or safety/readiness surfaces.
 
 **Verify**: run `$env:CI='false'; npm run build` from `frontend/`; inspect all listed routes locally at mobile and desktop widths before any deploy, then rebuild the frontend container if deployed.
+
+---
+
+## PRIORITY — HERMES SELF-IMPROVEMENT LOOP ("the trading brain") (2026-06-30)
+
+**Goal**: evolve Hermes from a co-pilot that *narrates* the day into a brain that *learns* from it — analyzes every day's trading, grows validated knowledge, scores its own past calls, and (human-approved) tunes the book toward measured edge.
+
+**The loop**: OBSERVE → ATTRIBUTE → HYPOTHESIZE → VALIDATE (OOS) → REMEMBER → ADVISE → (back to OBSERVE), with a central SELF-SCORE that grades Hermes' own past lessons.
+
+**Two non-negotiable laws** (keep it a brain, not a hallucinator):
+1. **Every claim is backed by a computed number + sample size.** Code computes the truth; Gemini only phrases it. No fact with n<5 stated as fact. ("LLM narrates, code computes.")
+2. **No lesson influences trading until it survives an out-of-sample backtest.** Hermes proposes; the backtester judges on held-out data; the human approves. JUDGE-FIRST (build the OOS judge before the proposer can promote anything).
+
+**Constraints / context**:
+- Stays **Gemini 2.5-flash** (no GPU; flash is the analyst, not the calculator). Runs as a cheap **once-a-day batch**, not per-tick.
+- Hermes **never trades and never edits code** — read-only tools + approval-gated `pending_actions` only (existing law, `read_only=True`).
+- **Prerequisite CLEARED 2026-06-30**: this was backlogged "until win-rate settles" because the data was fake (phantom wallet). The phantom-wallet exit-qty fix (`ff4fd58`) + self-healing reconcile (`0c3d1b2`) made paper P&L real, so the loop can now learn from trustworthy data.
+- **Data-maturity reality**: build now, but the brain only gets *smart* over weeks. 1 clean day = nothing; ~30 clean days = real signal. Stages 1–3 are buildable immediately; Stage 4 (OOS) needs ~3–4 weeks of clean attribution before its held-out windows have signal; Stage 5 is founder-gated.
+- **Reuses existing assets**: `hermes_memory` (embeddings/RAG) · `READ_ONLY_AGENT_TOOLS` (routes/ai.py) · `pending_actions`/Approvals UI · `core/backtest_engine` + `core/options_backtest` + `backtrader_runner` · `core/strategy_scorecard` · AutoResearch (Phase 0/1 done — see project_autoresearch) · `_position_exposure_bias` (strategy_runner, added 2026-06-30) · EOD `_compile_eod_memory` (position_monitor).
+- **⚠ Relationship to the existing HSB campaign** (PRIORITY 12, HSB-01..17 above — see project_hermes_second_brain): **HSB-01..10 are DONE/deployed — REUSE, don't rebuild.** Already built: `get_strategy_score_explained` + `get_external_context` (tools), `db.hermes_recommendations` + `_score_open_recommendations` (advise→observe→score ring — overlaps Stage 3), `draft_strategy_pause` (governed action — the Stage 5 pattern), `recall_memory`/`hermes_memory`. **What HSI genuinely ADDS** = the missing **"why" layer (Stage 1 Trade Attribution — brand new, no equivalent exists)**; Stages 4–5 are a concrete re-framing of HSB-11..17's OOS-judge/ratchet. When building, **extend the existing collections/functions, don't fork parallel ones** (e.g. fold the scored-lesson store into the `hermes_recommendations`/`_score_open_recommendations` machinery).
+
+---
+
+### Stage 1 — Trade Attribution Engine (code only, no LLM) — *the "why"*
+**Goal**: tag every closed trade with the dimensions that explain win/loss, and make them queryable. Pure deterministic code = fully trustworthy. Everything else reads from this.
+- `[ ]` **HSI-11** New `trade_attribution` collection + `core/trade_attribution.py`. Per CLOSED trade write one record: `{trade_id, strategy_id, strategy_name, user_id, date_ist, underlying, asset_type, structure, exposure_bias, regime_at_entry, entry_time, exit_time, hold_minutes, exit_reason, entry_price, exit_price, realized_pnl, planned_risk, R_multiple, slippage, is_win}`. `exposure_bias` via `strategy_runner._position_exposure_bias`. `R_multiple = realized_pnl / planned_risk` (planned_risk = |entry−stop|×qty from `tp_sl_tsl_config`; for spreads use `max_loss`).
+- `[ ]` **HSI-12** Populate it: new `compile_trade_attribution(db, user_id, date)` called from `position_monitor._run_eod_aggregation` (after the `daily_reports` write, alongside `_compile_eod_memory`). Idempotent per (trade_id) — unique index on `trade_id`.
+- `[ ]` **HSI-13** Persist `regime_at_entry` + `planned_risk` on the position doc **at creation** (so attribution is exact, not reconstructed). Add to position-creation sites: `core/portfolio_ledger.py` (single-leg/equity) and `core/spread_lifecycle.py` (spreads). Source regime from the signal's `regime_snapshot.regime` (strategy_runner already attaches it). Until backfilled, attribution falls back to "UNKNOWN".
+- `[ ]` **HSI-14** Aggregation helper `attribution_rollup(db, user_id, since, group_by)` → group by any of `{strategy, structure, regime, exposure_bias, exit_reason, hold_bucket, time_of_day}` → returns per-bucket `{n, net_pnl, win_rate, avg_R, expectancy, avg_hold_min}`. Pure code, no LLM.
+- `[ ]` **HSI-15** New read-only tool `get_trade_attribution` (register in `READ_ONLY_AGENT_TOOLS` + handler beside the other `get_*` tools in routes/ai.py + add to the tool-matching keywords). Lets the user ask Hermes "why did BANKNIFTY lose this week" and get a numbers-backed table.
+- **Acceptance**: after one session, one row per closed trade with non-null bias/structure/exit_reason/R; `get_trade_attribution` returns a grouped table; spot-check 3 trades' R vs manual calc.
+- **Files**: `core/trade_attribution.py` (new), `position_monitor.py`, `routes/ai.py`, `core/portfolio_ledger.py`, `core/spread_lifecycle.py`. **Deps**: none.
+
+### Stage 2 — Grounded EOD analysis (LLM reads attribution, not raw JSON)
+**Goal**: the daily distillation produces observations backed by numbers + sample sizes instead of vague prose.
+- `[ ]` **HSI-21** Rewrite `_compile_eod_memory` input (position_monitor.py): replace the raw `json.dumps(strategies/alerts/signals)` blob with the Stage-1 `attribution_rollup` output (per-structure, per-regime, per-bias expectancy + sample sizes) + a **week-to-date** rollup for trend.
+- `[ ]` **HSI-22** Update the `distill_daily_report_to_facts` prompt (find the distiller — `core/embeddings.py` / hermes module): require each fact to cite **metric + value + sample_size + dimension**; forbid stating any claim with n<5 as fact (label "insufficient sample"); emit **structured** facts `{claim, dimension, metric, value, sample_size}` (not just prose).
+- `[ ]` **HSI-23** Store distilled observations both as embeddings (existing `hermes_memory`, keep RAG) AND as structured rows (new `hermes_observations`) for Stage 3 to score.
+- **Acceptance**: EOD facts read like "BANKNIFTY credit_spread expectancy +X over n=Y (WTD)" — no n<5 claim asserted as fact.
+- **Files**: `position_monitor.py`, the distiller module, `core/trade_attribution.py`. **Deps**: Stage 1.
+
+### Stage 3 — Scored Lesson Store (knowledge that self-corrects) — *the SELF-SCORE core*
+**Goal**: lessons carry confidence/sample/hit-rate and decay. This is "knowledge increases" + "improves itself".
+- `[ ]` **HSI-31** New `hermes_lessons` collection + `core/hermes_lessons.py`: `{lesson_id, claim, dimension, direction (good|bad), metric_at_creation, sample_size, confidence (0..1), status (candidate|active|decayed), created_at, last_confirmed_at, hit_rate, observations_count, correct_count}`.
+- `[ ]` **HSI-32** Daily SELF-SCORE pass `score_lessons(db, user_id, date)` (run from EOD after attribution): for each active lesson, re-measure its dimension against the latest attribution. Confirms direction → `correct_count++`, bump confidence + `last_confirmed_at`. Contradicts → `observations_count++` only (hit_rate falls). **Decay**: not confirmed in N days, or hit_rate<0.5 over ≥M observations → `status=decayed` (stops influencing anything).
+- `[ ]` **HSI-33** Promotion: a Stage-2 observation that persists (same direction, growing sample, expectancy holds) for K days auto-promotes `candidate`→`active`.
+- `[ ]` **HSI-34** Brain meta-metric: read-only tool `get_hermes_brain_health` (active-lesson count, avg confidence, overall lesson hit-rate, decayed count) — so you can literally watch the brain get smarter (or not).
+- **Acceptance**: lessons accumulate over a week; a deliberately-wrong test lesson decays after contradicting data; hit-rate updates daily; brain-health tool returns sane numbers.
+- **Files**: `core/hermes_lessons.py` (new), `position_monitor.py`, `routes/ai.py`. **Deps**: Stages 1–2.
+
+### Stage 4 — OOS Hypothesis Validator (the guardrail — JUDGE-FIRST)
+**Goal**: no lesson becomes a trading rule until it passes an **out-of-sample** backtest. Build the judge BEFORE the proposer can promote.
+- `[ ]` **HSI-41** Hypothesis schema: a candidate lesson that proposes a RULE (e.g. "block NIFTY long entries when ADX>30", "size credit_spreads up in RANGE") expressed as a **testable config delta + a measurable objective** (OOS expectancy / Sharpe).
+- `[ ]` **HSI-42** `validate_hypothesis(db, hypothesis)` in `core/hermes_validator.py`: split history into in-sample (lesson source window) and **held-out OOS** (later window); run the existing backtester (`core/backtest_engine` / `core/options_backtest` / `backtrader_runner`) with vs without the rule on the OOS window; **pass only if OOS objective improves beyond a margin AND OOS n ≥ threshold**. Persist the OOS result on the lesson.
+- `[ ]` **HSI-43** Enforce JUDGE-FIRST ordering (per project_autoresearch): a hypothesis with no passing OOS test can NEVER reach Stage 5. The judge runs first; the proposer is downstream of it.
+- `[ ]` **HSI-44** Overfitting guards: cap hypotheses tested per period (multiple-comparisons), require **effect size** not just sign, log every test to an auditable collection (`hermes_hypothesis_tests`).
+- **Acceptance**: feed one known-good and one known-noise hypothesis → validator promotes the good, rejects the noise; OOS result stored + auditable.
+- **Files**: `core/hermes_validator.py` (new), backtester wiring, `core/hermes_lessons.py`. **Deps**: Stages 1–3 + existing backtester. ⛔ **needs ~3–4 weeks of clean attribution** for OOS windows to carry signal.
+
+### Stage 5 — Gated Advisor (learning changes behavior — human-approved)
+**Goal**: OOS-validated lessons become (a) approval-gated config proposals and (b) read-only live context the strategy gates may consult. **Never auto-trades, never edits code.**
+- `[ ]` **HSI-51** New `pending_action` type `draft_config_change` (extend `allowed_actions` in routes/ai.py ~L1336; mirror `draft_strategy_pause`). Params `{scope/strategy_id, field, current, proposed, lesson_id, oos_evidence}`. Renders in the existing Approvals UI. On approve → applies the delta **respecting the template-resync mechanic** (only `required_capital`/`options.structure` survive a DB-only edit; otherwise surface an "edit-in-template" task).
+- `[ ]` **HSI-52** Live read-only advisory context: "active" validated lessons exposed via a cached `hermes_advice` doc the strategy_runner gates MAY read (e.g. a regime×structure confidence multiplier) — **behind a flag, default observe-only**. Code still decides; the lesson only nudges a parameter. (AutoResearch ratchet apply-step, human-gated.)
+- `[ ]` **HSI-53** Close the loop: when an approved change is applied, tag subsequent `trade_attribution` rows with the `lesson_id`, so Stage 3 can score whether the CHANGE actually improved real P&L (the ultimate self-score — did the brain's advice help?).
+- `[ ]` **HSI-54** Safety rails: every applied change is reversible (store prior value), rate-limited (≤N changes/week), and **auto-reverted** if post-change expectancy drops over a window (with a notification).
+- **Acceptance**: a validated lesson surfaces as an Approval card with OOS evidence; approving applies + logs + tags; later attribution shows whether it helped; revert works.
+- **Files**: `routes/ai.py`, frontend Approvals (renders `pending_actions` already), `strategy_runner.py` (52 read), `core/hermes_lessons.py` (53). **Deps**: Stages 1–4. **Founder-gated.**
+
+**Suggested order**: HSI-11→15 (Stage 1, do first — unblocks everything) → HSI-21→23 → HSI-31→34 → let ~3–4 weeks of clean attribution accumulate → HSI-41→44 → HSI-51→54.
 
 ---
