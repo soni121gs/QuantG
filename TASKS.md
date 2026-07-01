@@ -31,8 +31,8 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 > Status: `[ ]` open · `[~]` in progress (add your model name) · `[x]` done. IDs use a domain prefix (`HSI-`, `WR-`, `HSB-`, `CUR-`) — not all `TASK-###`. Start with the highest item your tier can handle; read the task's "Files / Acceptance" before coding.
 
 **🧠 Hermes Self-Improvement Loop — the headline initiative (§ bottom of file)**
-- **START HERE → `HSI-11..15`** Stage 1 Trade Attribution Engine (the "why" layer — pure code, zero trading risk, unblocks everything else)
-- `HSI-21..23` Stage 2 grounded EOD analysis · `HSI-31..34` Stage 3 scored lesson store · `HSI-41..44` Stage 4 OOS validator (⛔ needs ~3–4 wks clean attribution) · `HSI-51..54` Stage 5 gated advisor (founder-gated)
+- **Stages 1–3 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01 — `hermes_lessons` self-scores/promotes/decays each EOD; `get_hermes_brain_health` tool).
+- **NEXT → `HSI-41..44`** Stage 4 OOS validator — ⛔ **data-gated**: needs ~3–4 weeks of clean attribution for OOS windows to carry signal (the measurement clock started ~2026-07-01). Then `HSI-51..54` Stage 5 gated advisor (founder-gated).
 
 **📈 Win-Rate / Expectancy (PRIORITY 0)**
 - `WR-31` tighten credit-spread short delta 0.30→0.20 · `WR-33` let momentum winners run (raise `target_R` + trailing) · `WR-42` weight book to measured edge *(partly done 06-30 via FIX-03)* · `WR-43` uncorrelated archetypes *(advanced by WR-53)* · `WR-44` OOS ratchet keep/kill · `WR-45` correlation matrix · `WR-51` risk-based sizing · `WR-54` auto-pause on drawdown
@@ -2608,10 +2608,10 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ### Stage 3 — Scored Lesson Store (knowledge that self-corrects) — *the SELF-SCORE core*
 **Goal**: lessons carry confidence/sample/hit-rate and decay. This is "knowledge increases" + "improves itself".
-- `[ ]` **HSI-31** New `hermes_lessons` collection + `core/hermes_lessons.py`: `{lesson_id, claim, dimension, direction (good|bad), metric_at_creation, sample_size, confidence (0..1), status (candidate|active|decayed), created_at, last_confirmed_at, hit_rate, observations_count, correct_count}`.
-- `[ ]` **HSI-32** Daily SELF-SCORE pass `score_lessons(db, user_id, date)` (run from EOD after attribution): for each active lesson, re-measure its dimension against the latest attribution. Confirms direction → `correct_count++`, bump confidence + `last_confirmed_at`. Contradicts → `observations_count++` only (hit_rate falls). **Decay**: not confirmed in N days, or hit_rate<0.5 over ≥M observations → `status=decayed` (stops influencing anything).
-- `[ ]` **HSI-33** Promotion: a Stage-2 observation that persists (same direction, growing sample, expectancy holds) for K days auto-promotes `candidate`→`active`.
-- `[ ]` **HSI-34** Brain meta-metric: read-only tool `get_hermes_brain_health` (active-lesson count, avg confidence, overall lesson hit-rate, decayed count) — so you can literally watch the brain get smarter (or not).
+- `[x]` **HSI-31** DONE 2026-07-01 (`fb486ef`): `hermes_lessons` collection + `core/hermes_lessons.py`. Keyed by (dimension,bucket); fields incl. claim/direction/metric_at_creation/sample_size/confidence/status/hit_rate/observations_count/correct_count/last_confirmed_at.
+- `[x]` **HSI-32** DONE (`fb486ef`): `score_and_update_lessons(db,user_id,date)` wired into `position_monitor` EOD after Stage 1/2. Deterministic (scores sign of today's `attribution_rollup` expectancy vs the lesson's claim): confirm→correct_count++ + confidence up; contradict→hit_rate falls. Decay: stale (LESSON_DECAY_DAYS) or hit_rate<0.5 over ≥LESSON_DECAY_MIN_OBS. **Idempotent per (lesson,date)** via last_scored_date. Env-tunable thresholds.
+- `[x]` **HSI-33** DONE (`fb486ef`): candidate→active on LESSON_PROMOTE_K confirmations at hit_rate≥0.6.
+- `[x]` **HSI-34** DONE (`fb486ef`): read-only tool `get_hermes_brain_health` (active/candidate/decayed counts, avg confidence, overall hit-rate, top lessons) + keyword routing in routes/ai.py. Verified on real data: 07-01 seeded 10 candidate lessons with correct directions (credit_spread/RANGE/squareoff=good; debit_spread/single_leg/time-exit/killswitch/TREND_UP/BULLISH=bad). NOTE: `attribution_rollup(since=date)` is cumulative-from-date; the live EOD path passes since=today (today-only, correct) — do NOT backfill a PAST date (pulls in later days, inflates sample_size).
 - **Acceptance**: lessons accumulate over a week; a deliberately-wrong test lesson decays after contradicting data; hit-rate updates daily; brain-health tool returns sane numbers.
 - **Files**: `core/hermes_lessons.py` (new), `position_monitor.py`, `routes/ai.py`. **Deps**: Stages 1–2.
 
