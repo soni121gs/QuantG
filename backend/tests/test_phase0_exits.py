@@ -386,3 +386,41 @@ async def test_gt10_force_exit_on_ltp_unavailable_past_deadline():
     accepted = ("market", "ltp", "unavailable", "stale", "protective")
     assert any(token in reason.lower() for token in accepted), \
         f"Expected a stale/ltp protective force-exit reason, got: {reason}"
+
+
+# ── Rung 1: equity defers to ATR SL/TP + EOD square-off, not the blind clock ─────
+
+def _stale_entry(minutes: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+
+
+def test_equity_time_exit_deferred_but_sltp_intact():
+    """Equity flat past the 22m clock is NOT force-cut (defers to ATR SL/TP + EOD),
+    but its stop-loss and take-profit still fire — the real risk control is intact."""
+    from core.position_lifecycle import exit_reason
+
+    risk = {"stop_loss_pct": 8.0, "take_profit_pct": 12.0, "time_exit_minutes": 22,
+            "trailing_sl_enabled": False, "adaptive_exits_enabled": False}
+    equity = {"average_buy_price": 100.0, "position_side": "LONG", "asset_type": "equity",
+              "exchange": "NSE", "entry_time": _stale_entry(40), "tp_sl_tsl_config": risk}
+
+    # 40 min old, flat: the blind clock no longer force-exits equity.
+    assert exit_reason(equity, 100.5) is None
+    # SL still fires (designed ATR risk control preserved).
+    assert exit_reason(equity, 90.0) == "stop-loss"
+    # TP still fires.
+    assert exit_reason(equity, 115.0) == "take-profit"
+
+
+def test_option_time_exit_still_fires():
+    """Options keep the blind time-exit backstop (equity change must not touch them)."""
+    from core.position_lifecycle import exit_reason
+
+    # No greeks → theta-aware falls back to no-progress; either way an option flat
+    # past the window must produce a time/theta exit, never None.
+    risk = {"stop_loss_pct": 8.0, "take_profit_pct": 12.0, "time_exit_minutes": 22,
+            "trailing_sl_enabled": False, "adaptive_exits_enabled": False}
+    opt = {"average_buy_price": 100.0, "position_side": "LONG", "asset_type": "option",
+           "option_type": "CE", "exchange": "NFO", "entry_time": _stale_entry(40),
+           "tp_sl_tsl_config": risk, "greeks_at_entry": {}}
+    assert exit_reason(opt, 100.5) is not None

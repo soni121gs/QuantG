@@ -32,6 +32,18 @@ _SESSION_MINUTES = 375.0
 # not shortened. Steeper decay shrinks the window proportionally.
 _THETA_REF_PCT_PER_MIN = 0.001
 
+# ── Equity time-exit (rung 1, 2026-07-01) ───────────────────────────────────────
+# Equity has no theta, so the theta-aware exit above never applies to it. Its only
+# non-SL/TP early exit was the blind time_exit_minutes clock (default 22m), which
+# closed equity trades before their ATR(14) SL/TP brackets — the strategies' actual
+# designed risk control — could play out. On the 06-30 book every equity time-exit
+# was a small-loss 0% win (arbitrary-clock churn). Equity now defers to its ATR
+# brackets + the EOD square-off instead of the clock. 0 = disable the blind timer
+# for equity (default/recommended); set >0 (e.g. 22) to restore a hard equity
+# time-exit. Env-tunable so it reverts without a code change. Options/spreads keep
+# their timer (it backstops the theta-aware exit).
+EQUITY_TIME_EXIT_MINUTES = int(os.environ.get("EQUITY_TIME_EXIT_MINUTES", "0") or 0)
+
 # Trade-frequency categories (audit #9). A strategy's category is independent of
 # its risk_style: it governs how often the strategy may trade, not its SL/TP
 # profile. Scalpers must trade frequently, so their cooldown/trade caps are
@@ -108,6 +120,21 @@ def _is_long_option(position: Dict[str, Any]) -> bool:
     if str(position.get("option_type") or "").upper() in ("CE", "PE"):
         return True
     return str(position.get("exchange") or "").upper() in ("NFO", "BFO")
+
+
+def _is_equity(position: Dict[str, Any]) -> bool:
+    """Cash-equity position (no theta, no option/spread structure). Routes the
+    blind time-exit backstop: equity relies on its ATR SL/TP + EOD square-off,
+    not an arbitrary intraday clock."""
+    if str(position.get("asset_type") or "").lower() == "option":
+        return False
+    if str(position.get("option_type") or "").upper() in ("CE", "PE"):
+        return False
+    if str(position.get("structure") or "").lower() in ("credit_spread", "debit_spread"):
+        return False
+    if str(position.get("exchange") or "").upper() in ("NFO", "BFO", "NSE_FO", "BSE_FO"):
+        return False
+    return True
 
 
 def theta_aware_exit(
@@ -305,6 +332,11 @@ def exit_reason(position: Dict[str, Any], ltp: float) -> Optional[str]:
     if theta_exit:
         return theta_exit
     time_exit_minutes = int(risk.get("time_exit_minutes") or 0)
+    # Equity defers to its ATR SL/TP brackets + EOD square-off rather than the
+    # blind intraday clock (see EQUITY_TIME_EXIT_MINUTES). Options/spreads keep
+    # the timer — it backstops the theta-aware exit above.
+    if _is_equity(position):
+        time_exit_minutes = EQUITY_TIME_EXIT_MINUTES
     if time_exit_minutes > 0:
         entry_dt = parse_iso_dt(position.get("entry_time"))
         if entry_dt and (datetime.now(timezone.utc) - entry_dt).total_seconds() >= time_exit_minutes * 60:
