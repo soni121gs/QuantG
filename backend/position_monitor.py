@@ -274,6 +274,14 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     await _compile_eod_memory(db, user_id, today_str, doc)
                 except Exception as mem_exc:
                     logger.error("Auto-memory aggregation failed for user=%s: %s", user_id, mem_exc)
+                # HSI-32: Stage-3 scored lesson store — re-test lessons against today's
+                # attribution (create/confirm/promote/decay). Runs after Stage 1/2 so
+                # the rollups exist. Idempotent per (lesson, date).
+                try:
+                    from core.hermes_lessons import score_and_update_lessons
+                    await score_and_update_lessons(db, user_id, today_str)
+                except Exception as lesson_exc:
+                    logger.error("Lesson scoring failed for user=%s: %s", user_id, lesson_exc)
                 try:
                     await _score_open_recommendations(db, user_id, today_str, doc)
                 except Exception as score_exc:

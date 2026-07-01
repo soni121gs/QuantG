@@ -78,6 +78,7 @@ READ_ONLY_AGENT_TOOLS = [
     "recall_memory",
     "get_external_context",
     "get_trade_attribution",
+    "get_hermes_brain_health",
 ]
 
 
@@ -474,6 +475,16 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 warnings.append("No attributed trades in the window — attribution accrues at EOD.")
                 confidence = 0.5
             source = "db.trade_attribution"
+        elif name == "get_hermes_brain_health":
+            # HSI-34: the self-improvement meta-metric — how many lessons the brain
+            # holds, how confident/accurate they are, how many decayed. Lets the user
+            # ask "is Hermes actually learning?" and watch it get smarter (or not).
+            from core.hermes_lessons import get_brain_health
+            data = await get_brain_health(db, user["id"])
+            if not data.get("total_lessons"):
+                warnings.append("No lessons yet — the lesson store accrues one scoring pass per EOD.")
+                confidence = 0.5
+            source = "db.hermes_lessons"
         elif name == "get_recent_alerts":
             data = await db.notifications.find(
                 {"user_id": user["id"]},
@@ -1228,6 +1239,15 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "worst", "which strategy", "exit reason", "hold time", "performed", "performance by",
     ]):
         matched_tools.add("get_trade_attribution")
+        has_matches = True
+
+    # HSI-34: brain-health / self-improvement meta questions.
+    if any(w in q for w in [
+        "brain health", "brain-health", "lesson", "lessons", "learning", "getting smarter",
+        "self-improve", "self improve", "self-improvement", "what have you learned",
+        "what has hermes learned", "confidence", "decayed",
+    ]):
+        matched_tools.add("get_hermes_brain_health")
         has_matches = True
 
     if not has_matches:
