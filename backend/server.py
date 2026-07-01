@@ -16770,9 +16770,11 @@ async def startup():
         # it is now force-converted to a credit_spread by
         # _migrate_credit_spread_structure below (it lost every directional trade in
         # chop). Leaving it here would fight that migration on every restart.
+        # NOTE (2026-07-01): "BANKNIFTY Volatility Breakout" removed too — it was the
+        # worst remaining debit spread (-2337, 0/2, lost in TREND_UP *and* chop) and
+        # is now force-converted to credit_spread below.
         _debit_names = [
             "NIFTY Momentum Buyer",
-            "BANKNIFTY Volatility Breakout",
         ]
         try:
             res = await db.strategies.update_many(
@@ -16802,10 +16804,17 @@ async def startup():
     # they are excluded from _migrate_debit_spread_structure above.
     async def _migrate_credit_spread_structure():
         await asyncio.sleep(7)
+        # 2026-07-01: added the two worst remaining directional debit spreads. Both
+        # lost every trade over 06-30/07-01 and — with regime now instrumented —
+        # BANKNIFTY Volatility Breakout lost even in TREND_UP, so this is a structural
+        # failure, not a regime one (a regime gate would be curve-fitting: the debit
+        # winners that day were in RANGE). Converting to theta-earning credit spreads.
         _credit_names = [
             "NIFTY Quick EMA Scalper",
             "BANKNIFTY HFT Momentum Scalper",
             "BANKNIFTY Breakout Buyer",
+            "BANKNIFTY Volatility Breakout",
+            "SENSEX Swing RSI Pullback",
         ]
         try:
             res = await db.strategies.update_many(
