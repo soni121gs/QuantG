@@ -159,6 +159,21 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
         user_ids = await db.strategy_positions.distinct("user_id")
         now_ist = ist.isoformat()
 
+        # Snapshot the day's per-index market regime for the EOD report. This
+        # field was previously hardcoded None, so every daily_report showed
+        # regime "-". Read once (regime is global per index, not per user) from
+        # the persisted market_regime_state; graceful None on any failure.
+        try:
+            _regime_rows = await db.market_regime_state.find(
+                {}, {"_id": 0, "index": 1, "regime": 1, "bias": 1}
+            ).to_list(10)
+            market_regime_snapshot = {
+                r["index"]: {"regime": r.get("regime"), "bias": r.get("bias")}
+                for r in _regime_rows if r.get("index")
+            } or None
+        except Exception:
+            market_regime_snapshot = None
+
         for user_id in user_ids:
             try:
                 strategies = await db.strategies.find(
@@ -218,7 +233,7 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     "trades_taken": total_trades,
                     "signals_fired": signals_fired,
                     "signals_filtered": signals_filtered,
-                    "market_regime": None,
+                    "market_regime": market_regime_snapshot,
                     "best_strategy": {"name": best["name"], "pnl": best["realized_pnl"]} if best else None,
                     "worst_strategy": {"name": worst["name"], "pnl": worst["realized_pnl"]} if worst else None,
                     "strategies": strategy_rows,
