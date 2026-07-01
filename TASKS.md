@@ -95,9 +95,9 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 ---
 
 ### Phase 3 — Economics / strike tuning (P1 — AFTER Phase 1 confirms)
-- `[ ]` **WR-31** Tighten credit-spread short strike 0.30 → 0.20 delta (`CREDIT_SPREAD_SHORT_DELTA` env) → POP ~70% → ~80%. Reversible. **UNBLOCKED** (WR-12 validated 2026-06-24). Next economics lever to ship.
+- `[x]` **WR-31** DONE 2026-07-01 (`9521e14`): `CREDIT_SPREAD_SHORT_DELTA` default 0.30→0.20 in docker-compose.yml (verified 0.20 in container). POP ~70%→80%, less premium collected. Reversible via env. NOTE: entangles measurement with the same-day rung-2 credit migration (both push the book toward theta) — read the two effects together.
 - `[x]` **WR-32** 50%-profit close (`SPREAD_TP_FRAC=0.5`) CONFIRMED firing: 2026-06-23 had 4 `spread-tp` closes (+₹2,086, ~32m); 2026-06-24 had 2 more (+₹683/+₹883). No signal-churn contamination after `1f03c5d`. Closed.
-- `[ ]` **WR-33** Let momentum winners run: raise `target_R`, enable trailing — fixes expectancy.
+- `[ ]` **WR-33** Let momentum winners run: raise `target_R`, enable trailing — fixes expectancy. **DEFERRED 2026-07-01 (evidence-based):** the premise (winners cut tight) came from the 06-20 single-leg-buyer-heavy book. The CURRENT book's winners are spreads held to theta-TP (`spread-tp`, tastytrade-optimal 50%) / EOD square-off — i.e. NOT cut tight. Trailing is already enabled by default (`trailing_sl_enabled=True` suppresses the fixed TP). Raising `target_R`/loosening trail now = low-evidence change that adds give-back risk AND muddies the rung-1 (equity exit) + rung-2 (migration) measurement. RE-OPEN when attribution shows a real "winner cut early" pattern (e.g. a cluster of `take-profit`/`trailing-sl` exits closing well below `target_R` on trending days).
 
 ---
 
@@ -406,7 +406,7 @@ the negative-edge names identified.
 ---
 
 ### TASK-EQ-05 — Find the paused→live auto-reactivation root cause
-- **Status**: `[ ]` not started
+- **Status**: `[x]` DONE 2026-07-01 (`9521e14`). Root cause: two pause flags. The active toggle (`routes/strategies.py`) already sets `manual_paused=True`+`schedule_paused=False` on manual pause; `enable-all` (ops.py) already skips `manual_paused=True`; but the 9AM + startup **auto-restore** paths keyed off `schedule_paused` only. Added `manual_paused:{$ne:True}` to both restore filters so an explicit manual pause can never be auto-woken even with a stale `schedule_paused`. No current behavior change (cycling strategies have `manual_paused` unset). ORPHAN FOUND (not auto-fixed): `RELIANCE Trend Rider` = `status=paused, schedule_paused=false, manual_paused=false` → won't auto-restore; founder to decide reactivate-or-leave.
 - **Tier**: 2
 - **Session size**: ~1.5 hours
 - **Prerequisite**: None
