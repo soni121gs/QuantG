@@ -31,19 +31,19 @@ class BacktestReq(BaseModel):
 @router.get("/core/strategies")
 async def get_core_strategies(user=Depends(get_current_user)):
     user_id = user["id"]
-    return await db.strategies.find({"user_id": user_id}).to_list(length=200)
+    return await db.strategies.find({"user_id": user_id}, {"_id": 0}).to_list(length=200)
 
 
 @router.get("/core/orders")
 async def get_core_orders(user=Depends(get_current_user)):
     user_id = user["id"]
-    return await db.orders.find({"user_id": user_id}).sort("created_at", -1).to_list(length=200)
+    return await db.orders.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(length=200)
 
 
 @router.get("/core/positions")
 async def get_core_positions(user=Depends(get_current_user)):
     user_id = user["id"]
-    return await db.strategy_positions.find({"user_id": user_id}).to_list(length=200)
+    return await db.strategy_positions.find({"user_id": user_id}, {"_id": 0}).to_list(length=200)
 
 
 @router.get("/core/performance")
@@ -56,7 +56,7 @@ async def get_core_performance(user=Depends(get_current_user)):
 @router.get("/core/backtests")
 async def get_core_backtests(user=Depends(get_current_user)):
     user_id = user["id"]
-    return await db.backtest_runs.find().sort("created_at", -1).to_list(length=100)
+    return await db.backtest_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(length=100)
 
 
 @router.post("/core/backtests/run")
