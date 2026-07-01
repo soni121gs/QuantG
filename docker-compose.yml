@@ -75,7 +75,9 @@ services:
       # early (signal_manager:743, no fall-through); Stages 3/4 fixed spread P&L;
       # strategy_runner exempts credit_spread from the theta guard. Paper only.
       CREDIT_SPREADS_ENABLED: "${CREDIT_SPREADS_ENABLED:-true}"
-      CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.30}"
+      # WR-31 (2026-07-01): short strike 0.30 -> 0.20 delta → POP ~70% -> ~80%.
+      # Trades less premium for a higher win rate. Reversible: set back to 0.30.
+      CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.20}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
       # Debit spreads (defined-risk option BUYING) — engine fully supports them;
       # NIFTY/BANKNIFTY directional buyers opt in via structure=debit_spread.

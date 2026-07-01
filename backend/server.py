@@ -15895,7 +15895,10 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     logger.info("FIX5: All %d user gateways connected at market open", len(results))
 
             # 9:00 AM IST Mon–Fri — auto-activate strategies that were paused by the market schedule.
-            # Only re-activates strategies with schedule_paused=True; manually paused ones are left alone.
+            # Only re-activates strategies with schedule_paused=True; manually paused ones are left
+            # alone. The manual_paused guard (EQ-05, 2026-07-01) is belt-and-suspenders: even if a
+            # strategy somehow carries a stale schedule_paused=True, an explicit manual_paused=True
+            # can never be auto-woken (the manual toggle sets manual_paused=True + schedule_paused=False).
             if (
                 ist.weekday() < 5
                 and _schedule_activate_done_date != today
@@ -15904,7 +15907,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 _schedule_activate_done_date = today
                 try:
                     result = await db.strategies.update_many(
-                        {"schedule_paused": True},
+                        {"schedule_paused": True, "manual_paused": {"$ne": True}},
                         {"$set": {"status": "live", "schedule_paused": False,
                                   "schedule_resumed_at": ist.isoformat()}},
                     )
@@ -16888,7 +16891,7 @@ async def startup():
             ist = get_ist_now()
             if ist.weekday() < 5 and is_trading_session_active():
                 result = await db.strategies.update_many(
-                    {"schedule_paused": True},
+                    {"schedule_paused": True, "manual_paused": {"$ne": True}},
                     {"$set": {"status": "live", "schedule_paused": False,
                               "schedule_resumed_at": ist.isoformat()}},
                 )
