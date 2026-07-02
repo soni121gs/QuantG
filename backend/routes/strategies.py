@@ -508,7 +508,21 @@ async def _margin_estimate_for_combo(gw: Any, underlying: str, structure: str) -
         from core.market_domains import resolve_domain_by_underlying
         from brokers.upstox_gateway import UpstoxGateway
 
-        chain = await asyncio.to_thread(gw.get_option_chain, _MARGIN_EST_SPOT_KEYS[underlying], None)
+        spot_key = _MARGIN_EST_SPOT_KEYS[underlying]
+        # /v2/option/chain requires expiry_date — resolve the nearest listed expiry
+        # from the contracts API (BANKNIFTY has no weeklies since Nov-24, so a
+        # weekday guess would miss; the contract list is the truth).
+        from datetime import date as _date
+        contracts = await asyncio.to_thread(gw.get_option_contracts, spot_key, None)
+        today_iso = _date.today().isoformat()
+        expiries = sorted({
+            str(c.get("expiry"))
+            for c in ((contracts or {}).get("data") or [])
+            if str(c.get("expiry") or "") >= today_iso
+        })
+        if not expiries:
+            raise RuntimeError("no listed expiries found")
+        chain = await asyncio.to_thread(gw.get_option_chain, spot_key, expiries[0])
         rows = [r for r in ((chain or {}).get("data") or []) if r.get("strike_price")]
         if rows:
             strikes = sorted({float(r["strike_price"]) for r in rows})
