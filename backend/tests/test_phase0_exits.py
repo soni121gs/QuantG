@@ -424,3 +424,39 @@ def test_option_time_exit_still_fires():
            "option_type": "CE", "exchange": "NFO", "entry_time": _stale_entry(40),
            "tp_sl_tsl_config": risk, "greeks_at_entry": {}}
     assert exit_reason(opt, 100.5) is not None
+
+
+def test_equity_atr_policy_attaches_before_full_fourteen_bar_warmup():
+    from strategy_runner import _equity_atr_exit_policy
+
+    candles = [
+        {"high": 100.8, "low": 99.7, "close": 100.0},
+        {"high": 101.2, "low": 100.1, "close": 100.8},
+        {"high": 101.8, "low": 100.6, "close": 101.2},
+        {"high": 102.1, "low": 100.9, "close": 101.6},
+        {"high": 102.7, "low": 101.3, "close": 102.2},
+        {"high": 103.0, "low": 101.7, "close": 102.6},
+        {"high": 103.4, "low": 102.0, "close": 103.0},
+    ]
+
+    policy = _equity_atr_exit_policy({"target_R": 1.8}, candles)
+
+    assert policy is not None
+    assert policy["protection_status"] == "EQUITY_ATR_POLICY"
+    assert policy["equity_atr_bars"] == 6
+    assert policy["stop_loss_pct"] != 7.05
+    assert policy["take_profit_pct"] != 10.94
+
+
+def test_equity_atr_policy_rejects_tiny_warmup_windows():
+    from strategy_runner import _equity_atr_exit_policy
+
+    candles = [
+        {"high": 100.8, "low": 99.7, "close": 100.0},
+        {"high": 101.2, "low": 100.1, "close": 100.8},
+        {"high": 101.8, "low": 100.6, "close": 101.2},
+        {"high": 102.1, "low": 100.9, "close": 101.6},
+        {"high": 102.7, "low": 101.3, "close": 102.2},
+    ]
+
+    assert _equity_atr_exit_policy({"target_R": 1.8}, candles) is None

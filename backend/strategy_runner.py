@@ -146,7 +146,7 @@ def _signal_minutes_ist(signal: Dict[str, Any]) -> int:
 
 
 def _equity_atr_exit_policy(signal: Dict[str, Any], data: List[dict]) -> Optional[Dict[str, Any]]:
-    if len(data) < 15:
+    if len(data) < 6:
         return None
     try:
         trs = []
@@ -165,6 +165,7 @@ def _equity_atr_exit_policy(signal: Dict[str, Any], data: List[dict]) -> Optiona
         return {
             "equity_atr": round(atr, 4),
             "equity_atr_pct": round(atr_pct, 4),
+            "equity_atr_bars": len(trs),
             "stop_loss_pct": round(atr_pct, 4),
             "stoploss_pct": round(atr_pct, 4),
             "take_profit_pct": round(target_pct, 4),
