@@ -594,6 +594,7 @@ async def strategy_margin_estimates(user=Depends(get_current_user)):
                 "reason": "Reconnect Upstox to compute live margin estimates.", "estimates": {}}
 
     estimates: Dict[str, Any] = {}
+    errors: Dict[str, str] = {}
     for row in option_rows:
         underlying = _margin_est_underlying(row.get("name"))
         structure = _margin_est_structure(row)
@@ -607,7 +608,9 @@ async def strategy_margin_estimates(user=Depends(get_current_user)):
                 "atm_strike": est.get("atm_strike"),
                 "width_points": est.get("width_points"),
             }
-    return {"ok": True, "available": bool(estimates), "estimates": estimates}
+        else:
+            errors[f"{underlying}:{structure}"] = str(est.get("error") or "unknown")
+    return {"ok": True, "available": bool(estimates), "estimates": estimates, "errors": errors}
 
 
 @router.get("/{sid}/daily-report")
