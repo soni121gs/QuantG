@@ -53,8 +53,8 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 **Audit verdict: system HEALTHY and trading correctly.** Real feed (0 mock fallbacks), 57 fills today, MTM fresh (2–3s), no stuck EXITING/CIRCUIT_BREAKER positions, HSI brain intact (attribution 06-30/07-01, 10 candidate lessons scored 07-01, daily_reports through 07-01), self-healing wallet ledger working. Below are the non-urgent cleanups found — **none affect trading correctness or money integrity; do after 15:30 IST.**
 
 - `[x]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** DONE 2026-07-02: backend now only starts the Upstox portfolio stream when `CORE_ENGINE_LIVE_ENABLED=true`; paper mode keeps REST reconciliation but skips the portfolio WS handshake entirely. Commit: `18f70fd`. Acceptance after deploy: 401 log rate → ~0, backend CPU baseline should drop. Recheck OPS-02 after this because it may remove most of the contention.
-- `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
-- `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first. **Ordering added 2026-07-02: do AFTER AR-03 — RELIANCE's only trade since baseline was the `R_TARGET_HIT`-at-a-loss bracket defect (AR-03 step 3); reactivating it before the bracket fix re-exposes it to the same bug.**
+- `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path. **Early recheck 2026-07-03 02:06 IST:** current rebuilt backend container has 0 HTTP 429 matches; only "rate-limited" matches are the gateway's own duplicate-warning suppression for missing broker timestamps. Keep open for one market-hours load recheck because the current sample is overnight.
+- `[x]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** DONE 2026-07-03: RELIANCE was exactly orphaned (`status=paused`, `manual_paused=false`, `schedule_paused=false`) with 0 open positions, 0 pending signals, 0 open orders. After the equity ATR/deadline fixes, production Mongo now has `status=paused`, `manual_paused=false`, `schedule_paused=true`, so the 9AM scheduler will adopt/reactivate it with the rest of the book instead of leaving it idle overnight. No code commit; DB-only ops fix.
 - `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
 - `[x]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** DONE 2026-07-02: exact wallet reset timestamp is `2026-06-30T15:03:34.386Z`; wallet balance ₹498,889.87 implies Δ −₹1,110.13 from ₹500k, and `trade_fills` realized since reset is exactly −₹1,110.13 across 84 fills. No open reserved positions. Close as benign epoch mismatch, not residual phantom-credit. Commit: `b47f28d`.
 
@@ -314,6 +314,34 @@ the scorecard verdict (WR-41 KEEP/WATCH/KILL, respects the thin-sample floor). U
 WR-33 only if attribution now shows winners being cut early.
 
 **Acceptance**: a written before/after table in this section; explicit KEEP/WATCH/KILL verdict per strategy.
+
+**Early checkpoint 2026-07-03 02:06 IST (NOT FINAL — prerequisite not met):** AR-01..06 have not yet had 8
+trading sessions; July 2 data still includes old equity deadline/static-bracket positions opened before the
+latest `EQUITY_TIME_EXIT_MINUTES` / ATR warmup deploys. Read this as a smoke-check, not a keep/kill decision.
+
+| Metric | 07-02 baseline | Current query | Early read |
+|---|---:|---:|---|
+| Closed attributed trades since 2026-06-25 | 118 in original analysis window | 82 in current `trade_attribution` window | Different compiler/window; do not compare counts directly |
+| Net P&L since 2026-06-25 | about -₹8.2k | -₹10,439 | Still negative; not enough post-fix data |
+| July 2 attributed P&L | n/a | -₹653 across 30 trades | Much closer to flat than the pre-fix bleed, but mixed old/new behavior |
+| `daily-loss-killswitch-strat` since 2026-06-25 | 28 / -₹21,177 | 18 / -₹12,145 | Improved vs baseline but still the largest loss bucket |
+| `daily-loss-killswitch-strat` on/after 2026-07-02 | n/a | 5 / -₹2,877 | Watch next sessions after AR-01 geometry fully propagates |
+| `time-exit-22m` | 26 / bad equity bucket | 17 / -₹1,271 | Should decay to 0 after latest equity deadline fix |
+| `time-exit-deadline` | should vanish for equity | 8 / -₹658 | These are old pre-deadline-fix positions; recheck after next market session |
+| `spread-tp` | +₹4,239 @ 100% WR | +₹3,502 @ 100% WR | Still the cleanest winning exit |
+| `intraday-squareoff-1525` | +₹4,139 @ 62.5% WR | +₹3,340 @ 61.5% WR | EOD/theta holds remain productive |
+| Time of day | afternoon was worst | afternoon -₹9,361; morning +₹1,877 | Supports keeping afternoon entry gates |
+| Hold bucket | 2h+ winners strongest | 2h+ +₹3,416; 15-30m -₹7,046 | Supports letting theta trades mature |
+| Structure | credit/range strongest | credit spreads -₹364, debit spreads -₹6,953, single-leg -₹3,123 | Credit spreads still least bad; debit probes need regime proof |
+| Regime | RANGE best | RANGE +₹2,205; UNKNOWN -₹11,574 | AR-05 regime stamping is important; UNKNOWN remains the loss bucket |
+| Equity book | cost/bracket leak | 61 closed equity positions, net -₹5,161, 3.3% WR | Old equity behavior still dominates; recheck after ATR warmup fix has live trades |
+
+**Early KEEP/WATCH/KILL:** no hard KILL yet because every strategy is below the WR-41 thin-sample floor
+(`n < 15`). `SENSEX Theta Credit Spread` remains the best WATCH/KEEP candidate (+₹2,305, 85.7% WR, n=7).
+Worst WATCH/rework names by current P&L: `BANKNIFTY Volatility Breakout` (-₹2,404, n=3),
+`SENSEX Swing RSI Pullback` (-₹2,233, n=3), `NIFTY Quick EMA Scalper` (-₹2,129, n=3),
+and `KOTAKBANK RSI Rebound` (-₹880, n=13). Do not reopen WR-33 yet: the winners are still mainly
+`spread-tp` / EOD theta holds, not winners being cut early.
 
 ---
 
