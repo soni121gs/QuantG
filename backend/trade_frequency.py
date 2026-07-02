@@ -32,17 +32,17 @@ logger = logging.getLogger("quantg.trade_frequency")
 _STRATEGY_CLASSES: Dict[str, str] = {
     # Scalpers (ORB = NIFTY HFT Quick Scalper)
     "NIFTY HFT Quick Scalper":          "scalper",
-    "BANKNIFTY HFT Momentum Scalper":   "scalper",
+    "BANKNIFTY HFT Momentum Scalper":   "default",
     # Momentum / Breakout
-    "NIFTY Quick EMA Scalper":                  "momentum",  # converted to debit spread 2026-06-24
-    "NIFTY Momentum Buyer":                     "momentum",
-    "BANKNIFTY Breakout Buyer":                 "momentum",
-    "BANKNIFTY Volatility Breakout":             "momentum",
+    "NIFTY Quick EMA Scalper":                  "default",
+    "NIFTY Momentum Buyer":                     "default",
+    "BANKNIFTY Breakout Buyer":                 "default",
+    "BANKNIFTY Volatility Breakout":             "default",
     # Trend / Retest
     "NIFTY VWAP Trend Breakout":        "trend_retest",
-    "NIFTY Micro-Lot Trend Follower":   "trend_retest",
+    "NIFTY Micro-Lot Trend Follower":   "default",
     # Swing
-    "SENSEX Swing RSI Pullback":        "swing",
+    "SENSEX Swing RSI Pullback":        "default",
 }
 
 # Caps raised 2026-06-22 for the data-gathering phase (paper): the credit-spread
@@ -54,7 +54,7 @@ _CLASS_CAPS: Dict[str, Dict[str, Any]] = {
     "momentum":     {"daily_cap": int(os.environ.get("FREQ_CAP_MOMENTUM",     "16")), "cooldown_bars": 4},
     "trend_retest": {"daily_cap": int(os.environ.get("FREQ_CAP_TREND",        "12")), "cooldown_bars": 8},
     "swing":        {"daily_cap": int(os.environ.get("FREQ_CAP_SWING",        "10")), "cooldown_bars": 0},
-    "default":      {"daily_cap": int(os.environ.get("FREQ_CAP_DEFAULT",      "20")), "cooldown_bars": 4},
+    "default":      {"daily_cap": int(os.environ.get("FREQ_CAP_DEFAULT",      "8")), "cooldown_bars": 4},
 }
 
 LOSS_STREAK_TRIGGER  = int(os.environ.get("LOSS_STREAK_TRIGGER",  "3"))

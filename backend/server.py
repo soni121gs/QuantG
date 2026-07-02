@@ -1533,6 +1533,25 @@ def _strategy_risk_profile(template: Dict[str, Any]) -> Dict[str, Any]:
     return risk
 
 
+CREDIT_SPREAD_THETA_NAMES = {
+    "NIFTY Quick EMA Scalper",
+    "BANKNIFTY HFT Momentum Scalper",
+    "BANKNIFTY Breakout Buyer",
+    "BANKNIFTY Volatility Breakout",
+    "SENSEX Swing RSI Pullback",
+    "NIFTY Micro-Lot Trend Follower",
+    "NIFTY Momentum Buyer",
+}
+
+CREDIT_SPREAD_THETA_RISK = {
+    "cooldown_minutes": 15,
+    "max_trades_day": 8,
+    "daily_loss_limit": 4000.0,
+    "time_exit_minutes": 0,
+    "strategy_category": "intraday",
+}
+
+
 def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk") -> Dict[str, Any]:
     return {
         f"{prefix}.stop_loss_pct": risk["stop_loss_pct"],
@@ -6011,6 +6030,13 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     if not isinstance(_risk, dict):
         _risk = {}
         _template["risk"] = _risk
+    if _template.get("name") in CREDIT_SPREAD_THETA_NAMES or str(_template.get("structure") or "") == "credit_spread":
+        _template["structure"] = "credit_spread"
+        _template["strategy_type"] = "Option Selling"
+        _template["required_capital"] = 8000.0
+        _risk.update(CREDIT_SPREAD_THETA_RISK)
+    if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
+        _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
     _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
 
 STRATEGY_DISPLAY_NAME_RENAMES = {
@@ -6890,6 +6916,43 @@ async def _activate_strategy_position(
         if price_patch.get("take_profit") is not None:
             risk_patch["target_price"] = price_patch["take_profit"]
             risk_patch["take_profit"] = price_patch["take_profit"]
+
+    is_equity = (
+        str(reservation.get("asset_type") or "").lower() == "equity"
+        or str(reservation.get("exchange") or "").upper() in {"NSE", "BSE"}
+        or "_EQ|" in str(reservation.get("instrument_key") or "")
+    )
+    if is_equity and average_buy_price:
+        atr_pct = None
+        for key in ("equity_atr_pct", "underlying_atr_pct", "atr_pct"):
+            try:
+                value = risk_patch.get(key)
+                if value not in (None, ""):
+                    atr_pct = float(value)
+                    break
+            except (TypeError, ValueError):
+                continue
+        if atr_pct and atr_pct > 0:
+            side = "SHORT" if str(reservation.get("position_side") or "").upper() == "SHORT" else "LONG"
+            target_r = float(reservation.get("target_R") or risk_patch.get("target_r_multiple") or 1.8)
+            stop_gap = float(average_buy_price) * atr_pct / 100.0
+            target_gap = stop_gap * max(1.2, min(2.5, target_r))
+            if side == "SHORT":
+                stop_price = round(float(average_buy_price) + stop_gap, 2)
+                target_price = round(max(0.0, float(average_buy_price) - target_gap), 2)
+            else:
+                stop_price = round(max(0.0, float(average_buy_price) - stop_gap), 2)
+                target_price = round(float(average_buy_price) + target_gap, 2)
+            risk_patch.update({
+                "stoploss_price": stop_price,
+                "stop_loss": stop_price,
+                "target_price": target_price,
+                "take_profit": target_price,
+                "stop_loss_pct": round(atr_pct, 4),
+                "take_profit_pct": round(atr_pct * max(1.2, min(2.5, target_r)), 4),
+                "trailing_sl_enabled": False,
+                "protection_status": "PROTECTED_EQUITY_ATR",
+            })
 
     is_option_buy = (
         reservation.get("position_side") == "LONG"
@@ -15419,33 +15482,35 @@ async def _broker_reconciliation_loop(stop_event: asyncio.Event) -> None:
 
                 if in_market_hours:
                     try:
+                        live_enabled = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").strip().lower() == "true"
                         upstox_status = await get_user_upstox_status(user_id)
                         if not upstox_status.get("token_valid"):
                             continue
                         gw = await get_user_upstox_gateway(user_id)
                         if gw and gw.connected:
-                            streams = getattr(app.state, "upstox_portfolio_streams", None)
-                            if streams is None:
-                                streams = {}
-                                app.state.upstox_portfolio_streams = streams
-                            if user_id not in streams:
-                                loop = asyncio.get_running_loop()
+                            if live_enabled:
+                                streams = getattr(app.state, "upstox_portfolio_streams", None)
+                                if streams is None:
+                                    streams = {}
+                                    app.state.upstox_portfolio_streams = streams
+                                if user_id not in streams:
+                                    loop = asyncio.get_running_loop()
 
-                                async def _process_stream_event_async(payload_dict, user_uid):
-                                    try:
-                                        await _on_portfolio_stream_event(db, payload_dict, user_uid)
-                                    except Exception as exc:
-                                        logger.error("Error processing portfolio stream event: %s", exc)
+                                    async def _process_stream_event_async(payload_dict, user_uid):
+                                        try:
+                                            await _on_portfolio_stream_event(db, payload_dict, user_uid)
+                                        except Exception as exc:
+                                            logger.error("Error processing portfolio stream event: %s", exc)
 
-                                def _on_event(payload, uid=user_id):
-                                    loop.call_soon_threadsafe(
-                                        lambda: asyncio.create_task(_process_stream_event_async(payload, uid))
-                                    )
+                                    def _on_event(payload, uid=user_id):
+                                        loop.call_soon_threadsafe(
+                                            lambda: asyncio.create_task(_process_stream_event_async(payload, uid))
+                                        )
 
-                                stream = UpstoxPortfolioStream(access_token_getter=lambda gateway=gw: gateway.access_token, event_callback=_on_event)
-                                start_result = stream.start()
-                                if start_result.get("ok"):
-                                    streams[user_id] = stream
+                                    stream = UpstoxPortfolioStream(access_token_getter=lambda gateway=gw: gateway.access_token, event_callback=_on_event)
+                                    start_result = stream.start()
+                                    if start_result.get("ok"):
+                                        streams[user_id] = stream
                             await broker_reconciliation_summary(db, user_id, gw)
                     except Exception as stream_err:
                         logger.warning("Upstox portfolio stream/reconciliation state failed for user %s: %s", user_id, stream_err)
@@ -16777,7 +16842,6 @@ async def startup():
         # worst remaining debit spread (-2337, 0/2, lost in TREND_UP *and* chop) and
         # is now force-converted to credit_spread below.
         _debit_names = [
-            "NIFTY Momentum Buyer",
         ]
         try:
             res = await db.strategies.update_many(
@@ -16818,6 +16882,8 @@ async def startup():
             "BANKNIFTY Breakout Buyer",
             "BANKNIFTY Volatility Breakout",
             "SENSEX Swing RSI Pullback",
+            "NIFTY Micro-Lot Trend Follower",
+            "NIFTY Momentum Buyer",
         ]
         try:
             res = await db.strategies.update_many(
@@ -16829,6 +16895,11 @@ async def startup():
                     "visual_config.options.required_capital": 8000.0,
                     "structure": "credit_spread",
                     "strategy_type": "Option Selling",
+                    "visual_config.risk.cooldown_minutes": 15,
+                    "visual_config.risk.max_trades_day": 8,
+                    "visual_config.risk.daily_loss_limit": 4000.0,
+                    "visual_config.risk.time_exit_minutes": 0,
+                    "visual_config.risk.strategy_category": "intraday",
                 }},
             )
             if res.modified_count:

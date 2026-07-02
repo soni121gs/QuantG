@@ -67,6 +67,75 @@ EQUITY_COUNTERTREND_BLOCK_STRENGTH = float(os.environ.get("EQUITY_COUNTERTREND_B
 # per stock) is unaffected. 0 disables. Env-tunable.
 MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING = int(os.environ.get("MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING", "3"))
 _EXPOSURE_OPEN_STATUSES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]
+CREDIT_ENTRY_WINDOW = os.environ.get("CREDIT_ENTRY_WINDOW", "0945-1300").strip()
+
+
+def _parse_hhmm_minutes(value: str) -> Optional[int]:
+    text = str(value or "").strip().replace(":", "")
+    if len(text) != 4 or not text.isdigit():
+        return None
+    hour = int(text[:2])
+    minute = int(text[2:])
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
+def _credit_entry_window_bounds() -> Optional[tuple[int, int]]:
+    if not CREDIT_ENTRY_WINDOW or CREDIT_ENTRY_WINDOW.lower() in {"off", "false", "0"}:
+        return None
+    if "-" not in CREDIT_ENTRY_WINDOW:
+        return None
+    start_raw, end_raw = CREDIT_ENTRY_WINDOW.split("-", 1)
+    start = _parse_hhmm_minutes(start_raw)
+    end = _parse_hhmm_minutes(end_raw)
+    if start is None or end is None or start >= end:
+        return None
+    return start, end
+
+
+def _signal_minutes_ist(signal: Dict[str, Any]) -> int:
+    raw = str(signal.get("date") or "")
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.hour * 60 + dt.minute
+        ist = dt.astimezone(timezone.utc) + timedelta(hours=5, minutes=30)
+        return ist.hour * 60 + ist.minute
+    except Exception:
+        now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        return now_ist.hour * 60 + now_ist.minute
+
+
+def _equity_atr_exit_policy(signal: Dict[str, Any], data: List[dict]) -> Optional[Dict[str, Any]]:
+    if len(data) < 15:
+        return None
+    try:
+        trs = []
+        for i in range(max(1, len(data) - 14), len(data)):
+            high = float(data[i].get("high", data[i].get("close")))
+            low = float(data[i].get("low", data[i].get("close")))
+            prev_close = float(data[i - 1].get("close"))
+            trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        close = float(data[-1].get("close") or 0)
+        if close <= 0 or not trs:
+            return None
+        atr = sum(trs) / len(trs)
+        atr_pct = max(0.25, min(2.0, atr / close * 100.0))
+        target_r = float(signal.get("target_R") or 1.8)
+        target_pct = atr_pct * max(1.2, min(2.5, target_r))
+        return {
+            "equity_atr": round(atr, 4),
+            "equity_atr_pct": round(atr_pct, 4),
+            "stop_loss_pct": round(atr_pct, 4),
+            "stoploss_pct": round(atr_pct, 4),
+            "take_profit_pct": round(target_pct, 4),
+            "target_pct": round(target_pct, 4),
+            "trailing_sl_enabled": False,
+            "protection_status": "EQUITY_ATR_POLICY",
+        }
+    except Exception:
+        return None
 
 
 def _position_exposure_bias(pos: Dict[str, Any]) -> Optional[str]:
@@ -1172,6 +1241,26 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 # so low vol / theta works in their favour — they have their own
                 # TP/SL via spread_lifecycle and must not be theta-blocked.
                 _is_credit_spread = str((option_contract or {}).get("structure")) == "credit_spread"
+                if _is_entry and _is_credit_spread:
+                    _bounds = _credit_entry_window_bounds()
+                    if _bounds:
+                        _start_min, _end_min = _bounds
+                        _sig_min = _signal_minutes_ist(last_sig)
+                        if _sig_min < _start_min or _sig_min > _end_min:
+                            _reason = (
+                                f"ENTRY_WINDOW: credit_spread entry at {_sig_min // 60:02d}:{_sig_min % 60:02d} IST "
+                                f"outside {CREDIT_ENTRY_WINDOW}"
+                            )
+                            await record_strategy_filter(db, s["id"], s.get("user_id"), "ENTRY_WINDOW", _reason)
+                            await db.strategies.update_one(
+                                {"id": s["id"]},
+                                {"$set": {**eval_set,
+                                          "last_signals_count": signals_count,
+                                          "last_signal_action": action,
+                                          "last_filter_reason": _reason},
+                                 "$inc": inc_set},
+                            )
+                            continue
                 if option_buying_mode and _is_entry and option_contract and not _is_credit_spread:
                     try:
                         from exit_policy import attach_exit_policy_to_signal
@@ -1288,6 +1377,13 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                 continue
                     except Exception as _ph_exc:
                         logger.debug("phantom-candle guard failed for %s: %s", s["id"], _ph_exc)
+
+                if _is_entry and not option_resolution_requested and str(s.get("asset_class") or "").lower() == "equity":
+                    _eq_policy = _equity_atr_exit_policy(last_sig, data)
+                    if _eq_policy:
+                        last_sig = dict(last_sig)
+                        last_sig["exit_policy"] = {**(last_sig.get("exit_policy") or {}), **_eq_policy}
+                        last_sig["underlying_atr_pct"] = _eq_policy.get("equity_atr_pct")
 
                 # Insert signal into db.signals collection instead of placing order directly
                 try:

@@ -28,15 +28,19 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ### ▶ OPEN TASKS INDEX — pick from here (full detail in the sections below)
 
-> Status: `[ ]` open · `[~]` in progress (add your model name) · `[x]` done. IDs use a domain prefix (`HSI-`, `WR-`, `HSB-`, `CUR-`) — not all `TASK-###`. Start with the highest item your tier can handle; read the task's "Files / Acceptance" before coding.
+> Status: `[ ]` open · `[~]` in progress (add your model name) · `[x]` done. IDs use a domain prefix (`AR-`, `HSI-`, `WR-`, `HSB-`, `CUR-`) — not all `TASK-###`. Start with the highest item your tier can handle; read the task's "Files / Acceptance" before coding.
+
+**🩹 Alpha Repair Campaign (2026-07-02 full-book analysis) — START HERE (§ below)**
+- **NEXT → `AR-01`+`AR-02`** risk-geometry fix (killswitch force-closes = −₹21,177 since 06-25, the #1 leak) + credit-config coherence/entry-window — **ship together: same template file, one deploy = one measurement epoch**
+- Then: `AR-03` equity ATR-bracket bug (P1, independent — can go same day) · `AR-04` equity cost economics + 14:30 cutoff · `AR-05` regime/planned-risk stamping (gates AR-07 + HSI Stage 4) · `AR-06` BANKNIFTY expiry mismatch · `AR-07` ⛔ portfolio gates (data-gated) · `AR-08` measurement checkpoint (~07-16)
 
 **🧠 Hermes Self-Improvement Loop — the headline initiative (§ bottom of file)**
 - **Stages 1–3 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01 — `hermes_lessons` self-scores/promotes/decays each EOD; `get_hermes_brain_health` tool).
 - **NEXT → `HSI-41..44`** Stage 4 OOS validator — ⛔ **data-gated**: needs ~3–4 weeks of clean attribution for OOS windows to carry signal (the measurement clock started ~2026-07-01). Then `HSI-51..54` Stage 5 gated advisor (founder-gated).
 
-**📈 Win-Rate / Expectancy (PRIORITY 0)**
-- `WR-31` tighten credit-spread short delta 0.30→0.20 · `WR-33` let momentum winners run (raise `target_R` + trailing) · `WR-42` weight book to measured edge *(partly done 06-30 via FIX-03)* · `WR-43` uncorrelated archetypes *(advanced by WR-53)* · `WR-44` OOS ratchet keep/kill · `WR-45` correlation matrix · `WR-51` risk-based sizing · `WR-54` auto-pause on drawdown
-- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-72` walk-forward harness · `WR-73` enable live on 2–3 proven *(founder gate)* · `WR-74` analytics dashboard
+**📈 Win-Rate / Expectancy (open remainder — deduped 2026-07-02)**
+- Open: `WR-33` deferred (re-open only per AR-08 evidence) · `WR-45` correlation matrix · `WR-51` risk sizing *(after AR-08)* · `WR-54` auto-pause *(⛔ gated on AR-01/AR-08)*. **Folded 07-02:** `WR-42`/`WR-43` → AR-07/AR-08 · `WR-44`/`WR-72` → HSI-41..44.
+- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-73` enable live on 2–3 proven *(founder gate — requires AR-08 green)* · `WR-74` analytics dashboard
 
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
@@ -48,11 +52,262 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 **Audit verdict: system HEALTHY and trading correctly.** Real feed (0 mock fallbacks), 57 fills today, MTM fresh (2–3s), no stuck EXITING/CIRCUIT_BREAKER positions, HSI brain intact (attribution 06-30/07-01, 10 candidate lessons scored 07-01, daily_reports through 07-01), self-healing wallet ledger working. Below are the non-urgent cleanups found — **none affect trading correctness or money integrity; do after 15:30 IST.**
 
-- `[ ]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** `quantg.upstox_portfolio_stream` hammering the Upstox portfolio WS handshake → **33,138** `Handshake status 401 Unauthorized` since 14:03 IST (~11/sec), spiking backend CPU to 115%. REST/market-data token is FINE (quotes work, positions priced) — this is specific to the portfolio-stream endpoint, which streams broker order/position updates. **In paper mode this stream is not needed at all** (paper fills are simulated locally). Fix: **skip starting the portfolio stream when `CORE_ENGINE_LIVE_ENABLED=false`** (cleanest), OR add exponential backoff to its reconnect loop (mirror the market-feed fix `dd087f6`, cap ~300s). Files: find `upstox_portfolio_stream` (likely `brokers/upstox_gateway.py` or a dedicated stream module) + its startup wiring in `server.py`. Acceptance: 401 log rate → ~0, backend CPU baseline drops. Removes most of OPS-02 pressure too.
+- `[x]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** DONE 2026-07-02: backend now only starts the Upstox portfolio stream when `CORE_ENGINE_LIVE_ENABLED=true`; paper mode keeps REST reconciliation but skips the portfolio WS handshake entirely. Commit: pending. Acceptance after deploy: 401 log rate → ~0, backend CPU baseline should drop. Recheck OPS-02 after this because it may remove most of the contention.
 - `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
-- `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first.
+- `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first. **Ordering added 2026-07-02: do AFTER AR-03 — RELIANCE's only trade since baseline was the `R_TARGET_HIT`-at-a-loss bracket defect (AR-03 step 3); reactivating it before the bracket fix re-exposes it to the same bug.**
 - `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
 - `[ ]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** Wallet ₹467,824 (Δ −32,176 from 500k start) vs all-time `trade_fills` realized −₹56,174 don't tie out. Almost certainly benign — wallet was reset to 500k at the 06-25 research epoch (post-dates many fills) + 7 open positions have capital reserved. Confirm: Σ realized_pnl of fills since 2026-06-25 + open reserved capital ≈ (500k − balance). If it reconciles, close this; if not, investigate residual phantom-credit.
+
+---
+
+## PRIORITY 0 — Alpha Repair Campaign (2026-07-02)
+
+**Source**: Full-book strategy analysis 2026-07-02 — 118 closed trades since the clean 2026-06-25 baseline
+(VPS Mongo: `strategy_positions` + `trade_attribution` + `hermes_lessons` + live configs; memory
+`strategy-book-analysis-07-02`). Book since baseline: +₹13.0k (06-25) → −₹9.0k (06-29) → −₹9.4k (06-30) →
+−₹0.5k (07-01) → −₹2.4k (07-02) ≈ **−₹8.2k net**.
+
+**Verdict: the book produces alpha and then interrupts it.** Every exit that lets a trade complete its thesis
+is green — `spread-tp` +₹4,239 @ 100% WR · `profit-lock-book-trail` +₹6,938 @ 100% · `squareoff-1525` +₹4,139
+@ 62.5% — and every exit that interrupts is red — **`daily-loss-killswitch-strat` −₹21,177 across 28 trades**
+(more than the entire net loss) · `time-exit-22m` −₹2,406 @ 3.8% · signal-flips −₹926 @ 7.7%. The winning
+cluster is **credit spread + RANGE regime + held 2h+ to theta TP or EOD** (SENSEX Theta Credit Spread +₹2,664
+@ 80% WR, n=10, is the template). Leaks ranked: (1) killswitch geometry, (2) equity cost structure + dead ATR
+brackets, (3) regime blindness (79% of attribution UNKNOWN), (4) afternoon entries (−₹9,411; hour-13 IST alone
+−₹7,964 vs morning +₹2,176), (5) debit spreads (−₹8,260 @ 18% WR), (6) scalper configs on theta trades,
+(7) one-sided book (44 BULLISH vs 8 BEARISH entries).
+
+**Evidence-strength note**: AR-01 and AR-04's cost math are *arithmetic* (a ₹700 limit under a ₹5k designed
+risk is incoherent at any sample size), not statistics. The regime/time-of-day findings are directional on a
+small sample — ship them env-gated with skip-reason codes so attribution confirms or kills them.
+
+**Sequencing**: AR-01+AR-02 ship together (same `server.py` template edit — one deploy, one measurement
+epoch; note the deploy date in `db.app_config`). AR-03 is an independent P1 bug, can land the same day.
+AR-04/AR-05 next. AR-06 is verify-then-config. AR-07 is ⛔ data-gated on AR-05 + ~2–3 weeks of stamped
+attribution (same clock as HSI-41..44). AR-08 closes the loop. **Do NOT pile unrelated tuning into the
+measurement window** (WR-33 stays deferred).
+
+---
+
+### AR-01 — Risk geometry: make the per-trade stop the risk unit, daily limit a multiple of it
+- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2.5 hours
+- **Prerequisite**: None. **Ships WITH AR-02** (same template edit, one deploy).
+- **Targets**: the −₹21,177 `daily-loss-killswitch-strat` bucket (28 trades since 06-25); 20 strategy-day
+  locks in 5 sessions; ALL of 06-29's −₹9.0k day was killswitch force-closes
+
+**Problem**: every options strategy is designed to risk ~₹4.4k–7.5k per spread (`planned_risk` on live fills)
+but carries a ₹600–1,200 `daily_loss_limit` → one normal mid-trade drawdown force-closes at the worst mark and
+locks the day (`LOSS_LOCKED_DAY` suppressed 173 signals since 06-25). Short premium routinely marks against you
+intraday and then decays back — our own `squareoff-1525` exits are +₹4,139 @ 62.5% WR. WR-52 already flagged
+this ("floors inherit the small momentum-preset value"). Live example 07-02: `strat:-762<=-700` locked SENSEX
+Swing RSI Pullback after ONE designed-size trade. Theta diagnosis 07-01 called the same lead.
+
+**Invariant to enforce: `daily_loss_limit ≥ 2 × designed per-trade stop`, for every strategy, forever.**
+
+**Files to touch**: `backend/server.py` (`DEFAULT_OPTION_STRATEGIES` risk template + `_risk_update_fields` —
+DB-only edits get re-synced away, see KEY MECHANIC at top of this file), `backend/position_monitor.py` (spread
+SL knob), `docker-compose.yml` (env), `backend/core/loss_killswitch.py` (verify only — which field it reads).
+
+**Exact steps**:
+1. Locate the spread stop mechanism (grep `spread-sl` in `position_monitor.py`) and its level knob. Evidence:
+   it fired once at −₹2,014 on a ₹4,473-planned-risk spread → current stop ≈ 45% of max loss. Set the spread
+   stop to **1.5–2× credit received** (≈ ₹1.5–2k at current sizing) if it isn't already; make it env-tunable.
+2. In the in-code template, raise options `daily_loss_limit` to **2–3× that stop (₹3,000–4,500)** for all 13
+   options strategies. Leave equity dll alone (equity's problem is costs, see AR-04).
+3. Keep `PORTFOLIO_DAILY_LOSS_LIMIT` (₹20k whole-book kill) unchanged — that's the real catastrophe brake.
+4. After restart, verify the re-sync propagated: `strategies.visual_config.risk.daily_loss_limit` on VPS shows
+   the new values, and `loss_killswitch.py` reads that same field.
+5. Record the deploy date here + a note in `db.app_config` (measurement epoch marker).
+
+**Acceptance**: no live strategy with `daily_loss_limit < 2× its per-trade stop`; over the next 5 sessions,
+`daily-loss-killswitch-strat` exits drop to ~0 on single-loss days (the killswitch should only fire on genuine
+multi-loss days); strategy-day locks fall materially from 20-per-5-sessions.
+
+---
+
+### AR-02 — Structure–config coherence: strip scalper DNA off the 9 credit-spread strategies + entry window
+- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2.5 hours
+- **Prerequisite**: Ships with AR-01 (same template edit)
+- **Targets**: the 15–30m hold bucket (−₹6,256 @ 8.3% WR vs 2h+ holds +₹2,935 @ 62.5%); afternoon entries
+  (−₹9,411; hour-13 IST −₹7,964)
+
+**Problem**: 9 strategies now fire credit spreads (4 original theta + 5 converted ex-scalpers) but still carry
+scalper/momentum configs — `time_exit` 10–30m, cooldowns down to 1m, `max_trades_day` up to 20, scalper freq
+class. A credit spread with an 18-minute time exit fights its own theta thesis. Separately, credit entered
+after ~13:00 IST has no decay runway before the 15:25 squareoff — and afternoon is exactly where the book
+bleeds.
+
+**Files to touch**: `backend/server.py` (template, same pass as AR-01; also the `_debit_names`/`_credit_names`
+startup-migration lists), `backend/strategy_runner.py` or `backend/signal_manager.py` (entry-window gate),
+`backend/trade_frequency.py` (class reassignment), `docker-compose.yml` (env).
+
+**Exact steps**:
+1. Verify which time clock spreads actually honor: SENSEX Theta's median hold is 81m against a configured
+   `time_exit_minutes=20` → the per-strategy value appears NOT applied to spreads. Confirm in
+   `position_monitor._process_spread_position`, then neutralize/remove the misleading value for credit
+   strategies so nobody later "fixes" it in the wrong direction.
+2. Normalize the 9 credit strategies in the template: cooldown ≥ 15m, `max_trades_day` ≤ 8, no sub-hour time
+   exit; the designed exits stay `spread-tp` (SPREAD_TP_FRAC=0.5, validated WR-32), spread SL (AR-01), and
+   squareoff-1525.
+3. Add an env-gated **entry window for `structure=credit_spread`: new entries 09:45–13:00 IST only**
+   (`CREDIT_ENTRY_WINDOW=0945-1300`, default on). Emit a distinct skip code (`ENTRY_WINDOW`) so attribution
+   can measure the gate. Existing positions manage to TP/EOD unchanged.
+4. Reclass converted strategies in `trade_frequency._CLASS_CAPS` lookup (still classed scalper/momentum) so
+   freq caps match their new structure.
+5. Migrate the 2 worst remaining debit spreads → credit via the `_debit_names`/`_credit_names` lists:
+   **NIFTY Micro-Lot Trend Follower** (0% WR, −₹1,755 since baseline) and **NIFTY Momentum Buyer** (lifetime
+   −₹14,520, worst in book). Keep **NIFTY VWAP Trend Breakout** (only debit with positive lifetime, +₹1,626)
+   and NIFTY HFT Quick Scalper as the TREND-gated debit probes for AR-07.
+
+**Acceptance**: all 9+2 credit strategies share theta-coherent configs post-resync; `ENTRY_WINDOW` skips
+visible in `signals`; credit entries after 13:00 IST → ~0; hold-bucket distribution shifts toward 1h+.
+
+---
+
+### AR-03 — BUG: equity ATR brackets never land — every position gets the dead 7.05%/10.94%
+- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: None (independent P1 bug — can land same day as AR-01/02)
+- **Targets**: equity book −₹5,160 @ ~3% WR since baseline; 26 `time-exit-22m` exits @ 3.8% WR (now disabled)
+  left signal-flips @ 7.7% WR as the de-facto exit
+
+**Problem**: the 06-23 equity rebuild (`a94f5ab`) was supposed to replace the 7%/11% SL/TP with ATR(14)
+brackets — but EVERY equity position through 07-01 carries exactly slPct 7.05 / tpPct 10.94. Those are
+unreachable intraday → equity has NO functioning risk brackets; with `EQUITY_TIME_EXIT_MINUTES=0` (7abb5e1,
+verified landed — zero 22m exits on 07-02) the only exits left are signal flips and squareoff. Related oddity,
+same subsystem: RELIANCE Trend Rider closed `R_TARGET_HIT` at a LOSS (−₹61) 23 seconds after entry.
+
+**Files to touch**: `backend/server.py` (fill handler that stamps `tp_sl_tsl_config`; KEY MECHANIC: there is
+no `equity_trend` preset → equity silently uses the `momentum` preset — 7.05/10.94 smells like preset
+percents), `backend/strategy_runner.py` (do the equity python_code v2.0 signals actually emit ATR levels —
+check signal fields `initial_stop_R`/`target_R`/`exit_policy`), `backend/core/position_lifecycle.py`.
+
+**Exact steps**:
+1. Pull one 07-01 equity signal + its position doc side by side: does the signal carry ATR-based levels that
+   the fill path ignores, or does the python_code not emit them at all? Fix at whichever end is broken.
+2. Wire real ATR(14) levels into `tp_sl_tsl_config` at fill time: SL ≈ 1×ATR, TP ≈ 1.5–2×ATR, trailing on.
+3. Root-cause the RELIANCE `R_TARGET_HIT`-at-a-loss (target below entry? stale entry price?) and fix.
+
+**Acceptance**: new equity positions show ATR-derived brackets that vary per name/day (NOT 7.05/10.94); no
+`R_TARGET_HIT` exit with negative P&L; real `stop-loss`/`take-profit` exit reasons reappear in the equity mix.
+
+---
+
+### AR-04 — Equity economics: clear the cost bar + 14:30 entry cutoff + wake the dead names
+- **Status**: `[ ]`
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: AR-03 (brackets must work before judging equity edge)
+- **Targets**: ~HALF of the equity loss is transaction charges (avg win ₹13 vs ₹30+ round-trip on ₹13k
+  notionals — arithmetic, not signal quality); 3 entries at 15:05 went straight into the 15:10 squareoff
+
+**Problem**: at current sizing no equity signal can be profitable: a 0.2% favorable move on ₹13k is ₹26,
+below round-trip cost. Founder rule applies: FIX, don't pause. Also: SBIN Short Seller has NEVER fired a
+single trade (the book's only bearish equity leg is dead) and INFY VWAP Pullback has 0 trades since baseline —
+silent strategies produce no data.
+
+**Files to touch**: `backend/server.py` (equity capital tiers from CUR-04; entry-cutoff gate),
+`backend/strategy_runner.py` (cutoff + SBIN/INFY diagnosis).
+
+**Exact steps**:
+1. Raise per-name notional so expected gross at TP clears **≥3× round-trip charges** (use the CUR-04 capital
+   tiers; concentrate capital in fewer names only if sizing-up all 10 overshoots book risk).
+2. Entry cutoff: **no NEW equity entries after 14:30 IST** (env-gated, distinct skip code like AR-02's).
+3. Diagnose SBIN (short-side path likely blocked — CNC product can't short? signal never emitted?) and INFY
+   (evaluations run but nothing fires) — fix or document why.
+
+**Acceptance**: no equity entry after 14:30; median equity notional ≥ ₹50k (or a written tier decision);
+SBIN/INFY either trade or have a root-caused reason recorded here.
+
+---
+
+### AR-05 — Attribution inputs: equity regime stamping + planned_risk everywhere
+- **Status**: `[ ]`
+- **Tier**: 2 (Sonnet / Codex)
+- **Session size**: ~2 hours
+- **Prerequisite**: None. **Gates AR-07 and HSI Stage 4** — the sooner this lands, the sooner the data clock runs.
+- **Targets**: 41/52 attribution rows are regime UNKNOWN; RANGE = 83% WR / TREND_UP = 0% WR is the strongest
+  gate we have and it is currently unactionable
+
+**Problem**: options regime stamping only works since 07-01 (8d2be82); equity has NEVER stamped regime
+(`market_regime` covers indices only; the equity fill path doesn't thread `trend_context` — known gap, memory
+`project_regime_instrumentation_status`). Also `planned_risk=0` on NIFTY Micro-Lot + NIFTY Range Credit Spread
+positions → their `R_multiple` attribution is broken, which mis-feeds the Hermes lesson scorer.
+
+**Files to touch**: `backend/server.py` (equity fill path — thread `trend_context`→`regime_at_entry`),
+`backend/strategy_runner.py`, wherever `planned_risk` is stamped for spread paths (grep `planned_risk`).
+
+**Exact steps**:
+1. Thread the equity signal's `trend_context` into `regime_at_entry` on the position doc at fill time.
+2. Fix `planned_risk` stamping on the spread paths that miss it (Micro-Lot debit + Range credit evidence).
+3. Do NOT backfill old rows — attribution is cumulative (HSI gotcha: `attribution_rollup(since=date)`).
+
+**Acceptance**: new trades <10% UNKNOWN regime across all asset types; every new position has
+`planned_risk > 0`.
+
+---
+
+### AR-06 — BANKNIFTY theta expiry mismatch (weeklies died Nov 2024)
+- **Status**: `[ ]`
+- **Tier**: 1–2
+- **Session size**: ~1 hour (investigation + config)
+- **Prerequisite**: None
+- **Targets**: BANKNIFTY Theta Credit Spread's inverted asymmetry — 67% WR but avgLoss −₹1,601 vs avgWin
+  +₹366, including the book's single worst stop (−₹2,014)
+
+**Problem**: NSE discontinued BANKNIFTY weekly options in Nov 2024 — it only has monthlies now, while
+NIFTY (NSE) and SENSEX (BSE) kept weeklies. An intraday theta-harvest strategy on a monthly option sells
+slow-decay premium while keeping fast-market risk. The data is consistent: SENSEX Theta (weekly) +₹2,664 @
+80% WR vs BANKNIFTY Theta bleeding. The selector uses `expiry_offset: 0` = nearest available expiry.
+
+**Exact steps**:
+1. Verify from `orders`/`strategy_positions` trading symbols what expiry BANKNIFTY spreads actually trade
+   (the verbose symbol carries the date).
+2. If monthly: either (a) restrict BANKNIFTY theta entries to **expiry week only** (env-gated), or (b)
+   re-point that strategy's premium-selling to a weekly underlying (NIFTY/SENSEX) and leave BANKNIFTY to the
+   directional/breakout book. Prefer (a) first — smaller change, keeps the underlying diversity.
+
+**Acceptance**: expiry evidence documented here; one of the two configs applied; BANKNIFTY theta's win/loss
+asymmetry normalizes over the following 2 weeks (avgLoss no longer 4× avgWin).
+
+---
+
+### AR-07 — ⛔ Portfolio layer: regime gates + two-sided selling + net-delta cap (DATA-GATED)
+- **Status**: `[ ]` ⛔ blocked until AR-05 lands + ~2–3 weeks of stamped attribution (same clock as HSI-41..44
+  — reuse that OOS validation, don't fork it)
+- **Tier**: 2–3
+- **Session size**: ~1 day, split
+
+**Scope when unblocked**:
+1. Enforce regime entry gates from *measured* lessons (the Hermes lesson store already scores
+   regime=RANGE/TREND_UP claims): credit spreads require RANGE/weak-ADX; the two debit probes require TREND.
+2. In RANGE, sell BOTH sides (put spread + call spread) instead of the bias-picked single side — a ranging
+   market is the iron-condor case; one-sided selling wastes half the edge.
+3. Book-level net-delta cap via the existing Greeks proxy (44 BULLISH vs 8 BEARISH entries = one big long
+   bet; 06-29/30 was the cascade this causes). WR-53's per-underlying cap stays; this is the book-level lid.
+4. Optional: VIX-scaled spread lots (shrink size continuously as vol rises — arXiv 2508.16598 pattern), using
+   the VIX data already collected since 06-16.
+
+---
+
+### AR-08 — Measurement checkpoint (~2026-07-16)
+- **Status**: `[ ]`
+- **Tier**: 1 (any model — read-only queries + doc update)
+- **Session size**: ~1 hour
+- **Prerequisite**: AR-01..03 deployed ≥ 8 trading sessions
+
+**Exact steps**: re-run the 07-02 analysis queries (memory `strategy-book-analysis-07-02` documents them) and
+compare against this baseline: killswitch exits (was 28 / −₹21,177), exit-reason economics, morning-vs-afternoon
+P&L split, hold-bucket distribution, equity gross-vs-charges, per-strategy expectancy. Feed keep/kill through
+the scorecard verdict (WR-41 KEEP/WATCH/KILL, respects the thin-sample floor). Update all AR statuses; re-open
+WR-33 only if attribution now shows winners being cut early.
+
+**Acceptance**: a written before/after table in this section; explicit KEEP/WATCH/KILL verdict per strategy.
 
 ---
 
@@ -117,18 +372,18 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ### Phase 4 — Portfolio construction & measurement (P1 — the real strategy)
 - `[x]` **WR-41** DONE 2026-06-24 (`874521e`) — `grade()` was already pure expectancy/Sharpe/PF (win rate unused); added explicit `keep_kill_verdict` (KEEP/WATCH/KILL + reason) and `summarize_verdicts` roll-up on `GET /ops/risk-scorecard`. Never KILLs on a thin sample (`SCORECARD_KILL_MIN_TRADES`, default 15) per the don't-kill-on-1-2-days rule. 5 new pure tests. Auto-pause action is WR-54.
-- `[ ]` **WR-42** Weight book toward measured-positive edge (equity momentum A/B, theta-selling); de-weight measured-negative (ATM option buying grade F). Data-driven. *Partial progress 06-30 (`873117a`/FIX-03): 3 worst directional debit spreads → theta credit spreads. Full data-driven weighting waits on HSI Stage 1 attribution.*
-- `[ ]` **WR-43** Build portfolio of UNCORRELATED archetypes (theta=range, mean-reversion=stat-arb-lite, trend=momentum) so regimes hedge each other. *Advanced 06-30 by WR-53 (directional-exposure cap caps same-side concentration). Still want explicit archetype diversification + WR-45 correlation matrix.*
-- `[ ]` **WR-44** Run the ratchet: backtest OOS → paper-forward → keep/kill by expectancy. Keep only 2–3 survivors.
+- `[x]` **WR-42** FOLDED into the Alpha Repair campaign 2026-07-02 (dedupe — not independently actionable): the concrete weighting moves are AR-02 step 5 (last debit→credit conversions), AR-07 (regime-gated sizing) and AR-08 (KEEP/WATCH/KILL verdicts). *Partial progress 06-30 (`873117a`/FIX-03).*
+- `[x]` **WR-43** FOLDED into AR-07 2026-07-02 (dedupe): archetype decorrelation is delivered concretely as two-sided selling in RANGE + book net-delta cap + the TREND-gated debit probes. WR-45 (correlation matrix) stays open as the measurement tool.
+- `[x]` **WR-44** FOLDED 2026-07-02 (dedupe): the OOS ratchet IS HSI Stage 4 (HSI-41..44) + the AR-08 checkpoint verdicts — one judge, built once. (HSB-12..16 superseded the same way, see Phase E note there.)
 - `[ ]` **WR-45** Track per-strategy correlation matrix to confirm edges are genuinely independent.
 
 ---
 
 ### Phase 5 — Risk management (P1 — the actual product)
-- `[ ]` **WR-51** Size each bet by risk (fraction-of-Kelly / fixed-fractional), not fixed lots.
+- `[ ]` **WR-51** Size each bet by risk (fraction-of-Kelly / fixed-fractional), not fixed lots. **Sequenced 2026-07-02: do AFTER AR-08 — changing sizing inside the AR-01/02 measurement window would make the checkpoint unreadable.**
 - `[x]` **WR-52** DONE 2026-06-24 (`874521e`) — `core/loss_killswitch.py` (sibling of profit_lock), actively enforced from the monitor tick (fires even with no new order, unlike the entry-only preflight guard). Per-strategy: day P&L ≤ −`daily_loss_limit` → square off + stand down for the IST day (`day_loss_locked`, read by the signal_manager gate). Whole-book: aggregate ≤ −`PORTFOLIO_DAILY_LOSS_LIMIT` (env, default ₹20k) → square off entire book + stand down. ⚠️ Per-strategy floors currently inherit the small momentum-preset value (₹650 equity / ₹650–1200 options) — may want raising vs the new equity sizing.
 - `[x]` **WR-53** DONE 2026-06-30 (`873117a`): directional-exposure cap `MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING` (default 3) in `strategy_runner.py` — blocks a new entry when N strategies already hold the same BULLISH/BEARISH bias on one underlying. Per-position bias via `_position_exposure_bias` (equity long / credit PE=bullish CE=bearish / debit CE=bullish PE=bearish / single-leg by option_type+side). Per-underlying so equity (1 strat/stock) is never throttled.
-- `[ ]` **WR-54** Auto-pause a strategy on max-drawdown breach.
+- `[ ]` **WR-54** Auto-pause a strategy on max-drawdown breach. **⛔ GATED on AR-01 + AR-08 (2026-07-02): the killswitch analysis showed auto-locks tighter than designed risk destroyed −₹21k of edge in 5 sessions. Any drawdown auto-pause must respect the AR-01 invariant (threshold ≥ 2–3 designed per-trade losses) and only ships after AR-08 proves the new geometry — otherwise this recreates the exact bug class AR-01 removes.**
 
 ---
 
@@ -142,8 +397,8 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 
 ### Phase 7 — Roadmap-aligned, bigger build (P2/P3)
 - `[ ]` **WR-71** Strategy backtesting on real options-chain history (blocked by Upstox expired-option API — needs a data source).
-- `[ ]` **WR-72** Walk-forward / out-of-sample validation harness before any live scaling.
-- `[ ]` **WR-73** Enable `CORE_ENGINE_LIVE_ENABLED` on 2–3 proven strategies (founder gate; roadmap Phase 1).
+- `[x]` **WR-72** FOLDED into HSI-41..44 2026-07-02 (dedupe): the walk-forward/OOS harness is HSI Stage 4's `core/hermes_validator.py` (+ HSB-11's historical_chains data audit as precursor). One OOS judge for the whole platform — don't build a parallel one.
+- `[ ]` **WR-73** Enable `CORE_ENGINE_LIVE_ENABLED` on 2–3 proven strategies (founder gate; roadmap Phase 1). **Prerequisites added 2026-07-02: AR-08 checkpoint green (killswitch leak closed, equity brackets real) + OOS verdicts from HSI Stage 4.**
 - `[ ]` **WR-74** Performance analytics dashboard (per-strategy Sharpe, drawdown, expectancy) for the investor track record.
 
 ---
@@ -397,7 +652,7 @@ no Greeks/delta rejection on a cash-equity order.
 ---
 
 ### TASK-EQ-04 — Backtest + rank the full equity universe (real OHLC)
-- **Status**: `[ ]` OPEN (operational) — backtester wired to real OHLC; still needs a full-universe run + ranking table on a clean window. Now also has real live paper fills to rank against.
+- **Status**: `[ ]` OPEN (operational) — backtester wired to real OHLC; still needs a full-universe run + ranking table on a clean window. **Re-scoped 2026-07-02: run this as the INPUT to AR-04 step 1 (which names deserve capital). Do NOT rank on live paper fills until AR-03 lands — the equity brackets are broken (dead 7.05%/10.94%), so live exit stats are noise; the OHLC backtest ranks entry-signal quality independently of that bug.**
 - **Tier**: 1–2
 - **Session size**: ~1.5 hours
 - **Prerequisite**: token connected on a trading day (EQ-01 not strictly required — backtest is read-only)
@@ -2397,6 +2652,8 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ### Phase E — Strategy AutoResearch Ratchet (folded in; judge-first)
 
+> **⚠ SUPERSEDED 2026-07-02 (dedupe): HSB-12..16 are re-framed as HSI Stages 4–5 (HSI-41..54, bottom of file) — build there, extend don't fork (the HSI section itself says so). Only `HSB-11` (historical_chains data audit — genuine prerequisite for ANY OOS backtest, do it before HSI-42) and `HSB-17` (dead-action cleanup) remain independently actionable in this section.**
+
 | HSB-11 | `db.historical_chains` hardening: add capped/TTL index (flagged missing in [[project_autoresearch]]) + audit actual accumulated data volume (days × strikes). **Gating check: confirms whether HSB-12 walk-forward is buildable now or still data-collection.** | `backend/server.py`, Mongo index |
 | HSB-12 | **Phase 2 — THE JUDGE:** walk-forward backtester over `db.historical_chains` with train/test split, **deflated-Sharpe + complexity penalty** (clamps on OOS, never in-sample). Pure deterministic, no LLM. Everything else depends on this. | new `backend/core/walkforward.py` |
 | HSB-13 | **Phase 3 — THE GATE:** ratchet loop `propose-config → OOS backtest (HSB-12) → keep iff beats incumbent → log to db.experiments`. | `backend/core/`, `db.experiments` |
@@ -2484,12 +2741,10 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ---
 
-*Last updated: 2026-06-22 (Hermes Second-Brain Campaign added: PRIORITY 12, HSB-01..HSB-17 — RAG/memory/advisor/self-improvement loop + folded-in strategy AutoResearch ratchet, judge-first. Backlog, below the active Win-Rate campaign.)*
-*Total tasks: 53 + 25 Hermes (H001–H025) + 17 Hermes Second-Brain (HSB-01–HSB-17) + 5 Profitability (P-EX01–P-EX05) + 6 Equity (EQ-01–EQ-06)*
-*Open: 7 (HSB-11–HSB-17, BACKLOG) · Blocked: 0 · In progress: 0 · Done: 89 (53 + H001–H025 + HSB-01–HSB-10)*
-*Hermes open: HSB-11–HSB-17 (PRIORITY 12 — HSB-11..16 is the strategy AutoResearch ratchet, judge-first; HSB-17 cleanup)*
+*Last updated: 2026-07-02 (Alpha Repair campaign AR-01..08 added as the active PRIORITY 0; dedupe pass: WR-42/43 folded → AR-07/08, WR-44/72 folded → HSI-41..44, HSB-12..16 superseded by HSI-41..54; WR-51/54/73, OPS-03, EQ-04 gated/re-scoped against the AR campaign.)*
+*Open after dedupe: **27** — AR-04..08 (5; AR-07 ⛔ data-gated) · OPS-02..05 (4) · WR-33 deferred / WR-45 / WR-51 / WR-54 ⛔ / WR-71 ⛔ / WR-73 founder-gate / WR-74 (7) · EQ-04 (1) · HSI-41..44 ⛔ data-gated + HSI-51..54 founder-gated (8) · HSB-11 + HSB-17 (2). In progress: 0.*
 *Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
-*Recommended next build order (when unblocked): HSB-11 (historical_chains TTL index + data-volume audit) — gates the HSB-12 OOS judge.*
+*Recommended next build order: AR-05 → AR-04/EQ-04/AR-06 → OPS-02 recheck → AR-08 checkpoint → AR-07 + HSB-11 → HSI-41..44 → HSI-51..54 / WR-51 / WR-54 / WR-73.*
 # Frontend Trading-Cockpit Polish Task - 2026-06-23
 
 ### TASK-UI-01 - Remove cockpit clutter and simplify trading surfaces

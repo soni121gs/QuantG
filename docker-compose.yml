@@ -79,6 +79,8 @@ services:
       # Trades less premium for a higher win rate. Reversible: set back to 0.30.
       CREDIT_SPREAD_SHORT_DELTA: "${CREDIT_SPREAD_SHORT_DELTA:-0.20}"
       CREDIT_SPREAD_WIDTH_STRIKES: "${CREDIT_SPREAD_WIDTH_STRIKES:-2}"
+      CREDIT_SPREAD_SL_MULT: "${CREDIT_SPREAD_SL_MULT:-2.0}"
+      CREDIT_ENTRY_WINDOW: "${CREDIT_ENTRY_WINDOW:-0945-1300}"
       # Debit spreads (defined-risk option BUYING) — engine fully supports them;
       # NIFTY/BANKNIFTY directional buyers opt in via structure=debit_spread.
       DEBIT_SPREADS_ENABLED: "${DEBIT_SPREADS_ENABLED:-true}"
