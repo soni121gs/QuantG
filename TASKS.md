@@ -56,7 +56,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 - `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
 - `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first. **Ordering added 2026-07-02: do AFTER AR-03 — RELIANCE's only trade since baseline was the `R_TARGET_HIT`-at-a-loss bracket defect (AR-03 step 3); reactivating it before the bracket fix re-exposes it to the same bug.**
 - `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
-- `[x]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** DONE 2026-07-02: exact wallet reset timestamp is `2026-06-30T15:03:34.386Z`; wallet balance ₹498,889.87 implies Δ −₹1,110.13 from ₹500k, and `trade_fills` realized since reset is exactly −₹1,110.13 across 84 fills. No open reserved positions. Close as benign epoch mismatch, not residual phantom-credit. Commit: pending.
+- `[x]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** DONE 2026-07-02: exact wallet reset timestamp is `2026-06-30T15:03:34.386Z`; wallet balance ₹498,889.87 implies Δ −₹1,110.13 from ₹500k, and `trade_fills` realized since reset is exactly −₹1,110.13 across 84 fills. No open reserved positions. Close as benign epoch mismatch, not residual phantom-credit. Commit: `b47f28d`.
 
 ---
 
@@ -199,7 +199,7 @@ check signal fields `initial_stop_R`/`target_R`/`exit_policy`), `backend/core/po
 ---
 
 ### AR-04 — Equity economics: clear the cost bar + 14:30 entry cutoff + wake the dead names
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `b47f28d`
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: AR-03 (brackets must work before judging equity edge)
@@ -229,7 +229,7 @@ SBIN/INFY either trade or have a root-caused reason recorded here.
 ---
 
 ### AR-05 — Attribution inputs: equity regime stamping + planned_risk everywhere
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `b47f28d`
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None. **Gates AR-07 and HSI Stage 4** — the sooner this lands, the sooner the data clock runs.
@@ -257,7 +257,7 @@ positions → their `R_multiple` attribution is broken, which mis-feeds the Herm
 ---
 
 ### AR-06 — BANKNIFTY theta expiry mismatch (weeklies died Nov 2024)
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `b47f28d`
 - **Tier**: 1–2
 - **Session size**: ~1 hour (investigation + config)
 - **Prerequisite**: None
@@ -658,7 +658,7 @@ no Greeks/delta rejection on a cash-equity order.
 ---
 
 ### TASK-EQ-04 — Backtest + rank the full equity universe (real OHLC)
-- **Status**: `[x]` DONE 2026-07-02, commit pending — full-universe run completed on real Upstox 5-minute OHLC as input to AR-04. Result is a **thin-sample frequency diagnosis**, not a reliable Sharpe ranking: most strategies emitted 0–1 trades over 60 days, so no name clears a true Sharpe > 1 evidence bar yet.
+- **Status**: `[x]` DONE 2026-07-02, commit `b47f28d` — full-universe run completed on real Upstox 5-minute OHLC as input to AR-04. Result is a **thin-sample frequency diagnosis**, not a reliable Sharpe ranking: most strategies emitted 0–1 trades over 60 days, so no name clears a true Sharpe > 1 evidence bar yet.
 - **Tier**: 1–2
 - **Session size**: ~1.5 hours
 - **Prerequisite**: token connected on a trading day (EQ-01 not strictly required — backtest is read-only)
