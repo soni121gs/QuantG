@@ -37,6 +37,20 @@ function pnlTone(val) {
   return "neutral";
 }
 
+// market_regime is a per-index object since the EOD snapshot fix
+// ({"NIFTY 50": {regime, bias}, ...}); older reports stored a plain string.
+// Rendering the raw object crashes React (error #31), so normalize to strings.
+function regimeBadges(regime) {
+  if (!regime) return [];
+  if (typeof regime === "string") return [regime];
+  if (typeof regime !== "object") return [String(regime)];
+  return Object.entries(regime).map(([index, info]) => {
+    if (!info || typeof info !== "object") return `${index}: ${info ?? "-"}`;
+    const parts = [info.regime, info.bias].filter(Boolean).join(" / ");
+    return `${index}: ${parts || "-"}`;
+  });
+}
+
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -234,11 +248,13 @@ export default function Calendar() {
                 </div>
 
                 {selectedReport.market_regime && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[11px] font-mono text-[var(--qd-text-3)] uppercase">Regime</span>
-                    <span className="text-[11px] font-mono font-bold text-[var(--qd-accent)] px-2 py-0.5 rounded bg-[var(--qd-accent)]/10 border border-[var(--qd-accent)]/20">
-                      {selectedReport.market_regime}
-                    </span>
+                    {regimeBadges(selectedReport.market_regime).map((b) => (
+                      <span key={b} className="text-[11px] font-mono font-bold text-[var(--qd-accent)] px-2 py-0.5 rounded bg-[var(--qd-accent)]/10 border border-[var(--qd-accent)]/20">
+                        {b}
+                      </span>
+                    ))}
                   </div>
                 )}
 
