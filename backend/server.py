@@ -1554,6 +1554,11 @@ CREDIT_SPREAD_THETA_RISK = {
 EQUITY_MIN_REQUIRED_CAPITAL = float(os.environ.get("EQUITY_MIN_REQUIRED_CAPITAL", "50000"))
 EQUITY_ENTRY_CUTOFF = os.environ.get("EQUITY_ENTRY_CUTOFF", "1430")
 BANKNIFTY_THETA_EXPIRY_WEEK_ONLY = os.environ.get("BANKNIFTY_THETA_EXPIRY_WEEK_ONLY", "true").lower() == "true"
+EQUITY_CAPITAL_TIERS = {
+    "RELIANCE Trend Rider": 75000.0,
+    "HDFCBANK Range Rebound": 75000.0,
+    "ICICIBANK Volatility Breakout": 75000.0,
+}
 
 
 def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk") -> Dict[str, Any]:
@@ -6045,7 +6050,8 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
     if str(_template.get("instrument_group") or "").upper() in {"NSE", "BSE"}:
-        _template["required_capital"] = max(float(_template.get("required_capital") or 0), EQUITY_MIN_REQUIRED_CAPITAL)
+        _tier_capital = EQUITY_CAPITAL_TIERS.get(str(_template.get("name") or ""), EQUITY_MIN_REQUIRED_CAPITAL)
+        _template["required_capital"] = max(float(_template.get("required_capital") or 0), _tier_capital)
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 2500.0)
         _risk["entry_cutoff_ist"] = EQUITY_ENTRY_CUTOFF
     _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
@@ -16972,14 +16978,15 @@ async def startup():
                         {"visual_config.options.enabled": False},
                     ]
                 },
-                {"_id": 0, "id": 1, "required_capital": 1, "visual_config.risk": 1},
+                {"_id": 0, "id": 1, "name": 1, "required_capital": 1, "visual_config.risk": 1},
             ).to_list(200)
             equity_updated = 0
             for row in equity_rows:
                 visual_capital = float(((row.get("visual_config") or {}).get("risk") or {}).get("required_capital") or 0)
                 top_level_capital = float(row.get("required_capital") or 0)
                 current_capital = max(top_level_capital, visual_capital)
-                capital = max(current_capital, EQUITY_MIN_REQUIRED_CAPITAL)
+                tier_capital = EQUITY_CAPITAL_TIERS.get(str(row.get("name") or ""), EQUITY_MIN_REQUIRED_CAPITAL)
+                capital = max(current_capital, tier_capital)
                 risk = ((row.get("visual_config") or {}).get("risk") or {})
                 daily_loss = max(float(risk.get("daily_loss_limit") or 0), 2500.0)
                 res = await db.strategies.update_one(
