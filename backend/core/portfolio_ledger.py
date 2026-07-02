@@ -50,6 +50,7 @@ def _trading_day_window_utc(trading_date: Optional[str | date | datetime] = None
     return ist_midnight_utc.isoformat(), (ist_midnight_utc + timedelta(days=1)).isoformat()
 
 from core.position_lifecycle import (
+    EQUITY_TIME_EXIT_MINUTES,
     normalize_strategy_risk,
     position_risk_prices,
 )
@@ -376,6 +377,14 @@ class PortfolioLedger:
                 else "UNPROTECTED"
             )
             time_exit_min = int(risk_cfg.get("time_exit_minutes") or 0)
+            if not is_option:
+                # Equity must defer to its ATR SL/TP brackets + EOD square-off, not
+                # a blind intraday clock. The strategy config's 18-min time_exit was
+                # stamping deadline_at and force-exiting every equity trade flat
+                # (time-exit-deadline, 0% WR). The 07-01 EQUITY_TIME_EXIT_MINUTES fix
+                # only touched position_lifecycle's time-exit path, not this deadline
+                # stamp. Env-overridable (default 0 = no deadline). 2026-07-03.
+                time_exit_min = EQUITY_TIME_EXIT_MINUTES
             if time_exit_min > 0:
                 position_doc["deadline_at"] = (
                     datetime.now(timezone.utc) + timedelta(minutes=time_exit_min)
