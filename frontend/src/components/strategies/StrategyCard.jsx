@@ -40,9 +40,9 @@ function StatusBadge({ status }) {
   return <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${tone}`}>{status || "draft"}</span>;
 }
 
-function Metric({ label, value, tone, compact = false }) {
+function Metric({ label, value, tone, compact = false, title }) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" title={title}>
       <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
       <div className={`${compact ? "text-xs" : "text-sm"} mt-0.5 truncate font-mono font-semibold ${tone || "text-[var(--qd-text)]"}`}>{value}</div>
     </div>
@@ -162,7 +162,16 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
 
       {/* Metrics 3 x 2 */}
       <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2 relative z-10">
-        <Metric label="Capital" value={money(s.required_capital)} compact />
+        <Metric
+          label={isOptionStrat ? "Risk budget" : "Capital"}
+          value={money(s.required_capital)}
+          compact
+          title={
+            isOptionStrat
+              ? "Per-trade max-loss budget used to size lots — NOT broker margin. Live orders are margin-checked against Upstox at entry (spreads typically need ~₹25k+ free funds per lot for the short leg)."
+              : "Deployable capital tier used for position sizing."
+          }
+        />
         <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
         <Metric label="Score" value={scoreValue ? `${scoreValue}%` : "-"} compact />
         <Metric label="Scans" value={s.evaluations_today ?? 0} compact />
