@@ -52,7 +52,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 **Audit verdict: system HEALTHY and trading correctly.** Real feed (0 mock fallbacks), 57 fills today, MTM fresh (2–3s), no stuck EXITING/CIRCUIT_BREAKER positions, HSI brain intact (attribution 06-30/07-01, 10 candidate lessons scored 07-01, daily_reports through 07-01), self-healing wallet ledger working. Below are the non-urgent cleanups found — **none affect trading correctness or money integrity; do after 15:30 IST.**
 
-- `[x]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** DONE 2026-07-02: backend now only starts the Upstox portfolio stream when `CORE_ENGINE_LIVE_ENABLED=true`; paper mode keeps REST reconciliation but skips the portfolio WS handshake entirely. Commit: pending. Acceptance after deploy: 401 log rate → ~0, backend CPU baseline should drop. Recheck OPS-02 after this because it may remove most of the contention.
+- `[x]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** DONE 2026-07-02: backend now only starts the Upstox portfolio stream when `CORE_ENGINE_LIVE_ENABLED=true`; paper mode keeps REST reconciliation but skips the portfolio WS handshake entirely. Commit: `18f70fd`. Acceptance after deploy: 401 log rate → ~0, backend CPU baseline should drop. Recheck OPS-02 after this because it may remove most of the contention.
 - `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
 - `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first. **Ordering added 2026-07-02: do AFTER AR-03 — RELIANCE's only trade since baseline was the `R_TARGET_HIT`-at-a-loss bracket defect (AR-03 step 3); reactivating it before the bracket fix re-exposes it to the same bug.**
 - `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
@@ -90,7 +90,7 @@ measurement window** (WR-33 stays deferred).
 ---
 
 ### AR-01 — Risk geometry: make the per-trade stop the risk unit, daily limit a multiple of it
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `18f70fd`
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2.5 hours
 - **Prerequisite**: None. **Ships WITH AR-02** (same template edit, one deploy).
@@ -128,7 +128,7 @@ multi-loss days); strategy-day locks fall materially from 20-per-5-sessions.
 ---
 
 ### AR-02 — Structure–config coherence: strip scalper DNA off the 9 credit-spread strategies + entry window
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `18f70fd`
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2.5 hours
 - **Prerequisite**: Ships with AR-01 (same template edit)
@@ -169,7 +169,7 @@ visible in `signals`; credit entries after 13:00 IST → ~0; hold-bucket distrib
 ---
 
 ### AR-03 — BUG: equity ATR brackets never land — every position gets the dead 7.05%/10.94%
-- **Status**: `[x]` DONE 2026-07-02, commit pending
+- **Status**: `[x]` DONE 2026-07-02, commit `18f70fd`
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None (independent P1 bug — can land same day as AR-01/02)
