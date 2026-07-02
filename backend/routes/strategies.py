@@ -435,6 +435,181 @@ async def list_strategies(user=Depends(get_current_user)):
     return [_strategy_out(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# Live margin estimates (real Upstox SPAN via /v2/charges/margin)
+# ---------------------------------------------------------------------------
+
+_MARGIN_EST_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARGIN_EST_TTL_SECONDS = 900        # successful estimates
+_MARGIN_EST_ERROR_TTL_SECONDS = 120  # failed lookups retry sooner
+
+_MARGIN_EST_SPOT_KEYS = {
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "SENSEX": "BSE_INDEX|SENSEX",
+}
+
+
+def _margin_est_underlying(name: str) -> Optional[str]:
+    upper = str(name or "").upper()
+    for underlying in ("BANKNIFTY", "NIFTY", "SENSEX"):
+        if upper.startswith(underlying):
+            return underlying
+    return None
+
+
+def _margin_est_structure(doc: Dict[str, Any]) -> str:
+    opts = (doc.get("visual_config") or {}).get("options") or {}
+    return str(doc.get("structure") or opts.get("structure") or "single_leg")
+
+
+def _margin_est_required(payload: Any) -> float:
+    """Extract required margin, preferring hedge-benefit totals over per-leg sums."""
+    if not isinstance(payload, dict):
+        return 0.0
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return 0.0
+    for key in ("final_margin", "required_margin", "total_margin"):
+        try:
+            value = data.get(key)
+            if value not in (None, ""):
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    margins = data.get("margins")
+    if isinstance(margins, list):
+        total = 0.0
+        for row in margins:
+            if isinstance(row, dict):
+                for key in ("total_margin", "required_margin"):
+                    try:
+                        total += float(row.get(key) or 0)
+                    except (TypeError, ValueError):
+                        pass
+        return round(total, 2)
+    return 0.0
+
+
+async def _margin_estimate_for_combo(gw: Any, underlying: str, structure: str) -> Dict[str, Any]:
+    """One-lot Upstox margin for a representative ATM structure. Cached per combo."""
+    import time
+
+    cache_key = f"{underlying}:{structure}"
+    cached = _MARGIN_EST_CACHE.get(cache_key)
+    if cached:
+        ttl = _MARGIN_EST_TTL_SECONDS if cached.get("ok") else _MARGIN_EST_ERROR_TTL_SECONDS
+        if time.time() - cached.get("_at", 0) < ttl:
+            return cached
+
+    result: Dict[str, Any] = {"ok": False, "error": "chain unavailable"}
+    try:
+        from core.spread_builder import CREDIT_SPREAD_WIDTH_STRIKES
+        from core.market_domains import resolve_domain_by_underlying
+        from brokers.upstox_gateway import UpstoxGateway
+
+        chain = await asyncio.to_thread(gw.get_option_chain, _MARGIN_EST_SPOT_KEYS[underlying], None)
+        rows = [r for r in ((chain or {}).get("data") or []) if r.get("strike_price")]
+        if rows:
+            strikes = sorted({float(r["strike_price"]) for r in rows})
+            spot = 0.0
+            for r in rows:
+                try:
+                    spot = float(r.get("underlying_spot_price") or 0)
+                    if spot > 0:
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if spot <= 0:
+                spot = strikes[len(strikes) // 2]
+            step = min((b - a) for a, b in zip(strikes, strikes[1:])) if len(strikes) > 1 else 50.0
+            width = step * max(1, CREDIT_SPREAD_WIDTH_STRIKES)
+            atm = min(strikes, key=lambda s: abs(s - spot))
+            by_strike = {float(r["strike_price"]): r for r in rows}
+
+            def _leg_key(strike: float, option_type: str) -> Optional[str]:
+                node = (by_strike.get(strike) or {}).get("call_options" if option_type == "CE" else "put_options") or {}
+                return node.get("instrument_key")
+
+            domain = resolve_domain_by_underlying(underlying)
+            lot_size = int(domain.get_lot_size(underlying)) if domain else 1
+            product = UpstoxGateway.normalize_product("MIS")
+
+            if structure == "credit_spread":
+                legs = [(_leg_key(atm, "PE"), "SELL"), (_leg_key(atm - width, "PE"), "BUY")]
+            elif structure == "debit_spread":
+                legs = [(_leg_key(atm, "CE"), "BUY"), (_leg_key(atm + width, "CE"), "SELL")]
+            else:
+                legs = [(_leg_key(atm, "CE"), "BUY")]
+
+            if all(key for key, _ in legs):
+                instruments = [
+                    {"instrument_key": key, "quantity": lot_size, "transaction_type": side, "product": product}
+                    for key, side in legs
+                ]
+                payload = await asyncio.to_thread(gw.get_margin_details, instruments)
+                required = _margin_est_required(payload)
+                if required > 0:
+                    result = {
+                        "ok": True,
+                        "required_margin": round(required, 2),
+                        "lot_size": lot_size,
+                        "atm_strike": atm,
+                        "width_points": width if "spread" in structure else 0,
+                        "spot": round(spot, 2),
+                    }
+                else:
+                    result = {"ok": False, "error": "margin API returned no requirement"}
+            else:
+                result = {"ok": False, "error": "strikes not found in chain"}
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)[:200]}
+
+    result["_at"] = time.time()
+    _MARGIN_EST_CACHE[cache_key] = result
+    return result
+
+
+@router.get("/margin-estimates")
+async def strategy_margin_estimates(user=Depends(get_current_user)):
+    """Real one-lot Upstox margin (SPAN + exposure, hedge benefit included) for each
+    option strategy's representative ATM structure. Requires a valid Upstox token;
+    returns available=false gracefully when disconnected (e.g. token expired)."""
+    from server import get_user_upstox_gateway
+
+    rows = await db.strategies.find(
+        {"user_id": user["id"]},
+        {"_id": 0, "id": 1, "name": 1, "structure": 1, "visual_config.options": 1,
+         "instrument_group": 1, "asset_class": 1},
+    ).to_list(500)
+    option_rows = [
+        r for r in rows
+        if str(r.get("instrument_group") or "").upper() in {"NFO", "BFO"}
+        and _margin_est_underlying(r.get("name"))
+    ]
+
+    gw = await get_user_upstox_gateway(user["id"])
+    if not gw or not getattr(gw, "connected", False):
+        return {"ok": True, "available": False,
+                "reason": "Reconnect Upstox to compute live margin estimates.", "estimates": {}}
+
+    estimates: Dict[str, Any] = {}
+    for row in option_rows:
+        underlying = _margin_est_underlying(row.get("name"))
+        structure = _margin_est_structure(row)
+        est = await _margin_estimate_for_combo(gw, underlying, structure)
+        if est.get("ok"):
+            estimates[row["id"]] = {
+                "required_margin": est["required_margin"],
+                "underlying": underlying,
+                "structure": structure,
+                "lot_size": est.get("lot_size"),
+                "atm_strike": est.get("atm_strike"),
+                "width_points": est.get("width_points"),
+            }
+    return {"ok": True, "available": bool(estimates), "estimates": estimates}
+
+
 @router.get("/{sid}/daily-report")
 async def strategy_daily_report(sid: str, user=Depends(get_current_user)):
     from server import _fetch_strategy_history

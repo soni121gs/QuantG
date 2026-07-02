@@ -72,18 +72,21 @@ export default function Strategies() {
 
   // Broker state
   const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
+  const [marginEstimates, setMarginEstimates] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [strategiesRes, scoresRes, uRes] = await Promise.all([
+      const [strategiesRes, scoresRes, uRes, marginRes] = await Promise.all([
         api.get("/strategies"),
         api.get("/ai/strategy-scores").catch(() => ({ data: { scores: [] } })),
         api.get("/upstox/status").catch(() => ({ data: { connected: false } })),
+        api.get("/strategies/margin-estimates").catch(() => ({ data: { estimates: {} } })),
       ]);
       setList(strategiesRes.data || []);
       setScores(Object.fromEntries((scoresRes.data?.scores || []).map((row) => [row.strategy_id, row])));
       setUpstoxStatus(uRes.data || { connected: false });
+      setMarginEstimates(marginRes.data?.estimates || {});
     } finally {
       setLoading(false);
     }
@@ -334,6 +337,7 @@ export default function Strategies() {
               exitAll={exitAll}
               load={load}
               upstoxStatus={upstoxStatus}
+              marginEstimate={marginEstimates[s.id]}
             />
           ))}
         </div>

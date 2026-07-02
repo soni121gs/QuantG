@@ -49,7 +49,7 @@ function Metric({ label, value, tone, compact = false, title }) {
   );
 }
 
-export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, upstoxStatus }) => {
+export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, upstoxStatus, marginEstimate }) => {
   const live = s.status === "live";
   const paused = s.status === "paused";
   const cardOpts = s.visual_config?.options || {};
@@ -172,7 +172,17 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
               : "Deployable capital tier used for position sizing."
           }
         />
-        <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
+        {marginEstimate?.required_margin ? (
+          <Metric
+            label="Margin/lot"
+            value={money(marginEstimate.required_margin)}
+            compact
+            tone="text-[var(--qd-warn)]"
+            title={`Real Upstox margin for 1 lot of a representative ATM ${marginEstimate.structure === "credit_spread" ? "credit spread" : marginEstimate.structure === "debit_spread" ? "debit spread" : "long option"} (strike ${marginEstimate.atm_strike}, lot ${marginEstimate.lot_size}) — SPAN + exposure with hedge benefit, from the broker margin API.`}
+          />
+        ) : (
+          <Metric label="Type" value={s.strategy_type || "Option Buying"} compact />
+        )}
         <Metric label="Score" value={scoreValue ? `${scoreValue}%` : "-"} compact />
         <Metric label="Scans" value={s.evaluations_today ?? 0} compact />
         <Metric label="Orders" value={tradesToday} compact tone={tradesToday > 0 ? "text-[var(--qd-profit)]" : ""} />
