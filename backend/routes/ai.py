@@ -79,6 +79,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_external_context",
     "get_trade_attribution",
     "get_hermes_brain_health",
+    "get_hermes_oos_validation",
 ]
 
 
@@ -485,6 +486,13 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 warnings.append("No lessons yet — the lesson store accrues one scoring pass per EOD.")
                 confidence = 0.5
             source = "db.hermes_lessons"
+        elif name == "get_hermes_oos_validation":
+            from core.hermes_validator import get_validation_summary
+            data = await get_validation_summary(db, user["id"])
+            if not data.get("recent_tests"):
+                warnings.append("No OOS tests have run yet - held-out evidence is still accumulating.")
+                confidence = 0.5
+            source = "db.hermes_hypothesis_tests"
         elif name == "get_recent_alerts":
             data = await db.notifications.find(
                 {"user_id": user["id"]},
@@ -1162,7 +1170,7 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "strategy-loss-review": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained", "get_historical_context"],
         "feed-token-diagnosis": ["get_upstox_status", "get_market_data_status", "get_feed_status", "get_token_status"],
         "eod-report": ["get_daily_report", "get_risk_snapshot", "get_today_fills", "get_today_orders", "get_historical_context"],
-        "backtest-review": ["get_backtest_summary", "get_active_strategies"],
+        "backtest-review": ["get_backtest_summary", "get_hermes_oos_validation", "get_active_strategies"],
         "vps-deploy-check": ["get_live_readiness", "get_logs_errors", "get_recent_alerts"],
         "incident-postmortem": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit", "get_historical_context"],
     }

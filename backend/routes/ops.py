@@ -165,6 +165,20 @@ async def ops_risk_scorecard(
     }
 
 
+@router.get("/hermes-oos-validation")
+async def ops_hermes_oos_validation(user=Depends(get_current_user)):
+    from core.hermes_validator import get_validation_summary
+
+    return await get_validation_summary(db, user["id"])
+
+
+@router.post("/hermes-oos-validation/run")
+async def ops_run_hermes_oos_validation(limit: int = 25, user=Depends(get_current_user)):
+    from core.hermes_validator import validate_lessons
+
+    return await validate_lessons(db, user["id"], limit=limit)
+
+
 @router.post("/options-backtest")
 async def ops_options_backtest(
     strategy_id: Optional[str] = None,

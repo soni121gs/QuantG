@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart3, RefreshCw, TrendingUp, TrendingDown, ArrowUpDown,
-  Activity, AlertTriangle, FlaskConical, Layers,
+  Activity, AlertTriangle, FlaskConical, Layers, ShieldCheck, CircleSlash,
 } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { toast } from "sonner";
@@ -94,9 +94,33 @@ const SortHeader = ({ label, col, sort, onSort, className = "" }) => (
   </th>
 );
 
+const SummaryTile = ({ label, value, sub, tone = "neutral", icon: Icon }) => {
+  const toneClass = {
+    good: "text-[var(--qd-profit)]",
+    bad: "text-[var(--qd-loss)]",
+    warn: "text-[var(--qd-warn)]",
+    neutral: "text-[var(--qd-text)]",
+  }[tone] || "text-[var(--qd-text)]";
+  return (
+    <div className="qd-stat-panel p-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="qd-section-title">{label}</span>
+        {Icon && <Icon size={15} className="text-[var(--qd-text-3)]" />}
+      </div>
+      <div className={`mt-3 font-mono text-xl font-bold ${toneClass}`}>{value}</div>
+      {sub && <div className="mt-2 text-xs text-[var(--qd-text-2)]">{sub}</div>}
+    </div>
+  );
+};
+
+const verdictTone = (verdict) => (
+  verdict === "KEEP" ? "good" : verdict === "KILL" ? "bad" : "warn"
+);
+
 export default function Analytics() {
   const [tab, setTab] = useState("realized"); // realized | backtest
   const [scorecard, setScorecard] = useState(null);
+  const [oos, setOos] = useState(null);
   const [backtest, setBacktest] = useState(null);
   const [loading, setLoading] = useState(false);
   const [btLoading, setBtLoading] = useState(false);
@@ -107,8 +131,12 @@ export default function Analytics() {
     setLoading(true);
     setError("");
     try {
-      const r = await api.get("/ops/risk-scorecard");
+      const [r, o] = await Promise.all([
+        api.get("/ops/risk-scorecard"),
+        api.get("/ops/hermes-oos-validation").catch(() => ({ data: null })),
+      ]);
       setScorecard(r.data);
+      setOos(o.data);
     } catch (e) {
       setError(e?.response?.data?.detail || e.message || "Failed to load scorecard");
     } finally {
@@ -154,6 +182,15 @@ export default function Analytics() {
   }, [backtest]);
 
   const byStructure = scorecard?.by_structure || {};
+  const verdicts = scorecard?.verdicts?.counts || {};
+  const bestByExpectancy = useMemo(() => (
+    [...(scorecard?.rows || [])].sort((a, b) => (b.expectancy ?? -Infinity) - (a.expectancy ?? -Infinity))[0]
+  ), [scorecard]);
+  const worstByExpectancy = useMemo(() => (
+    [...(scorecard?.rows || [])].sort((a, b) => (a.expectancy ?? Infinity) - (b.expectancy ?? Infinity))[0]
+  ), [scorecard]);
+  const oosCounts = oos?.counts || {};
+  const oosTotal = Object.values(oosCounts).reduce((a, b) => a + Number(b || 0), 0);
 
   return (
     <div className="space-y-5" data-testid="analytics-page">
@@ -212,6 +249,37 @@ export default function Analytics() {
 
       {tab === "realized" && (
         <>
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <SummaryTile
+              label="Verdicts"
+              value={`${verdicts.KEEP || 0} KEEP / ${verdicts.WATCH || 0} WATCH / ${verdicts.KILL || 0} KILL`}
+              sub={scorecard?.stats_window?.since ? `Clean since ${scorecard.stats_window.since.slice(0, 10)}` : "Lifetime window"}
+              tone={(verdicts.KILL || 0) > 0 ? "bad" : (verdicts.KEEP || 0) > 0 ? "good" : "warn"}
+              icon={ShieldCheck}
+            />
+            <SummaryTile
+              label="Best Expectancy"
+              value={bestByExpectancy ? money(bestByExpectancy.expectancy) : "-"}
+              sub={bestByExpectancy?.name || "No realized strategies"}
+              tone={(bestByExpectancy?.expectancy || 0) >= 0 ? "good" : "bad"}
+              icon={TrendingUp}
+            />
+            <SummaryTile
+              label="Worst Expectancy"
+              value={worstByExpectancy ? money(worstByExpectancy.expectancy) : "-"}
+              sub={worstByExpectancy?.name || "No realized strategies"}
+              tone={(worstByExpectancy?.expectancy || 0) >= 0 ? "good" : "bad"}
+              icon={TrendingDown}
+            />
+            <SummaryTile
+              label="OOS Judge"
+              value={oosTotal ? `${oosCounts.PASS || 0} pass / ${oosCounts.INSUFFICIENT_DATA || 0} waiting` : "No tests yet"}
+              sub="Lessons cannot influence trading without OOS pass"
+              tone={(oosCounts.PASS || 0) > 0 ? "good" : "warn"}
+              icon={oosTotal ? ShieldCheck : CircleSlash}
+            />
+          </section>
+
           {/* Buyers vs sellers structure summary */}
           {Object.keys(byStructure).length > 0 && (
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -253,6 +321,7 @@ export default function Analytics() {
                       <SortHeader label="Trades" col="total_trades" sort={sort} onSort={onSort} />
                       <SortHeader label="Win%" col="win_rate" sort={sort} onSort={onSort} />
                       <SortHeader label="Net P&L" col="total_pnl" sort={sort} onSort={onSort} className="text-right" />
+                      <SortHeader label="Verdict" col="verdict" sort={sort} onSort={onSort} />
                       <th className="px-3 py-2.5 text-right font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Equity</th>
                     </tr>
                   </thead>
@@ -272,6 +341,14 @@ export default function Analytics() {
                         <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{r.total_trades}</td>
                         <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{Math.round((r.win_rate ?? 0) * 100)}%</td>
                         <td className={`px-3 py-2.5 text-right font-semibold ${(r.total_pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(r.total_pnl)}</td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={`inline-flex rounded-md border px-2 py-1 font-mono text-[10px] font-bold ${verdictTone(r.verdict) === "good" ? "border-[var(--qd-profit)]/35 text-[var(--qd-profit)]" : verdictTone(r.verdict) === "bad" ? "border-[var(--qd-loss)]/35 text-[var(--qd-loss)]" : "border-[var(--qd-warn)]/35 text-[var(--qd-warn)]"}`}
+                            title={r.verdict_reason}
+                          >
+                            {r.verdict || "WATCH"}
+                          </span>
+                        </td>
                         <td className="px-3 py-2.5 text-right"><div className="flex justify-end"><EquitySparkline curve={r.equity_curve} /></div></td>
                       </tr>
                     ))}
