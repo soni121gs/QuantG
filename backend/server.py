@@ -1551,9 +1551,13 @@ CREDIT_SPREAD_THETA_RISK = {
     "strategy_category": "intraday",
 }
 
+EQUITY_MIN_REQUIRED_CAPITAL = float(os.environ.get("EQUITY_MIN_REQUIRED_CAPITAL", "50000"))
+EQUITY_ENTRY_CUTOFF = os.environ.get("EQUITY_ENTRY_CUTOFF", "1430")
+BANKNIFTY_THETA_EXPIRY_WEEK_ONLY = os.environ.get("BANKNIFTY_THETA_EXPIRY_WEEK_ONLY", "true").lower() == "true"
+
 
 def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk") -> Dict[str, Any]:
-    return {
+    fields = {
         f"{prefix}.stop_loss_pct": risk["stop_loss_pct"],
         f"{prefix}.stoploss_pct": risk["stop_loss_pct"],
         f"{prefix}.take_profit_pct": risk["take_profit_pct"],
@@ -1572,6 +1576,9 @@ def _risk_update_fields(risk: Dict[str, Any], prefix: str = "visual_config.risk"
         f"{prefix}.adaptive_exits_enabled": bool(risk.get("adaptive_exits_enabled", True)),
         f"{prefix}.target_r_multiple": float(risk.get("target_r_multiple") or DEFAULT_STRATEGY_RISK["target_r_multiple"]),
     }
+    if risk.get("required_capital") is not None:
+        fields[f"{prefix}.required_capital"] = float(risk.get("required_capital") or 0)
+    return fields
 
 
 RETAIL_LIVE_STATE_CODE = """def run(data):
@@ -6037,6 +6044,10 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _risk.update(CREDIT_SPREAD_THETA_RISK)
     if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
+    if str(_template.get("instrument_group") or "").upper() in {"NSE", "BSE"}:
+        _template["required_capital"] = max(float(_template.get("required_capital") or 0), EQUITY_MIN_REQUIRED_CAPITAL)
+        _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 2500.0)
+        _risk["entry_cutoff_ist"] = EQUITY_ENTRY_CUTOFF
     _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
 
 STRATEGY_DISPLAY_NAME_RENAMES = {
@@ -6817,7 +6828,8 @@ async def _reserve_strategy_position(
             "setup_type", "confidence", "entry_reason", "target_R",
             "initial_stop_R", "trail_after_R", "max_hold_minutes",
             "invalidation_rule", "regime_required", "option_selection_preference",
-            "signal_version", "strategy_logic_version", "default_strategy_version"
+            "signal_version", "strategy_logic_version", "default_strategy_version",
+            "trend_context", "regime_snapshot", "regime", "underlying_atr_pct"
         ]:
             if field in signal_doc:
                 r_meta[field] = signal_doc[field]
@@ -6871,6 +6883,29 @@ async def _reserve_strategy_position(
         "updated_at": now,
     }
     doc.update(r_meta)
+    is_equity_reservation = (
+        str(exchange or "").upper() in {"NSE", "BSE"}
+        or "_EQ|" in str(instrument_key or "")
+    )
+    doc["asset_type"] = "equity" if is_equity_reservation else "option"
+    doc["regime_at_entry"] = str(
+        doc.get("regime")
+        or (doc.get("regime_snapshot") or {}).get("regime")
+        or (doc.get("trend_context") or {}).get("trend")
+        or "UNKNOWN"
+    ).upper()
+    risk_prices = _position_risk_prices(
+        {**doc, "average_buy_price": float(entry_price or 0), "tp_sl_tsl_config": doc.get("tp_sl_tsl_config") or {}}
+    )
+    if risk_prices.get("stop_loss") is not None:
+        doc["sl_price"] = risk_prices["stop_loss"]
+    if risk_prices.get("take_profit") is not None:
+        doc["tp_price"] = risk_prices["take_profit"]
+    if doc.get("sl_price") not in (None, "", 0) and entry_price and quantity:
+        try:
+            doc["planned_risk"] = round(abs((float(entry_price) - float(doc["sl_price"])) * int(quantity)), 2)
+        except Exception:
+            doc["planned_risk"] = None
 
     try:
         await db.strategy_positions.insert_one(doc)
@@ -6998,6 +7033,22 @@ async def _activate_strategy_position(
         "tp_sl_tsl_config": risk_patch,
         "updated_at": now,
     }
+    risk_prices = _position_risk_prices({
+        "average_buy_price": average_buy_price,
+        "position_side": "SHORT" if str(reservation.get("position_side") or "").upper() == "SHORT" else "LONG",
+        "tp_sl_tsl_config": risk_patch,
+    })
+    if risk_prices.get("stop_loss") is not None:
+        set_fields["sl_price"] = risk_prices["stop_loss"]
+    if risk_prices.get("take_profit") is not None:
+        set_fields["tp_price"] = risk_prices["take_profit"]
+    if set_fields.get("sl_price") not in (None, "", 0) and average_buy_price and quantity:
+        try:
+            set_fields["planned_risk"] = round(abs((float(average_buy_price) - float(set_fields["sl_price"])) * int(quantity)), 2)
+        except Exception:
+            pass
+    if reservation.get("regime_at_entry"):
+        set_fields["regime_at_entry"] = str(reservation.get("regime_at_entry")).upper()
     set_fields.update(r_activation_fields)
 
     await db.strategy_positions.update_one(
@@ -16908,6 +16959,62 @@ async def startup():
             logger.warning("Credit-spread structure migration failed: %s", _cs_err)
 
     asyncio.create_task(_migrate_credit_spread_structure())
+
+    async def _migrate_alpha_repair_followups():
+        await asyncio.sleep(8)
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            equity_rows = await db.strategies.find(
+                {
+                    "$or": [
+                        {"asset_class": "equity"},
+                        {"instrument_group": {"$in": ["NSE", "BSE"]}},
+                        {"visual_config.options.enabled": False},
+                    ]
+                },
+                {"_id": 0, "id": 1, "required_capital": 1, "visual_config.risk": 1},
+            ).to_list(200)
+            equity_updated = 0
+            for row in equity_rows:
+                visual_capital = float(((row.get("visual_config") or {}).get("risk") or {}).get("required_capital") or 0)
+                top_level_capital = float(row.get("required_capital") or 0)
+                current_capital = max(top_level_capital, visual_capital)
+                capital = max(current_capital, EQUITY_MIN_REQUIRED_CAPITAL)
+                risk = ((row.get("visual_config") or {}).get("risk") or {})
+                daily_loss = max(float(risk.get("daily_loss_limit") or 0), 2500.0)
+                res = await db.strategies.update_one(
+                    {"id": row["id"]},
+                    {"$set": {
+                        "required_capital": capital,
+                        "visual_config.risk.required_capital": capital,
+                        "visual_config.risk.daily_loss_limit": daily_loss,
+                        "visual_config.risk.entry_cutoff_ist": EQUITY_ENTRY_CUTOFF,
+                        "alpha_repair_followup_migrated_at": now,
+                    }},
+                )
+                equity_updated += int(res.modified_count or 0)
+
+            bn_res = await db.strategies.update_many(
+                {
+                    "name": {"$regex": "BANKNIFTY.*Theta", "$options": "i"},
+                    "visual_config.options.structure": "credit_spread",
+                },
+                {"$set": {
+                    "visual_config.options.expiry_week_only": bool(BANKNIFTY_THETA_EXPIRY_WEEK_ONLY),
+                    "visual_config.options.expiry_policy": "expiry_week_only" if BANKNIFTY_THETA_EXPIRY_WEEK_ONLY else "nearest",
+                    "alpha_repair_followup_migrated_at": now,
+                }},
+            )
+            if equity_updated or bn_res.modified_count:
+                logger.info(
+                    "DB migration: alpha repair followups equity=%d banknifty_theta=%d",
+                    equity_updated,
+                    bn_res.modified_count,
+                )
+        except Exception as _ar_err:
+            logger.warning("Alpha repair followup migration failed: %s", _ar_err)
+
+    asyncio.create_task(_migrate_alpha_repair_followups())
 
     # Fix 3: Warn loudly at boot if running with the default JWT secret.
     # The secret is SHA-256'd so it won't crash, but forging tokens is trivial

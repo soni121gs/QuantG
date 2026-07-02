@@ -31,8 +31,8 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 > Status: `[ ]` open · `[~]` in progress (add your model name) · `[x]` done. IDs use a domain prefix (`AR-`, `HSI-`, `WR-`, `HSB-`, `CUR-`) — not all `TASK-###`. Start with the highest item your tier can handle; read the task's "Files / Acceptance" before coding.
 
 **🩹 Alpha Repair Campaign (2026-07-02 full-book analysis) — START HERE (§ below)**
-- **NEXT → `AR-01`+`AR-02`** risk-geometry fix (killswitch force-closes = −₹21,177 since 06-25, the #1 leak) + credit-config coherence/entry-window — **ship together: same template file, one deploy = one measurement epoch**
-- Then: `AR-03` equity ATR-bracket bug (P1, independent — can go same day) · `AR-04` equity cost economics + 14:30 cutoff · `AR-05` regime/planned-risk stamping (gates AR-07 + HSI Stage 4) · `AR-06` BANKNIFTY expiry mismatch · `AR-07` ⛔ portfolio gates (data-gated) · `AR-08` measurement checkpoint (~07-16)
+- **DONE 2026-07-02:** `AR-01`+`AR-02` risk/config epoch, `AR-03` equity ATR brackets, `AR-04` equity economics/cutoff, `AR-05` attribution inputs, `AR-06` BANKNIFTY theta expiry guard.
+- **NEXT → `AR-07` is data-gated** on the new AR-05 stamped attribution window; `AR-08` measurement checkpoint is due after ~8 trading sessions from the AR-01..06 deploy window.
 
 **🧠 Hermes Self-Improvement Loop — the headline initiative (§ bottom of file)**
 - **Stages 1–3 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01 — `hermes_lessons` self-scores/promotes/decays each EOD; `get_hermes_brain_health` tool).
@@ -56,7 +56,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 - `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
 - `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first. **Ordering added 2026-07-02: do AFTER AR-03 — RELIANCE's only trade since baseline was the `R_TARGET_HIT`-at-a-loss bracket defect (AR-03 step 3); reactivating it before the bracket fix re-exposes it to the same bug.**
 - `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
-- `[ ]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** Wallet ₹467,824 (Δ −32,176 from 500k start) vs all-time `trade_fills` realized −₹56,174 don't tie out. Almost certainly benign — wallet was reset to 500k at the 06-25 research epoch (post-dates many fills) + 7 open positions have capital reserved. Confirm: Σ realized_pnl of fills since 2026-06-25 + open reserved capital ≈ (500k − balance). If it reconciles, close this; if not, investigate residual phantom-credit.
+- `[x]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** DONE 2026-07-02: exact wallet reset timestamp is `2026-06-30T15:03:34.386Z`; wallet balance ₹498,889.87 implies Δ −₹1,110.13 from ₹500k, and `trade_fills` realized since reset is exactly −₹1,110.13 across 84 fills. No open reserved positions. Close as benign epoch mismatch, not residual phantom-credit. Commit: pending.
 
 ---
 
@@ -199,7 +199,7 @@ check signal fields `initial_stop_R`/`target_R`/`exit_policy`), `backend/core/po
 ---
 
 ### AR-04 — Equity economics: clear the cost bar + 14:30 entry cutoff + wake the dead names
-- **Status**: `[ ]`
+- **Status**: `[x]` DONE 2026-07-02, commit pending
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: AR-03 (brackets must work before judging equity edge)
@@ -224,10 +224,12 @@ silent strategies produce no data.
 **Acceptance**: no equity entry after 14:30; median equity notional ≥ ₹50k (or a written tier decision);
 SBIN/INFY either trade or have a root-caused reason recorded here.
 
+**Done 2026-07-02**: added env-gated `EQUITY_ENTRY_CUTOFF=1430` with skip code `EQUITY_ENTRY_CUTOFF`; enforced a minimum ₹50k equity risk-capital tier while preserving existing higher 75k tiers; startup migration syncs top-level `required_capital` with `visual_config.risk.required_capital`. Dead-name diagnosis: 60-day real Upstox 5-minute OHLC backtest produced 0 trades for RELIANCE and SBIN; INFY produced 1 losing trade. This is signal scarcity/low edge on the current code, not an execution/router failure.
+
 ---
 
 ### AR-05 — Attribution inputs: equity regime stamping + planned_risk everywhere
-- **Status**: `[ ]`
+- **Status**: `[x]` DONE 2026-07-02, commit pending
 - **Tier**: 2 (Sonnet / Codex)
 - **Session size**: ~2 hours
 - **Prerequisite**: None. **Gates AR-07 and HSI Stage 4** — the sooner this lands, the sooner the data clock runs.
@@ -250,10 +252,12 @@ positions → their `R_multiple` attribution is broken, which mis-feeds the Herm
 **Acceptance**: new trades <10% UNKNOWN regime across all asset types; every new position has
 `planned_risk > 0`.
 
+**Done 2026-07-02**: equity signals now store `trend_context`, a regime-like `regime_snapshot`, and `regime`; the reservation/activation path writes `regime_at_entry` onto new equity/single-leg position docs. New reserved/activated positions also stamp `sl_price`, `tp_price`, and `planned_risk` from the final risk config when a stop exists. Spread lifecycle already stamps `planned_risk`; old zero/UNKNOWN rows are intentionally not backfilled.
+
 ---
 
 ### AR-06 — BANKNIFTY theta expiry mismatch (weeklies died Nov 2024)
-- **Status**: `[ ]`
+- **Status**: `[x]` DONE 2026-07-02, commit pending
 - **Tier**: 1–2
 - **Session size**: ~1 hour (investigation + config)
 - **Prerequisite**: None
@@ -274,6 +278,8 @@ slow-decay premium while keeping fast-market risk. The data is consistent: SENSE
 
 **Acceptance**: expiry evidence documented here; one of the two configs applied; BANKNIFTY theta's win/loss
 asymmetry normalizes over the following 2 weeks (avgLoss no longer 4× avgWin).
+
+**Done 2026-07-02**: live DB has `BANKNIFTY Theta Credit Spread` configured as paused/schedule-paused credit spread with no recent position/order expiry rows to inspect; config fix applied anyway as the smaller-risk option. Added env-gated `BANKNIFTY_THETA_EXPIRY_WEEK_ONLY=true`: after option resolution, BANKNIFTY theta credit-spread entries are blocked unless the resolved contract expiry is within 6 IST calendar days. Startup migration annotates the DB strategy with `expiry_policy=expiry_week_only`.
 
 ---
 
@@ -652,7 +658,7 @@ no Greeks/delta rejection on a cash-equity order.
 ---
 
 ### TASK-EQ-04 — Backtest + rank the full equity universe (real OHLC)
-- **Status**: `[ ]` OPEN (operational) — backtester wired to real OHLC; still needs a full-universe run + ranking table on a clean window. **Re-scoped 2026-07-02: run this as the INPUT to AR-04 step 1 (which names deserve capital). Do NOT rank on live paper fills until AR-03 lands — the equity brackets are broken (dead 7.05%/10.94%), so live exit stats are noise; the OHLC backtest ranks entry-signal quality independently of that bug.**
+- **Status**: `[x]` DONE 2026-07-02, commit pending — full-universe run completed on real Upstox 5-minute OHLC as input to AR-04. Result is a **thin-sample frequency diagnosis**, not a reliable Sharpe ranking: most strategies emitted 0–1 trades over 60 days, so no name clears a true Sharpe > 1 evidence bar yet.
 - **Tier**: 1–2
 - **Session size**: ~1.5 hours
 - **Prerequisite**: token connected on a trading day (EQ-01 not strictly required — backtest is read-only)
@@ -671,6 +677,23 @@ old `trade_fills` sample; the rest are unranked.
 
 **Acceptance**: a ranked table of all 12 equity strategies on real OHLC, with the A/B graders confirmed and
 the negative-edge names identified.
+
+**Result 2026-07-02 (60-day Upstox 5m OHLC, 1350–1351 bars/name)**:
+
+| Strategy | Trades | Return | Win rate | Verdict |
+|---|---:|---:|---:|---|
+| LT Momentum Rider | 1 | +0.15% | 100% | WATCH — best thin-sample positive |
+| HDFCBANK Range Rebound | 1 | +0.06% | 100% | WATCH — thin positive |
+| BHARTIARTL Intraday Trend | 1 | +0.06% | 100% | WATCH — thin positive |
+| AXISBANK Trend Follower | 1 | +0.04% | 100% | WATCH — thin positive |
+| KOTAKBANK RSI Rebound | 1 | +0.02% | 100% | WATCH — thin positive |
+| RELIANCE Trend Rider | 0 | 0.00% | 0% | DEAD/NO-SIGNAL |
+| SBIN Short Seller | 0 | 0.00% | 0% | DEAD/NO-SIGNAL |
+| TCS Swing Accumulator | 1 | −0.10% | 0% | WATCH/WEAK |
+| INFY VWAP Pullback | 1 | −0.11% | 0% | WATCH/WEAK |
+| ICICIBANK Volatility Breakout | 1 | −0.15% | 0% | WATCH/WEAK |
+
+Capital rule from this run: do not use the OHLC sample to up-weight aggressively yet; AR-04 only raises the floor to cost-clearing size and preserves existing higher tiers.
 
 ---
 

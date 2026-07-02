@@ -68,6 +68,8 @@ EQUITY_COUNTERTREND_BLOCK_STRENGTH = float(os.environ.get("EQUITY_COUNTERTREND_B
 MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING = int(os.environ.get("MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING", "3"))
 _EXPOSURE_OPEN_STATUSES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]
 CREDIT_ENTRY_WINDOW = os.environ.get("CREDIT_ENTRY_WINDOW", "0945-1300").strip()
+EQUITY_ENTRY_CUTOFF = os.environ.get("EQUITY_ENTRY_CUTOFF", "1430").strip()
+BANKNIFTY_THETA_EXPIRY_WEEK_ONLY = os.environ.get("BANKNIFTY_THETA_EXPIRY_WEEK_ONLY", "true").lower() == "true"
 
 
 def _parse_hhmm_minutes(value: str) -> Optional[int]:
@@ -92,6 +94,28 @@ def _credit_entry_window_bounds() -> Optional[tuple[int, int]]:
     if start is None or end is None or start >= end:
         return None
     return start, end
+
+
+def _equity_entry_cutoff_minutes() -> Optional[int]:
+    if not EQUITY_ENTRY_CUTOFF or EQUITY_ENTRY_CUTOFF.lower() in {"off", "false", "0"}:
+        return None
+    return _parse_hhmm_minutes(EQUITY_ENTRY_CUTOFF)
+
+
+def _expiry_days_from_now_ist(option_contract: Dict[str, Any]) -> Optional[int]:
+    expiry = (
+        option_contract.get("expiry")
+        or ((option_contract.get("spread") or {}).get("short_leg") or {}).get("expiry")
+        or ((option_contract.get("spread") or {}).get("long_leg") or {}).get("expiry")
+    )
+    if not expiry:
+        return None
+    try:
+        exp_date = datetime.fromisoformat(str(expiry)[:10]).date()
+        today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).date()
+        return (exp_date - today_ist).days
+    except Exception:
+        return None
 
 
 def _signal_minutes_ist(signal: Dict[str, Any]) -> int:
@@ -896,6 +920,23 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     # CE/PE regime gate above and are untouched.
                     _eq_opt = (vc or {}).get("options") or {}
                     if not bool(_eq_opt.get("enabled")):
+                        if _is_entry:
+                            _cutoff = _equity_entry_cutoff_minutes()
+                            if _cutoff is not None and _signal_minutes_ist(last_sig) > _cutoff:
+                                _reason = (
+                                    f"EQUITY_ENTRY_CUTOFF: {action} blocked after "
+                                    f"{EQUITY_ENTRY_CUTOFF} IST"
+                                )
+                                await record_strategy_filter(db, s["id"], s.get("user_id"), "EQUITY_ENTRY_CUTOFF", _reason)
+                                await db.strategies.update_one(
+                                    {"id": s["id"]},
+                                    {"$set": {**eval_set, "last_signals_count": signals_count,
+                                              "last_signal_action": action,
+                                              "last_filter_reason": _reason},
+                                     "$inc": inc_set},
+                                )
+                                continue
+
                         _tr = signal_validation.get("trend") or {}
                         _tr_dir = str(_tr.get("trend") or "").upper()
                         try:
@@ -1139,6 +1180,39 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             )
                             await db.strategies.update_one({"id": s["id"]}, update_doc)
                             continue
+
+                        _resolved_underlying = str(opt_cfg.get("underlying") or "").upper()
+                        _strategy_name = str(s.get("name") or "").upper()
+                        _resolved_structure = str(
+                            (option_contract or {}).get("structure")
+                            or opt_cfg.get("structure")
+                            or ""
+                        ).lower()
+                        if (
+                            BANKNIFTY_THETA_EXPIRY_WEEK_ONLY
+                            and _is_entry
+                            and _resolved_underlying == "BANKNIFTY"
+                            and _resolved_structure == "credit_spread"
+                            and "THETA" in _strategy_name
+                        ):
+                            _days_to_expiry = _expiry_days_from_now_ist(option_contract)
+                            if _days_to_expiry is None or _days_to_expiry > 6:
+                                _reason = (
+                                    "EXPIRY_WEEK: BANKNIFTY theta credit spread blocked "
+                                    f"outside expiry week (days_to_expiry={_days_to_expiry})"
+                                )
+                                await record_strategy_filter(db, s["id"], s.get("user_id"), "EXPIRY_WEEK", _reason)
+                                await db.strategies.update_one(
+                                    {"id": s["id"]},
+                                    {"$set": {**eval_set, "last_signals_count": signals_count,
+                                              "last_signal_action": action,
+                                              "last_filter_reason": _reason,
+                                              "last_traded_symbol": option_contract.get("tradingsymbol"),
+                                              "last_resolver_stage": option_contract.get("resolver_stage"),
+                                              "last_resolver_reason": option_contract.get("resolver_reason")},
+                                     "$inc": inc_set},
+                                )
+                                continue
 
                         # ---- OptionSelector v2 quality gate ----
                         _v2_direction = str(last_sig.get("direction") or "CE").upper()
@@ -1392,6 +1466,16 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     signal_price = _latest_signal_price(last_sig, data, option_contract)
                     signal_id = str(uuid.uuid4())
                     now_str = datetime.now(timezone.utc).isoformat()
+                    _trend_context = signal_validation.get("trend") or {}
+                    _equity_regime_snapshot = {}
+                    if not option_resolution_requested:
+                        _trend_name = str(_trend_context.get("trend") or "").upper()
+                        if _trend_name:
+                            _equity_regime_snapshot = {
+                                "regime": _trend_name,
+                                "source": "equity_trend_context",
+                                "strength": _trend_context.get("strength"),
+                            }
                     
                     signal_doc = {
                         "id": signal_id,
@@ -1405,7 +1489,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "confidence": float(last_sig.get("confidence") or signal_validation.get("confidence", 85.0)),
                         "price": signal_price,
                         "ltp": signal_price,
-                        "trend_context": signal_validation.get("trend") or {},
+                        "trend_context": _trend_context,
                         "visual_config": s.get("visual_config") or {},
                         "option_contract": option_contract,
                         "exchange": (option_contract.get("exchange") if option_contract else "NSE"),
@@ -1431,8 +1515,8 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                         "selected_strike_mode": (option_contract or {}).get("selected_strike_mode"),
                         "v2_selector_warnings": (option_contract or {}).get("v2_warnings"),
                         # Regime snapshot at signal time
-                        "regime_snapshot": last_sig.get("regime_snapshot") or {},
-                        "regime": (last_sig.get("regime_snapshot") or {}).get("regime"),
+                        "regime_snapshot": last_sig.get("regime_snapshot") or _equity_regime_snapshot,
+                        "regime": (last_sig.get("regime_snapshot") or _equity_regime_snapshot).get("regime"),
                         # Greeks/IV/OI snapshot at signal time (flat copy of the
                         # contract fields for analytics queries; the full contract
                         # is embedded above in option_contract)
