@@ -53,7 +53,9 @@ EQUITY_PHANTOM_MAX_DEV = float(os.environ.get("EQUITY_PHANTOM_MAX_DEV", "0.35"))
 # the position monitor) still fires anytime. Spreads need a long hold to collect
 # theta (the 2026-06-23 churn: 43/47 spreads closed <5min, never reached TP);
 # single-leg buyers get a short debounce just to stop same-candle flip-flop.
-SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC", "1200"))
+# 1200→3600 (2026-07-03): attribution shows holds <30m at 6% WR (−₹11k) vs 2h+
+# holds +₹3.4k at 50% WR — a theta spread must survive its first hour of noise.
+SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SPREAD_SIGNAL_EXIT_MIN_HOLD_SEC", "3600"))
 SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC = int(os.environ.get("SINGLE_LEG_SIGNAL_EXIT_MIN_HOLD_SEC", "180"))
 # Equity brains (Donchian/RSI/VWAP) only see OHLC and can emit a BUY on a minor
 # bounce inside a strong downtrend (or a SELL into a strong uptrend). trend_context
@@ -100,6 +102,18 @@ def _equity_entry_cutoff_minutes() -> Optional[int]:
     if not EQUITY_ENTRY_CUTOFF or EQUITY_ENTRY_CUTOFF.lower() in {"off", "false", "0"}:
         return None
     return _parse_hhmm_minutes(EQUITY_ENTRY_CUTOFF)
+
+
+# Book-wide new-entry cutoff (2026-07-03): attribution since 06-25 shows midday +
+# afternoon entries at −₹13.1k combined vs morning/open +₹2.8k. Exits and EOD
+# square-off are unaffected. "off"/"0" disables.
+ENTRY_CUTOFF_IST = os.environ.get("ENTRY_CUTOFF_IST", "1230")
+
+
+def _global_entry_cutoff_minutes() -> Optional[int]:
+    if not ENTRY_CUTOFF_IST or ENTRY_CUTOFF_IST.lower() in {"off", "false", "0"}:
+        return None
+    return _parse_hhmm_minutes(ENTRY_CUTOFF_IST)
 
 
 def _expiry_days_from_now_ist(option_contract: Dict[str, Any]) -> Optional[int]:
@@ -967,6 +981,21 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     if _hm != 1.0 and last_sig.get("max_hold_minutes"):
                         last_sig = dict(last_sig)
                         last_sig["max_hold_minutes"] = max(5, int(last_sig["max_hold_minutes"] * _hm))
+
+                # ── Book-wide entry-time gate ────────────────────────────────
+                if _is_entry:
+                    _gc = _global_entry_cutoff_minutes()
+                    if _gc is not None and _signal_minutes_ist(last_sig) > _gc:
+                        _reason = f"ENTRY_CUTOFF: {action} blocked after {ENTRY_CUTOFF_IST} IST"
+                        await record_strategy_filter(db, s["id"], s.get("user_id"), "ENTRY_CUTOFF", _reason)
+                        await db.strategies.update_one(
+                            {"id": s["id"]},
+                            {"$set": {**eval_set, "last_signals_count": signals_count,
+                                      "last_signal_action": action,
+                                      "last_filter_reason": _reason},
+                             "$inc": inc_set},
+                        )
+                        continue
 
                 # ── Frequency Gate ────────────────────────────────────────────
                 if _is_entry:
