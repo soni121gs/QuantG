@@ -433,7 +433,7 @@ journalplus.co/learn/guides/win-rate-vs-risk-reward · einvestingforbeginners.co
 - `[ ]` **WR-71** Strategy backtesting on real options-chain history (blocked by Upstox expired-option API — needs a data source).
 - `[x]` **WR-72** FOLDED into HSI-41..44 2026-07-02 (dedupe): the walk-forward/OOS harness is HSI Stage 4's `core/hermes_validator.py` (+ HSB-11's historical_chains data audit as precursor). One OOS judge for the whole platform — don't build a parallel one.
 - `[ ]` **WR-73** Enable `CORE_ENGINE_LIVE_ENABLED` on 2–3 proven strategies (founder gate; roadmap Phase 1). **Prerequisites added 2026-07-02: AR-08 checkpoint green (killswitch leak closed, equity brackets real) + OOS verdicts from HSI Stage 4.**
-- `[x]` **WR-74** DONE 2026-07-03 (`d64f83f`) — improved the existing `/analytics` page with decision-grade panels: KEEP/WATCH/KILL counts, clean-window marker, best/worst expectancy, Hermes OOS judge status, and a verdict column with per-strategy reasons. Verified with `$env:CI='false'; npm run build`.
+- `[x]` **WR-74** DONE 2026-07-03 (`d1553fc`) — improved the existing `/analytics` page with decision-grade panels: KEEP/WATCH/KILL counts, clean-window marker, best/worst expectancy, Hermes OOS judge status, and a verdict column with per-strategy reasons. Verified with `$env:CI='false'; npm run build`.
 
 ---
 
@@ -2937,10 +2937,10 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ### Stage 4 — OOS Hypothesis Validator (the guardrail — JUDGE-FIRST)
 **Goal**: no lesson becomes a trading rule until it passes an **out-of-sample** backtest. Build the judge BEFORE the proposer can promote.
-- `[x]` **HSI-41** DONE 2026-07-03 (`d64f83f`) — hypothesis schema now derives from `hermes_lessons`: `{lesson_id, dimension, bucket, direction, claim, objective:"expectancy", source_window_end, oos_start}`.
-- `[x]` **HSI-42** DONE 2026-07-03 (`d64f83f`) — `validate_hypothesis(db, hypothesis)` lives in `core/hermes_validator.py`. It tests held-out `trade_attribution` rows after the lesson source window, compares bucket expectancy against the control population, and passes only if OOS sample and effect-size thresholds clear. Until the 3–4 week data window matures, results correctly return `INSUFFICIENT_DATA`.
-- `[x]` **HSI-43** DONE 2026-07-03 (`d64f83f`) — judge-first state is enforced in data: each lesson gets `oos_status`, `oos_passed`, and `last_oos_result`; Stage 5 must require `oos_passed=true` before proposing any config action.
-- `[x]` **HSI-44** DONE 2026-07-03 (`d64f83f`) — every OOS test is written to `hermes_hypothesis_tests`; per-run tests are capped by `HERMES_OOS_MAX_TESTS_PER_RUN`; pass requires effect size (`HERMES_OOS_MIN_EFFECT_INR`) and minimum OOS sample (`HERMES_OOS_MIN_TRADES`), not just sign.
+- `[x]` **HSI-41** DONE 2026-07-03 (`d1553fc`) — hypothesis schema now derives from `hermes_lessons`: `{lesson_id, dimension, bucket, direction, claim, objective:"expectancy", source_window_end, oos_start}`.
+- `[x]` **HSI-42** DONE 2026-07-03 (`d1553fc`) — `validate_hypothesis(db, hypothesis)` lives in `core/hermes_validator.py`. It tests held-out `trade_attribution` rows after the lesson source window, compares bucket expectancy against the control population, and passes only if OOS sample and effect-size thresholds clear. Until the 3–4 week data window matures, results correctly return `INSUFFICIENT_DATA`.
+- `[x]` **HSI-43** DONE 2026-07-03 (`d1553fc`) — judge-first state is enforced in data: each lesson gets `oos_status`, `oos_passed`, and `last_oos_result`; Stage 5 must require `oos_passed=true` before proposing any config action.
+- `[x]` **HSI-44** DONE 2026-07-03 (`d1553fc`) — every OOS test is written to `hermes_hypothesis_tests`; per-run tests are capped by `HERMES_OOS_MAX_TESTS_PER_RUN`; pass requires effect size (`HERMES_OOS_MIN_EFFECT_INR`) and minimum OOS sample (`HERMES_OOS_MIN_TRADES`), not just sign.
 - **Acceptance**: feed one known-good and one known-noise hypothesis → validator promotes the good, rejects the noise; OOS result stored + auditable.
 - **Files**: `core/hermes_validator.py` (new), backtester wiring, `core/hermes_lessons.py`. **Deps**: Stages 1–3 + existing backtester. ⛔ **needs ~3–4 weeks of clean attribution** for OOS windows to carry signal.
 
