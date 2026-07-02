@@ -35,12 +35,12 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 - **NEXT → `AR-07` is data-gated** on the new AR-05 stamped attribution window; `AR-08` measurement checkpoint is due after ~8 trading sessions from the AR-01..06 deploy window.
 
 **🧠 Hermes Self-Improvement Loop — the headline initiative (§ bottom of file)**
-- **Stages 1–3 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01 — `hermes_lessons` self-scores/promotes/decays each EOD; `get_hermes_brain_health` tool).
-- **NEXT → `HSI-41..44`** Stage 4 OOS validator — ⛔ **data-gated**: needs ~3–4 weeks of clean attribution for OOS windows to carry signal (the measurement clock started ~2026-07-01). Then `HSI-51..54` Stage 5 gated advisor (founder-gated).
+- **Stages 1–4 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01) · `HSI-41..44` Stage 4 OOS validator (`d1553fc`, 2026-07-03 — judge-first, returns `INSUFFICIENT_DATA` until held-out samples mature).
+- **NEXT → `HSI-51..54`** Stage 5 gated advisor — founder-gated and must require `oos_passed=true`.
 
 **📈 Win-Rate / Expectancy (open remainder — deduped 2026-07-02)**
 - Open: `WR-33` deferred (re-open only per AR-08 evidence) · `WR-45` correlation matrix · `WR-51` risk sizing *(after AR-08)* · `WR-54` auto-pause *(⛔ gated on AR-01/AR-08)*. **Folded 07-02:** `WR-42`/`WR-43` → AR-07/AR-08 · `WR-44`/`WR-72` → HSI-41..44.
-- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-73` enable live on 2–3 proven *(founder gate — requires AR-08 green)* · `WR-74` analytics dashboard
+- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-73` enable live on 2–3 proven *(founder gate — requires AR-08 green + OOS pass)*
 
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
@@ -2792,8 +2792,8 @@ a confident overfitting machine — that is the single worst outcome and is expl
 
 ---
 
-*Last updated: 2026-07-02 (Alpha Repair campaign AR-01..08 added as the active PRIORITY 0; dedupe pass: WR-42/43 folded → AR-07/08, WR-44/72 folded → HSI-41..44, HSB-12..16 superseded by HSI-41..54; WR-51/54/73, OPS-03, EQ-04 gated/re-scoped against the AR campaign.)*
-*Open after dedupe: **27** — AR-04..08 (5; AR-07 ⛔ data-gated) · OPS-02..05 (4) · WR-33 deferred / WR-45 / WR-51 / WR-54 ⛔ / WR-71 ⛔ / WR-73 founder-gate / WR-74 (7) · EQ-04 (1) · HSI-41..44 ⛔ data-gated + HSI-51..54 founder-gated (8) · HSB-11 + HSB-17 (2). In progress: 0.*
+*Last updated: 2026-07-03 (HSI-41..44 OOS judge-first validator shipped; WR-74 Analytics upgraded; OPS-03 fixed as scheduler-adopted.)*
+*Open after dedupe: AR-07/AR-08 data-gated · OPS-02 market-hours recheck / OPS-04 · WR-33 deferred / WR-45 / WR-51 / WR-54 ⛔ / WR-71 ⛔ / WR-73 founder-gate · HSI-51..54 founder-gated · HSB-11 + HSB-17. In progress: 0.*
 *Founder decisions 2026-06-22 (Hermes Second-Brain): (1) RAG + prompt engineering, no model fine-tuning, stay on Gemini 2.5-flash; (2) web via Gemini Google-Search grounding; (3) AI score = quant-grounded, LLM-narrated; (4) strategy AutoResearch ratchet folded into this campaign, judge-first; (5) lower priority than Win-Rate.*
 *Recommended next build order: AR-05 → AR-04/EQ-04/AR-06 → OPS-02 recheck → AR-08 checkpoint → AR-07 + HSB-11 → HSI-41..44 → HSI-51..54 / WR-51 / WR-54 / WR-73.*
 # Frontend Trading-Cockpit Polish Task - 2026-06-23
