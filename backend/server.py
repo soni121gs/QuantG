@@ -1546,7 +1546,12 @@ CREDIT_SPREAD_THETA_NAMES = {
 CREDIT_SPREAD_THETA_RISK = {
     "cooldown_minutes": 15,
     "max_trades_day": 8,
-    "daily_loss_limit": 4000.0,
+    # Killswitch geometry: a spread's designed max loss is ~required_capital
+    # (₹8k budget → lots via lots_for_risk). The daily loss floor must sit AT
+    # or above one designed loss, otherwise the killswitch force-closes a
+    # breathing spread mid-drawdown and realizes the worst tick (the −21k
+    # leak found in the 2026-07-02 book analysis).
+    "daily_loss_limit": 8000.0,
     "time_exit_minutes": 0,
     "strategy_category": "intraday",
 }
@@ -6508,11 +6513,19 @@ async def _sync_strategy_modes_to_profile(user_id: str, paper_mode: bool) -> int
             "last_halt_reason": "",
             "last_error": "",
         })
+    # Strategies with mode_pinned=True keep their explicitly chosen mode — this
+    # is how a paper cohort keeps collecting data while the account runs one
+    # strategy live. All other profile-sync hygiene fields still apply to them.
     res = await db.strategies.update_many(
-        {"user_id": user_id},
+        {"user_id": user_id, "mode_pinned": {"$ne": True}},
         {"$set": update, "$unset": unset},
     )
-    return int(res.modified_count or 0)
+    pinned_update = {k: v for k, v in update.items() if k != "mode"}
+    pinned_res = await db.strategies.update_many(
+        {"user_id": user_id, "mode_pinned": True},
+        {"$set": pinned_update, "$unset": unset},
+    )
+    return int((res.modified_count or 0) + (pinned_res.modified_count or 0))
 
 
 async def _strategy_source_id(source: Optional[str]) -> Optional[str]:
