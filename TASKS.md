@@ -40,6 +40,20 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
+**🔧 OPS hygiene (from 2026-07-02 live audit — do AFTER market close, § below):** `OPS-01` portfolio-stream 401 storm (P1) · `OPS-02` 429 rate-limiting · `OPS-03` RELIANCE Trend Rider orphaned-paused · `OPS-04` Hermes Telegram 404 · `OPS-05` verify wallet reconcile.
+
+---
+
+## OPS HYGIENE — from live full-system audit (2026-07-02, market open, no changes made)
+
+**Audit verdict: system HEALTHY and trading correctly.** Real feed (0 mock fallbacks), 57 fills today, MTM fresh (2–3s), no stuck EXITING/CIRCUIT_BREAKER positions, HSI brain intact (attribution 06-30/07-01, 10 candidate lessons scored 07-01, daily_reports through 07-01), self-healing wallet ledger working. Below are the non-urgent cleanups found — **none affect trading correctness or money integrity; do after 15:30 IST.**
+
+- `[ ]` **OPS-01 (P1) — Upstox portfolio-stream 401 storm, no backoff.** `quantg.upstox_portfolio_stream` hammering the Upstox portfolio WS handshake → **33,138** `Handshake status 401 Unauthorized` since 14:03 IST (~11/sec), spiking backend CPU to 115%. REST/market-data token is FINE (quotes work, positions priced) — this is specific to the portfolio-stream endpoint, which streams broker order/position updates. **In paper mode this stream is not needed at all** (paper fills are simulated locally). Fix: **skip starting the portfolio stream when `CORE_ENGINE_LIVE_ENABLED=false`** (cleanest), OR add exponential backoff to its reconnect loop (mirror the market-feed fix `dd087f6`, cap ~300s). Files: find `upstox_portfolio_stream` (likely `brokers/upstox_gateway.py` or a dedicated stream module) + its startup wiring in `server.py`. Acceptance: 401 log rate → ~0, backend CPU baseline drops. Removes most of OPS-02 pressure too.
+- `[ ]` **OPS-02 (P2) — 429 rate-limiting on `/v2/market-quote/ltp`** (~15/min, 231 in 15m). Tolerated today (MTM stays fresh, 0 mock fallbacks) but wasteful; partly caused by OPS-01 contention. Recheck after OPS-01 lands; if still present, add quote batching/throttle on the monitor+guardian quote path.
+- `[ ]` **OPS-03 (P3) — RELIANCE Trend Rider orphaned-paused.** `status=paused` but `manual_paused=false` AND `schedule_paused=false` → the 9AM scheduler won't auto-restore it (it only reactivates `schedule_paused`), so it sits idle. Known from prior sessions ([[project_wr31_eq05_wr33_07_01]], [[project_debit_spread_triage_07_01]]). Fix: flip `status` to `live` (or set `schedule_paused=true` so the scheduler adopts it). Verify it's actually a strategy we want live first.
+- `[ ]` **OPS-04 (P3) — Hermes Telegram alerts 404.** `.env.hermes` bot token/chat_id is still a placeholder → every `[TELEGRAM] Send failed 404`. Alerts undelivered (doesn't affect trading). Known ([[ops_hermes_creds_and_core_status_bug]]). Fix: real bot token + chat_id, then force-recreate hermes (restart won't reload env_file).
+- `[ ]` **OPS-05 (P3, verify only) — wallet vs realized-P&L reconcile.** Wallet ₹467,824 (Δ −32,176 from 500k start) vs all-time `trade_fills` realized −₹56,174 don't tie out. Almost certainly benign — wallet was reset to 500k at the 06-25 research epoch (post-dates many fills) + 7 open positions have capital reserved. Confirm: Σ realized_pnl of fills since 2026-06-25 + open reserved capital ≈ (500k − balance). If it reconciles, close this; if not, investigate residual phantom-credit.
+
 ---
 
 ## PRIORITY 0 — Win-Rate & Expectancy Campaign (2026-06-22)
