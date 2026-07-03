@@ -7,9 +7,21 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
-## CURRENT STATE & ACTIVE QUEUE (updated 2026-06-30)
+## CURRENT STATE & ACTIVE QUEUE (updated 2026-07-04)
 
-**App reality now:** Paper mode (`CORE_ENGINE_LIVE_ENABLED=false`). ~24 strategies live — index options (single-leg + **credit/debit spreads**) and **equity (10 NSE_EQ on the real Upstox V3 feed)**. Truth-bearing P&L source is `db.trade_fills`; the paper wallet now **self-heals to that ledger at EOD** (phantom-money drift is structurally eliminated). Day-level **profit-lock** (`core/profit_lock.py`) + **daily-loss kill-switch** (`core/loss_killswitch.py`) + **directional-exposure cap** are all live.
+**⭐ HEADLINE (2026-07-04): the data wall is broken, and the OOS verdict is in — the current book has NO EDGE.**
+2 years of real NSE option prices are ingested (`backend/scripts/bhavcopy_ingest.py`, 494 days, ~2.5M rows) and the EOD OOS validator (`backend/core/eod_options_backtest.py`) graded the whole book: **0 of 11 option strategies are positive out-of-sample**; a **72-config sweep found 0 winners**. Corroborates live ~−₹86/trade. This UNBLOCKS old `WR-71` (real options-chain backtest) and completes the data layer for HSI Stage 4. See CLAUDE.md §13.
+
+**🚫 NEW LAW (supersedes daily tweaking):** do NOT tune the existing strategies. Every strategy change / new strategy must PASS the OOS validator first. Discipline: hypothesis → OOS backtest → forward-paper → live. Grade ideas on OOS expectancy, not daily paper P&L.
+
+**▶ NEW ACTIVE PROGRAM — Edge Discovery & Book Rebuild (EDR):**
+- `[ ]` **EDR-01** Base-rate studies on the bhavcopy data (short-vol vs long-vol; ATM straddle-to-expiry; iron-condor-in-RANGE; underlying daily trend) — find WHERE edge could live before building. Tier 3.
+- `[ ]` **EDR-02** Design NEW option strategies from EDR-01 findings; each must pass `run_oos_validation.py` (CANDIDATE_EDGE, 30+ trades, positive OOS). Tier 3.
+- `[ ]` **EDR-03** Archive + de-template the 11 dead option strategies + 10 equity (touch-points in CLAUDE.md §13). Off-hours, one commit + rebuild, PAIRED with EDR-02 replacements so the book isn't emptied. Update catalog tests. Tier 3.
+- `[ ]` **EDR-04** Bake the research modules (`bhavcopy_store`, `eod_options_backtest`, `run_*`) into the backend image on next off-hours rebuild (currently `docker cp`'d for ad-hoc runs); ship `/app/data/bhavcopy_fo`. Tier 2.
+- `[ ]` **EDR-05** (data gap) BSE SENSEX/BANKEX bhavcopy is Akamai-gated — needs a browser/manual fetch; and equity needs NSE_EQ stock EOD data before equity can be backtested/rebuilt. Tier 2.
+
+**App reality now:** Paper mode (`CORE_ENGINE_LIVE_ENABLED=false`). ~24 strategies live but **none proven** — index options (single-leg + credit/debit spreads) + equity (10 NSE_EQ). Truth-bearing P&L source is `db.trade_fills`; the paper wallet self-heals to that ledger at EOD. Profit-lock + daily-loss kill-switch + directional-exposure cap all live.
 
 **Shipped 2026-06-30 (this session — all deployed to VPS):**
 - `[x]` **FIX-01** Phantom-wallet ROOT CAUSE fixed: equity exits were sized as fresh capital-based SELL orders (e.g. 29 sh sold vs 17 held) → wallet over-credited ~₹160k of fake "profit" while real P&L was negative. Equity exits now route through `close_strategy_fn` (reduce-only, sells `open_quantity`). `ff4fd58` + wallet reset to clean ₹500k.
@@ -40,7 +52,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 **📈 Win-Rate / Expectancy (open remainder — deduped 2026-07-02)**
 - Open: `WR-33` deferred (re-open only per AR-08 evidence) · `WR-45` correlation matrix · `WR-51` risk sizing *(after AR-08)* · `WR-54` auto-pause *(⛔ gated on AR-01/AR-08)*. **Folded 07-02:** `WR-42`/`WR-43` → AR-07/AR-08 · `WR-44`/`WR-72` → HSI-41..44.
-- Bigger builds: `WR-71` real options-chain backtest *(⛔ blocked: Upstox expired-option data)* · `WR-73` enable live on 2–3 proven *(founder gate — requires AR-08 green + OOS pass)*
+- Bigger builds: `WR-71` real options-chain backtest **✅ UNBLOCKED + DONE 2026-07-04** (free NSE bhavcopy replaced the Upstox expired-option 404 wall; EOD OOS validator shipped — see EDR program above) · `WR-73` enable live on 2–3 proven *(founder gate — now also requires an OOS `CANDIDATE_EDGE`, which NO current strategy has)*
 
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 

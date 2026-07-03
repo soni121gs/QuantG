@@ -18,10 +18,13 @@ QuantG is an NSE/BSE options algo-trading platform.
 ### Current Mode
 Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=false` in docker-compose.yml.
 
-### Current Operational State (updated 2026-06-22)
-- **Equity is LIVE on real data (paper).** 10 NSE_EQ strategies (RELIANCE, TCS, HDFCBANK, INFY, ICICIBANK, SBIN, AXISBANK, BHARTIARTL, KOTAKBANK, LT) trade alongside the options strategies (~24 live total). All earlier equity phantom/mock bugs are FIXED — do NOT re-apply old "equity is phantom / don't re-enable" cautions. Equity strategies use a **trend re-entry** patch in their `python_code` (re-emit the entry signal while the trend persists, so they trade more than once-at-open).
-- **Data-gathering phase tuning:** per-class daily trade caps raised (`trade_frequency._CLASS_CAPS`, default 6→20 etc.); spread `required_capital` cut to ~₹8k so spreads size to ~1–4 lots (was 4–17). These are config choices for collecting trade data, not defaults to assume elsewhere.
-- Feed/quotes, spreads, and equity all run on the real Upstox V3 + REST path — see Common Pitfalls (§6) for the colon-vs-pipe, spread-sizing, guardian-skip, and equity-candle gotchas learned here.
+### Current Operational State (updated 2026-07-04)
+- **The data wall is BROKEN and the current book has NO PROVEN EDGE.** As of 2026-07-04 we can backtest option strategies on 2 years of real NSE prices (see §13). The OOS validator's verdict: **0 of 11 option strategies show an out-of-sample edge** — every real-sample strategy is `NO_EDGE_NEGATIVE` (e.g. NIFTY Theta Credit Spread −₹873/trade over 116 trades, −₹83.6k in 2025 OOS). A 72-config sweep found **0 configs** that cross positive OOS. This corroborates the live book's ~−₹86/trade. The "winning theta cluster" was small-sample illusion. **Do not tune these strategies further — that is the treadmill.**
+- **NEW OPERATING DISCIPLINE (this supersedes daily strategy-tweaking):** hypothesis → **OOS backtest** (§13) → forward-paper → live. Nothing is "working" until it has 30+ trades AND survives out-of-sample. Grade *ideas* on OOS expectancy, not daily paper P&L (which is noise at ~13 trades/day). New strategies must PASS the OOS validator before deploy.
+- **Planned cleanup (not yet executed):** archive + de-template the 11 dead option strategies + 10 equity strategies (kept in code templates; a DB delete alone re-seeds — see removal touch-points in §13). Pair removal with validated NEW strategies so the book is never left empty. Do off-hours as one commit + backend rebuild; the catalog tests will need updating.
+- **Equity is LIVE on real data (paper)** — 10 NSE_EQ strategies. Their phantom/mock bugs are FIXED (do NOT re-apply old "equity is phantom" cautions). BUT they cannot yet be backtested (index-only bhavcopy data; stock EOD data not fetched) and their live record is loss. Candidates for removal/rework, not tuning.
+- **Data-gathering phase tuning** (caps, spread `required_capital`) remains as config, but its purpose (collect trade data) is now largely served — the historical bhavcopy backtest replaces slow live data-gathering for edge discovery.
+- Feed/quotes/spreads/equity run on the real Upstox V3 + REST path — see Common Pitfalls (§6).
 
 ---
 
@@ -68,6 +71,11 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Reverse proxy config | `Caddyfile` |
 | Hermes sidecar engine | `hermes/agent.py` (watchdog alert loop, pre-market readiness, EOD report) |
 | Hermes deployment runbook | `docs/DEPLOY_HERMES.md` |
+| **EOD options-history ingest (bhavcopy)** | `backend/scripts/bhavcopy_ingest.py` (NSE + BSE UDiFF → gz store) |
+| **Bhavcopy store reader** (OHLC + option chains) | `backend/core/bhavcopy_store.py` |
+| **EOD options backtester + walk-forward OOS** | `backend/core/eod_options_backtest.py` |
+| **OOS validation scorecard** (per strategy) | `backend/scripts/run_oos_validation.py` |
+| **Edge-search sweep** (config grid → OOS) | `backend/scripts/run_edge_sweep.py` |
 
 ---
 
@@ -675,3 +683,35 @@ QuantG features a bidirectional Knowledge Hub synchronizing markdown files with 
 - **Wikilinks**: Standard double-bracket `[[Page Title]]` references are parsed to calculate backlinks dynamically (backlinks populate under "See Also" sections).
 - **Disk Sync**: The edge container mounts the host `./wiki` folder so Obsidian edits are synchronized live.
 
+
+---
+
+## 13. Strategy Research — OOS Backtesting Discipline (added 2026-07-04)
+
+**This section is now the governing law for strategy work. It supersedes the old "notice a red day → tweak a strategy → deploy" loop.**
+
+### 13.1 The data wall is solved
+Upstox 404s on expired-option history made option backtesting impossible for months (old blocker `WR-71`). Fixed 2026-07-04: NSE publishes a free daily F&O bhavcopy (UDiFF) with per-contract EOD OHLC, **settlement price**, underlying price, OI and volume for every index derivative. `backend/scripts/bhavcopy_ingest.py` downloads + filters it to a gzipped per-day store at `/opt/QuantG/data/bhavcopy_fo/<year>/`. Backfilled **2024-01-01 → 2025-12-31 (494 trading days, ~2.5M option rows)**. SENSEX/BANKEX are BSE (Akamai-gated — not fetched; the one data gap).
+
+### 13.2 The tools
+- `core/bhavcopy_store.py` — reads the store → daily underlying OHLC (from index futures) + option chains (settle prices).
+- `core/eod_options_backtest.py` — prices the live structures (single_leg/credit/debit spread) **settle-to-settle, daily granularity**, modelling theta decay, expiry settlement, brokerage + 3% adverse slippage/leg. `walk_forward()` splits per-YEAR (OOS = latest) + per-MONTH → verdict: `CANDIDATE_EDGE` / `FRAGILE` / `NO_EDGE_NEGATIVE` / `INSUFFICIENT_DATA`. `run(params=)` overrides tp/sl/width/DTE for sweeps.
+- `scripts/run_oos_validation.py` — per-strategy scorecard. `scripts/run_edge_sweep.py` — config grid → OOS.
+- Run: `docker exec quantg-backend python /app/scripts/run_oos_validation.py`. (Modules are `docker cp`'d into the running container for ad-hoc runs; **bake them into the image on the next off-hours rebuild** so they ship normally. Data must be at `/app/data/bhavcopy_fo` inside the container.)
+
+### 13.3 Honest limits
+Daily granularity + multi-day hold (2–10 DTE) ≠ the live intraday hold; intraday VWAP degenerates on daily bars. So this validates **signal + structure held to theta**, not tick-perfect intraday execution — but it AGREES with live P&L, so the convergence is the signal. It cannot backtest scalpers (need paid 1-min data; those are the losing cluster anyway) or equity (index-only data).
+
+### 13.4 The verdict (2026-07-04) and what it means
+**0 of 11 option strategies have an OOS edge. 0 of 72 swept configs cross positive OOS.** The credit-spread exit geometry (risk 100% of credit to make 50%) is structurally negative — it needs ~67% WR and runs 33–48%. **Do not tune the existing book.** Archive the dead strategies (§ removal touch-points below) and design NEW hypotheses that PASS the validator.
+
+### 13.5 The discipline (mandatory for any new strategy)
+```
+hypothesis → OOS backtest (run_oos_validation / run_edge_sweep) → forward-paper (3–6 wks) → live pilot
+```
+- Nothing is "working" until it has **30+ trades AND positive out-of-sample**.
+- Grade IDEAS on OOS expectancy, not daily paper P&L (noise at ~13 trades/day).
+- Before building, run the **base-rate studies** first (short-vol vs long-vol, straddle-to-expiry, condor-in-range, underlying trend) so new strategies come FROM what the data shows, not from intuition.
+
+### 13.6 Removing a dead strategy (touch-points — a DB delete alone re-seeds)
+Strategies are re-created from CODE templates in `server.py` on startup. To remove one: (1) its dict in `DEFAULT_OPTION_STRATEGIES` (:~3394) or `STANDARD_STRATEGY_CATALOG` (:~5950); (2) `UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME` (:~5991); (3) `STRATEGY_DISPLAY_NAME_RENAMES`; (4) `CREDIT_SPREAD_THETA_NAMES` (:~1536); (5) `EQUITY_CAPITAL_TIERS` (:~1562); (6) `_debit_names`/`_credit_names` migrations (:~16914/16949); (7) DB: set `status="archived"` (preferred over delete — keeps P&L history); (8) update the catalog tests. Do it off-hours as one commit + rebuild, paired with validated replacements.

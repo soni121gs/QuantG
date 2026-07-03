@@ -27,6 +27,8 @@ QuantG is an NSE options algo-trading platform running on a VPS (82.180.145.183)
 - **Mode right now**: Paper trading. Live trading is disabled (`CORE_ENGINE_LIVE_ENABLED=false`).
 - **Equity is LIVE on real data (paper)** as of 2026-06-22 — 10 NSE_EQ strategies trade alongside options (~24 live total). Old "equity is phantom / don't re-enable" cautions are obsolete; do NOT re-apply them. Equity strategies carry a trend re-entry patch in their `python_code`.
 - **P&L is now REAL (2026-06-30)**: the recurring phantom-wallet over-credit class is fixed (equity exits are reduce-only) AND guarded — `PaperWallet.reconcile_if_flat` snaps the wallet to `initial + Σ realized_pnl` at EOD and logs CRITICAL on any drift. The truth source is `db.trade_fills`; **never compute P&L from the wallet balance alone**. A **directional-exposure cap** (`MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING`) limits same-side concentration per underlying.
+- **OOS BACKTESTING now exists + the current book has NO EDGE (2026-07-04)**: 2 years of real NSE option prices are ingested (`backend/scripts/bhavcopy_ingest.py`), and the OOS validator (`backend/core/eod_options_backtest.py`) graded every strategy — **0 of 11 have an out-of-sample edge**; a 72-config sweep found 0 winners. See CLAUDE.md §13.
+- **🚫 GOVERNING RULE: do NOT tweak/tune the existing strategies.** That is the treadmill and it's proven futile. Any strategy change or new strategy MUST pass the OOS validator (`run_oos_validation.py` / `run_edge_sweep.py`) before deploy. Discipline: hypothesis → OOS backtest → forward-paper → live. Grade IDEAS on OOS expectancy, not daily paper P&L.
 - **Database**: MongoDB at `mongodb://mongo:27017`, db name `quantg`.
 
 For full architecture details → see `CLAUDE.md`.
