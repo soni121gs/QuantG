@@ -93,8 +93,13 @@ class BhavcopyStore:
             # near-month = nearest expiry >= day (fallback: earliest available)
             futs.sort(key=lambda r: r.get("expiry", ""))
             near = next((r for r in futs if r.get("expiry", "") >= day), futs[0])
+            # Stamp the single daily bar at a midday time so strategies' intraday
+            # time-of-day gates (e.g. 09:30–14:15) pass — at daily granularity that
+            # clock filter is a no-op by design; we evaluate the daily trend/regime
+            # once per day. Intraday VWAP (which resets per day) degenerates to the
+            # bar's typical price and is effectively neutral here.
             out.append({
-                "date": f"{day} 15:25",
+                "date": f"{day} 11:00",
                 "open": _f(near["open"]), "high": _f(near["high"]),
                 "low": _f(near["low"]), "close": _f(near["close"]),
                 "volume": int(_f(near["volume"])),
