@@ -154,19 +154,72 @@ def daterange(start: date, end: date):
         d += timedelta(days=1)
 
 
+def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwrite: bool) -> None:
+    """Parse pre-downloaded bhavcopy .zip files (any source) into the gz store.
+    Filenames must contain the 8-digit trading date (YYYYMMDD). Robust to
+    non-zip files (skips them). Use this for BSE SENSEX/BANKEX, which the
+    automated downloader cannot reach (Akamai bot-gate)."""
+    import glob as _glob
+    import re as _re
+    files = sorted(_glob.glob(os.path.join(zip_dir, "*.zip")) + _glob.glob(os.path.join(zip_dir, "*.ZIP")))
+    print(f"ingest-from-zips: {len(files)} zip(s) in {zip_dir}")
+    print(f"underlyings: {sorted(underlyings)}  store: {STORE_ROOT}\n")
+    written = skipped = bad = total_rows = 0
+    for path in files:
+        m = _re.search(r"(\d{8})", os.path.basename(path))
+        if not m:
+            print(f"  ?? no date in filename, skipped: {os.path.basename(path)}")
+            continue
+        d = date(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:8]))
+        if os.path.exists(out_path(d, prefix)) and not overwrite:
+            skipped += 1
+            continue
+        try:
+            with open(path, "rb") as f:
+                blob = f.read()
+            if blob[:2] != b"PK":
+                bad += 1
+                print(f"  !! not a zip (Akamai HTML?), skipped: {os.path.basename(path)}")
+                continue
+            rows = parse_and_filter(blob, underlyings)
+        except Exception as exc:  # noqa: BLE001
+            bad += 1
+            print(f"  !! failed {os.path.basename(path)}: {exc}")
+            continue
+        if not rows:
+            print(f"  ~~ {d}: no matching underlyings in file")
+            continue
+        write_day(d, prefix, rows)
+        written += 1
+        total_rows += len(rows)
+        print(f"  {d}  rows={len(rows):>5}  -> {os.path.relpath(out_path(d, prefix), STORE_ROOT)}")
+    print(f"\nDONE. written={written} already_had={skipped} bad={bad} total_rows={total_rows}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("start", help="YYYY-MM-DD")
-    ap.add_argument("end", help="YYYY-MM-DD")
+    ap.add_argument("start", nargs="?", help="YYYY-MM-DD (omit with --from-zips)")
+    ap.add_argument("end", nargs="?", help="YYYY-MM-DD (omit with --from-zips)")
     ap.add_argument("--source", choices=list(SOURCES), default="nse")
     ap.add_argument("--underlyings", default="", help="override (comma-sep); default = source's set")
     ap.add_argument("--overwrite", action="store_true", help="re-download days already stored")
+    ap.add_argument("--from-zips", default=None, metavar="DIR",
+                    help="ingest pre-downloaded bhavcopy .zip files from DIR instead of downloading "
+                         "(for BSE/SENSEX, which is Akamai-gated: fetch the zips in a real browser, "
+                         "drop them in DIR, then run this). Zip filenames must contain the 8-digit date.")
     args = ap.parse_args()
 
     src = SOURCES[args.source]
     prefix = src["prefix"]
     underlyings = ({u.strip().upper() for u in args.underlyings.split(",") if u.strip()}
                    or set(src["underlyings"]))
+
+    if args.from_zips:
+        _ingest_local_zips(args.from_zips, prefix, underlyings, args.overwrite)
+        return
+
+    if not args.start or not args.end:
+        ap.error("start and end dates are required unless --from-zips is used")
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
 

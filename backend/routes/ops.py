@@ -206,6 +206,58 @@ async def ops_options_backtest(
     return {"count": len(results), "results": results}
 
 
+@router.post("/eod-options-backtest")
+async def ops_eod_options_backtest(
+    strategy_id: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    """Out-of-sample backtest over the FREE NSE bhavcopy store (2 years of real EOD
+    option settlement prices) — the engine that answers 'does this strategy have an
+    edge?'. Prices single_leg/credit/debit spreads settle-to-settle with theta,
+    expiry, brokerage + slippage; returns a per-year (OOS=latest) walk-forward
+    verdict (CANDIDATE_EDGE / FRAGILE / NO_EDGE_NEGATIVE / INSUFFICIENT_DATA).
+    Omit strategy_id to grade all the caller's option strategies. Read-only.
+
+    Requires the bhavcopy store mounted at /app/data/bhavcopy_fo (docker-compose
+    volume) — returns an empty result with `data_available=false` if absent."""
+    import asyncio
+    from core.eod_options_backtest import EODOptionsBacktest, walk_forward
+    from core.bhavcopy_store import BhavcopyStore
+
+    store = BhavcopyStore()
+    days = await asyncio.to_thread(store.trading_days)
+    if not days:
+        return {"data_available": False, "count": 0, "results": [],
+                "hint": "bhavcopy store empty — run scripts/bhavcopy_ingest.py and mount /app/data/bhavcopy_fo"}
+
+    engine = EODOptionsBacktest(store)
+    query: Dict[str, Any] = {"user_id": user["id"], "python_code": {"$nin": [None, ""]}}
+    if strategy_id:
+        query["id"] = strategy_id
+    results: List[Dict[str, Any]] = []
+    async for strat in db.strategies.find(query):
+        res = await asyncio.to_thread(engine.run, strat, start, end)
+        if res.get("error"):
+            results.append({"name": strat.get("name"), "error": res["error"]})
+            continue
+        wf = walk_forward(res)
+        row = {"name": res.get("name"), "underlying": res.get("underlying"),
+               "structure": res.get("structure"), "verdict": wf["verdict"],
+               "overall": wf["overall"], "oos_year": wf.get("oos_year"),
+               "oos": wf.get("oos"), "pct_green_months": wf.get("pct_green_months")}
+        if strategy_id:
+            row["trades"] = res.get("trades")
+            row["by_year"] = wf.get("by_year")
+        results.append(row)
+
+    order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
+    results.sort(key=lambda r: order.get(r.get("verdict", ""), 9))
+    return {"data_available": True, "window": {"start": days[0], "end": days[-1], "n_days": len(days)},
+            "count": len(results), "results": results}
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,

@@ -93,6 +93,9 @@ services:
     volumes:
       - backend-state:/data
       - ./wiki:/app/wiki
+      # Free EOD options-history store (bhavcopy) for the OOS backtester.
+      # Read-only; populated on the host by scripts/bhavcopy_ingest.py.
+      - ./data/bhavcopy_fo:/app/data/bhavcopy_fo:ro
     depends_on:
       mongo:
         condition: service_healthy
