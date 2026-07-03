@@ -51,7 +51,10 @@ SOURCES = {
         "referer": "https://www.nseindia.com/",
     },
     "bse": {
-        "url": "https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{d}_F_0000.CSV.zip",
+        # BSE now serves the F&O UDiFF bhavcopy as a PLAIN .CSV (not zipped), and
+        # it is Akamai-gated — use bse_bhavcopy_download.js on a real desktop, then
+        # `--from-zips ./bse_csv`. This direct URL is kept for reference/parity.
+        "url": "https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{d}_F_0000.CSV",
         "underlyings": {"SENSEX", "BANKEX", "SENSEX50"},
         "prefix": "BhavCopy_BSE_FO_",
         "referer": "https://www.bseindia.com/markets/Derivatives/DeriReports.aspx",
@@ -107,6 +110,12 @@ def download(d: date, src: dict, retries: int = 3) -> bytes | None:
 def parse_and_filter(zip_bytes: bytes, underlyings: set[str]) -> list[dict]:
     z = zipfile.ZipFile(io.BytesIO(zip_bytes))
     raw = z.read(z.namelist()[0]).decode("utf-8", "replace")
+    return parse_udiff_csv(raw, underlyings)
+
+
+def parse_udiff_csv(raw: str, underlyings: set[str]) -> list[dict]:
+    """Parse a raw UDiFF bhavcopy CSV (NSE or BSE — same common format). BSE now
+    serves the F&O bhavcopy as a plain .CSV (not zipped)."""
     reader = csv.DictReader(io.StringIO(raw))
     out = []
     for row in reader:
@@ -161,8 +170,11 @@ def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwri
     automated downloader cannot reach (Akamai bot-gate)."""
     import glob as _glob
     import re as _re
-    files = sorted(_glob.glob(os.path.join(zip_dir, "*.zip")) + _glob.glob(os.path.join(zip_dir, "*.ZIP")))
-    print(f"ingest-from-zips: {len(files)} zip(s) in {zip_dir}")
+    files = sorted(set(
+        _glob.glob(os.path.join(zip_dir, "*.zip")) + _glob.glob(os.path.join(zip_dir, "*.ZIP"))
+        + _glob.glob(os.path.join(zip_dir, "*.csv")) + _glob.glob(os.path.join(zip_dir, "*.CSV"))
+    ))
+    print(f"ingest-from-files: {len(files)} file(s) in {zip_dir}")
     print(f"underlyings: {sorted(underlyings)}  store: {STORE_ROOT}\n")
     written = skipped = bad = total_rows = 0
     for path in files:
@@ -170,18 +182,25 @@ def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwri
         if not m:
             print(f"  ?? no date in filename, skipped: {os.path.basename(path)}")
             continue
-        d = date(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:8]))
+        g = m.group(1)
+        # filenames may be YYYYMMDD or DDMMYYYY — detect by which end is a valid year
+        y = g[:4] if g[:2] in ("19", "20") else g[4:8]
+        mo, dy = (g[4:6], g[6:8]) if g[:2] in ("19", "20") else (g[2:4], g[0:2])
+        d = date(int(y), int(mo), int(dy))
         if os.path.exists(out_path(d, prefix)) and not overwrite:
             skipped += 1
             continue
         try:
             with open(path, "rb") as f:
                 blob = f.read()
-            if blob[:2] != b"PK":
+            if blob[:2] == b"PK":                       # zipped bhavcopy
+                rows = parse_and_filter(blob, underlyings)
+            elif blob[:4] in (b"Trad", b"\xef\xbb\xbfT"):  # plain UDiFF CSV (BSE now serves this)
+                rows = parse_udiff_csv(blob.decode("utf-8", "replace"), underlyings)
+            else:
                 bad += 1
-                print(f"  !! not a zip (Akamai HTML?), skipped: {os.path.basename(path)}")
+                print(f"  !! not a bhavcopy (HTML/error page?), skipped: {os.path.basename(path)}")
                 continue
-            rows = parse_and_filter(blob, underlyings)
         except Exception as exc:  # noqa: BLE001
             bad += 1
             print(f"  !! failed {os.path.basename(path)}: {exc}")
