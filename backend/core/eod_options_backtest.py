@@ -46,12 +46,13 @@ def _dte(entry_day: str, expiry: str) -> int:
         return 9999
 
 
-def _pick_expiry(store: BhavcopyStore, u: str, day: str) -> Optional[str]:
+def _pick_expiry(store: BhavcopyStore, u: str, day: str,
+                 min_dte: int = MIN_DTE_DAYS, max_dte: int = MAX_DTE_DAYS) -> Optional[str]:
     exps = store.expiries(u, day)
-    weeklies = [e for e in exps if MIN_DTE_DAYS <= _dte(day, e) <= MAX_DTE_DAYS]
+    weeklies = [e for e in exps if min_dte <= _dte(day, e) <= max_dte]
     if weeklies:
         return min(weeklies, key=lambda e: _dte(day, e))
-    future = [e for e in exps if _dte(day, e) >= MIN_DTE_DAYS]
+    future = [e for e in exps if _dte(day, e) >= min_dte]
     return min(future, key=lambda e: _dte(day, e)) if future else None
 
 
@@ -71,17 +72,23 @@ class EODOptionsBacktest:
         self.store = store or BhavcopyStore()
 
     def run(self, strategy: Dict[str, Any], start: Optional[str] = None,
-            end: Optional[str] = None, starting_capital: float = 100_000.0) -> Dict[str, Any]:
+            end: Optional[str] = None, starting_capital: float = 100_000.0,
+            params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """`params` (optional) overrides config for edge-search sweeps:
+        credit_tp / credit_sl (spread exit geometry), debit_tp / debit_sl,
+        width (strikes), min_dte / max_dte (expiry choice), max_hold_days."""
+        p = params or {}
+        self._p = p
         vc = strategy.get("visual_config") or {}
         opt = vc.get("options") or {}
         risk = vc.get("risk") or {}
         u = (opt.get("underlying") or vc.get("symbol") or "NIFTY").upper()
         structure = opt.get("structure") or "single_leg"
         lots = int(opt.get("lots") or 1)
-        width = int(opt.get("spread_width") or 2)
+        width = int(p.get("width") or opt.get("spread_width") or 2)
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
-        max_hold_days = int(risk.get("max_hold_days") or MAX_DTE_DAYS)
+        max_hold_days = int(p.get("max_hold_days") or risk.get("max_hold_days") or MAX_DTE_DAYS)
 
         candles = self.store.underlying_daily(u, start, end)
         if len(candles) < 40:
@@ -158,7 +165,10 @@ class EODOptionsBacktest:
 
     # ---- structure open / value / close --------------------------------------
     def _open(self, sig, u, day, idx, spot, structure, width, tp_pct, sl_pct):
-        expiry = _pick_expiry(self.store, u, day)
+        p = getattr(self, "_p", {}) or {}
+        expiry = _pick_expiry(self.store, u, day,
+                              int(p.get("min_dte") or MIN_DTE_DAYS),
+                              int(p.get("max_dte") or MAX_DTE_DAYS))
         if not expiry:
             return None
         chain = self.store.option_chain(u, day).get(expiry, {})
@@ -197,7 +207,8 @@ class EODOptionsBacktest:
                 return None
             return {"kind": "credit", "structure": structure, "u": u, "expiry": expiry,
                     "short_k": short_k, "long_k": long_k, "typ": typ,
-                    "entry_basis": credit, "entry_ref": credit, "tp": 0.5, "sl": 1.0,
+                    "entry_basis": credit, "entry_ref": credit,
+                    "tp": float(p.get("credit_tp", 0.5)), "sl": float(p.get("credit_sl", 1.0)),
                     "entry_idx": idx, "entry_day": day,
                     "desc": f"SELL {short_k:.0f}/{long_k:.0f}{typ} credit={credit:.1f}"}
 
