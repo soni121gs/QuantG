@@ -126,12 +126,31 @@ class BhavcopyStore:
 
     def leg_settle(self, underlying: str, day: str, expiry: str, strike: float,
                    opt_type: str) -> Optional[float]:
-        """EOD settlement premium for one contract, or None if it did not trade /
-        does not exist that day. Falls back to close if settle is blank."""
+        """EOD option premium (mark) for one contract. Returns None only when the
+        contract is absent that day; returns 0.0 for a contract that expired
+        worthless (a valid price).
+
+        Uses `close` (last traded premium) as the primary mark. On EXPIRY day
+        NSE's UDiFF overwrites the option `settle` column with the UNDERLYING
+        settlement price (not the premium), so `settle` is only trusted as a
+        fallback when it is a plausible option premium (>0 and < spot)."""
         chain = self.option_chain(underlying, day)
-        node = chain.get(expiry, {}).get(strike, {})
-        row = node.get(opt_type)
+        row = chain.get(expiry, {}).get(strike, {}).get(opt_type)
         if not row:
             return None
-        px = _f(row.get("settle")) or _f(row.get("close"))
-        return px if px > 0 else None
+        close = _f(row.get("close"))
+        if close > 0:
+            return close
+        settle = _f(row.get("settle"))
+        spot = _f(row.get("underlying_price"))
+        if 0 < settle < spot:            # reject the expiry-day spot placeholder
+            return settle
+        return 0.0                        # traded/settled worthless
+
+    def leg_lot_size(self, underlying: str, day: str, expiry: str, strike: float,
+                     opt_type: str) -> Optional[int]:
+        row = self.option_chain(underlying, day).get(expiry, {}).get(strike, {}).get(opt_type)
+        if not row:
+            return None
+        lot = int(_f(row.get("lot_size")))
+        return lot or None

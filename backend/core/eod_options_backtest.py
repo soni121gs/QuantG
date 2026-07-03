@@ -78,7 +78,6 @@ class EODOptionsBacktest:
         u = (opt.get("underlying") or vc.get("symbol") or "NIFTY").upper()
         structure = opt.get("structure") or "single_leg"
         lots = int(opt.get("lots") or 1)
-        lot = LOT_SIZES.get(u, 50) * lots
         width = int(opt.get("spread_width") or 2)
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
@@ -128,7 +127,7 @@ class EODOptionsBacktest:
                     elif held >= max_hold_days:
                         reason = reason or "TIME_EXIT"
                 if reason and val is not None:
-                    self._close(active, day, val, lot, reason, trades)
+                    self._close(active, day, val, reason, trades)
                     active = None
 
             # ---- look for entry ----
@@ -136,12 +135,16 @@ class EODOptionsBacktest:
                 pos = self._open(sig_days[day], u, day, i, close_by_day[day],
                                  structure, width, tp_pct, sl_pct)
                 if pos:
+                    ref_k = pos.get("short_k") or pos["legs"][0][1]
+                    ref_typ = pos.get("typ") or pos["legs"][0][2]
+                    real_lot = self.store.leg_lot_size(u, day, pos["expiry"], ref_k, ref_typ)
+                    pos["lot"] = (real_lot or LOT_SIZES.get(u, 50)) * lots
                     active = pos
 
         if active:  # close hanging at last day
             val = self._value(active, u, days[-1])
             if val is not None:
-                self._close(active, days[-1], val, lot, "FORCE_CLOSE_END", trades)
+                self._close(active, days[-1], val, "FORCE_CLOSE_END", trades)
 
         pnls = [t["pnl"] for t in trades]
         metrics = compute_metrics(pnls, starting_capital=starting_capital)
@@ -230,14 +233,14 @@ class EODOptionsBacktest:
             return _fill(short_px, "BUY") - _fill(long_px, "SELL")   # buy back short, sell long
         return _fill(long_px, "SELL") - _fill(short_px, "BUY")       # debit: sell long, buy back short
 
-    def _close(self, pos, day, val, lot, reason, trades):
+    def _close(self, pos, day, val, reason, trades):
         s = pos["structure"]
         if s == "credit_spread":
             pnl_per_unit = pos["entry_basis"] - val
         else:
             pnl_per_unit = val - pos["entry_basis"]
         legs = 1 if s == "single_leg" else 2
-        gross = pnl_per_unit * lot
+        gross = pnl_per_unit * pos["lot"]
         costs = BROKERAGE_PER_LEG * legs * 2
         trades.append({
             "structure": s, "desc": pos["desc"], "entry_date": pos["entry_day"], "exit_date": day,
