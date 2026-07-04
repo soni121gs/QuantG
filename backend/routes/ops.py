@@ -301,6 +301,56 @@ async def ops_edge_lab_refresh(user=Depends(get_current_user)):
     return {"status": "building", "already_running": False}
 
 
+class EdgeLabProposeReq(BaseModel):
+    underlying: str = "NIFTY"
+    structure: str = "credit_spread"        # single_leg / credit_spread / debit_spread / iron_condor
+    direction: str = "bullish"              # bullish → BUY (put spread); bearish → SELL (call spread)
+    short_otm_pct: float = 0.03
+    wing_width: int = 6
+    spread_width: int = 6
+    min_dte: int = 2
+    max_dte: int = 8
+    exit_mode: str = "expiry"               # expiry (hold to expiry) | "" (intraday tp/sl)
+    credit_tp: float = 0.5
+    credit_sl: float = 1.0
+
+
+@router.post("/edge-lab/propose")
+async def ops_edge_lab_propose(req: EdgeLabProposeReq, user=Depends(get_current_user)):
+    """FE-04: OOS-test a hypothetical option structure BEFORE seeding it live. Builds a
+    synthetic strategy from the requested structure/strikes/DTE, runs it through the
+    walk-forward bhavcopy backtester, and returns the honest verdict. This is the
+    OOS-first discipline as a one-click tool — nothing is seeded, read-only."""
+    from core.eod_options_backtest import EODOptionsBacktest, walk_forward
+    from core.bhavcopy_store import BhavcopyStore
+
+    store = BhavcopyStore()
+    days = await asyncio.to_thread(store.trading_days)
+    if not days:
+        return {"error": "bhavcopy store empty — no data to backtest"}
+    action = "BUY" if req.direction == "bullish" else "SELL"
+    code = ("def run(data):\n"
+            f"    return [{{'date': c['date'], 'action': '{action}'}} for c in data]\n")
+    strat = {"id": "propose", "name": "Proposed", "python_code": code,
+             "visual_config": {"symbol": req.underlying, "options": {
+                 "underlying": req.underlying, "structure": req.structure,
+                 "short_otm_pct": req.short_otm_pct, "wing_width": req.wing_width,
+                 "spread_width": req.spread_width, "exit_mode": req.exit_mode}}}
+    params = {"short_otm_pct": req.short_otm_pct, "wing_width": req.wing_width,
+              "width": req.spread_width, "min_dte": req.min_dte, "max_dte": req.max_dte,
+              "max_hold_days": req.max_dte, "exit_mode": req.exit_mode,
+              "credit_tp": req.credit_tp, "credit_sl": req.credit_sl}
+    res = await asyncio.to_thread(
+        EODOptionsBacktest(store).run, strat, None, None, 100_000.0, params)
+    if res.get("error"):
+        return {"error": res["error"], "config": req.dict()}
+    wf = walk_forward(res)
+    return {"verdict": wf["verdict"], "overall": wf["overall"], "by_year": wf.get("by_year"),
+            "oos": wf.get("oos"), "oos_year": wf.get("oos_year"),
+            "pct_green_months": wf.get("pct_green_months"),
+            "window": {"start": days[0], "end": days[-1]}, "config": req.dict()}
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,

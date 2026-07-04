@@ -160,6 +160,80 @@ const VolCell = ({ s, highlight }) => {
   );
 };
 
+// FE-04: propose a hypothetical option structure → run it through the OOS
+// walk-forward backtester → see the verdict BEFORE anything is seeded live.
+const F_UNDER = ["NIFTY", "BANKNIFTY", "SENSEX"];
+const F_STRUCT = [["credit_spread", "Credit spread (1-sided)"], ["iron_condor", "Iron condor"],
+  ["single_leg", "Single leg (buy)"], ["debit_spread", "Debit spread"]];
+const F_DIR = [["bullish", "Bullish / put side"], ["bearish", "Bearish / call side"]];
+
+const Field = ({ label, children }) => (
+  <label className="flex flex-col gap-1">
+    <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{label}</span>
+    {children}
+  </label>
+);
+const inputCls = "rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1.5 font-mono text-xs text-[var(--qd-text)] focus:border-[var(--qd-accent)] focus:outline-none";
+
+function Proposer() {
+  const [form, setForm] = useState({ underlying: "NIFTY", structure: "credit_spread",
+    direction: "bullish", short_otm_pct: 0.03, spread_width: 6, wing_width: 6, max_dte: 8, exit_mode: "expiry" });
+  const [result, setResult] = useState(null);
+  const [running, setRunning] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const run = async () => {
+    setRunning(true); setResult(null);
+    try {
+      const r = await api.post("/ops/edge-lab/propose", {
+        ...form,
+        short_otm_pct: Number(form.short_otm_pct), spread_width: Number(form.spread_width),
+        wing_width: Number(form.wing_width), max_dte: Number(form.max_dte),
+      });
+      setResult(r.data);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "OOS test failed");
+    } finally { setRunning(false); }
+  };
+  const isCondor = form.structure === "iron_condor";
+  const o = result?.overall;
+  return (
+    <section className="qd-card p-5">
+      <div className="qd-section-title flex items-center gap-1.5"><Target size={13} /> // Propose &amp; OOS-test</div>
+      <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Test a structure before you seed it</h2>
+      <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">Walk-forward on 2yr real bhavcopy. Nothing is seeded — this is the OOS-first discipline as a button.</p>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        <Field label="Underlying"><select className={inputCls} value={form.underlying} onChange={set("underlying")}>{F_UNDER.map((u) => <option key={u} value={u}>{u}</option>)}</select></Field>
+        <Field label="Structure"><select className={inputCls} value={form.structure} onChange={set("structure")}>{F_STRUCT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+        <Field label="Side"><select className={inputCls} value={form.direction} onChange={set("direction")}>{F_DIR.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+        <Field label="Short OTM %"><input className={inputCls} type="number" step="0.005" value={form.short_otm_pct} onChange={set("short_otm_pct")} /></Field>
+        <Field label={isCondor ? "Wing (strikes)" : "Width (strikes)"}><input className={inputCls} type="number" value={isCondor ? form.wing_width : form.spread_width} onChange={set(isCondor ? "wing_width" : "spread_width")} /></Field>
+        <Field label="Max DTE"><input className={inputCls} type="number" value={form.max_dte} onChange={set("max_dte")} /></Field>
+        <Field label="Exit"><select className={inputCls} value={form.exit_mode} onChange={set("exit_mode")}><option value="expiry">Hold to expiry</option><option value="">Intraday tp/sl</option></select></Field>
+      </div>
+      <button type="button" onClick={run} disabled={running}
+        className="mt-3 inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-accent)]/40 bg-[var(--qd-surface-2)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-surface-3)] disabled:opacity-50">
+        <FlaskConical size={14} className={running ? "animate-spin" : ""} /> {running ? "Running OOS…" : "Run OOS test"}
+      </button>
+      {result && (
+        <div className="mt-4 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4">
+          {result.error ? (
+            <div className="font-mono text-xs text-[var(--qd-loss)]">{result.error}</div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <VerdictChip verdict={result.verdict} />
+              <span className="font-mono text-xs text-[var(--qd-text-2)]">n=<b className="text-[var(--qd-text)]">{o?.n}</b></span>
+              <span className="font-mono text-xs">exp <b className={signCls(o?.expectancy)}>{money(o?.expectancy)}</b>/trade</span>
+              <span className="font-mono text-xs text-[var(--qd-text-2)]">WR <b className="text-[var(--qd-text)]">{pct(o?.win_rate)}</b></span>
+              <span className="font-mono text-xs text-[var(--qd-text-2)]">green {pct(result.pct_green_months)}</span>
+              <span className="font-mono text-[11px] text-[var(--qd-text-3)]">by year: {Object.entries(result.by_year || {}).map(([y, b]) => `${y} ${money(b.expectancy)}`).join(" · ")}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function EdgeLab({ data, loading, onRefresh }) {
   const building = data?.building || data?.status === "building";
 
@@ -220,6 +294,8 @@ function EdgeLab({ data, loading, onRefresh }) {
           <RefreshCw size={13} className={building ? "animate-spin" : ""} /> {building ? "Building" : "Rebuild"}
         </button>
       </div>
+
+      <Proposer />
 
       {/* Data coverage — honesty about what can/can't be tested */}
       <section className="qd-card p-5">
