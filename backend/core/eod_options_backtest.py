@@ -89,6 +89,11 @@ class EODOptionsBacktest:
         # iron_condor geometry: short legs `short_otm_pct` OTM, long wings `wing_width` strikes beyond
         self._short_otm = float(p.get("short_otm_pct") or opt.get("short_otm_pct") or 0.02)
         self._wing = int(p.get("wing_width") or opt.get("wing_width") or width or 4)
+        # exit_mode="expiry" holds a defined-risk structure to expiry with NO intraday
+        # tp/sl — required for condors, whose max loss is measured in wing-widths, not
+        # credit-multiples, so any credit-based stop is meaningless and the illiquid
+        # far wings make daily marks unreliable. Exits only on EXPIRY / TIME.
+        self._exit_mode = (p.get("exit_mode") or opt.get("exit_mode") or "").lower()
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
         max_hold_days = int(p.get("max_hold_days") or risk.get("max_hold_days") or MAX_DTE_DAYS)
@@ -119,18 +124,19 @@ class EODOptionsBacktest:
                 reason = None
                 if val is not None:
                     basis, ref = active["entry_basis"], active["entry_ref"]
-                    if active["kind"] == "credit":
-                        captured = (basis - val) / basis if basis else 0.0  # % of credit kept
-                        if captured >= active["tp"]:
-                            reason = "TAKE_PROFIT"
-                        elif (val - basis) >= active["sl"] * basis:
-                            reason = "STOP_LOSS"
-                    else:  # long premium (single_leg / debit)
-                        rel = (val - basis) / ref if ref else 0.0
-                        if rel >= active["tp"]:
-                            reason = "TAKE_PROFIT"
-                        elif rel <= -active["sl"]:
-                            reason = "STOP_LOSS"
+                    if self._exit_mode != "expiry":
+                        if active["kind"] == "credit":
+                            captured = (basis - val) / basis if basis else 0.0  # % of credit kept
+                            if captured >= active["tp"]:
+                                reason = "TAKE_PROFIT"
+                            elif (val - basis) >= active["sl"] * basis:
+                                reason = "STOP_LOSS"
+                        else:  # long premium (single_leg / debit)
+                            rel = (val - basis) / ref if ref else 0.0
+                            if rel >= active["tp"]:
+                                reason = "TAKE_PROFIT"
+                            elif rel <= -active["sl"]:
+                                reason = "STOP_LOSS"
                     held = i - active["entry_idx"]
                     if day >= active["expiry"]:
                         reason = reason or "EXPIRY"
@@ -252,6 +258,7 @@ class EODOptionsBacktest:
             return {"kind": "credit", "structure": structure, "u": u, "expiry": expiry,
                     "ce_short": ce_s_k, "ce_long": ce_l_k, "pe_short": pe_s_k, "pe_long": pe_l_k,
                     "short_k": ce_s_k, "typ": "CE",  # reference leg for lot sizing
+                    "wing_pts": self._wing * interval,  # defined max cost-to-close (per side)
                     "entry_basis": credit, "entry_ref": credit,
                     "tp": float(p.get("credit_tp", 0.5)), "sl": float(p.get("credit_sl", 1.0)),
                     "entry_idx": idx, "entry_day": day,
@@ -273,8 +280,12 @@ class EODOptionsBacktest:
             if None in (ce_s, ce_l, pe_s, pe_l):
                 return None
             # cost to close = buy back shorts, sell the wings back
-            return ((_fill(ce_s, "BUY") - _fill(ce_l, "SELL"))
-                    + (_fill(pe_s, "BUY") - _fill(pe_l, "SELL")))
+            raw = ((_fill(ce_s, "BUY") - _fill(ce_l, "SELL"))
+                   + (_fill(pe_s, "BUY") - _fill(pe_l, "SELL")))
+            # Cap at the defined wing width: far-OTM wings are illiquid on EOD data and
+            # can mark ~0 on volatile days, spuriously inflating the mark as if naked.
+            # The structure's true max cost-to-close is the wing width per breached side.
+            return max(0.0, min(raw, pos.get("wing_pts", raw)))
         # spreads: value = cost to close (credit) / spread value (debit)
         short_px = self.store.leg_settle(u, day, pos["expiry"], pos["short_k"], pos["typ"])
         long_px = self.store.leg_settle(u, day, pos["expiry"], pos["long_k"], pos["typ"])
