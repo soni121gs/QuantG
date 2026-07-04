@@ -42,7 +42,7 @@ book." See [[project_base_rate_findings_07_04]].
 
 🟡 **PRIORITY 2 — data gaps + cleanup (gated on P0 producing a replacement):**
 - `[ ]` **EDR-05** (data gap) Automate the BSE SENSEX/BANKEX bhavcopy fetch (currently a manual real-browser run — Akamai-gated); and ingest **NSE_EQ stock EOD** data so the 10 equity strategies can finally be backtested/rebuilt. Tier 2.
-- `[ ]` **EDR-03** *(modify)* Archive + de-template the 11 dead option + 10 equity strategies (touch-points CLAUDE.md §13.6 — a DB delete re-seeds). **Now explicitly gated on EDR-02 shipping a validated replacement** so the book is never emptied. Off-hours, one commit + rebuild, update catalog tests. Tier 3.
+- `[x]` **EDR-03** DONE 2026-07-04 (see P0 block, `86815b0`) — 23 dead strategies archived. Optional follow-up: de-template them from `server.py` (CLAUDE.md §13.6) so they stop seeding-then-archiving; cosmetic, low priority.
 - `[ ]` **FE-04** *(new)* Phase-2 Edge Lab: a "strategy proposer" — pick structure/strikes/DTE → run OOS → see the verdict BEFORE it is ever seeded live. Turns the OOS-first discipline into a UI. Tier 3.
 
 ⏸ **Gating updates:** `WR-73` (enable live) and HSI Stage-5 advisor now additionally require an OOS `CANDIDATE_EDGE` — which NO current strategy has, so both stay founder-gated behind Priority 0.
