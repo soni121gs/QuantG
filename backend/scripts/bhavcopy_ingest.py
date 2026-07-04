@@ -78,7 +78,9 @@ SOURCES = {
 
 STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "bhavcopy_fo"),
+    # …/backend/data/bhavcopy_fo — must match core/bhavcopy_store.py's default
+    # (both resolve to /app/data/bhavcopy_fo in the container, the ./data bind mount).
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "bhavcopy_fo"),
 )
 DATA_ROOT = os.path.dirname(STORE_ROOT)   # …/data — CM store is a sibling of bhavcopy_fo
 
