@@ -20,14 +20,25 @@ from core.bhavcopy_store import BhavcopyStore  # noqa: E402
 
 
 def main():
+    import traceback
+    from datetime import datetime, timezone
+
     db = pymongo.MongoClient(os.environ.get("MONGO_URL", "mongodb://mongo:27017"),
                              serverSelectionTimeoutMS=4000)[os.environ.get("DB_NAME", "quantg")]
     strategies = list(db.strategies.find({"python_code": {"$nin": [None, ""]}}))
-    print(f"building edge-lab snapshot over {len(strategies)} strategies…")
-    snap = build_snapshot(strategies, BhavcopyStore())
+    print(f"building edge-lab snapshot over {len(strategies)} strategies…", flush=True)
+    try:
+        snap = build_snapshot(strategies, BhavcopyStore())
+    except Exception as exc:  # noqa: BLE001 — persist the failure so it is visible in the UI/collection
+        traceback.print_exc()
+        db.edge_lab_snapshots.replace_one(
+            {"_id": "latest"},
+            {"_id": "latest", "status": "error", "error": str(exc),
+             "generated_at": datetime.now(timezone.utc).isoformat()}, upsert=True)
+        raise
     snap["_id"] = "latest"
     db.edge_lab_snapshots.replace_one({"_id": "latest"}, snap, upsert=True)
-    print(f"done: status={snap.get('status')} generated_at={snap.get('generated_at')}")
+    print(f"done: status={snap.get('status')} generated_at={snap.get('generated_at')}", flush=True)
     if snap.get("oos"):
         print("OOS verdict counts:", snap["oos"]["counts"])
     for sw in (snap.get("sweep") or []):

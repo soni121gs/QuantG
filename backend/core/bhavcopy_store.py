@@ -107,6 +107,7 @@ class BhavcopyStore:
         return out
 
     # ---- option chain for pricing -------------------------------------------
+    @lru_cache(maxsize=16)
     def option_chain(self, underlying: str, day: str) -> Dict[str, Dict[float, Dict[str, Any]]]:
         u = underlying.upper()
         chain: Dict[str, Dict[float, Dict[str, Any]]] = {}

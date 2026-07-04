@@ -38,11 +38,12 @@ LOT = {"NIFTY": 75, "BANKNIFTY": 35, "SENSEX": 20, "BANKEX": 15, "FINNIFTY": 65,
 _ENTRY_DTE = (2, 8)
 _SLIP = float(os.environ.get("STUDY_SLIP_PCT", "0.015"))  # entry slippage per leg (matches base_rate_studies)
 
-# sweep grid — mirrors scripts/run_edge_sweep.py
+# sweep grid — the meaningful TP×SL exit-geometry matrix (width/DTE held fixed to
+# keep the routine snapshot cheap; the full 4-axis grid lives in run_edge_sweep.py).
 _CREDIT_TP = [0.35, 0.5, 0.7]
 _CREDIT_SL = [1.0, 2.0, 3.5]
-_WIDTH = [2, 4]
-_MAX_DTE = [4, 10]
+_WIDTH = [2]
+_MAX_DTE = [10]
 _MIN_DTE = 2
 
 
@@ -236,18 +237,25 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
                    include_sweep: bool = True) -> Dict[str, Any]:
     """Compute the full Edge Lab snapshot. Returns a JSON-serialisable dict with a
     top-level `status` ('ready' or 'empty') and `generated_at` (UTC ISO)."""
+    import time
     store = store or BhavcopyStore()
     days = store.trading_days()
     now = datetime.now(timezone.utc).isoformat()
     if not days:
         return {"status": "empty", "generated_at": now,
                 "hint": "bhavcopy store empty — run scripts/bhavcopy_ingest.py and mount /app/data/bhavcopy_fo"}
-    return {
-        "status": "ready",
-        "generated_at": now,
-        "coverage": _coverage(store, days),
-        "base_rate": {"short_vol": _base_rate(store), "directional": _directional(store),
-                      "slippage_pct": _SLIP},
-        "oos": _oos(strategies, store),
-        "sweep": _sweep(strategies, store) if include_sweep else None,
-    }
+
+    def _phase(label, fn):
+        t0 = time.time()
+        print(f"[edge_lab] {label}…", flush=True)
+        out = fn()
+        print(f"[edge_lab] {label} done in {time.time() - t0:.0f}s", flush=True)
+        return out
+
+    coverage = _phase("coverage", lambda: _coverage(store, days))
+    base_rate = _phase("base_rate", lambda: {
+        "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
+    oos = _phase("oos", lambda: _oos(strategies, store))
+    sweep = _phase("sweep", lambda: _sweep(strategies, store)) if include_sweep else None
+    return {"status": "ready", "generated_at": now, "coverage": coverage,
+            "base_rate": base_rate, "oos": oos, "sweep": sweep}
