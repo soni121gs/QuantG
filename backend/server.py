@@ -6352,6 +6352,8 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
     if not docs:
         return 0
+    await db.strategies.insert_many(docs)
+    return len(docs)
 
 
 async def migrate_strategy_display_names(user_id: str) -> int:
