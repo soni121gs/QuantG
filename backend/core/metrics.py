@@ -2,7 +2,7 @@
 
 No DB, no I/O — fully unit-testable. This is the single source of truth for
 Sharpe, Sortino, max-drawdown, profit-factor, expectancy, etc. Both the options
-backtester (core/options_backtest.py) and the live-trade scorecard
+backtester (core/eod_options_backtest.py) and the live-trade scorecard
 (core/strategy_scorecard.py) compute from here, so a strategy's backtest score
 and its realized score are directly comparable.
 

@@ -304,7 +304,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await ops_risk_scorecard(user=user)
             source = "routes.ops.ops_risk_scorecard"
         elif name == "get_backtest_summary":
-            from routes.ops import ops_options_backtest
+            from routes.ops import ops_eod_options_backtest as ops_options_backtest
             strategy_id = None
             start = None
             end = None
@@ -330,7 +330,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                     logger.warning("Failed to parse dates in get_backtest_summary: %s", e_dates)
                     
             data = await ops_options_backtest(strategy_id=strategy_id, start=start, end=end, user=user)
-            source = "routes.ops.ops_options_backtest"
+            source = "routes.ops.ops_eod_options_backtest"
         elif name == "get_today_fills":
             from server import get_trading_day_window_ist
             start, end = get_trading_day_window_ist()

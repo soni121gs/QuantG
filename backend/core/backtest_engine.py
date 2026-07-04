@@ -3,9 +3,9 @@
 USE THIS FOR: equity / futures strategies, where the traded price IS the candle
 price. DO NOT use for options — it prices trades on the underlying candle and so
 ignores premium, theta and spread cost, returning a confidently-wrong grade for
-any option strategy. For options use core/options_backtest.py (OptionsBacktestEngine).
-Dispatch is enforced in routes/core_status.py:run_core_backtest by
-visual_config.options.enabled.
+any option strategy. For options use the OOS bhavcopy backtester
+(core/eod_options_backtest.py). Dispatch is enforced in
+routes/core_status.py:run_core_backtest by visual_config.options.enabled.
 
 Runs AST sandboxed python strategy code sequentially over historical candle series.
 Simulates realistic order fills at next candle open, enforces SL/TP risk boundaries,

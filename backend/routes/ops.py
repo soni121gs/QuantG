@@ -179,31 +179,10 @@ async def ops_run_hermes_oos_validation(limit: int = 25, user=Depends(get_curren
     return await validate_lessons(db, user["id"], limit=limit)
 
 
-@router.post("/options-backtest")
-async def ops_options_backtest(
-    strategy_id: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    user=Depends(get_current_user),
-):
-    """Option-priced backtest over db.historical_chains (real CE/PE premiums incl.
-    theta + spread cost), supporting single_leg / credit_spread / debit_spread.
-    Omit strategy_id to run all the caller's option strategies. Returns metrics
-    per strategy; per-trade detail only when a single strategy_id is given."""
-    from core.options_backtest import OptionsBacktestEngine
-    engine = OptionsBacktestEngine(db)
-    query: Dict[str, Any] = {"user_id": user["id"], "visual_config.options.enabled": True}
-    if strategy_id:
-        query["id"] = strategy_id
-    results: List[Dict[str, Any]] = []
-    async for strat in db.strategies.find(query):
-        res = await engine.run(strat, start_date=start, end_date=end)
-        if not strategy_id:
-            res.pop("trades", None)
-            res.pop("equity_curve", None)
-        results.append(res)
-    results.sort(key=lambda r: r.get("sharpe", -999), reverse=True)
-    return {"count": len(results), "results": results}
+# FE-03 (2026-07-04): the old in-sample option-priced backtester (/options-backtest
+# + core/options_backtest.py) was RETIRED — it graded on limited collected chain
+# history with no walk-forward and was proven misleading. Use /eod-options-backtest
+# (2yr real bhavcopy, out-of-sample verdict) below; the Edge Lab UI already does.
 
 
 @router.post("/eod-options-backtest")

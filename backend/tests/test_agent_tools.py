@@ -233,15 +233,15 @@ async def test_run_agent_tool_get_backtest_summary():
     mock_backtest_fn = AsyncMock(return_value={"status": "success", "results": []})
 
     with patch("routes.ai.db", mock_db), \
-         patch("routes.ops.ops_options_backtest", mock_backtest_fn):
+         patch("routes.ops.ops_eod_options_backtest", mock_backtest_fn):
         res = await _run_agent_tool(
-            "get_backtest_summary", 
-            user, 
+            "get_backtest_summary",
+            user,
             query="Run backtest for strat_buyer_opt from 2026-06-01 to 2026-06-15"
         )
 
     assert res["status"] == "ok"
-    assert res["source"] == "routes.ops.ops_options_backtest"
+    assert res["source"] == "routes.ops.ops_eod_options_backtest"
     mock_backtest_fn.assert_called_once_with(
         strategy_id="strat_buyer_opt",
         start="2026-06-01",

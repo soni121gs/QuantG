@@ -79,9 +79,11 @@ async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
     # the traded price IS the candle price.
     options_mode = bool(((strat.get("visual_config") or {}).get("options") or {}).get("enabled"))
     if options_mode:
-        from core.options_backtest import OptionsBacktestEngine
-        engine = OptionsBacktestEngine(db)
-        return await engine.run(strat)
+        # FE-03: option strategies now use the out-of-sample bhavcopy backtester
+        # (2yr real settlement prices, walk-forward verdict) instead of the retired
+        # in-sample core/options_backtest.py.
+        from routes.ops import ops_eod_options_backtest
+        return await ops_eod_options_backtest(strategy_id=strategy_id, user=user)
 
     # Equity / futures: backtest on REAL underlying OHLC pulled from Upstox V3
     # (same source the live engine and /strategies/backtest use). Mock candles
