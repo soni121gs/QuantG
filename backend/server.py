@@ -3419,7 +3419,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "First OOS-validated edge (EDR-09): sell a defined-risk ~3% OTM NIFTY put spread and hold to weekly expiry to harvest the downside volatility-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy (+₹214/trade, 95% WR, both years positive). Seeded DRAFT for forward-paper; live hold-to-expiry exit wiring pending (EDR-11).",
         "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
         "structure": "credit_spread", "spread_width": 6,
-        "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry",
+        "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry", "short_delta": 0.12,
         "strategy_type": "Option Selling", "required_capital": 25000.0, "instrument_group": "NFO",
         "python_code": """def run(data):
     # Always the put side (BUY = sell put spread); the engine opens one spread per
@@ -6090,6 +6090,16 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _template["strategy_type"] = "Option Selling"
         _template["required_capital"] = 8000.0
         _risk.update(CREDIT_SPREAD_THETA_RISK)
+    # EDR-11: the OOS-validated put spread holds to weekly expiry — its DEFINED RISK
+    # (wing width) is the stop, so raise daily_loss_limit above one designed max loss
+    # (~₹22k/lot) and disable the intraday time-exit so the killswitch/time-exit can't
+    # force-close it before expiry. exit_mode="hold_to_expiry" (risk) mirrors the
+    # options.exit_mode="expiry" the position monitor keys off.
+    if _template.get("name") == "NIFTY Put Spread Theta (OOS)":
+        _template["required_capital"] = 25000.0
+        _risk.update({"daily_loss_limit": 30000.0, "time_exit_minutes": 0,
+                      "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
+                      "max_trades_day": 4, "strategy_category": "swing"})
     if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
     if str(_template.get("instrument_group") or "").upper() in {"NSE", "BSE"}:
@@ -6217,6 +6227,9 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             "short_otm_pct": template.get("short_otm_pct"),
             "wing_width": template.get("wing_width"),
             "exit_mode": template.get("exit_mode"),
+            # EDR-11: short-leg |delta| the LIVE spread builder targets (server.py spread
+            # build reads options.short_delta). ~0.12 ≈ 3% OTM. None → default 0.30.
+            "short_delta": template.get("short_delta"),
         }
         
     risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}

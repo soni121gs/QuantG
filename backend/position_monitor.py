@@ -105,6 +105,39 @@ def _spread_squareoff_due() -> bool:
     return ist.hour * 60 + ist.minute >= _SPREAD_SQUAREOFF_MINUTE_IST
 
 
+# EDR-11: hold-to-expiry spreads (the OOS-validated put spread) keep the position
+# across days and only settle on the option's actual expiry day — they are exempt
+# from the 15:25 intraday squareoff and intraday tp/sl. Detected from the strategy's
+# options.exit_mode (cached; cleared on restart).
+_HOLD_TO_EXPIRY_SIDS: Dict[str, bool] = {}
+
+
+async def _strategy_holds_to_expiry(db, strategy_id) -> bool:
+    if not strategy_id:
+        return False
+    if strategy_id in _HOLD_TO_EXPIRY_SIDS:
+        return _HOLD_TO_EXPIRY_SIDS[strategy_id]
+    doc = await db.strategies.find_one({"id": strategy_id}, {"visual_config.options.exit_mode": 1})
+    val = str((((doc or {}).get("visual_config") or {}).get("options") or {}).get("exit_mode") or "").lower() == "expiry"
+    _HOLD_TO_EXPIRY_SIDS[strategy_id] = val
+    return val
+
+
+def _spread_past_expiry(pos) -> bool:
+    """True if today (IST) is on/after the spread's option expiry — settle now.
+    Unknown/unparseable expiry → True (never hold a spread indefinitely)."""
+    exp = pos.get("expiry")
+    if not exp:
+        exp = next((l.get("expiry") for l in (pos.get("legs") or []) if l.get("expiry")), None)
+    if not exp:
+        return True
+    try:
+        d = datetime.strptime(str(exp)[:10], "%Y-%m-%d").date()
+    except Exception:  # noqa: BLE001
+        return True
+    return _ist_now().date() >= d
+
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
 async def run_monitor_loop(
@@ -722,20 +755,32 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         {"$set": set_fields},
     )
 
+    # EDR-11: hold-to-expiry spreads keep the position across days and only settle on
+    # the option's actual expiry day; everything else squares off intraday at 15:25.
+    hold_to_expiry = await _strategy_holds_to_expiry(db, pos.get("strategy_id"))
+
     # Spreads ride later than single-leg (15:25 vs 15:10) so theta is collected
     # nearer to expiry instead of cutting them mid-trajectory at 15:10.
     if _spread_squareoff_due():
-        logger.info("spread monitor: squareoff-1525 closing pos=%s", pos.get("id"))
+        if hold_to_expiry and not _spread_past_expiry(pos):
+            return  # keep holding to weekly expiry — skip the daily 15:25 squareoff
+        reason = "expiry-settlement" if hold_to_expiry else "intraday-squareoff-1525"
+        logger.info("spread monitor: %s closing pos=%s", reason, pos.get("id"))
         if structure == "debit_spread":
-            await close_debit_spread(db, pos, reason="intraday-squareoff-1525",
+            await close_debit_spread(db, pos, reason=reason,
                                      short_ltp=short_ltp, long_ltp=long_ltp)
         else:
-            await close_credit_spread(db, pos, reason="intraday-squareoff-1525",
+            await close_credit_spread(db, pos, reason=reason,
                                       short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
     # No exit on entry-premium fallback (value≈credit/debit → no false trigger).
     if not in_hours or not have_live:
+        return
+
+    # Hold-to-expiry: no intraday tp/sl — the defined risk (wing width) is the stop and
+    # weekly expiry is the exit, exactly as the OOS backtest validated.
+    if hold_to_expiry:
         return
 
     if structure == "debit_spread":
