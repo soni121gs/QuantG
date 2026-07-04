@@ -42,6 +42,11 @@ import urllib.request
 import urllib.error
 from datetime import date, timedelta
 
+# EDR-05: the 10 equity-strategy stocks — the NSE cash (CM) bhavcopy carries their
+# EOD OHLC so equity strategies can finally be backtested (index-only until now).
+CM_UNDERLYINGS = {"RELIANCE", "SBIN", "HDFCBANK", "ICICIBANK", "TCS", "INFY",
+                  "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"}
+
 # --- source registry ----------------------------------------------------------
 SOURCES = {
     "nse": {
@@ -49,6 +54,15 @@ SOURCES = {
         "underlyings": {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"},
         "prefix": "BhavCopy_FO_",           # keep legacy NSE filename (494 files already stored)
         "referer": "https://www.nseindia.com/",
+        "kind": "fo", "store": "bhavcopy_fo",
+    },
+    "cm": {
+        # NSE cash-market (equity) EOD bhavcopy — per-stock OHLC. Not gated (urllib works).
+        "url": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip",
+        "underlyings": set(CM_UNDERLYINGS),
+        "prefix": "BhavCopy_CM_",
+        "referer": "https://www.nseindia.com/",
+        "kind": "cm", "store": "bhavcopy_cm",
     },
     "bse": {
         # BSE now serves the F&O UDiFF bhavcopy as a PLAIN .CSV (not zipped), and
@@ -58,6 +72,7 @@ SOURCES = {
         "underlyings": {"SENSEX", "BANKEX", "SENSEX50"},
         "prefix": "BhavCopy_BSE_FO_",
         "referer": "https://www.bseindia.com/markets/Derivatives/DeriReports.aspx",
+        "kind": "fo", "store": "bhavcopy_fo",
     },
 }
 
@@ -65,6 +80,37 @@ STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "bhavcopy_fo"),
 )
+DATA_ROOT = os.path.dirname(STORE_ROOT)   # …/data — CM store is a sibling of bhavcopy_fo
+
+
+def store_root_for(src: dict) -> str:
+    return os.path.join(DATA_ROOT, src.get("store", "bhavcopy_fo"))
+
+
+# Equity (CM) store columns — per-stock EOD OHLC (no strike/expiry/settle).
+CM_OUT_COLS = ["date", "symbol", "series", "open", "high", "low", "close",
+               "prev_close", "volume", "value"]
+
+
+def parse_cm_csv(raw: str, underlyings: set[str]) -> list[dict]:
+    """Parse an NSE CM (cash/equity) UDiFF bhavcopy → per-stock EOD OHLC rows,
+    filtered to the EQ series and the requested tickers."""
+    reader = csv.DictReader(io.StringIO(raw))
+    out = []
+    for row in reader:
+        if (row.get("SctySrs") or "").strip() != "EQ":   # equity series only
+            continue
+        sym = row.get("TckrSymb", "")
+        if underlyings and sym not in underlyings:
+            continue
+        out.append({
+            "date": row.get("TradDt", ""), "symbol": sym, "series": "EQ",
+            "open": row.get("OpnPric", ""), "high": row.get("HghPric", ""),
+            "low": row.get("LwPric", ""), "close": row.get("ClsPric", ""),
+            "prev_close": row.get("PrvsClsgPric", ""),
+            "volume": row.get("TtlTradgVol", ""), "value": row.get("TtlTrfVal", ""),
+        })
+    return out
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -77,8 +123,8 @@ OUT_COLS = [
 ]
 
 
-def out_path(d: date, prefix: str) -> str:
-    return os.path.join(STORE_ROOT, str(d.year), f"{prefix}{d.strftime('%Y%m%d')}.csv.gz")
+def out_path(d: date, prefix: str, store_dir: str = STORE_ROOT) -> str:
+    return os.path.join(store_dir, str(d.year), f"{prefix}{d.strftime('%Y%m%d')}.csv.gz")
 
 
 def download(d: date, src: dict, retries: int = 3) -> bytes | None:
@@ -107,10 +153,10 @@ def download(d: date, src: dict, retries: int = 3) -> bytes | None:
     return None
 
 
-def parse_and_filter(zip_bytes: bytes, underlyings: set[str]) -> list[dict]:
+def parse_and_filter(zip_bytes: bytes, underlyings: set[str], kind: str = "fo") -> list[dict]:
     z = zipfile.ZipFile(io.BytesIO(zip_bytes))
     raw = z.read(z.namelist()[0]).decode("utf-8", "replace")
-    return parse_udiff_csv(raw, underlyings)
+    return (parse_cm_csv if kind == "cm" else parse_udiff_csv)(raw, underlyings)
 
 
 def parse_udiff_csv(raw: str, underlyings: set[str]) -> list[dict]:
@@ -147,11 +193,12 @@ def parse_udiff_csv(raw: str, underlyings: set[str]) -> list[dict]:
     return out
 
 
-def write_day(d: date, prefix: str, rows: list[dict]) -> None:
-    path = out_path(d, prefix)
+def write_day(d: date, prefix: str, rows: list[dict],
+              cols: list[str] = OUT_COLS, store_dir: str = STORE_ROOT) -> None:
+    path = out_path(d, prefix, store_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=OUT_COLS)
+        w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(rows)
 
@@ -163,7 +210,9 @@ def daterange(start: date, end: date):
         d += timedelta(days=1)
 
 
-def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwrite: bool) -> None:
+def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwrite: bool,
+                       kind: str = "fo", cols: list[str] = OUT_COLS,
+                       store_dir: str = STORE_ROOT) -> None:
     """Parse pre-downloaded bhavcopy .zip files (any source) into the gz store.
     Filenames must contain the 8-digit trading date (YYYYMMDD). Robust to
     non-zip files (skips them). Use this for BSE SENSEX/BANKEX, which the
@@ -187,16 +236,17 @@ def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwri
         y = g[:4] if g[:2] in ("19", "20") else g[4:8]
         mo, dy = (g[4:6], g[6:8]) if g[:2] in ("19", "20") else (g[2:4], g[0:2])
         d = date(int(y), int(mo), int(dy))
-        if os.path.exists(out_path(d, prefix)) and not overwrite:
+        if os.path.exists(out_path(d, prefix, store_dir)) and not overwrite:
             skipped += 1
             continue
         try:
             with open(path, "rb") as f:
                 blob = f.read()
+            _csv_parse = parse_cm_csv if kind == "cm" else parse_udiff_csv
             if blob[:2] == b"PK":                       # zipped bhavcopy
-                rows = parse_and_filter(blob, underlyings)
+                rows = parse_and_filter(blob, underlyings, kind)
             elif blob[:4] in (b"Trad", b"\xef\xbb\xbfT"):  # plain UDiFF CSV (BSE now serves this)
-                rows = parse_udiff_csv(blob.decode("utf-8", "replace"), underlyings)
+                rows = _csv_parse(blob.decode("utf-8", "replace"), underlyings)
             else:
                 bad += 1
                 print(f"  !! not a bhavcopy (HTML/error page?), skipped: {os.path.basename(path)}")
@@ -208,10 +258,10 @@ def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwri
         if not rows:
             print(f"  ~~ {d}: no matching underlyings in file")
             continue
-        write_day(d, prefix, rows)
+        write_day(d, prefix, rows, cols, store_dir)
         written += 1
         total_rows += len(rows)
-        print(f"  {d}  rows={len(rows):>5}  -> {os.path.relpath(out_path(d, prefix), STORE_ROOT)}")
+        print(f"  {d}  rows={len(rows):>5}  -> {os.path.relpath(out_path(d, prefix, store_dir), store_dir)}")
     print(f"\nDONE. written={written} already_had={skipped} bad={bad} total_rows={total_rows}")
 
 
@@ -230,11 +280,14 @@ def main():
 
     src = SOURCES[args.source]
     prefix = src["prefix"]
+    kind = src.get("kind", "fo")
+    store_dir = store_root_for(src)
+    cols = CM_OUT_COLS if kind == "cm" else OUT_COLS
     underlyings = ({u.strip().upper() for u in args.underlyings.split(",") if u.strip()}
                    or set(src["underlyings"]))
 
     if args.from_zips:
-        _ingest_local_zips(args.from_zips, prefix, underlyings, args.overwrite)
+        _ingest_local_zips(args.from_zips, prefix, underlyings, args.overwrite, kind, cols, store_dir)
         return
 
     if not args.start or not args.end:
@@ -251,21 +304,21 @@ def main():
         days += 1
         if d.weekday() >= 5:  # Sat/Sun — skip without hitting the host
             continue
-        if os.path.exists(out_path(d, prefix)) and not args.overwrite:
+        if os.path.exists(out_path(d, prefix, store_dir)) and not args.overwrite:
             skipped += 1
             continue
         blob = download(d, src)
         if blob is None:
             holidays += 1
             continue
-        rows = parse_and_filter(blob, underlyings)
+        rows = parse_and_filter(blob, underlyings, kind)
         if not rows:
             holidays += 1
             continue
-        write_day(d, prefix, rows)
+        write_day(d, prefix, rows, cols, store_dir)
         trading += 1
         total_rows += len(rows)
-        print(f"  {d}  rows={len(rows):>5}  -> {os.path.relpath(out_path(d, prefix), STORE_ROOT)}")
+        print(f"  {d}  rows={len(rows):>5}  -> {os.path.relpath(out_path(d, prefix, store_dir), store_dir)}")
         time.sleep(0.4)  # be polite to the host
 
     print(f"\nDONE. days_scanned={days} written={trading} already_had={skipped} "
