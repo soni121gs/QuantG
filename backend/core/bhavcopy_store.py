@@ -81,6 +81,7 @@ class BhavcopyStore:
         return tuple(rows)
 
     # ---- underlying OHLC (from near-month futures) ---------------------------
+    @lru_cache(maxsize=16)
     def underlying_daily(self, underlying: str, start: Optional[str] = None,
                          end: Optional[str] = None) -> List[Dict[str, Any]]:
         u = underlying.upper()

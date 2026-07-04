@@ -51,18 +51,22 @@ def _dte(a: str, b: str) -> int:
     return (datetime.strptime(b, "%Y-%m-%d") - datetime.strptime(a, "%Y-%m-%d")).days
 
 
+_OTM_LEVELS = (("atm", 0.0), ("otm_1pct", 0.01), ("otm_2pct", 0.02))
+
+
 # ---- base rate: short OTM vol held to expiry (the vol risk premium) ----------
 
-def _short_vol_cycles(store: BhavcopyStore, u: str, otm_pct: float) -> List[Dict[str, float]]:
-    """One short strangle (otm_pct>0) / straddle (0) per weekly expiry, held to
-    cash settlement. Entry slippage only; expiry is exact intrinsic. Points × lot."""
+def _short_vol_multi(store: BhavcopyStore, u: str) -> Dict[str, List[Dict[str, float]]]:
+    """All OTM levels in ONE pass over the days (each day's chain is built once):
+    a short strangle per weekly expiry, held to cash settlement. Entry slippage
+    only; expiry is exact intrinsic. Points × lot."""
+    buckets: Dict[str, List[Dict[str, float]]] = {k: [] for k, _ in _OTM_LEVELS}
     candles = store.underlying_daily(u)
     if len(candles) < 60:
-        return []
+        return buckets
     close_by = {c["date"][:10]: c["close"] for c in candles}
     days = [c["date"][:10] for c in candles]
     lot = LOT.get(u, 50)
-    out: List[Dict[str, float]] = []
     entered: set = set()
     for day in days:
         pick = None
@@ -77,24 +81,25 @@ def _short_vol_cycles(store: BhavcopyStore, u: str, otm_pct: float) -> List[Dict
         if len(strikes) < 5:
             continue
         spot = close_by[day]
-        ce_k = min(strikes, key=lambda k: abs(k - spot * (1 + otm_pct)))
-        pe_k = min(strikes, key=lambda k: abs(k - spot * (1 - otm_pct)))
-        ce = store.leg_settle(u, day, pick, ce_k, "CE")
-        pe = store.leg_settle(u, day, pick, pe_k, "PE")
-        if not ce or not pe:
-            continue
-        credit = (ce + pe) * (1 - _SLIP)
         s_exp = close_by.get(pick)
         if s_exp is None:                       # expiry not a stored day -> nearest prior
             prior = [d for d in days if d <= pick]
             if not prior:
                 continue
             s_exp = close_by[prior[-1]]
-        payoff = max(0.0, s_exp - ce_k) + max(0.0, pe_k - s_exp)
-        pnl_pts = credit - payoff               # short: keep credit, pay intrinsic
         entered.add(pick)
-        out.append({"pnl_pts": pnl_pts, "rupees": pnl_pts * lot})
-    return out
+        for label, otm in _OTM_LEVELS:
+            ce_k = min(strikes, key=lambda k: abs(k - spot * (1 + otm)))
+            pe_k = min(strikes, key=lambda k: abs(k - spot * (1 - otm)))
+            ce = store.leg_settle(u, day, pick, ce_k, "CE")
+            pe = store.leg_settle(u, day, pick, pe_k, "PE")
+            if not ce or not pe:
+                continue
+            credit = (ce + pe) * (1 - _SLIP)
+            payoff = max(0.0, s_exp - ce_k) + max(0.0, pe_k - s_exp)
+            pnl_pts = credit - payoff           # short: keep credit, pay intrinsic
+            buckets[label].append({"pnl_pts": pnl_pts, "rupees": pnl_pts * lot})
+    return buckets
 
 
 def _summ(rows: List[Dict[str, float]]) -> Optional[Dict[str, Any]]:
@@ -116,9 +121,10 @@ def _summ(rows: List[Dict[str, float]]) -> Optional[Dict[str, Any]]:
 def _base_rate(store: BhavcopyStore) -> List[Dict[str, Any]]:
     out = []
     for u in BASE_RATE_UNDERLYINGS:
+        buckets = _short_vol_multi(store, u)
         row: Dict[str, Any] = {"underlying": u, "lot": LOT.get(u)}
-        for label, otm in (("atm", 0.0), ("otm_1pct", 0.01), ("otm_2pct", 0.02)):
-            row[label] = _summ(_short_vol_cycles(store, u, otm))
+        for label, _ in _OTM_LEVELS:
+            row[label] = _summ(buckets[label])
         out.append(row)
     return out
 
@@ -166,10 +172,23 @@ def _coverage(store: BhavcopyStore, days: List[str]) -> Dict[str, Any]:
 
 # ---- per-strategy OOS verdict ------------------------------------------------
 
-def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore) -> Dict[str, Any]:
+def _strat_underlying(s: Dict[str, Any]) -> str:
+    vc = s.get("visual_config") or {}
+    opt = vc.get("options") or {}
+    return (opt.get("underlying") or vc.get("symbol") or "NIFTY").upper()
+
+
+def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
+         present: Optional[set] = None) -> Dict[str, Any]:
     engine = EODOptionsBacktest(store)
     rows = []
     for s in strategies:
+        # Skip strategies whose underlying has no data (equity/stocks) WITHOUT paying
+        # a full ~18s backtest just to surface the same "no data" error.
+        if present is not None and _strat_underlying(s) not in present:
+            rows.append({"name": s.get("name"), "underlying": _strat_underlying(s),
+                         "error": "no bhavcopy data (equity/stock EOD not ingested)"})
+            continue
         res = engine.run(s)
         if res.get("error"):
             rows.append({"name": s.get("name"), "error": res["error"]})
@@ -195,8 +214,11 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore) -> Dict[str, An
 
 # ---- exit-geometry sweep -----------------------------------------------------
 
-def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore) -> List[Dict[str, Any]]:
+def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore,
+           present: Optional[set] = None) -> List[Dict[str, Any]]:
     engine = EODOptionsBacktest(store)
+    if present is not None:
+        strategies = [s for s in strategies if _strat_underlying(s) in present]
     targets = [s for s in strategies
                if "theta credit spread" in (s.get("name") or "").lower()
                and any(u in (s.get("name") or "").upper() for u in ("NIFTY", "BANKNIFTY"))]
@@ -253,9 +275,10 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
         return out
 
     coverage = _phase("coverage", lambda: _coverage(store, days))
+    present = {u["underlying"] for u in coverage.get("underlyings", [])}
     base_rate = _phase("base_rate", lambda: {
         "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
-    oos = _phase("oos", lambda: _oos(strategies, store))
-    sweep = _phase("sweep", lambda: _sweep(strategies, store)) if include_sweep else None
+    oos = _phase("oos", lambda: _oos(strategies, store, present))
+    sweep = _phase("sweep", lambda: _sweep(strategies, store, present)) if include_sweep else None
     return {"status": "ready", "generated_at": now, "coverage": coverage,
             "base_rate": base_rate, "oos": oos, "sweep": sweep}
