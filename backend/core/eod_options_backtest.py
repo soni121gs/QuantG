@@ -114,6 +114,7 @@ class EODOptionsBacktest:
 
         days = [c["date"][:10] for c in candles]
         close_by_day = {c["date"][:10]: c["close"] for c in candles}
+        self._close_by = close_by_day   # index close per day, for cash-settled expiry payoff
         trades: List[Dict[str, Any]] = []
         active: Optional[Dict[str, Any]] = None
 
@@ -273,18 +274,25 @@ class EODOptionsBacktest:
             return _fill(px, "SELL") if px else None
         if s == "iron_condor":
             exp = pos["expiry"]
-            ce_s = self.store.leg_settle(u, day, exp, pos["ce_short"], "CE")
-            ce_l = self.store.leg_settle(u, day, exp, pos["ce_long"], "CE")
-            pe_s = self.store.leg_settle(u, day, exp, pos["pe_short"], "PE")
-            pe_l = self.store.leg_settle(u, day, exp, pos["pe_long"], "PE")
+            cs, cl, ps, pl = pos["ce_short"], pos["ce_long"], pos["pe_short"], pos["pe_long"]
+            # At/after expiry the options are CASH-settled at exact index intrinsic — use
+            # the index close, NOT the illiquid/garbage per-leg premiums on expiry day
+            # (which otherwise mark every trade at max loss). This mirrors the EDR-07 study.
+            if day >= exp:
+                s_exp = getattr(self, "_close_by", {}).get(exp) or getattr(self, "_close_by", {}).get(day)
+                if s_exp is not None:
+                    payoff = (max(0.0, s_exp - cs) - max(0.0, s_exp - cl)
+                              + max(0.0, ps - s_exp) - max(0.0, pl - s_exp))
+                    return max(0.0, payoff)
+            # pre-expiry mark-to-market from leg premiums, capped at the defined wing width
+            ce_s = self.store.leg_settle(u, day, exp, cs, "CE")
+            ce_l = self.store.leg_settle(u, day, exp, cl, "CE")
+            pe_s = self.store.leg_settle(u, day, exp, ps, "PE")
+            pe_l = self.store.leg_settle(u, day, exp, pl, "PE")
             if None in (ce_s, ce_l, pe_s, pe_l):
                 return None
-            # cost to close = buy back shorts, sell the wings back
             raw = ((_fill(ce_s, "BUY") - _fill(ce_l, "SELL"))
                    + (_fill(pe_s, "BUY") - _fill(pe_l, "SELL")))
-            # Cap at the defined wing width: far-OTM wings are illiquid on EOD data and
-            # can mark ~0 on volatile days, spuriously inflating the mark as if naked.
-            # The structure's true max cost-to-close is the wing width per breached side.
             return max(0.0, min(raw, pos.get("wing_pts", raw)))
         # spreads: value = cost to close (credit) / spread value (debit)
         short_px = self.store.leg_settle(u, day, pos["expiry"], pos["short_k"], pos["typ"])
