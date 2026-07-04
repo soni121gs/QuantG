@@ -86,6 +86,9 @@ class EODOptionsBacktest:
         structure = opt.get("structure") or "single_leg"
         lots = int(opt.get("lots") or 1)
         width = int(p.get("width") or opt.get("spread_width") or 2)
+        # iron_condor geometry: short legs `short_otm_pct` OTM, long wings `wing_width` strikes beyond
+        self._short_otm = float(p.get("short_otm_pct") or opt.get("short_otm_pct") or 0.02)
+        self._wing = int(p.get("wing_width") or opt.get("wing_width") or width or 4)
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
         max_hold_days = int(p.get("max_hold_days") or risk.get("max_hold_days") or MAX_DTE_DAYS)
@@ -227,6 +230,32 @@ class EODOptionsBacktest:
                     "entry_basis": debit, "entry_ref": debit, "tp": 0.5, "sl": 0.5,
                     "entry_idx": idx, "entry_day": day,
                     "desc": f"BUY {long_k:.0f}/{short_k:.0f}{typ} debit={debit:.1f}"}
+
+        if structure == "iron_condor":
+            # Direction-agnostic, defined-risk short vol: sell an OTM strangle, buy
+            # further-OTM wings to cap the tail. `short_otm_pct` sets the short legs;
+            # `wing_width` strikes beyond sets the longs. Net credit; max loss capped
+            # at (wing_width * interval - credit) per side.
+            short_dist = max(1, round(spot * self._short_otm / interval))
+            ce_s_k = atm + short_dist * interval
+            pe_s_k = atm - short_dist * interval
+            ce_l_k = ce_s_k + self._wing * interval
+            pe_l_k = pe_s_k - self._wing * interval
+            ce_s, ce_l = settle(ce_s_k, "CE"), settle(ce_l_k, "CE")
+            pe_s, pe_l = settle(pe_s_k, "PE"), settle(pe_l_k, "PE")
+            if not ce_s or not pe_s or ce_l is None or pe_l is None:
+                return None
+            credit = ((_fill(ce_s, "SELL") - _fill(ce_l, "BUY"))
+                      + (_fill(pe_s, "SELL") - _fill(pe_l, "BUY")))
+            if credit <= 0:
+                return None
+            return {"kind": "credit", "structure": structure, "u": u, "expiry": expiry,
+                    "ce_short": ce_s_k, "ce_long": ce_l_k, "pe_short": pe_s_k, "pe_long": pe_l_k,
+                    "short_k": ce_s_k, "typ": "CE",  # reference leg for lot sizing
+                    "entry_basis": credit, "entry_ref": credit,
+                    "tp": float(p.get("credit_tp", 0.5)), "sl": float(p.get("credit_sl", 1.0)),
+                    "entry_idx": idx, "entry_day": day,
+                    "desc": f"IC {pe_l_k:.0f}/{pe_s_k:.0f}-{ce_s_k:.0f}/{ce_l_k:.0f} cr={credit:.1f}"}
         return None
 
     def _value(self, pos, u, day):
@@ -235,6 +264,17 @@ class EODOptionsBacktest:
             _, k, typ = pos["legs"][0]
             px = self.store.leg_settle(u, day, pos["expiry"], k, typ)
             return _fill(px, "SELL") if px else None
+        if s == "iron_condor":
+            exp = pos["expiry"]
+            ce_s = self.store.leg_settle(u, day, exp, pos["ce_short"], "CE")
+            ce_l = self.store.leg_settle(u, day, exp, pos["ce_long"], "CE")
+            pe_s = self.store.leg_settle(u, day, exp, pos["pe_short"], "PE")
+            pe_l = self.store.leg_settle(u, day, exp, pos["pe_long"], "PE")
+            if None in (ce_s, ce_l, pe_s, pe_l):
+                return None
+            # cost to close = buy back shorts, sell the wings back
+            return ((_fill(ce_s, "BUY") - _fill(ce_l, "SELL"))
+                    + (_fill(pe_s, "BUY") - _fill(pe_l, "SELL")))
         # spreads: value = cost to close (credit) / spread value (debit)
         short_px = self.store.leg_settle(u, day, pos["expiry"], pos["short_k"], pos["typ"])
         long_px = self.store.leg_settle(u, day, pos["expiry"], pos["long_k"], pos["typ"])
@@ -246,11 +286,11 @@ class EODOptionsBacktest:
 
     def _close(self, pos, day, val, reason, trades):
         s = pos["structure"]
-        if s == "credit_spread":
-            pnl_per_unit = pos["entry_basis"] - val
+        if s in ("credit_spread", "iron_condor"):
+            pnl_per_unit = pos["entry_basis"] - val   # credit kept minus cost to close
         else:
             pnl_per_unit = val - pos["entry_basis"]
-        legs = 1 if s == "single_leg" else 2
+        legs = {"single_leg": 1, "iron_condor": 4}.get(s, 2)
         gross = pnl_per_unit * pos["lot"]
         costs = BROKERAGE_PER_LEG * legs * 2
         trades.append({
