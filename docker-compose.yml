@@ -93,9 +93,11 @@ services:
     volumes:
       - backend-state:/data
       - ./wiki:/app/wiki
-      # Free EOD options-history store (bhavcopy) for the OOS backtester.
-      # Read-only; populated on the host by scripts/bhavcopy_ingest.py.
-      - ./data/bhavcopy_fo:/app/data/bhavcopy_fo:ro
+      # Free EOD bhavcopy stores for the OOS backtester: bhavcopy_fo (index F&O) +
+      # bhavcopy_cm (NSE equity EOD, EDR-05). Writable so the daily ingest cron
+      # (scripts/bhavcopy_ingest.py, run via docker exec) keeps them fresh and
+      # they persist across container restarts.
+      - ./data:/app/data
     depends_on:
       mongo:
         condition: service_healthy
