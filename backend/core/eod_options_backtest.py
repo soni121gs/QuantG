@@ -87,7 +87,11 @@ class EODOptionsBacktest:
         lots = int(opt.get("lots") or 1)
         width = int(p.get("width") or opt.get("spread_width") or 2)
         # iron_condor geometry: short legs `short_otm_pct` OTM, long wings `wing_width` strikes beyond
-        self._short_otm = float(p.get("short_otm_pct") or opt.get("short_otm_pct") or 0.02)
+        _otm_raw = p.get("short_otm_pct")
+        if _otm_raw is None:
+            _otm_raw = opt.get("short_otm_pct")
+        self._short_otm = float(_otm_raw) if _otm_raw is not None else 0.02   # condor default 2% OTM
+        self._credit_otm = float(_otm_raw) if _otm_raw is not None else 0.0   # credit_spread: ATM unless set
         self._wing = int(p.get("wing_width") or opt.get("wing_width") or width or 4)
         # exit_mode="expiry" holds a defined-risk structure to expiry with NO intraday
         # tp/sl — required for condors, whose max loss is measured in wing-widths, not
@@ -207,8 +211,15 @@ class EODOptionsBacktest:
 
         if structure == "credit_spread":
             typ = "PE" if bullish else "CE"
-            short_k = atm
-            long_k = atm - width * interval if bullish else atm + width * interval
+            # short leg `short_otm_pct` OTM (0 = ATM, the default). Put spread sits below
+            # spot, call spread above; the long wing is `width` strikes further OTM.
+            short_dist = round(spot * self._credit_otm / interval)
+            if bullish:   # sell put spread (OTM below)
+                short_k = atm - short_dist * interval
+                long_k = short_k - width * interval
+            else:         # sell call spread (OTM above)
+                short_k = atm + short_dist * interval
+                long_k = short_k + width * interval
             sp, lp = settle(short_k, typ), settle(long_k, typ)
             if not sp or lp is None:
                 return None
@@ -266,8 +277,38 @@ class EODOptionsBacktest:
                     "desc": f"IC {pe_l_k:.0f}/{pe_s_k:.0f}-{ce_s_k:.0f}/{ce_l_k:.0f} cr={credit:.1f}"}
         return None
 
+    def _intrinsic_value(self, pos, s_exp):
+        """Cost-to-close / mark at exact cash-settled index intrinsic — the faithful
+        expiry mark (per-leg premiums are unreliable on expiry day)."""
+        s = pos["structure"]
+        if s == "single_leg":
+            _, k, typ = pos["legs"][0]
+            return max(0.0, s_exp - k) if typ == "CE" else max(0.0, k - s_exp)
+        if s == "credit_spread":
+            sk, lk, typ = pos["short_k"], pos["long_k"], pos["typ"]
+            v = (max(0.0, sk - s_exp) - max(0.0, lk - s_exp)) if typ == "PE" \
+                else (max(0.0, s_exp - sk) - max(0.0, s_exp - lk))
+            return max(0.0, v)
+        if s == "debit_spread":
+            sk, lk, typ = pos["short_k"], pos["long_k"], pos["typ"]
+            v = (max(0.0, s_exp - lk) - max(0.0, s_exp - sk)) if typ == "CE" \
+                else (max(0.0, lk - s_exp) - max(0.0, sk - s_exp))
+            return max(0.0, v)
+        if s == "iron_condor":
+            cs, cl, ps, pl = pos["ce_short"], pos["ce_long"], pos["pe_short"], pos["pe_long"]
+            return max(0.0, (max(0.0, s_exp - cs) - max(0.0, s_exp - cl)
+                             + max(0.0, ps - s_exp) - max(0.0, pl - s_exp)))
+        return None
+
     def _value(self, pos, u, day):
         s = pos["structure"]
+        # Hold-to-expiry mode: settle at exact index intrinsic once at/after expiry.
+        if getattr(self, "_exit_mode", "") == "expiry" and day >= pos["expiry"]:
+            s_exp = getattr(self, "_close_by", {}).get(pos["expiry"]) or getattr(self, "_close_by", {}).get(day)
+            if s_exp is not None:
+                iv = self._intrinsic_value(pos, s_exp)
+                if iv is not None:
+                    return iv
         if s == "single_leg":
             _, k, typ = pos["legs"][0]
             px = self.store.leg_settle(u, day, pos["expiry"], k, typ)
