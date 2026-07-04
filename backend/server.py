@@ -1543,6 +1543,21 @@ CREDIT_SPREAD_THETA_NAMES = {
     "NIFTY Momentum Buyer",
 }
 
+# EDR-03 (2026-07-04): the entire pre-2026-07 book has ZERO out-of-sample edge
+# (OOS validator: 0 CANDIDATE_EDGE across 23 strategies). Archived on startup and
+# replaced by the OOS-validated "NIFTY Put Spread Theta (OOS)" (EDR-09/EDR-10).
+# Archiving (not deleting) preserves P&L history; the runner skips status=archived.
+DEAD_STRATEGY_NAMES = frozenset({
+    "SENSEX Swing RSI Pullback", "NIFTY Micro-Lot Trend Follower", "NIFTY HFT Quick Scalper",
+    "BANKNIFTY HFT Momentum Scalper", "NIFTY Quick EMA Scalper", "BANKNIFTY Volatility Breakout",
+    "NIFTY Momentum Buyer", "BANKNIFTY Breakout Buyer", "NIFTY VWAP Trend Breakout",
+    "RELIANCE Trend Rider", "SBIN Short Seller", "HDFCBANK Range Rebound",
+    "ICICIBANK Volatility Breakout", "TCS Swing Accumulator", "INFY VWAP Pullback",
+    "AXISBANK Trend Follower", "LT Momentum Rider", "BHARTIARTL Intraday Trend",
+    "KOTAKBANK RSI Rebound", "NIFTY Theta Credit Spread", "NIFTY Range Credit Spread",
+    "BANKNIFTY Theta Credit Spread", "SENSEX Theta Credit Spread",
+})
+
 CREDIT_SPREAD_THETA_RISK = {
     "cooldown_minutes": 15,
     "max_trades_day": 8,
@@ -3392,6 +3407,29 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
 
 
 DEFAULT_OPTION_STRATEGIES = [
+    {
+        # EDR-10 (2026-07-04): the FIRST OOS-validated edge. Sell a defined-risk ~3% OTM
+        # NIFTY put spread, hold to weekly expiry (no intraday stop) — harvest the
+        # downside vol-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy:
+        # +₹214/trade, 95% WR, both years positive (EDR-09). short_otm_pct/wing_width/
+        # exit_mode drive the Edge Lab OOS backtest (core/eod_options_backtest). Seeds
+        # DRAFT — live multi-day hold-to-expiry exit wiring is pending (EDR-11), so it
+        # must be validated forward-paper before going live.
+        "name": "NIFTY Put Spread Theta (OOS)",
+        "description": "First OOS-validated edge (EDR-09): sell a defined-risk ~3% OTM NIFTY put spread and hold to weekly expiry to harvest the downside volatility-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy (+₹214/trade, 95% WR, both years positive). Seeded DRAFT for forward-paper; live hold-to-expiry exit wiring pending (EDR-11).",
+        "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
+        "structure": "credit_spread", "spread_width": 6,
+        "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry",
+        "strategy_type": "Option Selling", "required_capital": 25000.0, "instrument_group": "NFO",
+        "python_code": """def run(data):
+    # Always the put side (BUY = sell put spread); the engine opens one spread per
+    # weekly expiry while flat and holds it to expiry.
+    if len(data) < 5:
+        return []
+    return [{'date': d['date'], 'action': 'BUY', 'reason': 'sell 3% OTM put spread, hold to expiry'} for d in data]
+""",
+        "market_suitability": "Non-crash / range-to-up markets (short downside vol)",
+    },
     {
         "name": "NIFTY Momentum Buyer",
         "description": "Upstox-compatible single-leg NIFTY ATM option buying strategy. Uses live NIFTY candles, resolves the exact Upstox option instrument_key, enters on momentum, and exits through the same order manager.",
@@ -6174,6 +6212,11 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             # or debit_spread. Consumed by the spread builder at signal time.
             "structure": template.get("structure") or "single_leg",
             "spread_width": template.get("spread_width"),
+            # EDR-09/10: OTM short-leg distance + wing + hold-to-expiry, consumed by the
+            # Edge Lab OOS backtester (core/eod_options_backtest). None on legacy templates.
+            "short_otm_pct": template.get("short_otm_pct"),
+            "wing_width": template.get("wing_width"),
+            "exit_mode": template.get("exit_mode"),
         }
         
     risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}
@@ -16358,7 +16401,14 @@ async def startup():
                         s_updates["instrument_group"] = "REMOVED"
                         s_updates["last_filter_reason"] = "MCX commodity strategies were removed; QuantG is Upstox-only for NSE/BSE/NFO/BFO."
                         logger.warning("Archived removed MCX strategy %s during startup cleanup", s.get("id"))
-                    
+
+                    # EDR-03: archive the zero-OOS-edge book (replaced by the OOS-validated put spread).
+                    if s.get("name") in DEAD_STRATEGY_NAMES and s.get("status") != "archived":
+                        s_updates["status"] = "archived"
+                        s_updates["mode"] = "paper"
+                        s_updates["last_filter_reason"] = "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
+                        logger.warning("Archived no-edge strategy %s (EDR-03)", s.get("name"))
+
                     if s_updates:
                         await db.strategies.update_one({"id": s["id"], "user_id": user_id}, {"$set": s_updates})
                 
