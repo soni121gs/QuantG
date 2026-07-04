@@ -14,12 +14,33 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 **🚫 NEW LAW (supersedes daily tweaking):** do NOT tune the existing strategies. Every strategy change / new strategy must PASS the OOS validator first. Discipline: hypothesis → OOS backtest → forward-paper → live. Grade ideas on OOS expectancy, not daily paper P&L.
 
-**▶ NEW ACTIVE PROGRAM — Edge Discovery & Book Rebuild (EDR):**
-- `[ ]` **EDR-01** Base-rate studies on the bhavcopy data (short-vol vs long-vol; ATM straddle-to-expiry; iron-condor-in-RANGE; underlying daily trend) — find WHERE edge could live before building. Tier 3.
-- `[ ]` **EDR-02** Design NEW option strategies from EDR-01 findings; each must pass `run_oos_validation.py` (CANDIDATE_EDGE, 30+ trades, positive OOS). Tier 3.
-- `[ ]` **EDR-03** Archive + de-template the 11 dead option strategies + 10 equity (touch-points in CLAUDE.md §13). Off-hours, one commit + rebuild, PAIRED with EDR-02 replacements so the book isn't emptied. Update catalog tests. Tier 3.
-- `[ ]` **EDR-04** Bake the research modules (`bhavcopy_store`, `eod_options_backtest`, `run_*`) into the backend image on next off-hours rebuild (currently `docker cp`'d for ad-hoc runs); ship `/app/data/bhavcopy_fo`. Tier 2.
-- `[ ]` **EDR-05** (data gap) BSE SENSEX/BANKEX bhavcopy is Akamai-gated — needs a browser/manual fetch; and equity needs NSE_EQ stock EOD data before equity can be backtested/rebuilt. Tier 2.
+**▶ NEW ACTIVE PROGRAM — Edge Discovery & Book Rebuild (EDR) — restructured 2026-07-04, priority-wise:**
+
+The findings are in: short OTM vol (vol risk premium) is the ONE real edge, monotonic in
+OTM distance (SENSEX ~2% OTM strangle +₹2,047/cycle, 82% WR); directional is a random walk;
+naked = fat tails. So the program is no longer "search" — it is "turn the naked edge into a
+defined-risk deployable strategy, make the science visible in the app, then archive the dead
+book." See [[project_base_rate_findings_07_04]].
+
+🔴 **PRIORITY 0 — prove ONE deployable edge (blocks live, blocks the rebuild):**
+- `[x]` **EDR-01** Base-rate studies (`backend/scripts/base_rate_studies.py`, ran 2026-07-04, `d94e925`) — DONE. Verdict: short OTM vol pays (monotonic in distance); no directional edge; regime unreliable; naked = undefined tail risk. This replaced the open-ended search with a concrete target.
+- `[ ]` **EDR-06** *(new)* Extend `core/eod_options_backtest.py` to a **4-leg `iron_condor`** structure (short ~2% OTM strangle + long further-OTM wings), priced settle-to-settle with the existing slippage/brokerage model. **Blocks EDR-02/07.** Tier 3.
+- `[ ]` **EDR-07** *(new)* Condor base-rate study: does the ~2% OTM short-vol edge SURVIVE after paying for the wings that cap the tail? Fast yes/no before wiring a full strategy. Tier 3.
+- `[ ]` **EDR-02** *(modify)* Design NEW option strategies **from the short-vol / defined-risk-condor finding** (not open-ended); each must pass `run_oos_validation.py` (CANDIDATE_EDGE, 30+ trades, positive OOS). Tier 3.
+- `[ ]` **EDR-08** *(new)* OOS-split the **SENSEX ~2% OTM standout per-year** — 2024-25 SENSEX was a calm grind-up; verify the edge holds year-by-year, not one benign regime. Tier 3.
+
+🟠 **PRIORITY 1 — make the science visible + ship the research modules:**
+- `[~]` **FE-01** *(new, THIS SESSION)* Backend Edge Lab endpoints: `GET /ops/edge-lab` (serves cached snapshot) + `POST /ops/edge-lab/refresh` (background rebuild) backed by `core/edge_lab.py` (coverage + short-vol base-rate + per-strategy OOS verdict + credit-spread sweep) and `scripts/build_edge_lab_snapshot.py` → `db.edge_lab_snapshots`. Tier 2.
+- `[~]` **FE-02** *(new, THIS SESSION)* Frontend: repurpose the Analytics **"Option-priced backtest" tab → "Edge Lab (OOS)"** (data-coverage banner + short-vol base-rate table + OOS verdict scorecard + sweep evidence, with a background-rebuild Refresh+poll). `frontend/src/pages/Analytics.jsx`. Tier 2.
+- `[ ]` **FE-03** *(new)* Retire the OLD in-sample backtester now that Edge Lab is live: delete `core/options_backtest.py` + `POST /ops/options-backtest` (UI no longer calls it after FE-02). Audit `core/backtest_engine.py` / `backtrader_runner.py` for the same. Update tests. Tier 2.
+- `[x]` **EDR-04** Research modules are committed (`bhavcopy_store`, `eod_options_backtest`, `edge_lab`, `run_*`) and the data volume `./data/bhavcopy_fo:/app/data/bhavcopy_fo:ro` is mounted in `docker-compose.yml` — a normal `build backend` now ships them; no more `docker cp`. (Verify on next rebuild.)
+
+🟡 **PRIORITY 2 — data gaps + cleanup (gated on P0 producing a replacement):**
+- `[ ]` **EDR-05** (data gap) Automate the BSE SENSEX/BANKEX bhavcopy fetch (currently a manual real-browser run — Akamai-gated); and ingest **NSE_EQ stock EOD** data so the 10 equity strategies can finally be backtested/rebuilt. Tier 2.
+- `[ ]` **EDR-03** *(modify)* Archive + de-template the 11 dead option + 10 equity strategies (touch-points CLAUDE.md §13.6 — a DB delete re-seeds). **Now explicitly gated on EDR-02 shipping a validated replacement** so the book is never emptied. Off-hours, one commit + rebuild, update catalog tests. Tier 3.
+- `[ ]` **FE-04** *(new)* Phase-2 Edge Lab: a "strategy proposer" — pick structure/strikes/DTE → run OOS → see the verdict BEFORE it is ever seeded live. Turns the OOS-first discipline into a UI. Tier 3.
+
+⏸ **Gating updates:** `WR-73` (enable live) and HSI Stage-5 advisor now additionally require an OOS `CANDIDATE_EDGE` — which NO current strategy has, so both stay founder-gated behind Priority 0.
 
 **App reality now:** Paper mode (`CORE_ENGINE_LIVE_ENABLED=false`). ~24 strategies live but **none proven** — index options (single-leg + credit/debit spreads) + equity (10 NSE_EQ). Truth-bearing P&L source is `db.trade_fills`; the paper wallet self-heals to that ledger at EOD. Profit-lock + daily-loss kill-switch + directional-exposure cap all live.
 

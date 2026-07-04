@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3, RefreshCw, TrendingUp, TrendingDown, ArrowUpDown,
   Activity, AlertTriangle, FlaskConical, Layers, ShieldCheck, CircleSlash,
+  Database, Target, Zap,
 } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { toast } from "sonner";
@@ -9,6 +10,16 @@ import { toast } from "sonner";
 const money = (v) => `INR ${formatINR(v ?? 0)}`;
 const pct = (v) => `${Number(v ?? 0).toFixed(1)}%`;
 const num = (v, d = 2) => (v == null || Number.isNaN(Number(v)) ? "-" : Number(v).toFixed(d));
+const signCls = (v) => ((v ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]");
+
+const timeAgo = (iso) => {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
 
 // Honest letter-grade → colour. Mirrors core/metrics.grade thresholds.
 const GRADE_TONE = {
@@ -29,6 +40,24 @@ const GradeChip = ({ grade }) => {
       title={grade === "INSUFFICIENT" ? "Fewer than 5 trades — not enough to grade" : `Grade ${grade}`}
     >
       {label}
+    </span>
+  );
+};
+
+// OOS walk-forward verdict → tone. This is the truth column: is there an edge
+// that persists out-of-sample, or is it noise to archive?
+const VERDICT_TONE = {
+  CANDIDATE_EDGE: { text: "text-[var(--qd-profit)]", br: "border-[var(--qd-profit)]/40", label: "CANDIDATE EDGE" },
+  FRAGILE: { text: "text-[var(--qd-warn)]", br: "border-[var(--qd-warn)]/35", label: "FRAGILE" },
+  NO_EDGE_NEGATIVE: { text: "text-[var(--qd-loss)]", br: "border-[var(--qd-loss)]/35", label: "NO EDGE" },
+  INSUFFICIENT_DATA: { text: "text-[var(--qd-text-3)]", br: "border-[var(--qd-border)]", label: "THIN" },
+  ERROR: { text: "text-[var(--qd-text-3)]", br: "border-[var(--qd-border)]", label: "SKIPPED" },
+};
+const VerdictChip = ({ verdict }) => {
+  const t = VERDICT_TONE[verdict] || VERDICT_TONE.ERROR;
+  return (
+    <span className={`inline-flex rounded-md border px-2 py-1 font-mono text-[10px] font-bold ${t.text} ${t.br}`}>
+      {t.label}
     </span>
   );
 };
@@ -73,7 +102,7 @@ const StructureCard = ({ name, agg }) => {
       <div className={`mt-2 font-head text-2xl font-bold ${pnlPos ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(agg.total_pnl)}</div>
       <div className="mt-1 grid grid-cols-2 gap-2 font-mono text-[11px] text-[var(--qd-text-2)]">
         <div>Win rate: <span className="text-[var(--qd-text)]">{pct((agg.win_rate ?? 0) * 100)}</span></div>
-        <div>Expectancy: <span className={(agg.expectancy ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{money(agg.expectancy)}</span></div>
+        <div>Expectancy: <span className={signCls(agg.expectancy)}>{money(agg.expectancy)}</span></div>
       </div>
     </div>
   );
@@ -117,15 +146,245 @@ const verdictTone = (verdict) => (
   verdict === "KEEP" ? "good" : verdict === "KILL" ? "bad" : "warn"
 );
 
+// ---- Edge Lab (OOS research surface) ---------------------------------------
+
+// One short-vol cell: mean ₹/cycle (win-rate), tinted by sign. Tooltip carries n / sum / worst.
+const VolCell = ({ s, highlight }) => {
+  if (!s) return <td className="px-3 py-2 text-center font-mono text-[11px] text-[var(--qd-text-3)]">—</td>;
+  return (
+    <td className={`px-3 py-2 text-center ${highlight ? "bg-[var(--qd-surface-2)]" : ""}`}
+        title={`n=${s.n} cycles · Σ ${money(s.sum_rupees)} · worst ${num(s.worst_pts, 0)} pts`}>
+      <div className={`font-mono text-sm font-semibold ${signCls(s.mean_rupees)}`}>{money(s.mean_rupees)}</div>
+      <div className="font-mono text-[11px] text-[var(--qd-text-3)]">{pct(s.win_rate)} WR</div>
+    </td>
+  );
+};
+
+function EdgeLab({ data, loading, onRefresh }) {
+  const building = data?.building || data?.status === "building";
+
+  if (loading && !data) {
+    return <div className="qd-card p-10 text-center font-mono text-xs text-[var(--qd-text-3)]">Loading Edge Lab…</div>;
+  }
+  if (!data || data.status === "empty") {
+    return (
+      <div className="qd-card p-10 text-center">
+        <FlaskConical className="mx-auto mb-3 text-[var(--qd-text-3)]" size={24} />
+        <div className="text-sm text-[var(--qd-text)]">No Edge Lab snapshot yet.</div>
+        <div className="mx-auto mt-1 max-w-md text-xs text-[var(--qd-text-2)]">
+          {data?.hint || "Builds an out-of-sample verdict for the whole book from 2 years of real NSE/BSE option settlement prices."}
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={building}
+          className="mt-4 inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-accent)]/40 bg-[var(--qd-surface-2)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-surface-3)] disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={building ? "animate-spin" : ""} /> {building ? "Building…" : "Build snapshot"}
+        </button>
+      </div>
+    );
+  }
+
+  if (data.status === "error") {
+    return (
+      <div className="qd-card border-l-2 border-l-[var(--qd-loss)] p-6">
+        <div className="qd-section-title text-[var(--qd-loss)]">Edge Lab build failed</div>
+        <div className="mt-1 font-mono text-xs text-[var(--qd-text-2)]">{data.error}</div>
+        <button type="button" onClick={onRefresh} className="mt-3 font-mono text-xs text-[var(--qd-accent)]">Retry</button>
+      </div>
+    );
+  }
+
+  const cov = data.coverage || {};
+  const shortVol = data.base_rate?.short_vol || [];
+  const directional = data.base_rate?.directional || [];
+  const oos = data.oos || {};
+  const oosCounts = oos.counts || {};
+  const sweep = data.sweep || [];
+
+  return (
+    <div className="space-y-5">
+      {/* Freshness / build bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-4 py-2.5">
+        <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--qd-text-3)]">
+          <Database size={13} />
+          {building ? "Rebuilding snapshot (this can take a few minutes)…" : `Snapshot ${timeAgo(data.generated_at)}`}
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={building}
+          className="inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={building ? "animate-spin" : ""} /> {building ? "Building" : "Rebuild"}
+        </button>
+      </div>
+
+      {/* Data coverage — honesty about what can/can't be tested */}
+      <section className="qd-card p-5">
+        <div className="qd-section-title flex items-center gap-1.5"><Database size={13} /> // Real data coverage</div>
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+          <div className="font-head text-lg font-semibold text-[var(--qd-text)]">
+            {cov.first} → {cov.last}
+          </div>
+          <div className="font-mono text-xs text-[var(--qd-text-2)]">{cov.n_days} trading days · NSE/BSE F&O settlement prices</div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(cov.underlyings || []).map((u) => (
+            <span key={u.underlying} className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2.5 py-1 font-mono text-[11px] text-[var(--qd-text-2)]"
+                  title={`${u.first} → ${u.last}`}>
+              {u.underlying} <span className="text-[var(--qd-text-3)]">· {u.days}d</span>
+            </span>
+          ))}
+        </div>
+        {(cov.gaps || []).length > 0 && (
+          <div className="mt-3 space-y-1">
+            {cov.gaps.map((g, i) => (
+              <div key={i} className="flex items-start gap-1.5 font-mono text-[11px] text-[var(--qd-text-3)]">
+                <CircleSlash size={12} className="mt-0.5 shrink-0" /> {g}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Base-rate finding — the short-OTM-vol edge */}
+      <section className="qd-card overflow-hidden">
+        <div className="border-b border-[var(--qd-border)] px-5 py-4">
+          <div className="qd-section-title flex items-center gap-1.5"><Target size={13} /> // Where the edge lives</div>
+          <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Short-vol base rate — sell &amp; hold to expiry</h2>
+          <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+            Per-cycle P&amp;L of selling a strangle and holding to weekly settlement (entry slippage {pct((data.base_rate?.slippage_pct ?? 0) * 100)}/leg).
+            The vol risk premium is real and grows the further OTM you sell — the lever is distance, not regime.
+          </p>
+        </div>
+        <div className="qd-table-wrap overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                <th className="px-3 py-2.5">Underlying</th>
+                <th className="px-3 py-2.5 text-center">ATM straddle</th>
+                <th className="px-3 py-2.5 text-center">~1% OTM</th>
+                <th className="px-3 py-2.5 text-center">~2% OTM <span className="text-[var(--qd-accent)]">◆</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shortVol.map((r) => (
+                <tr key={r.underlying} className="border-b border-[var(--qd-border)]">
+                  <td className="px-3 py-2 font-mono font-semibold text-[var(--qd-text)]">{r.underlying}<span className="ml-1 text-[11px] text-[var(--qd-text-3)]">lot {r.lot}</span></td>
+                  <VolCell s={r.atm} />
+                  <VolCell s={r.otm_1pct} />
+                  <VolCell s={r.otm_2pct} highlight />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="border-t border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-5 py-3 space-y-1 font-mono text-[11px] text-[var(--qd-text-3)]">
+          <div><Zap size={11} className="mr-1 inline text-[var(--qd-warn)]" /><span className="text-[var(--qd-warn)]">Naked = undefined risk.</span> These are the raw edge, not yet deployable — the next build is a defined-risk iron condor (buy wings to cap the tail).</div>
+          <div>
+            No directional edge: {directional.map((d) => `${d.underlying} ${num(d.continuation_wr, 0)}% cont / ${num(d.mean_fwd_return_pct, 2)}% fwd`).join(" · ")} — ≈ random walk. Stop building buyers.
+          </div>
+        </div>
+      </section>
+
+      {/* Per-strategy OOS verdict — the truth about the live book */}
+      <section className="qd-card overflow-hidden">
+        <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-5 py-4">
+          <div>
+            <div className="qd-section-title flex items-center gap-1.5"><ShieldCheck size={13} /> // Walk-forward truth</div>
+            <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Out-of-sample verdict</h2>
+          </div>
+          <div className="flex flex-wrap justify-end gap-1.5 font-mono text-[11px]">
+            <span className="text-[var(--qd-profit)]">{oosCounts.CANDIDATE_EDGE || 0} edge</span>
+            <span className="text-[var(--qd-text-3)]">·</span>
+            <span className="text-[var(--qd-warn)]">{oosCounts.FRAGILE || 0} fragile</span>
+            <span className="text-[var(--qd-text-3)]">·</span>
+            <span className="text-[var(--qd-loss)]">{oosCounts.NO_EDGE_NEGATIVE || 0} no-edge</span>
+            <span className="text-[var(--qd-text-3)]">·</span>
+            <span className="text-[var(--qd-text-3)]">{(oosCounts.INSUFFICIENT_DATA || 0) + (oosCounts.ERROR || 0)} thin</span>
+          </div>
+        </div>
+        <div className="qd-table-wrap overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
+                <th className="px-3 py-2.5">Strategy</th>
+                <th className="px-3 py-2.5">Verdict</th>
+                <th className="px-3 py-2.5 text-right">Trades</th>
+                <th className="px-3 py-2.5 text-right">Expectancy</th>
+                <th className="px-3 py-2.5 text-right">OOS exp</th>
+                <th className="px-3 py-2.5 text-right">Win%</th>
+                <th className="px-3 py-2.5 text-right">Green mo</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {(oos.rows || []).map((r, i) => (
+                <tr key={i} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
+                  <td className="px-3 py-2.5">
+                    <div className="font-semibold text-[var(--qd-text)]">{r.name}</div>
+                    <div className="text-[11px] text-[var(--qd-text-3)]">{r.error ? r.error : `${r.structure || "-"}${r.underlying ? ` · ${r.underlying}` : ""}`}</div>
+                  </td>
+                  <td className="px-3 py-2.5"><VerdictChip verdict={r.verdict || "ERROR"} /></td>
+                  <td className="px-3 py-2.5 text-right text-[var(--qd-text-2)]">{r.n ?? "-"}</td>
+                  <td className={`px-3 py-2.5 text-right ${signCls(r.expectancy)}`}>{r.error ? "-" : money(r.expectancy)}</td>
+                  <td className={`px-3 py-2.5 text-right ${signCls(r.oos_expectancy)}`}>{r.error ? "-" : money(r.oos_expectancy)}</td>
+                  <td className="px-3 py-2.5 text-right text-[var(--qd-text-2)]">{r.win_rate != null ? pct(r.win_rate) : "-"}</td>
+                  <td className="px-3 py-2.5 text-right text-[var(--qd-text-2)]">{r.pct_green_months != null ? pct(r.pct_green_months) : "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Sweep evidence — the credit-spread geometry is structurally negative */}
+      {sweep.length > 0 && (
+        <section className="qd-card overflow-hidden">
+          <div className="border-b border-[var(--qd-border)] px-5 py-4">
+            <div className="qd-section-title flex items-center gap-1.5"><FlaskConical size={13} /> // Exit-geometry sweep</div>
+            <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Can tuning save the credit-spread book?</h2>
+            <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">A grid over take-profit × stop × width × DTE, each run through the OOS validator. If nothing crosses positive OOS, the geometry is structurally negative — not tunable.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
+            {sweep.map((s) => {
+              const dead = (s.positive_oos || 0) === 0;
+              return (
+                <div key={s.name} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4">
+                  <div className="font-mono text-xs font-semibold text-[var(--qd-text)]">{s.name}</div>
+                  <div className={`mt-2 font-head text-2xl font-bold ${dead ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"}`}>
+                    {s.positive_oos} / {s.configs}
+                  </div>
+                  <div className="font-mono text-[11px] text-[var(--qd-text-3)]">configs positive out-of-sample · {s.candidate_edges} candidate-edge</div>
+                  <div className={`mt-2 font-mono text-[11px] ${dead ? "text-[var(--qd-loss)]" : "text-[var(--qd-warn)]"}`}>
+                    {dead ? "Structurally negative — no config is tunable to an edge." : "Some configs survive — validate before trusting."}
+                  </div>
+                  {(s.cells || []).slice(0, 3).length > 0 && (
+                    <div className="mt-3 border-t border-[var(--qd-border)] pt-2 font-mono text-[10px] text-[var(--qd-text-3)]">
+                      best OOS: {(s.cells || []).slice(0, 3).map((c) => `tp${c.tp}/sl${c.sl}/w${c.width}/d${c.dte}=${money(c.oos_expectancy)}`).join("  ·  ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export default function Analytics() {
-  const [tab, setTab] = useState("realized"); // realized | backtest
+  const [tab, setTab] = useState("realized"); // realized | edgelab
   const [scorecard, setScorecard] = useState(null);
   const [oos, setOos] = useState(null);
-  const [backtest, setBacktest] = useState(null);
+  const [edgeLab, setEdgeLab] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [btLoading, setBtLoading] = useState(false);
+  const [elLoading, setElLoading] = useState(false);
   const [error, setError] = useState("");
   const [sort, setSort] = useState({ col: "sharpe", dir: "desc" });
+  const pollRef = useRef(null);
 
   const loadScorecard = useCallback(async () => {
     setLoading(true);
@@ -144,19 +403,41 @@ export default function Analytics() {
     }
   }, []);
 
-  const runBacktest = useCallback(async () => {
-    setBtLoading(true);
+  const loadEdgeLab = useCallback(async () => {
+    setElLoading(true);
     try {
-      const r = await api.post("/ops/options-backtest", {});
-      setBacktest(r.data);
+      const r = await api.get("/ops/edge-lab");
+      setEdgeLab(r.data);
+      return r.data;
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Backtest failed");
+      toast.error(e?.response?.data?.detail || "Failed to load Edge Lab");
+      return null;
     } finally {
-      setBtLoading(false);
+      setElLoading(false);
     }
   }, []);
 
+  // Kick off a background rebuild, then poll the cached snapshot until it lands.
+  const refreshEdgeLab = useCallback(async () => {
+    try {
+      await api.post("/ops/edge-lab/refresh");
+      setEdgeLab((d) => ({ ...(d || {}), status: d?.status || "empty", building: true }));
+      toast.info("Building Edge Lab snapshot — this can take a few minutes.");
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        const d = await loadEdgeLab();
+        if (d && !d.building && d.status !== "building") {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }, 5000);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not start Edge Lab build");
+    }
+  }, [loadEdgeLab]);
+
   useEffect(() => { loadScorecard(); }, [loadScorecard]);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const onSort = (col) =>
     setSort((s) => (s.col === col ? { col, dir: s.dir === "desc" ? "asc" : "desc" } : { col, dir: "desc" }));
@@ -175,11 +456,6 @@ export default function Analytics() {
       return 0;
     });
   }, [scorecard, sort]);
-
-  const btRows = useMemo(() => {
-    const data = (backtest?.results || []).filter((r) => !r.error);
-    return [...data].sort((a, b) => (b.sharpe ?? -999) - (a.sharpe ?? -999));
-  }, [backtest]);
 
   const byStructure = scorecard?.by_structure || {};
   const verdicts = scorecard?.verdicts?.counts || {};
@@ -201,18 +477,18 @@ export default function Analytics() {
             <BarChart3 size={22} />
           </div>
           <div>
-            <div className="qd-section-title">Edge & Risk</div>
+            <div className="qd-section-title">Edge &amp; Risk</div>
             <h1 className="font-head text-2xl font-extrabold text-[var(--qd-text)]">Strategy Analytics</h1>
-            <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">Risk-adjusted scoring (Sharpe · Sortino · profit-factor · expectancy) from real trades — ranks by edge, not raw P&L.</p>
+            <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">Realized risk-adjusted scoring from live trades, and the Edge Lab — an out-of-sample verdict on the whole book from 2 years of real option prices.</p>
           </div>
         </div>
         <button
           type="button"
-          onClick={() => (tab === "realized" ? loadScorecard() : runBacktest())}
-          disabled={loading || btLoading}
+          onClick={() => (tab === "realized" ? loadScorecard() : refreshEdgeLab())}
+          disabled={loading || elLoading}
           className="flex items-center gap-2 self-start rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
         >
-          <RefreshCw size={14} className={loading || btLoading ? "animate-spin" : ""} /> Refresh
+          <RefreshCw size={14} className={loading || elLoading ? "animate-spin" : ""} /> {tab === "realized" ? "Refresh" : "Rebuild"}
         </button>
       </div>
 
@@ -220,12 +496,12 @@ export default function Analytics() {
       <div className="flex gap-2 border-b border-[var(--qd-border)] pb-px">
         {[
           { id: "realized", label: "Realized (live trades)" },
-          { id: "backtest", label: "Option-priced backtest" },
+          { id: "edgelab", label: "Edge Lab (OOS)" },
         ].map((t) => (
           <button
             key={t.id}
             type="button"
-            onClick={() => { setTab(t.id); if (t.id === "backtest" && !backtest) runBacktest(); }}
+            onClick={() => { setTab(t.id); if (t.id === "edgelab" && !edgeLab) loadEdgeLab(); }}
             className={`px-4 py-2.5 font-head text-xs font-semibold uppercase tracking-widest border-b-2 transition-colors ${
               tab === t.id ? "border-[var(--qd-accent)] text-[var(--qd-text)]" : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
@@ -336,11 +612,11 @@ export default function Analytics() {
                         <td className={`px-3 py-2.5 ${(r.sharpe ?? 0) >= 1 ? "text-[var(--qd-profit)]" : (r.sharpe ?? 0) < 0 ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}`}>{num(r.sharpe, 2)}</td>
                         <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{num(r.sortino, 2)}</td>
                         <td className={`px-3 py-2.5 ${(r.profit_factor ?? 0) >= 1.3 ? "text-[var(--qd-profit)]" : (r.profit_factor ?? 0) < 1 ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]"}`}>{num(r.profit_factor, 2)}</td>
-                        <td className={`px-3 py-2.5 ${(r.expectancy ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(r.expectancy)}</td>
+                        <td className={`px-3 py-2.5 ${signCls(r.expectancy)}`}>{money(r.expectancy)}</td>
                         <td className="px-3 py-2.5 text-[var(--qd-loss)]">{num(r.max_drawdown_pct, 1)}%</td>
                         <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{r.total_trades}</td>
                         <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{Math.round((r.win_rate ?? 0) * 100)}%</td>
-                        <td className={`px-3 py-2.5 text-right font-semibold ${(r.total_pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(r.total_pnl)}</td>
+                        <td className={`px-3 py-2.5 text-right font-semibold ${signCls(r.total_pnl)}`}>{money(r.total_pnl)}</td>
                         <td className="px-3 py-2.5">
                           <span
                             className={`inline-flex rounded-md border px-2 py-1 font-mono text-[10px] font-bold ${verdictTone(r.verdict) === "good" ? "border-[var(--qd-profit)]/35 text-[var(--qd-profit)]" : verdictTone(r.verdict) === "bad" ? "border-[var(--qd-loss)]/35 text-[var(--qd-loss)]" : "border-[var(--qd-warn)]/35 text-[var(--qd-warn)]"}`}
@@ -360,80 +636,8 @@ export default function Analytics() {
         </>
       )}
 
-      {tab === "backtest" && (
-        <section className="qd-card overflow-hidden">
-          <div className="flex items-center justify-between border-b border-[var(--qd-border)] px-5 py-4">
-            <div>
-              <div className="qd-section-title flex items-center gap-1.5"><FlaskConical size={13} /> // Option-priced, real chains</div>
-              <h2 className="mt-1 font-head text-lg font-semibold text-[var(--qd-text)]">Backtest (real CE/PE premiums)</h2>
-            </div>
-            <button
-              type="button"
-              onClick={runBacktest}
-              disabled={btLoading}
-              className="flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] hover:text-[var(--qd-text)] disabled:opacity-50"
-            >
-              <RefreshCw size={14} className={btLoading ? "animate-spin" : ""} /> Run
-            </button>
-          </div>
-
-          <div className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-5 py-2 font-mono text-[11px] text-[var(--qd-text-3)]">
-            Signals come from real 5-min underlying OHLC; legs priced from real chain snapshots. Sample is bounded by collected chain history.
-          </div>
-
-          {btLoading && !backtest ? (
-            <div className="p-10 text-center font-mono text-xs text-[var(--qd-text-3)]">Running backtest…</div>
-          ) : btRows.length === 0 ? (
-            <div className="p-10 text-center text-xs text-[var(--qd-text-2)]">No backtest results. Click Run to score option strategies on real chains.</div>
-          ) : (
-            <div className="qd-table-wrap overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">
-                    <th className="px-3 py-2.5">Strategy</th>
-                    <th className="px-3 py-2.5">Grade</th>
-                    <th className="px-3 py-2.5">Sharpe</th>
-                    <th className="px-3 py-2.5">PF</th>
-                    <th className="px-3 py-2.5">Signals</th>
-                    <th className="px-3 py-2.5">Trades</th>
-                    <th className="px-3 py-2.5">Win%</th>
-                    <th className="px-3 py-2.5">Source</th>
-                    <th className="px-3 py-2.5 text-right">Net P&L</th>
-                  </tr>
-                </thead>
-                <tbody className="font-mono">
-                  {btRows.map((r) => (
-                    <tr key={r.strategy_id} className="border-b border-[var(--qd-border)] hover:bg-[var(--qd-surface-2)]">
-                      <td className="px-3 py-2.5">
-                        <div className="font-semibold text-[var(--qd-text)]">{r.name}</div>
-                        <div className="text-[11px] text-[var(--qd-text-3)]">{r.structure}{r.underlying ? ` · ${r.underlying}` : ""}</div>
-                      </td>
-                      <td className="px-3 py-2.5"><GradeChip grade={r.grade} /></td>
-                      <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{num(r.sharpe, 2)}</td>
-                      <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{num(r.profit_factor, 2)}</td>
-                      <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{r.signals_in_window ?? r.signals ?? "-"}</td>
-                      <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{r.total_trades}</td>
-                      <td className="px-3 py-2.5 text-[var(--qd-text-2)]">{Math.round((r.win_rate ?? 0) * 100)}%</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`text-[11px] ${r.candle_source === "real_ohlc" ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"}`}>
-                          {r.candle_source === "real_ohlc" ? "real OHLC" : (r.candle_source || "-")}
-                        </span>
-                      </td>
-                      <td className={`px-3 py-2.5 text-right font-semibold ${(r.total_pnl ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(r.total_pnl)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* surface skipped strategies (e.g., no chain data) */}
-          {(backtest?.results || []).some((r) => r.error) && (
-            <div className="border-t border-[var(--qd-border)] px-5 py-3 font-mono text-[11px] text-[var(--qd-text-3)]">
-              Skipped: {(backtest.results.filter((r) => r.error)).map((r) => `${r.name || r.underlying} (${r.error})`).join(" · ")}
-            </div>
-          )}
-        </section>
+      {tab === "edgelab" && (
+        <EdgeLab data={edgeLab} loading={elLoading} onRefresh={refreshEdgeLab} />
       )}
     </div>
   );

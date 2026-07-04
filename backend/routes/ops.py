@@ -258,6 +258,70 @@ async def ops_eod_options_backtest(
             "count": len(results), "results": results}
 
 
+# ---- Edge Lab: cached OOS research surface (coverage + base-rate + OOS + sweep) ----
+
+_edge_lab_building = False
+
+
+async def _run_edge_lab_build(user_id: str) -> None:
+    """Heavy background compute → cache in db.edge_lab_snapshots(_id='latest').
+    Runs off the request path so the Edge Lab tab always loads instantly."""
+    global _edge_lab_building
+    try:
+        from core.edge_lab import build_snapshot
+        from core.bhavcopy_store import BhavcopyStore
+
+        strategies = await db.strategies.find(
+            {"user_id": user_id, "python_code": {"$nin": [None, ""]}}
+        ).to_list(500)
+        snap = await asyncio.to_thread(build_snapshot, strategies, BhavcopyStore())
+        snap["_id"] = "latest"
+        snap["built_by"] = user_id
+        await db.edge_lab_snapshots.replace_one({"_id": "latest"}, snap, upsert=True)
+    except Exception as exc:  # noqa: BLE001
+        await db.edge_lab_snapshots.update_one(
+            {"_id": "latest"},
+            {"$set": {"status": "error", "error": str(exc),
+                      "generated_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+    finally:
+        _edge_lab_building = False
+
+
+@router.get("/edge-lab")
+async def ops_edge_lab(user=Depends(get_current_user)):
+    """Serve the cached Edge Lab snapshot (data coverage, the short-OTM-vol base-rate
+    finding, per-strategy OOS verdicts, and the credit-spread exit-geometry sweep).
+    Read-only, instant — the heavy compute is done by POST /ops/edge-lab/refresh and
+    cached. Returns {status:'empty'} until the first build runs."""
+    doc = await db.edge_lab_snapshots.find_one({"_id": "latest"}, {"_id": 0})
+    if not doc:
+        return {"status": "empty", "building": _edge_lab_building,
+                "hint": "press Refresh to build the first Edge Lab snapshot"}
+    doc["building"] = _edge_lab_building
+    return doc
+
+
+@router.post("/edge-lab/refresh")
+async def ops_edge_lab_refresh(user=Depends(get_current_user)):
+    """Kick off a background rebuild of the Edge Lab snapshot (10s–several min over
+    2yr of chains). Returns immediately; poll GET /ops/edge-lab for the fresh
+    `generated_at`. Idempotent while a build is already running."""
+    global _edge_lab_building
+    if _edge_lab_building:
+        return {"status": "building", "already_running": True}
+    _edge_lab_building = True
+    await db.edge_lab_snapshots.update_one(
+        {"_id": "latest"},
+        {"$set": {"status": "building",
+                  "refresh_started_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    asyncio.create_task(_run_edge_lab_build(user["id"]))
+    return {"status": "building", "already_running": False}
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,
