@@ -38,6 +38,26 @@ logger = logging.getLogger("quantg.runner")
 TICK_SECONDS = int(os.environ.get("STRATEGY_RUNNER_TICK_SECONDS", "15"))
 # Min confidence bonus applied to signals aligned with CRASH/MELTUP regime
 REGIME_ALIGNED_CONFIDENCE_BONUS = float(os.environ.get("REGIME_ALIGNED_CONFIDENCE_BONUS", "10.0"))
+
+# HSI-52: cached Hermes advice (active OOS-passed lessons → confidence multiplier).
+# Read-only and OBSERVE-ONLY unless HERMES_ADVICE_ENABLED — code still decides.
+_HERMES_ADVICE_CACHE: Dict[str, Any] = {"advice": None, "at": 0.0}
+
+
+async def _hermes_advice_multiplier(db, user_id: str, regime: Any, structure: Any) -> float:
+    try:
+        import time as _t
+        from core.hermes_advisor import HERMES_ADVICE_ENABLED, confidence_multiplier, get_hermes_advice
+        if not HERMES_ADVICE_ENABLED:
+            return 1.0
+        now = _t.time()
+        if _HERMES_ADVICE_CACHE["advice"] is None or now - _HERMES_ADVICE_CACHE["at"] > 300:
+            _HERMES_ADVICE_CACHE["advice"] = await get_hermes_advice(db, user_id)
+            _HERMES_ADVICE_CACHE["at"] = now
+        return confidence_multiplier(_HERMES_ADVICE_CACHE["advice"] or {},
+                                     {"regime": str(regime or "").upper(), "structure": str(structure or "")})
+    except Exception:
+        return 1.0
 LOCK_TTL_SECONDS = 90  # lock auto-expires if a pod dies
 LOCK_ID = "strategy_runner"
 POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -1037,6 +1057,15 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 ).upper()
                 option_resolution_requested = bool(opt_cfg.get("enabled")) and instrument_type not in {"FUTURE", "FUTURES", "FUTCOM", "COMMODITY_FUTURE"}
                 option_buying_mode = option_resolution_requested and str(opt_cfg.get("strike_mode") or "").upper().endswith("BUY")
+
+                # HSI-52: consult the read-only Hermes advice surface. Always attaches
+                # the multiplier as diagnostics; only NUDGES confidence when
+                # HERMES_ADVICE_ENABLED (default off) — code still decides the trade.
+                _adv_mult = await _hermes_advice_multiplier(
+                    db, s.get("user_id"), _regime, opt_cfg.get("structure"))
+                last_sig["hermes_advice_multiplier"] = _adv_mult
+                if _adv_mult != 1.0 and last_sig.get("confidence") is not None:
+                    last_sig["confidence"] = round(min(100.0, max(0.0, float(last_sig["confidence"]) * _adv_mult)), 2)
 
                 # ── Equity / non-option single-leg exit routing (2026-06-30 fix) ──
                 # An exit signal (entry_reason carries "exit"/"close"/"squareoff", so

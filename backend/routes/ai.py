@@ -996,6 +996,15 @@ STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2 & STAGE 7):
      * `reason`: One-line justification grounded in the tool data.
      Example: PROPOSED_ACTION: {{"action": "draft_strategy_pause", "params": {{"strategy_id": "abc123", "reason": "4 consecutive losing exits today, grade F, expectancy -640"}}}}
 
+  7. Propose Config Change (action: "draft_config_change") — HSI-51, OOS-GATED
+     Propose changing ONE durable strategy field, justified by an OOS-VALIDATED lesson (`get_hermes_brain_health`). This is a non-trade config edit; it never places/closes trades. You may ONLY propose this if the lesson has `oos_passed=true`. Only `required_capital` and `visual_config.options.structure` can be applied directly (others get re-synced away and will surface an edit-in-template task). Params:
+     * `strategy_id`: target strategy id.
+     * `field`: one of `required_capital`, `visual_config.options.structure`.
+     * `proposed`: the new value.
+     * `lesson_id`: the OOS-passed lesson backing this (from the brain-health tool).
+     * `reason`: one-line justification citing the lesson's metric + OOS evidence.
+     Example: PROPOSED_ACTION: {{"action": "draft_config_change", "params": {{"strategy_id": "abc123", "field": "required_capital", "proposed": 16000, "lesson_id": "lsn_...", "reason": "credit_spread active lesson oos_passed +₹214/tr — scale sizing"}}}}
+
 - To propose any of these actions, you MUST append a single block matching exactly the format at the absolute end of your response text (replacing with actual action name and params keys/values in the JSON).
 - You may only propose one action per turn.
 - CRITICAL: You are PERMANENTLY FORBIDDEN from proposing or executing any trading actions (placing, modifying, or cancelling orders; changing live mode `CORE_ENGINE_LIVE_ENABLED`; modifying broker API keys; or direct settings overrides). Pausing a strategy is allowed (it only stops new entries); closing/exiting positions is NOT.
@@ -1416,7 +1425,7 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
     action_type = action.get("action_type")
     params = action.get("params") or {}
     
-    allowed_actions = {"update_profile", "draft_wiki_note", "draft_task_entry", "draft_incident_report", "draft_pr_summary", "draft_strategy_pause"}
+    allowed_actions = {"update_profile", "draft_wiki_note", "draft_task_entry", "draft_incident_report", "draft_pr_summary", "draft_strategy_pause", "draft_config_change"}
     if action_type not in allowed_actions:
         raise HTTPException(status_code=400, detail=f"Unsupported action type: {action_type}")
 
@@ -1618,6 +1627,71 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
             )
         except Exception as rec_exc:
             logger.warning("Failed to mark recommendation acted_on for pause: %s", rec_exc)
+
+    elif action_type == "draft_config_change":
+        # HSI-51: OOS-gated, approval-gated config edit. Non-trade. Only a lesson with
+        # oos_passed=true can drive it; only DB-durable fields are applied (others get
+        # re-synced away → surfaced as an edit-in-template task); rate-limited + reversible.
+        from core import hermes_advisor as _adv
+        strategy_id = params.get("strategy_id")
+        field = params.get("field")
+        proposed = params.get("proposed")
+        lesson_id = params.get("lesson_id")
+        if not (strategy_id and field and lesson_id) or proposed is None:
+            raise HTTPException(status_code=400, detail="strategy_id, field, proposed, lesson_id are required")
+
+        lesson = await db.hermes_lessons.find_one({"lesson_id": lesson_id, "user_id": user["id"]})
+        if not lesson:
+            raise HTTPException(status_code=404, detail=f"Lesson {lesson_id} not found")
+        if not lesson.get("oos_passed"):
+            raise HTTPException(status_code=400, detail="Lesson has not passed OOS validation — cannot apply (judge-first).")
+
+        recent = await _adv.count_recent_changes(db, user["id"])
+        if not _adv.within_rate_limit(recent):
+            raise HTTPException(status_code=429, detail=f"Config-change rate limit reached ({recent}/{_adv.HERMES_MAX_CHANGES_PER_WEEK} this week).")
+
+        strat = await db.strategies.find_one({"id": strategy_id, "user_id": user["id"]})
+        if not strat:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        if not _adv.is_db_durable_field(field):
+            # Non-durable field: a DB edit is re-synced away on restart → don't fake it.
+            # Surface an edit-in-template task instead (CLAUDE.md KEY MECHANIC).
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            try:
+                with open(os.path.join(root_dir, "TASKS.md"), "a", encoding="utf-8") as f:
+                    f.write(f"\n\n### HERMES-EDIT-IN-TEMPLATE — {strat.get('name')} `{field}` → {proposed}\n"
+                            f"- **Status**: `[ ]`\n- Lesson {lesson_id} (oos_passed). {params.get('reason','')}\n"
+                            f"- Field is NOT DB-durable — edit the in-code template in server.py, not the DB.\n")
+            except Exception as exc:
+                logger.error("Failed to append edit-in-template task: %s", exc)
+            await db.pending_actions.update_one(
+                {"action_id": req.action_id},
+                {"$set": {"status": "approved", "outcome": "edit_in_template_task",
+                          "executed_at": datetime.now(timezone.utc).isoformat()}})
+            return {"status": "approved", "action_id": req.action_id, "outcome": "edit_in_template_task"}
+
+        # DB-durable field: read prior value, apply, record for reversibility + HSI-53 tag.
+        prior = strat
+        for part in field.split("."):
+            prior = (prior or {}).get(part) if isinstance(prior, dict) else None
+        pre_rows = await db.trade_attribution.find(
+            {"user_id": user["id"], "strategy_id": strategy_id}).to_list(500)
+        pre_exp = round(sum(float(r.get("realized_pnl") or 0) for r in pre_rows) / len(pre_rows), 2) if pre_rows else 0.0
+
+        await db.strategies.update_one(
+            {"id": strategy_id, "user_id": user["id"]},
+            {"$set": {field: proposed, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        await _adv.record_applied_change(db, user["id"], {
+            "strategy_id": strategy_id, "strategy_name": strat.get("name"), "field": field,
+            "prior_value": prior, "proposed_value": proposed, "lesson_id": lesson_id,
+            "pre_expectancy": pre_exp, "reason": params.get("reason", ""),
+            "oos_evidence": lesson.get("last_oos_result"),
+        })
+        try:
+            await _adv.compile_hermes_advice(db, user["id"])
+        except Exception as adv_exc:
+            logger.warning("compile_hermes_advice failed post-apply: %s", adv_exc)
 
     await db.pending_actions.update_one(
         {"action_id": req.action_id},

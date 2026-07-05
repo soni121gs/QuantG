@@ -315,6 +315,29 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     await score_and_update_lessons(db, user_id, today_str)
                 except Exception as lesson_exc:
                     logger.error("Lesson scoring failed for user=%s: %s", user_id, lesson_exc)
+                # HSI-52/54: refresh the read-only advice surface from active OOS-passed
+                # lessons, then auto-revert any applied config change whose post-change
+                # expectancy regressed. Both are safe (advice is observe-only by default;
+                # revert only restores a stored prior value).
+                try:
+                    from core.hermes_advisor import compile_hermes_advice, check_and_autorevert
+                    from core.trade_attribution import attribution_rollup as _ar
+
+                    async def _strategy_expectancy(sid, since):
+                        rows = await db.trade_attribution.find(
+                            {"user_id": user_id, "strategy_id": sid,
+                             "date_ist": {"$gte": str(since)[:10]}}).to_list(500)
+                        if not rows:
+                            return {"n": 0, "expectancy": 0.0}
+                        return {"n": len(rows),
+                                "expectancy": sum(float(r.get("realized_pnl") or 0) for r in rows) / len(rows)}
+
+                    await compile_hermes_advice(db, user_id)
+                    reverted = await check_and_autorevert(db, user_id, _strategy_expectancy)
+                    if reverted:
+                        logger.warning("HSI-54 auto-reverted %d Hermes config change(s): %s", len(reverted), reverted)
+                except Exception as adv_exc:
+                    logger.error("Hermes advisor EOD step failed for user=%s: %s", user_id, adv_exc)
                 try:
                     await _score_open_recommendations(db, user_id, today_str, doc)
                 except Exception as score_exc:

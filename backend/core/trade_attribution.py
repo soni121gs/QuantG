@@ -219,6 +219,15 @@ async def compile_trade_attribution(db, user_id: str, date_str: str) -> int:
         async for s in db.strategies.find({"id": {"$in": sids}}, {"_id": 0, "id": 1, "name": 1}):
             name_by_sid[s.get("id")] = s.get("name")
 
+    # HSI-53: tag trades on strategies with an active Hermes config change so Stage 3
+    # can later score whether the CHANGE actually improved real P&L.
+    lesson_by_sid: Dict[str, str] = {}
+    try:
+        from core.hermes_advisor import active_change_lesson_by_strategy
+        lesson_by_sid = await active_change_lesson_by_strategy(db, user_id)
+    except Exception as tag_exc:
+        logger.debug("hermes lesson tag lookup failed: %s", tag_exc)
+
     written = 0
     for trade in trades:
         if not trade.get("id"):
@@ -228,6 +237,7 @@ async def compile_trade_attribution(db, user_id: str, date_str: str) -> int:
             record = _build_record(trade, pos, user_id, date_str)
             if not record.get("strategy_name"):
                 record["strategy_name"] = name_by_sid.get(record.get("strategy_id")) or record.get("strategy_id")
+            record["hermes_lesson_id"] = lesson_by_sid.get(record.get("strategy_id"))
             await db.trade_attribution.update_one(
                 {"trade_id": record["trade_id"]},
                 {"$set": record},
