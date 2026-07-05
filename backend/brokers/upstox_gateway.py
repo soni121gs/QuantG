@@ -475,7 +475,17 @@ class UpstoxGateway:
         path = f"/v3/historical-candle/intraday/{quote(instrument_key)}/{unit}/{int(interval)}"
         return self._parse_candle_response(self._request("GET", path))
 
-    def get_expired_historical_candles_v3(
+    @staticmethod
+    def _expired_interval_label(unit: str = "minutes", interval: int = 1) -> str:
+        unit_text = str(unit or "minutes").lower()
+        interval_num = int(interval or 1)
+        if unit_text.startswith("minute"):
+            return f"{interval_num}minute"
+        if unit_text.startswith("day"):
+            return "day"
+        return f"{interval_num}{unit_text.rstrip('s')}"
+
+    def get_expired_historical_candles_v2(
         self,
         expired_instrument_key: str,
         *,
@@ -486,8 +496,26 @@ class UpstoxGateway:
     ) -> Optional[List[Dict[str, Any]]]:
         from urllib.parse import quote
 
-        path = f"/v3/expired-instruments/historical-candle/{quote(expired_instrument_key)}/{unit}/{int(interval)}/{to_date}/{from_date}"
+        label = self._expired_interval_label(unit, interval)
+        path = f"/v2/expired-instruments/historical-candle/{quote(expired_instrument_key)}/{label}/{to_date}/{from_date}"
         return self._parse_candle_response(self._request("GET", path))
+
+    def get_expired_historical_candles_v3(
+        self,
+        expired_instrument_key: str,
+        *,
+        unit: str = "minutes",
+        interval: int = 1,
+        from_date: str,
+        to_date: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        return self.get_expired_historical_candles_v2(
+            expired_instrument_key,
+            unit=unit,
+            interval=interval,
+            from_date=from_date,
+            to_date=to_date,
+        )
 
     @staticmethod
     def _parse_candle_response(res: Any) -> Optional[List[Dict[str, Any]]]:

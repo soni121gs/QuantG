@@ -82,7 +82,7 @@ book." See [[project_base_rate_findings_07_04]].
 - Bigger builds: `WR-71` real options-chain backtest **✅ UNBLOCKED + DONE 2026-07-04** (free NSE bhavcopy replaced the Upstox expired-option 404 wall; EOD OOS validator shipped — see EDR program above) · `WR-73` enable live on 2–3 proven *(founder gate — now also requires an OOS `CANDIDATE_EDGE`, which NO current strategy has)*
 
 **Intraday Minute Data / Options Backtesting (IMD) — required before trusting QG-O5..QG-O10**
-- **NEXT → unblock/rerun `IMD-00`** with a valid Upstox session, then prove legal 1-minute option-data access. Do not build the importer/backtester until one NIFTY expired option contract can be fetched and checksummed from an allowed source.
+- **NEXT → `IMD-01`** now that `IMD-00` proved legal Upstox expired-contract and 1-minute candle access. Build the schema/store layer before any importer/backtester.
 - Then build in order: `IMD-01` schema/store → `IMD-02` expired-contract resolver → `IMD-03` bounded importer → `IMD-04` forward live capture → `IMD-05` store reader → `IMD-06` no-lookahead selector replay → `IMD-07` backtester → `IMD-08` QG-O5..O10 validator → `IMD-09` Edge Lab UI/API → `IMD-10` quality gates.
 
 **Edge Lab Research Ledger (ERL) — future work to use historical data better**
@@ -133,6 +133,7 @@ fetched_at, checksum
 
 ### IMD-00 — Legal data-access proof and one-contract smoke test
 - **Status**: `⛔ blocked` 2026-07-05 (Codex smoke test reached token validation only; stored Upstox token returned `UDAPI100050` invalid token before expired-instrument access could be tested)
+- **Current status**: `[x]` DONE 2026-07-06: Upstox reconnect succeeded; legal expired F&O contract lookup and 1-minute candle fetch are usable through documented `/v2/expired-instruments/...` endpoints. The older blocked line above is retained as attempt history.
 - **Tier**: 2
 - **Session size**: 1-2 hours
 - **Prerequisite**: none
@@ -153,6 +154,10 @@ fetched_at, checksum
 - Because token validation failed first, no conclusion was reached on Upstox Plus entitlement (`UDAPI1149`) or 1-minute candle availability.
 - Current Upstox docs show the expired contracts and expired candles endpoints under `/v2/expired-instruments/...`; QuantG currently has `get_expired_historical_candles_v3()` using `/v3/expired-instruments/...`. When unblocked, test both the documented `/v2` path and the existing helper path, then correct the helper if needed.
 - Resume command shape: get contracts from `/v2/expired-instruments/option/contract?instrument_key=NSE_INDEX|Nifty 50&expiry_date=YYYY-MM-DD`, choose one returned `instrument_key`, then fetch `/v2/expired-instruments/historical-candle/{expired_instrument_key}/1minute/{to_date}/{from_date}` for one date.
+- 2026-07-06 after founder reconnected Upstox, Codex verified `token_state="valid"`, `token_valid=true`, `connected=true` from inside `quantg-backend` without printing secrets.
+- `/v2/expired-instruments/option/contract?instrument_key=NSE_INDEX|Nifty 50&expiry_date=2025-01-09` returned 188 NIFTY contracts. `/v3/expired-instruments/option/contract` returned `UDAPI100060 Resource not Found`, proving the existing helper path was wrong.
+- Picked `NIFTY 24200 CE 09 JAN 25`; `/v2/expired-instruments/historical-candle/{instrument_key}/1minute/2025-01-09/2025-01-09` returned 375 candles with 7 fields and IST timestamps; `2025-01-03..2025-01-09` returned 1,875 one-minute candles. Invalid interval `minute` returned `UDAPI1147`; valid interval is `1minute`.
+- Corrective code note: `backend/brokers/upstox_gateway.py::get_expired_historical_candles_v3` now uses the documented v2 endpoint through a v2 helper and stays as a compatibility wrapper.
 
 **Acceptance:**
 - One legal source is confirmed usable OR the task clearly records the blocker and the subscription/vendor needed.

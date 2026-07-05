@@ -35,7 +35,7 @@ def test_subscription_payload_is_binary_json_for_upstox_v3():
     assert isinstance(payload, bytes)
     body = json.loads(payload.decode("utf-8"))
     assert body["method"] == "sub"
-    assert body["data"]["mode"] == "full_d5"
+    assert body["data"]["mode"] == "full"
     assert body["data"]["instrumentKeys"] == ["NSE_FO|45450"]
 
 
@@ -82,6 +82,29 @@ def test_gateway_strategy_reads_latest_tick_from_websocket_cache():
     gateway._feed_v3.apply_decoded_message(decode_feed_response(_ltpc_message_bytes("BSE_FO|566995", 101.25)))
     tick = gateway.latest_tick("BSE_FO|566995")
     assert tick["ltp"] == pytest.approx(101.25)
+
+
+def test_expired_historical_candles_use_documented_v2_endpoint(monkeypatch):
+    gateway = UpstoxGateway(access_token="token", api_key="key", api_secret="secret", redirect_uri="http://localhost")
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"status": "success", "data": {"candles": [["2025-01-09T15:29:00+05:30", 1, 2, 0.5, 1.5, 100, 200]]}}
+
+    monkeypatch.setattr(gateway, "_request", fake_request)
+
+    rows = gateway.get_expired_historical_candles_v3(
+        "NSE_FO|12345",
+        unit="minutes",
+        interval=1,
+        from_date="2025-01-09",
+        to_date="2025-01-09",
+    )
+
+    assert rows and rows[0]["date"] == "2025-01-09 15:29"
+    assert calls[0][0] == "GET"
+    assert calls[0][1] == "/v2/expired-instruments/historical-candle/NSE_FO%7C12345/1minute/2025-01-09/2025-01-09"
 
 
 def test_camelcase_and_snakecase_feed_tick_extraction():
