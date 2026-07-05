@@ -182,6 +182,21 @@ async def ops_run_hermes_oos_validation(limit: int = 25, user=Depends(get_curren
     return await validate_lessons(db, user["id"], limit=limit)
 
 
+@router.post("/hermes-oos-validation/historical")
+async def ops_run_hermes_historical_validation(underlying: str = "NIFTY", user=Depends(get_current_user)):
+    """Validate STRUCTURE-dimension lessons against the 2yr bhavcopy OOS engine (real
+    statistical power now, vs waiting weeks for live attribution). Heavy (prices 2yr
+    chains per structure) — run occasionally. Refreshes the Hermes advice surface after."""
+    from core.hermes_historical_validator import validate_structure_lessons
+    result = await validate_structure_lessons(db, user["id"], underlying=underlying)
+    try:
+        from core.hermes_advisor import compile_hermes_advice
+        await compile_hermes_advice(db, user["id"])
+    except Exception as exc:  # noqa: BLE001
+        result["advice_refresh_error"] = str(exc)
+    return result
+
+
 # FE-03 (2026-07-04): the old in-sample option-priced backtester (/options-backtest
 # + core/options_backtest.py) was RETIRED — it graded on limited collected chain
 # history with no walk-forward and was proven misleading. Use /eod-options-backtest
