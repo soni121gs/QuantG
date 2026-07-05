@@ -133,6 +133,7 @@ async def ops_risk_scorecard(
     since: Optional[str] = None,
     scope: str = "me",
     clean: bool = True,
+    include_empty: bool = True,
     user=Depends(get_current_user),
 ):
     """Risk-adjusted scorecard from REALIZED trades (db.trades): Sharpe, Sortino,
@@ -151,7 +152,9 @@ async def ops_risk_scorecard(
             raise HTTPException(status_code=403, detail="scope=all requires owner role")
         uid = None
     effective_since = since or (CLEAN_STATS_DEFAULT_SINCE if clean else None)
-    rows = await build_risk_scorecard(db, user_id=uid, since_iso=effective_since, clean=clean)
+    rows = await build_risk_scorecard(
+        db, user_id=uid, since_iso=effective_since, clean=clean, include_empty=include_empty
+    )
     return {
         "rows": rows,
         "by_structure": summarize_by_structure(rows),

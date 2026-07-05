@@ -274,11 +274,14 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
         print(f"[edge_lab] {label} done in {time.time() - t0:.0f}s", flush=True)
         return out
 
+    active_strategies = [s for s in strategies if str(s.get("status") or "").lower() != "archived"]
+    archived_count = len(strategies) - len(active_strategies)
     coverage = _phase("coverage", lambda: _coverage(store, days))
     present = {u["underlying"] for u in coverage.get("underlyings", [])}
     base_rate = _phase("base_rate", lambda: {
         "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
-    oos = _phase("oos", lambda: _oos(strategies, store, present))
-    sweep = _phase("sweep", lambda: _sweep(strategies, store, present)) if include_sweep else None
+    oos = _phase("oos", lambda: _oos(active_strategies, store, present))
+    sweep = _phase("sweep", lambda: _sweep(active_strategies, store, present)) if include_sweep else None
     return {"status": "ready", "generated_at": now, "coverage": coverage,
-            "base_rate": base_rate, "oos": oos, "sweep": sweep}
+            "base_rate": base_rate, "oos": oos, "sweep": sweep,
+            "book": {"active_strategies": len(active_strategies), "archived_strategies": archived_count}}

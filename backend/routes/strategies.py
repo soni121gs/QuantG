@@ -793,12 +793,50 @@ async def delete_strategy(sid: str, user=Depends(get_current_user)):
     return {"deleted": res.deleted_count}
 
 
+@router.post("/{sid}/archive")
+async def archive_strategy(sid: str, user=Depends(get_current_user)):
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    update_fields = {
+        "status": "archived",
+        "mode": "paper",
+        "manual_paused": True,
+        "schedule_paused": False,
+        "archived_at": datetime.now(timezone.utc).isoformat(),
+        "last_filter_reason": "Archived by operator; history retained and runner will skip this strategy.",
+    }
+    await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update_fields})
+    return {"ok": True, "status": "archived"}
+
+
+@router.post("/{sid}/restore")
+async def restore_strategy(sid: str, user=Depends(get_current_user)):
+    from core.market_clock import is_trading_session_active
+    row = await db.strategies.find_one({"id": sid, "user_id": user["id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    market_open = bool(is_trading_session_active())
+    update_fields = {
+        "status": "live" if market_open else "paused",
+        "mode": "paper",
+        "manual_paused": False,
+        "schedule_paused": not market_open,
+        "restored_at": datetime.now(timezone.utc).isoformat(),
+        "last_filter_reason": "" if market_open else "Market closed: restored and queued for activation at the next 09:15 IST open.",
+    }
+    await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update_fields})
+    return {"ok": True, "status": update_fields["status"], "schedule_paused": update_fields["schedule_paused"]}
+
+
 @router.post("/{sid}/toggle")
 async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     from server import option_ledger, _sync_option_ledger_strategy, get_user_settings
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    if row.get("status") == "archived":
+        raise HTTPException(status_code=400, detail="Strategy is archived. Restore it before toggling live/paused.")
     new_status = "paused" if row["status"] == "live" else "live"
     settings = await get_user_settings(user["id"])
     strategy_mode = "paper" if bool(settings.get("paper_mode", True)) else "live"
@@ -986,6 +1024,48 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         symbol = (opt_cfg.get("underlying") or "NIFTY").upper()
     else:
         symbol = (vc.get("symbol") or "RELIANCE").upper()
+
+    if options_mode:
+        from routes.ops import ops_eod_options_backtest
+
+        backtest = await ops_eod_options_backtest(strategy_id=sid, user=user)
+        result = (backtest.get("results") or [{}])[0]
+        if result.get("error"):
+            return {
+                "ok": False,
+                "engine": "eod_options_oos",
+                "oos_backtest": True,
+                "symbol": symbol,
+                "data_source": "bhavcopy_eod_options",
+                "error": result.get("error"),
+            }
+        overall = result.get("overall") or {}
+        wins = int(round(float(overall.get("n") or 0) * float(overall.get("win_rate") or 0) / 100.0))
+        trades = int(overall.get("n") or 0)
+        return {
+            "ok": True,
+            "engine": "eod_options_oos",
+            "oos_backtest": True,
+            "symbol": symbol,
+            "options_mode": True,
+            "data_source": "bhavcopy_eod_options",
+            "data_live": False,
+            "verdict": result.get("verdict"),
+            "oos_year": result.get("oos_year"),
+            "oos": result.get("oos"),
+            "pct_green_months": result.get("pct_green_months"),
+            "by_year": result.get("by_year"),
+            "summary": {
+                "total_pnl": overall.get("pnl", 0),
+                "return_pct": 0,
+                "trades": trades,
+                "wins": wins,
+                "losses": max(0, trades - wins),
+                "win_rate": overall.get("win_rate", 0),
+                "expectancy": overall.get("expectancy", 0),
+                "oos_expectancy": (result.get("oos") or {}).get("expectancy", 0),
+            },
+        }
 
     settings = await get_user_settings(user["id"])
     strategy_mode = row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")

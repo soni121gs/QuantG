@@ -80,6 +80,7 @@ async def build_scorecard(
     since_iso: Optional[str] = None,
     mode: Optional[str] = None,
     clean: bool = False,
+    include_empty: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return one risk-adjusted row per strategy that has realized trades.
 
@@ -148,6 +149,28 @@ async def build_scorecard(
             **keep_kill_verdict(m),
             **m,
         })
+
+    if include_empty:
+        scored_ids = {str(r.get("strategy_id")) for r in rows}
+        for sid, info in meta.items():
+            if sid in scored_ids or info.get("status") == "archived":
+                continue
+            m = compute_metrics([], starting_capital=SCORECARD_BASE_CAPITAL)
+            rows.append({
+                "strategy_id": sid,
+                "name": info.get("name", "?"),
+                "structure": info.get("structure", "?"),
+                "strategy_type": info.get("strategy_type", "?"),
+                "status": info.get("status", "?"),
+                "underlying": info.get("underlying"),
+                "stats_window": "clean" if since_iso else "lifetime",
+                "since": since_iso,
+                "clean_epoch": bool(since_iso),
+                "grade": grade(m),
+                "verdict": "WATCH",
+                "verdict_reason": "awaiting realized paper trades",
+                **m,
+            })
 
     rows.sort(key=lambda r: (r["sharpe"], r["expectancy"]), reverse=True)
     return rows

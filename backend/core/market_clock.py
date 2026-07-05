@@ -15,6 +15,11 @@ NSE_CLOSE_MINUTE = 15 * 60 + 30  # 3:30 PM — actual NSE market close
 RUNNER_OPEN_MINUTE = 9 * 60        # 9:00 AM IST — runner activates strategies
 RUNNER_CLOSE_MINUTE = 15 * 60 + 35 # 3:35 PM IST — runner pauses strategies
 
+# Keep strategy evaluation aligned with real exchange order hours. Pre-market
+# readiness can run separately, but scans should not advance outside 09:15-15:30.
+RUNNER_OPEN_MINUTE = NSE_OPEN_MINUTE
+RUNNER_CLOSE_MINUTE = NSE_CLOSE_MINUTE
+
 MARKET_HOLIDAYS_IST = {
     item.strip()
     for item in (os.environ.get("MARKET_HOLIDAYS_IST") or os.environ.get("MARKET_HOLIDAYS") or "").split(",")

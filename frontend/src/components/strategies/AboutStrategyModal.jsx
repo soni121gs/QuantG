@@ -230,13 +230,13 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
             {/* Relocated Performance Test Section */}
             <div className="space-y-3 border-t border-[var(--qd-border)] pt-4">
               <h3 className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold flex items-center gap-1.5">
-                <Activity size={14} className="text-[var(--qd-accent)]" /> Performance & Backtest Test
+                <Activity size={14} className="text-[var(--qd-accent)]" /> OOS Performance Test
               </h3>
 
               <div className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 space-y-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-[var(--qd-text-3)] sm:max-w-[240px]">
-                    Run a 60-day historical analysis on index data to verify this strategy's profitability and metrics.
+                    Run the read-only out-of-sample options backtest where available. This never places orders.
                   </p>
                   <Button
                     onClick={() => testRun(s.id)}
@@ -252,7 +252,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                       </>
                     ) : (
                       <>
-                        <Activity size={13} /> Run Performance Test
+                        <Activity size={13} /> Run OOS Test
                       </>
                     )}
                   </Button>
@@ -269,7 +269,7 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                       <div className="space-y-3 text-xs">
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                           <Metric label="Total P&L" value={money(testResult.summary?.total_pnl)} tone={(testResult.summary?.total_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"} compact />
-                          <Metric label="Return" value={`${testResult.summary?.return_pct?.toFixed(2) || 0}%`} compact />
+                          <Metric label={testResult.oos_backtest ? "OOS Exp" : "Return"} value={testResult.oos_backtest ? money(testResult.summary?.oos_expectancy) : `${testResult.summary?.return_pct?.toFixed(2) || 0}%`} compact />
                           <Metric label="Win Rate" value={`${testResult.summary?.win_rate?.toFixed(1) || 0}%`} compact />
                         </div>
                         <div className="grid grid-cols-1 gap-2 border-t border-[var(--qd-border)] pt-2 sm:grid-cols-3">
@@ -277,9 +277,15 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
                           <Metric label="Wins" value={testResult.summary?.wins || 0} tone="text-[var(--qd-profit)]" compact />
                           <Metric label="Losses" value={testResult.summary?.losses || 0} tone="text-[var(--qd-loss)]" compact />
                         </div>
+                        {testResult.verdict && (
+                          <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-3)] px-2 py-1 font-mono text-[11px] text-[var(--qd-text-2)]">
+                            Verdict: <span className="text-[var(--qd-text)]">{testResult.verdict}</span>
+                            {testResult.pct_green_months != null && <span> - Green months {testResult.pct_green_months.toFixed(1)}%</span>}
+                          </div>
+                        )}
                         <div className="text-[11px] text-[var(--qd-text-3)] font-mono flex justify-between">
                           <span>Data: {testResult.data_source || "-"}</span>
-                          <span>Ref: {testResult.symbol_analysed || "-"}</span>
+                          <span>Ref: {testResult.symbol_analysed || testResult.symbol || "-"}</span>
                         </div>
                       </div>
                     ) : null}

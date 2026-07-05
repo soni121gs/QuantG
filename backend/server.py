@@ -6749,6 +6749,26 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     docs = [_build_default_strategy_doc(t, user_id) for t in DEFAULT_OPTION_STRATEGIES if t["name"] not in existing_names]
     if not docs:
         return 0
+    try:
+        from core.market_clock import is_trading_session_active as _market_hours_active
+        market_hours_active = bool(_market_hours_active())
+    except Exception:
+        market_hours_active = False
+    for doc in docs:
+        if doc.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+            doc["status"] = "live" if market_hours_active else "paused"
+            doc["mode"] = "paper"
+            doc["manual_paused"] = False
+            doc["schedule_paused"] = not market_hours_active
+            doc["last_filter_reason"] = (
+                "Paper-forward active during market hours: Options Alpha Rebuild pack seeded 2026-07-05."
+                if market_hours_active
+                else "Market closed: queued for paper-forward activation at the next 09:15 IST open."
+            )
+        elif doc.get("name") in DEAD_STRATEGY_NAMES:
+            doc["status"] = "archived"
+            doc["mode"] = "paper"
+            doc["last_filter_reason"] = "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the old book."
     await db.strategies.insert_many(docs)
     return len(docs)
 
@@ -16485,7 +16505,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             if (
                 ist.weekday() < 5
                 and _schedule_activate_done_date != today
-                and hour == 9 and 0 <= minute < 15
+                and hour == 9 and 15 <= minute < 30
             ):
                 _schedule_activate_done_date = today
                 try:
@@ -16506,7 +16526,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             if (
                 ist.weekday() < 5
                 and _schedule_pause_done_date != today
-                and hour == 15 and 35 <= minute < 50
+                and hour == 15 and 30 <= minute < 45
             ):
                 _schedule_pause_done_date = today
                 try:
@@ -16790,6 +16810,11 @@ async def startup():
                 )
                 
                 # Normalize strategies and retire removed MCX commodity rows.
+                try:
+                    from core.market_clock import is_trading_session_active as _market_hours_active
+                    market_hours_active = bool(_market_hours_active())
+                except Exception:
+                    market_hours_active = False
                 user_strats = await db.strategies.find({"user_id": user_id}).to_list(1000)
                 for s in user_strats:
                     s_updates = {}
@@ -16815,11 +16840,15 @@ async def startup():
                         logger.warning("Archived no-edge strategy %s (EDR-03)", s.get("name"))
 
                     if s.get("name") in OPTION_ALPHA_REBUILD_NAMES:
-                        s_updates["status"] = "live"
+                        s_updates["status"] = "live" if market_hours_active else "paused"
                         s_updates["mode"] = "paper"
                         s_updates["manual_paused"] = False
-                        s_updates["schedule_paused"] = False
-                        s_updates["last_filter_reason"] = "Paper-forward active: Options Alpha Rebuild pack seeded 2026-07-05."
+                        s_updates["schedule_paused"] = not market_hours_active
+                        s_updates["last_filter_reason"] = (
+                            "Paper-forward active during market hours: Options Alpha Rebuild pack seeded 2026-07-05."
+                            if market_hours_active
+                            else "Market closed: queued for paper-forward activation at the next 09:15 IST open."
+                        )
 
                     if s_updates:
                         await db.strategies.update_one({"id": s["id"], "user_id": user_id}, {"$set": s_updates})

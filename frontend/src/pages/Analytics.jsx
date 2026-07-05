@@ -283,6 +283,11 @@ function EdgeLab({ data, loading, onRefresh }) {
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-4 py-2.5">
         <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--qd-text-3)]">
           <Database size={13} />
+          {data.book && (
+            <span className="text-[var(--qd-text-2)]">
+              {data.book.active_strategies || 0} active / {data.book.archived_strategies || 0} archived hidden
+            </span>
+          )}
           {building ? "Rebuilding snapshot (this can take a few minutes)…" : `Snapshot ${timeAgo(data.generated_at)}`}
         </div>
         <button

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { Shield, Play, Pause, HelpCircle, Trash2, Zap, Code2 } from "lucide-react";
+import { Archive, RotateCcw, Shield, Play, Pause, HelpCircle, Zap, Code2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatINR } from "../../lib/api";
 import { reasonLabel } from "../../lib/reasonLabels";
@@ -49,9 +49,10 @@ function Metric({ label, value, tone, compact = false, title }) {
   );
 }
 
-export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, upstoxStatus, marginEstimate }) => {
+export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exitAll, load, upstoxStatus, marginEstimate }) => {
   const live = s.status === "live";
   const paused = s.status === "paused";
+  const archived = s.status === "archived";
   const cardOpts = s.visual_config?.options || {};
   const isOptionStrat = !!cardOpts.enabled;
   const isSpreadCard = cardOpts.structure === "credit_spread" || cardOpts.structure === "debit_spread";
@@ -247,6 +248,7 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         </button>
         <button
           onClick={() => toggle(s.id)}
+          disabled={archived}
           className="flex flex-col items-center justify-center gap-0.5 rounded border border-[var(--qd-border)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]"
           data-testid={`toggle-${s.id}`}
           type="button"
@@ -255,19 +257,19 @@ export const StrategyCard = ({ s, score, toggle, del, onAbout, exitAll, load, up
         </button>
         <Link
           to={editPath}
-          className="flex flex-col items-center justify-center gap-0.5 rounded border border-[var(--qd-border)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-[var(--qd-text)] hover:border-[var(--qd-border-strong)]"
+          className={`flex flex-col items-center justify-center gap-0.5 rounded border border-[var(--qd-border)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-[var(--qd-text)] hover:border-[var(--qd-border-strong)] ${archived ? "pointer-events-none opacity-50" : ""}`}
           data-testid={`edit-${s.id}`}
         >
           <Code2 size={13} /> Edit
         </Link>
         <button
-          onClick={() => del(s.id)}
-          className="flex flex-col items-center justify-center gap-0.5 rounded border border-[var(--qd-border)] py-1.5 font-mono text-[9px] uppercase tracking-wide text-[var(--qd-loss)] hover:border-[var(--qd-loss)]"
-          data-testid={`delete-${s.id}`}
-          aria-label="Delete strategy"
+          onClick={() => archived ? restore(s.id) : archive(s.id)}
+          className={`flex flex-col items-center justify-center gap-0.5 rounded border border-[var(--qd-border)] py-1.5 font-mono text-[9px] uppercase tracking-wide ${archived ? "text-[var(--qd-accent)] hover:border-[var(--qd-accent)]" : "text-[var(--qd-warn)] hover:border-[var(--qd-warn)]"}`}
+          data-testid={`${archived ? "restore" : "archive"}-${s.id}`}
+          aria-label={archived ? "Restore strategy" : "Archive strategy"}
           type="button"
         >
-          <Trash2 size={13} /> Del
+          {archived ? <><RotateCcw size={13} /> Restore</> : <><Archive size={13} /> Archive</>}
         </button>
       </div>
     </article>

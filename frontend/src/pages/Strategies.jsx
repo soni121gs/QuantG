@@ -68,7 +68,8 @@ export default function Strategies() {
   const [searchQuery, setSearchQuery] = useState("");
   const [aboutStrategy, setAboutStrategy] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [sortBy, setSortBy] = useState("score");
+  const [sortBy, setSortBy] = useState("group");
+  const [bookView, setBookView] = useState("active");
 
   // Broker state
   const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
@@ -96,6 +97,18 @@ export default function Strategies() {
 
   const filtered = useMemo(() => {
     let result = [...list];
+    const isQG = (s) => (s.name || "").startsWith("QG-O");
+    const isArchived = (s) => s.status === "archived";
+
+    if (bookView === "active") {
+      result = result.filter((s) => !isArchived(s));
+    } else if (bookView === "new") {
+      result = result.filter((s) => !isArchived(s) && isQG(s));
+    } else if (bookView === "legacy") {
+      result = result.filter((s) => !isArchived(s) && !isQG(s));
+    } else if (bookView === "archive") {
+      result = result.filter((s) => isArchived(s));
+    }
     
     // Apply search filter
     if (searchQuery.trim()) {
@@ -110,12 +123,25 @@ export default function Strategies() {
     }
 
     // Apply sorting
-    if (sortBy === "score") {
+    if (sortBy === "group") {
+      const rank = (s) => {
+        if (s.status === "archived") return 4;
+        if ((s.name || "").startsWith("QG-O")) return 0;
+        if (s.status === "live") return 1;
+        if (s.status === "paused") return 2;
+        return 3;
+      };
+      result.sort((a, b) => rank(a) - rank(b) || (a.name || "").localeCompare(b.name || ""));
+    } else if (sortBy === "score") {
       result.sort((a, b) => {
         const scoreA = scores[a.id]?.score ?? a.ai_confidence_score ?? 0;
         const scoreB = scores[b.id]?.score ?? b.ai_confidence_score ?? 0;
         return scoreB - scoreA;
       });
+    } else if (sortBy === "status") {
+      result.sort((a, b) => (a.status || "").localeCompare(b.status || "") || (a.name || "").localeCompare(b.name || ""));
+    } else if (sortBy === "name") {
+      result.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     } else if (sortBy === "capital") {
       result.sort((a, b) => (a.required_capital ?? 0) - (b.required_capital ?? 0));
     } else if (sortBy === "signals") {
@@ -125,16 +151,42 @@ export default function Strategies() {
     }
 
     return result;
-  }, [list, searchQuery, sortBy, scores]);
+  }, [list, searchQuery, sortBy, scores, bookView]);
+
+  const grouped = useMemo(() => {
+    const bucketFor = (s) => {
+      if (s.status === "archived") return "Archive";
+      if ((s.name || "").startsWith("QG-O")) return "Options Alpha Rebuild";
+      if (s.status === "live") return "Legacy Live";
+      if (s.status === "paused") return "Paused / Scheduled";
+      return "Draft / Other";
+    };
+    const groups = [];
+    filtered.forEach((s) => {
+      const label = bucketFor(s);
+      let group = groups.find((g) => g.label === label);
+      if (!group) {
+        group = { label, items: [] };
+        groups.push(group);
+      }
+      group.items.push(s);
+    });
+    return groups;
+  }, [filtered]);
 
   const toggle = async (id) => {
     await api.post(`/strategies/${id}/toggle`);
     load();
   };
 
-  const del = async (id) => {
-    if (!window.confirm("Delete strategy?")) return;
-    await api.delete(`/strategies/${id}`);
+  const archiveStrategy = async (id) => {
+    if (!window.confirm("Archive this strategy? It will be hidden from the active book but history stays available.")) return;
+    await api.post(`/strategies/${id}/archive`);
+    load();
+  };
+
+  const restoreStrategy = async (id) => {
+    await api.post(`/strategies/${id}/restore`);
     load();
   };
 
@@ -240,7 +292,27 @@ export default function Strategies() {
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
+          <div className="flex flex-wrap items-center gap-1 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-1">
+            {[
+              ["active", "Active"],
+              ["new", "New QG"],
+              ["legacy", "Old Live"],
+              ["archive", "Archive"],
+              ["all", "All"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setBookView(value)}
+                className={`rounded px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider transition-colors ${
+                  bookView === value ? "bg-[var(--qd-accent)] text-black" : "text-[var(--qd-text-2)] hover:text-[var(--qd-text)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <span className="font-mono text-xs uppercase tracking-wider text-[var(--qd-text-2)] font-semibold">Sort By</span>
           <select
             value={sortBy}
@@ -248,7 +320,10 @@ export default function Strategies() {
             className="cursor-pointer rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1.5 font-mono text-xs text-[var(--qd-text)] outline-none transition-all hover:border-[var(--qd-border-strong)]"
             data-testid="sort-selector"
           >
+            <option value="group">Strategy Group</option>
             <option value="score">AI Confidence Score</option>
+            <option value="status">Status</option>
+            <option value="name">Name</option>
             <option value="capital">Capital Required</option>
             <option value="signals">Signals Fired</option>
             <option value="scans">Scans Count</option>
@@ -324,21 +399,32 @@ export default function Strategies() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((s) => (
-            <StrategyCard
-              key={s.id}
-              s={s}
-              score={scores[s.id]}
-              toggle={toggle}
-              del={del}
-              onAbout={setAboutStrategy}
-              manualOrder={manualOrder}
-              exitAll={exitAll}
-              load={load}
-              upstoxStatus={upstoxStatus}
-              marginEstimate={marginEstimates[s.id]}
-            />
+        <div className="space-y-4">
+          {grouped.map((group) => (
+            <section key={group.label} className="space-y-2">
+              <div className="flex items-center justify-between border-b border-[var(--qd-border)] pb-1">
+                <h2 className="font-mono text-xs font-semibold uppercase tracking-wider text-[var(--qd-text-2)]">{group.label}</h2>
+                <span className="font-mono text-[11px] text-[var(--qd-text-3)]">{group.items.length} strategies</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {group.items.map((s) => (
+                  <StrategyCard
+                    key={s.id}
+                    s={s}
+                    score={scores[s.id]}
+                    toggle={toggle}
+                    archive={archiveStrategy}
+                    restore={restoreStrategy}
+                    onAbout={setAboutStrategy}
+                    manualOrder={manualOrder}
+                    exitAll={exitAll}
+                    load={load}
+                    upstoxStatus={upstoxStatus}
+                    marginEstimate={marginEstimates[s.id]}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
