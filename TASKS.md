@@ -81,9 +81,348 @@ book." See [[project_base_rate_findings_07_04]].
 - Open: `WR-33` deferred (re-open only per AR-08 evidence) · `WR-45` correlation matrix · `WR-51` risk sizing *(after AR-08)* · `WR-54` auto-pause *(⛔ gated on AR-01/AR-08)*. **Folded 07-02:** `WR-42`/`WR-43` → AR-07/AR-08 · `WR-44`/`WR-72` → HSI-41..44.
 - Bigger builds: `WR-71` real options-chain backtest **✅ UNBLOCKED + DONE 2026-07-04** (free NSE bhavcopy replaced the Upstox expired-option 404 wall; EOD OOS validator shipped — see EDR program above) · `WR-73` enable live on 2–3 proven *(founder gate — now also requires an OOS `CANDIDATE_EDGE`, which NO current strategy has)*
 
+**Intraday Minute Data / Options Backtesting (IMD) — required before trusting QG-O5..QG-O10**
+- **NEXT → `IMD-00`** prove legal 1-minute option-data access first. Do not build the importer/backtester until one NIFTY expired option contract can be fetched and checksummed from an allowed source.
+- Then build in order: `IMD-01` schema/store → `IMD-02` expired-contract resolver → `IMD-03` bounded importer → `IMD-04` forward live capture → `IMD-05` store reader → `IMD-06` no-lookahead selector replay → `IMD-07` backtester → `IMD-08` QG-O5..O10 validator → `IMD-09` Edge Lab UI/API → `IMD-10` quality gates.
+
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
 **🔧 OPS hygiene (from 2026-07-02 live audit — do AFTER market close, § below):** `OPS-01` portfolio-stream 401 storm (P1) · `OPS-02` 429 rate-limiting · `OPS-03` RELIANCE Trend Rider orphaned-paused · `OPS-04` Hermes Telegram 404 · `OPS-05` verify wallet reconcile.
+
+---
+
+## INTRADAY MINUTE DATA / OPTIONS BACKTESTING (IMD) — QG-O5..QG-O10 JUDGE
+
+**Created 2026-07-05 after the Options Alpha Rebuild pack was seeded for paper.**
+
+**Goal:** build a legal, reproducible 1-minute options-history layer and no-lookahead intraday options backtester so QuantG can honestly judge intraday option buyers (`QG-O5`..`QG-O10`). The current EOD bhavcopy OOS engine is still the judge for held-to-expiry theta structures; it cannot prove ORB/VWAP/25-minute option-buying systems.
+
+**Legal data rule:** no pirated datasets, scraped paid-data dumps, Telegram/Drive leaks, or mystery CSVs. They are not acceptable research evidence and must not enter `data/`, Mongo, Edge Lab, or strategy promotion reports. Allowed sources are broker/API data under the account's terms, official exchange/authorized vendor feeds, and open datasets with clear license/provenance.
+
+**Researched legal sources (2026-07-05):**
+- Upstox expired F&O historical candle API supports `1minute` candles for expired contracts and requires `expired_instrument_key`; docs show `UDAPI1149` when the endpoint requires Upstox Plus. Use this first because QuantG already uses Upstox. Source: https://upstox.com/developer/api-documentation/get-expired-historical-candle-data/
+- Upstox V3 active historical candles support `minutes/1` from Jan 2022, but 1-15 minute intervals are limited to about one month per request window. Use for active/recent contracts, not the full old-history answer by itself. Source: https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/
+- ExpiryTrack is an AGPL open-source Upstox Plus expired-F&O collector. Study its design, but do not vendor it blindly into QuantG. Source: https://github.com/marketcalls/ExpiryTrack
+- Global Datafeeds and NSE authorized feeds are legal paid alternatives if Upstox Plus is insufficient. Sources: https://globaldatafeeds.in/apis/ and https://www.nseindia.com/static/market-data/real-time-data-subscription
+
+**Architecture decision:** raw 1-minute candles must live in Parquet/DuckDB under the existing `data/` bind mount, not Mongo. Mongo may store only manifests, coverage summaries, and validation verdicts.
+
+Target store shape:
+```text
+data/options_1m/
+  source=upstox/
+    underlying=NIFTY/
+      year=2025/
+        date=2025-07-04.parquet
+```
+
+Minimum candle schema:
+```text
+timestamp_ist, instrument_key, expired_instrument_key, underlying, expiry,
+strike, option_type, open, high, low, close, volume, open_interest, source,
+fetched_at, checksum
+```
+
+**Promotion law for intraday buyers:** `QG-O5`..`QG-O10` stay paper-observation hypotheses until `IMD-08` produces enough clean out-of-sample evidence. Do not tune their thresholds from one paper day.
+
+---
+
+### IMD-00 — Legal data-access proof and one-contract smoke test
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 1-2 hours
+- **Prerequisite**: none
+- **Files to touch**: `TASKS.md` only for the status note; optional scratch script under `scratch/` if needed, but do not commit secrets or downloaded raw data.
+
+**Goal:** prove the data source before building infra.
+
+**Steps:**
+1. Confirm whether the current Upstox account can call the expired F&O historical candle endpoint for `1minute`.
+2. Fetch one known expired NIFTY weekly option contract for one trading day using `backend/brokers/upstox_gateway.py::get_expired_historical_candles_v3` if possible.
+3. Record endpoint status, exact error code if blocked, candle count, timestamp timezone, and sample OHLC/OI fields.
+4. If Upstox blocks with `UDAPI1149`, stop and mark this task blocked on Upstox Plus or an approved paid vendor.
+5. Do not use unofficial/pirated data to bypass this gate.
+
+**Acceptance:**
+- One legal source is confirmed usable OR the task clearly records the blocker and the subscription/vendor needed.
+- Sample output includes at least one 1-minute candle with timestamp, OHLC, volume, and OI.
+- No strategy/backtester code is written yet.
+
+**How to verify:**
+```powershell
+python -m py_compile backend\brokers\upstox_gateway.py
+```
+
+---
+
+### IMD-01 — Define the 1-minute options store schema and manifest
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 2-3 hours
+- **Prerequisite**: `IMD-00` usable legal data source
+- **Files to touch**: `backend/core/options_minute_schema.py` (new), `backend/tests/test_options_minute_schema.py` (new), optional `docs/OPTIONS_1M_DATA.md`
+
+**Goal:** create a small, testable schema layer before any downloader exists.
+
+**Steps:**
+1. Define normalized candle fields and a manifest record shape.
+2. Include source, fetch window, checksum, row count, first/last timestamp, and data-quality flags.
+3. Add helpers to normalize Upstox candle arrays into typed dicts.
+4. Keep this pure-logic; no broker calls and no filesystem writes in unit tests.
+
+**Acceptance:**
+- Upstox raw candle arrays normalize into QuantG's canonical candle schema.
+- Bad rows fail validation with explicit reasons.
+- Manifest checksum is deterministic.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_options_minute_schema.py -q
+```
+
+---
+
+### IMD-02 — Expired-contract resolver for historical option universe
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 4-6 hours
+- **Prerequisite**: `IMD-01`
+- **Files to touch**: `backend/core/expired_option_resolver.py` (new), `backend/brokers/upstox_gateway.py`, `backend/tests/test_expired_option_resolver.py` (new)
+
+**Goal:** resolve the exact historical contracts the backtester would have selected, without downloading the whole exchange.
+
+**Steps:**
+1. Add a resolver that maps `(underlying, trade_date, expiry, strike, option_type)` to Upstox `expired_instrument_key`.
+2. Cache resolved contract metadata in a local manifest collection/file; do not store access tokens.
+3. Support at least `NIFTY` and `BANKNIFTY`; leave `SENSEX/BFO` blocked until a legal BSE path is confirmed.
+4. Add tests for weekly expiry selection, ATM rounding, CE/PE, and missing contract behavior.
+
+**Acceptance:**
+- Given one historical date and target strike, resolver returns a stable expired key or a typed `NOT_FOUND` reason.
+- No fallback to string-guessed symbols when the API has not confirmed the contract.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_expired_option_resolver.py -q
+```
+
+---
+
+### IMD-03 — Bounded Upstox 1-minute importer to Parquet/DuckDB
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `IMD-02`
+- **Files to touch**: `backend/scripts/options_1m_ingest_upstox.py` (new), `backend/core/options_minute_store.py` (new skeleton), `backend/tests/test_options_1m_ingest.py` (new), `docker-compose.yml` only if the data mount needs a new path
+
+**Goal:** fetch only the contracts QuantG needs for `QG-O5`..`QG-O10`, not every strike in India.
+
+**Steps:**
+1. Implement CLI args: `--from`, `--to`, `--underlyings`, `--strikes-around-atm`, `--expiry-mode weekly`, `--source upstox`, `--dry-run`.
+2. Default scope: NIFTY/BANKNIFTY, weekly expiry, ATM +/- 5 strikes, CE+PE.
+3. Use resolver from `IMD-02`, fetch `1minute` candles, normalize with `IMD-01`, write partitioned Parquet or DuckDB.
+4. Add manifest rows with checksum, source, row count, and fetch status.
+5. Rate-limit and resume idempotently; never re-fetch a clean existing contract-day unless `--force`.
+
+**Acceptance:**
+- Dry-run shows planned contract-day count before fetching.
+- Re-running the same command skips already clean files.
+- One week of NIFTY data can be ingested without duplicate rows.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_options_1m_ingest.py -q
+python backend\scripts\options_1m_ingest_upstox.py --from 2025-01-06 --to 2025-01-10 --underlyings NIFTY --strikes-around-atm 2 --dry-run
+```
+
+---
+
+### IMD-04 — Forward live 1-minute option-candle capture
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 4-8 hours
+- **Prerequisite**: `IMD-01`; can run in parallel with `IMD-03` after schema is fixed
+- **Files to touch**: `backend/core/options_minute_capture.py` (new), `backend/brokers/upstox_market_data_v3.py`, `backend/server.py` startup wiring only if required, `backend/tests/test_options_minute_capture.py` (new)
+
+**Goal:** build QuantG's own legal forward dataset every market day from the live feed.
+
+**Steps:**
+1. Subscribe only to selected option contracts that strategies could trade, not the entire chain.
+2. Aggregate ticks/LTP updates into 1-minute OHLCV/OI where available.
+3. Flush completed minute bars into the same store schema as imported history.
+4. Add health counters: subscribed contracts, bars written, missing minutes, stale feed seconds.
+5. Keep capture read-only with respect to trading decisions.
+
+**Acceptance:**
+- During market hours, one selected NIFTY CE/PE writes valid minute bars.
+- If feed is absent, capture records a clear data-quality gap and does not fabricate bars.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_options_minute_capture.py -q
+```
+
+---
+
+### IMD-05 — Options minute store reader and coverage report
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 3-5 hours
+- **Prerequisite**: `IMD-03`
+- **Files to touch**: `backend/core/options_minute_store.py`, `backend/tests/test_options_minute_store.py` (new)
+
+**Goal:** give the backtester a clean API over Parquet/DuckDB.
+
+**Steps:**
+1. Implement `get_option_minutes(...)`, `get_chain_at_time(...)`, `coverage(...)`, and `missing_minutes(...)`.
+2. Return typed empty results for missing contracts; do not silently use nearest strikes unless the caller asks.
+3. Include timezone-safe IST handling.
+4. Add coverage summary by date, underlying, expiry, strike count, and row count.
+
+**Acceptance:**
+- Store reader can reconstruct an ATM option chain snapshot at a timestamp.
+- Missing-data reports are deterministic and visible to callers.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_options_minute_store.py -q
+```
+
+---
+
+### IMD-06 — Historical no-lookahead option selection replay
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 4-6 hours
+- **Prerequisite**: `IMD-05`
+- **Files to touch**: `backend/core/intraday_option_selector.py` (new), `backend/core/option_selector_v2.py` only if shared pure helpers are extracted, `backend/tests/test_intraday_option_selector.py` (new)
+
+**Goal:** reproduce live option selection historically without peeking at future candles.
+
+**Steps:**
+1. Select ATM/OTM contracts at a given timestamp using only the chain available at or before that timestamp.
+2. Support single-leg and debit-spread construction for QG-O5..QG-O10.
+3. Add spread leg pairing rules, lot sizes from `market_domains`, and missing-leg rejection reasons.
+4. Add tests that prove future timestamps do not influence selection.
+
+**Acceptance:**
+- Given an underlying minute candle and option chain snapshot, selector returns the same class of contract the live app would trade.
+- No lookahead tests fail if future candles are injected.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_intraday_option_selector.py -q
+```
+
+---
+
+### IMD-07 — Intraday options backtest engine
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 8-12 hours
+- **Prerequisite**: `IMD-06`
+- **Files to touch**: `backend/core/intraday_options_backtest.py` (new), `backend/tests/test_intraday_options_backtest.py` (new)
+
+**Goal:** replay minute-by-minute option trades with realistic exits and costs.
+
+**Steps:**
+1. Build a deterministic event loop over underlying minutes and selected option minutes.
+2. Execute entries from strategy signals, then price fills on the selected option/spread candles.
+3. Model brokerage/slippage, max hold minutes, TP/SL/trailing stop, same-day force squareoff, and missing-price exits.
+4. Support `single_leg`, `debit_spread`, and `credit_spread`; start with buyer strategies first.
+5. Emit trade rows compatible with Edge Lab/Hermes attribution concepts: setup, entry/exit timestamp, gross/net P&L, MFE, MAE, reason, data-quality flags.
+
+**Acceptance:**
+- A tiny fixture with known candles produces exact expected P&L.
+- Stop/target/time-exit order is deterministic when multiple events happen in one candle.
+- Backtest fails closed on missing prices instead of inventing fills.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_intraday_options_backtest.py -q
+```
+
+---
+
+### IMD-08 — QG-O5..QG-O10 intraday OOS validator
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `IMD-07` and at least 3 months clean NIFTY/BANKNIFTY minute data
+- **Files to touch**: `backend/scripts/run_intraday_options_validation.py` (new), `backend/core/intraday_options_oos.py` (new), `backend/tests/test_intraday_options_oos.py` (new)
+
+**Goal:** judge the seeded intraday buyers with sample-size-aware OOS metrics.
+
+**Steps:**
+1. Load QG-O5..QG-O10 strategy templates from `server.py` or a read-only exported config.
+2. Run train/test splits by month and by rolling walk-forward window.
+3. Report trades, net P&L, expectancy, win rate, profit factor, max drawdown, MFE/MAE, average hold, skipped/missing-data counts, and OOS expectancy.
+4. Verdicts: `CANDIDATE_EDGE`, `FRAGILE`, `NO_EDGE_NEGATIVE`, `INSUFFICIENT_DATA`, `DATA_QUALITY_FAIL`.
+5. Store summary in Mongo `intraday_options_oos_runs` but keep raw candles out of Mongo.
+
+**Acceptance:**
+- One command validates all QG intraday buyers and prints a ranked scorecard.
+- A strategy cannot pass if sample size is too small or data-quality coverage is poor.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_intraday_options_oos.py -q
+python backend\scripts\run_intraday_options_validation.py --strategies QG-O5,QG-O6 --from 2025-01-01 --to 2025-03-31
+```
+
+---
+
+### IMD-09 — Edge Lab API and UI for intraday OOS
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `IMD-08`
+- **Files to touch**: `backend/routes/ops.py`, `backend/core/edge_lab.py`, `frontend/src/pages/Analytics.jsx`, optional `frontend/src/components/analytics/*`, tests if existing patterns allow
+
+**Goal:** make the intraday evidence visible beside the existing EOD OOS evidence.
+
+**Steps:**
+1. Add backend endpoints for latest intraday OOS summary and background refresh.
+2. Add Edge Lab panels: minute-data coverage, strategy verdict table, best/worst expectancy, data-quality warnings.
+3. Clearly label EOD theta OOS vs Intraday 1m OOS so users do not mix the judges.
+4. Do not add controls that seed/tune strategies from the UI.
+
+**Acceptance:**
+- Analytics page shows QG-O5..QG-O10 verdicts and coverage.
+- Refresh is backgrounded and cached like current Edge Lab.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_ops_edge_lab.py -q
+cd frontend
+$env:CI='false'; npm run build
+```
+
+---
+
+### IMD-10 — Data-quality gate and promotion checklist
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 3-5 hours
+- **Prerequisite**: `IMD-09`
+- **Files to touch**: `CLAUDE.md`, `TASKS.md`, `wiki/Projects/Options Alpha Rebuild Strategy Pack 2026-07-05.md`, optional backend constants if a gate is coded
+
+**Goal:** prevent a pretty intraday backtest from becoming a money strategy without evidence discipline.
+
+**Steps:**
+1. Define pass thresholds for intraday buyers: minimum trades, minimum months, max missing-minute rate, positive OOS expectancy after costs, drawdown cap, and forward-paper requirement.
+2. Document that live promotion still requires founder approval and `CORE_ENGINE_LIVE_ENABLED` remains false by default.
+3. Add a checklist for daily forward data capture health.
+4. Update the Options Alpha pack note with the final promotion ladder.
+
+**Acceptance:**
+- Future agents can tell whether an intraday strategy is blocked by data, OOS result, or forward-paper result.
+- The app docs do not imply paper P&L alone proves an edge.
+
+**How to verify:**
+```powershell
+rg -n "IMD-|intraday.*OOS|1-minute options" TASKS.md CLAUDE.md wiki
+```
 
 ---
 
