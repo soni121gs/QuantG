@@ -228,7 +228,9 @@ async def ops_eod_options_backtest(
         row = {"name": res.get("name"), "underlying": res.get("underlying"),
                "structure": res.get("structure"), "verdict": wf["verdict"],
                "overall": wf["overall"], "oos_year": wf.get("oos_year"),
-               "oos": wf.get("oos"), "pct_green_months": wf.get("pct_green_months")}
+               "oos": wf.get("oos"), "pct_green_months": wf.get("pct_green_months"),
+               "signals": res.get("signals", 0),
+               "signal_evaluation": res.get("signal_evaluation")}
         if strategy_id:
             row["trades"] = res.get("trades")
             row["by_year"] = wf.get("by_year")

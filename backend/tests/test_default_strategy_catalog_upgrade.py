@@ -4,7 +4,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from safe_exec import safe_run_strategy
-from server import DEFAULT_OPTION_STRATEGIES, RETAIL_LIVE_STATE_CODE, UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME
+from server import (
+    DEAD_STRATEGY_NAMES,
+    DEFAULT_OPTION_STRATEGIES,
+    OPTION_ALPHA_REBUILD_NAMES,
+    RETAIL_LIVE_STATE_CODE,
+    UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME,
+)
 
 
 EXPECTED_DEFAULT_NAMES = {
@@ -104,6 +110,13 @@ def test_equity_templates_are_in_versioned_code_migration():
 
     assert equity_names
     assert equity_names.issubset(UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME)
+
+
+def test_new_qg_pack_is_not_part_of_dead_strategy_archive_set():
+    names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
+
+    assert OPTION_ALPHA_REBUILD_NAMES.issubset(names)
+    assert OPTION_ALPHA_REBUILD_NAMES.isdisjoint(DEAD_STRATEGY_NAMES)
 
 
 def test_default_strategy_templates_are_sandbox_runnable():

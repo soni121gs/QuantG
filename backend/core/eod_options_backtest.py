@@ -67,6 +67,10 @@ def _fill(px: float, side: str) -> float:
     return px * (1 + SLIPPAGE_PCT) if side == "BUY" else px * (1 - SLIPPAGE_PCT)
 
 
+def _signal_days_from(signals: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {str(s.get("date"))[:10]: s for s in (signals or []) if s.get("date")}
+
+
 class EODOptionsBacktest:
     def __init__(self, store: Optional[BhavcopyStore] = None):
         self.store = store or BhavcopyStore()
@@ -114,10 +118,32 @@ class EODOptionsBacktest:
             signals = safe_run_strategy(code, candles)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"strategy code failed: {exc}", "underlying": u, "structure": structure}
-        sig_days = {str(s.get("date"))[:10]: s for s in (signals or [])}
 
         days = [c["date"][:10] for c in candles]
         close_by_day = {c["date"][:10]: c["close"] for c in candles}
+        sig_days = _signal_days_from(signals or [])
+        signal_eval = "whole_history"
+
+        # Live strategies commonly evaluate only the latest candle (`data[-1]`).
+        # A single whole-history call then emits only the final day's signal, which
+        # cannot open/close historically. Replay prefixes to backtest that style.
+        if len(sig_days) <= 1:
+            rolling_sig_days: Dict[str, Dict[str, Any]] = {}
+            for j in range(1, len(candles) - 1):
+                prefix = candles[: j + 1]
+                day = days[j]
+                try:
+                    prefix_signals = safe_run_strategy(code, prefix) or []
+                except Exception as exc:  # noqa: BLE001
+                    return {"error": f"strategy code failed during rolling evaluation on {day}: {exc}",
+                            "underlying": u, "structure": structure}
+                today = [s for s in prefix_signals if str(s.get("date"))[:10] == day]
+                if today:
+                    rolling_sig_days[day] = today[-1]
+            if len(rolling_sig_days) > len(sig_days):
+                sig_days = rolling_sig_days
+                signal_eval = "rolling_latest_window"
+
         self._close_by = close_by_day   # index close per day, for cash-settled expiry payoff
         trades: List[Dict[str, Any]] = []
         active: Optional[Dict[str, Any]] = None
@@ -173,7 +199,7 @@ class EODOptionsBacktest:
             "strategy_id": strategy.get("id"), "name": strategy.get("name"),
             "underlying": u, "structure": structure, "lots": lots,
             "window": {"start": days[0], "end": days[-1], "n_days": len(days)},
-            "signals": len(sig_days), "grade": grade(metrics),
+            "signals": len(sig_days), "signal_evaluation": signal_eval, "grade": grade(metrics),
             **metrics, "trades": trades,
         }
 

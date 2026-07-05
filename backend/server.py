@@ -9088,6 +9088,8 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
     row = await db.strategies.find_one({"id": sid, "user_id": user["id"]})
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    if row.get("status") == "archived":
+        raise HTTPException(status_code=400, detail="Strategy is archived. Restore it before toggling live/paused.")
     new_status = "paused" if row["status"] == "live" else "live"
     settings = await get_user_settings(user["id"])
     strategy_mode = "paper" if bool(settings.get("paper_mode", True)) else "live"
@@ -9096,6 +9098,12 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
         "broker": "upstox",
         "mode": strategy_mode,
     }
+    if new_status == "paused":
+        update_fields["manual_paused"] = True
+        update_fields["schedule_paused"] = False
+    else:
+        update_fields["manual_paused"] = False
+        update_fields["schedule_paused"] = False
     if strategy_mode == "paper":
         update_fields.update({
             "quarantined": False,
@@ -9259,6 +9267,48 @@ async def test_run_strategy(sid: str, user=Depends(get_current_user)):
         symbol = (opt_cfg.get("underlying") or "NIFTY").upper()
     else:
         symbol = (vc.get("symbol") or "RELIANCE").upper()
+
+    if options_mode:
+        from routes.ops import ops_eod_options_backtest
+
+        backtest = await ops_eod_options_backtest(strategy_id=sid, user=user)
+        result = (backtest.get("results") or [{}])[0]
+        if result.get("error"):
+            return {
+                "ok": False,
+                "engine": "eod_options_oos",
+                "oos_backtest": True,
+                "symbol": symbol,
+                "data_source": "bhavcopy_eod_options",
+                "error": result.get("error"),
+            }
+        overall = result.get("overall") or {}
+        trades = int(overall.get("n") or 0)
+        wins = int(round(trades * float(overall.get("win_rate") or 0) / 100.0))
+        return {
+            "ok": True,
+            "engine": "eod_options_oos",
+            "oos_backtest": True,
+            "symbol": symbol,
+            "options_mode": True,
+            "data_source": "bhavcopy_eod_options",
+            "data_live": False,
+            "verdict": result.get("verdict"),
+            "oos_year": result.get("oos_year"),
+            "oos": result.get("oos"),
+            "pct_green_months": result.get("pct_green_months"),
+            "by_year": result.get("by_year"),
+            "summary": {
+                "total_pnl": overall.get("pnl", 0),
+                "return_pct": 0,
+                "trades": trades,
+                "wins": wins,
+                "losses": max(0, trades - wins),
+                "win_rate": overall.get("win_rate", 0),
+                "expectancy": overall.get("expectancy", 0),
+                "oos_expectancy": (result.get("oos") or {}).get("expectancy", 0),
+            },
+        }
 
     settings = await get_user_settings(user["id"])
     strategy_mode = row.get("mode") or ("paper" if settings.get("paper_mode", True) else "live")

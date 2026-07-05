@@ -202,6 +202,8 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             "pnl": o["pnl"], "oos_year": wf.get("oos_year"),
             "oos_expectancy": wf.get("oos", {}).get("expectancy", 0),
             "pct_green_months": wf.get("pct_green_months"),
+            "signals": res.get("signals", 0),
+            "signal_evaluation": res.get("signal_evaluation"),
         })
     order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
     rows.sort(key=lambda r: order.get(r.get("verdict", ""), 9))

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timezone, timedelta
 
 from core.market_domains import resolve_domain_by_underlying, DomainType
-from core.market_clock import get_segment_status
+from core.market_clock import get_segment_status, is_trading_session_active
 from core.price_service import PriceService
 from core.portfolio_ledger import PortfolioLedger
 from core.live_safety_firewall import LiveSafetyFirewall
@@ -36,6 +36,14 @@ def test_market_clock_schedules():
     
     assert nse_status["open"] is False
     assert bse_status["open"] is False
+
+
+def test_strategy_runner_uses_strict_exchange_hours():
+    assert is_trading_session_active(datetime(2026, 7, 6, 3, 44, tzinfo=timezone.utc)) is False
+    assert is_trading_session_active(datetime(2026, 7, 6, 3, 45, tzinfo=timezone.utc)) is True
+    assert is_trading_session_active(datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)) is True
+    assert is_trading_session_active(datetime(2026, 7, 6, 10, 1, tzinfo=timezone.utc)) is False
+    assert is_trading_session_active(datetime(2026, 7, 5, 6, 0, tzinfo=timezone.utc)) is False
 
 @pytest.mark.asyncio
 async def test_price_service_live_blocks_simulation():
