@@ -742,9 +742,10 @@ No pirated/scraped/mystery datasets. Only broker/API data under the account's te
 
 Store format is **gzipped CSV** (matches `bhavcopy_store`), not Parquet — pyarrow/duckdb aren't installed and adding them is a founder-gated rebuild.
 
-### 14.3 What's left before real verdicts (DATA, not code)
-1. Run `scripts/options_1m_ingest_upstox.py` against a live Upstox token to build real option 1-min history (needs the daily token connected).
-2. Supply **UNDERLYING index 1-min candles** — the backtester evaluates the signal on index minutes, which the options importer does NOT fetch. Either wire IMD-04 forward capture into the live feed, or add an index-minute import. Until then `run_intraday_options_validation` reports `INSUFFICIENT_DATA` honestly.
+### 14.3 Data layer (both sources exist + proven on real data, 2026-07-06)
+- **Options 1-min**: `scripts/options_1m_ingest_upstox.py` → `data/options_1m` (proven: real Jan-2025 NIFTY fetch, idempotent, 0 errors).
+- **Underlying index 1-min**: TWO sources — historical import `scripts/index_1m_ingest_upstox.py` (Upstox v3 active minutes) → `data/index_1m`, AND live forward capture (IMD-04 WIRED: `core/live_index_capture.py` attached to the feed via `add_tick_listener`, flushed 15:35 IST by `_daily_scheduler_loop`, `core/index_minute_store.py`).
+- `run_intraday_options_validation` builds real store-backed providers from both and produces real intraday trades (verified QG-O5/O6 = 5 trades on 5 days). **Remaining is SCALE only** — backfill ~3 months so the sample crosses the `GATE` (30 trades / 3 months); a Jan–Mar 2025 NIFTY backfill was started 2026-07-06. Run either importer in-container: `docker exec -u root quantg-backend python /app/scripts/<importer>.py --from … --to … --underlyings NIFTY` (writes to the `./data` bind mount).
 
 ### 14.4 Intraday promotion ladder (the law for QG-O5..QG-O10)
 ```
