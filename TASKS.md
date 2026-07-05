@@ -85,6 +85,10 @@ book." See [[project_base_rate_findings_07_04]].
 - **NEXT → unblock/rerun `IMD-00`** with a valid Upstox session, then prove legal 1-minute option-data access. Do not build the importer/backtester until one NIFTY expired option contract can be fetched and checksummed from an allowed source.
 - Then build in order: `IMD-01` schema/store → `IMD-02` expired-contract resolver → `IMD-03` bounded importer → `IMD-04` forward live capture → `IMD-05` store reader → `IMD-06` no-lookahead selector replay → `IMD-07` backtester → `IMD-08` QG-O5..O10 validator → `IMD-09` Edge Lab UI/API → `IMD-10` quality gates.
 
+**Edge Lab Research Ledger (ERL) — future work to use historical data better**
+- **NEXT after current blockers → `ERL-01`** Strategy Trial Registry. Save every backtest/parameter run with config hash, train/OOS split, costs, verdict, and reject reason so QuantG stops remembering only the lucky run.
+- Build in order: `ERL-01` experiment registry → `ERL-02` robustness/overfit metrics → `ERL-03` regime tagging → `ERL-04` parameter heatmaps → `ERL-05` reject-reason engine → `ERL-06` evidence-weighted portfolio allocation → `ERL-07` frontend Edge Lab v2 panels.
+
 **🏗 Backlog programs — do NOT start unless the founder directs:** Architecture redesign Stages 0–1 (event catalog / publish-only bus — see CLAUDE.md §11) · Hermes integration `HSB-11..17` (AutoResearch ratchet — overlaps HSI Stages 4–5, reuse not fork) · Phase-2 UI polish · capital allocator.
 
 **🔧 OPS hygiene (from 2026-07-02 live audit — do AFTER market close, § below):** `OPS-01` portfolio-stream 401 storm (P1) · `OPS-02` 429 rate-limiting · `OPS-03` RELIANCE Trend Rider orphaned-paused · `OPS-04` Hermes Telegram 404 · `OPS-05` verify wallet reconcile.
@@ -158,6 +162,203 @@ fetched_at, checksum
 **How to verify:**
 ```powershell
 python -m py_compile backend\brokers\upstox_gateway.py
+```
+
+---
+
+## EDGE LAB RESEARCH LEDGER (ERL) — USE HISTORICAL DATA AS A STRATEGY JUDGE
+
+**Created 2026-07-06 after Edge Lab proved QG-O1/QG-O4 can produce real historical samples once live-style strategies are replayed day-by-day.**
+
+**Goal:** turn the historical EOD option store into a strategy research operating system, not a one-off P&L table. QuantG should remember every idea tested, penalize overfit/fragile ideas, explain reject reasons, and only promote strategies that survive train/OOS, costs, regimes, nearby parameters, and forward-paper evidence.
+
+**Research law:** do not tune strategies by eyeballing one green backtest. Every candidate must go through: hypothesis → saved experiment → train/OOS result → robustness/overfit check → forward-paper checkpoint → founder-gated live promotion. If many variants were tested, the winner must be penalized for data snooping.
+
+### ERL-01 — Strategy Trial Registry
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 3-5 hours
+- **Prerequisite**: current EOD Edge Lab working
+- **Files to touch**: `backend/core/strategy_trial_registry.py` (new), `backend/routes/ops.py`, `backend/scripts/build_edge_lab_snapshot.py`, `backend/tests/test_strategy_trial_registry.py` (new)
+
+**Goal:** persist every OOS/Edge Lab experiment with enough metadata to reproduce and audit it.
+
+**Steps:**
+1. Define a trial document schema: strategy id/name, config hash, python_code hash, parameter overrides, data window, train/OOS split, slippage/cost assumptions, source store coverage, metrics, verdict, reject reason, created_at, run_id.
+2. Save a trial row for Edge Lab OOS runs and proposer runs; keep raw candles/trades out of Mongo unless compacted.
+3. De-duplicate identical config/data-window trials by hash while keeping run timestamps.
+4. Add a route to list recent trials and fetch a strategy's trial history.
+
+**Acceptance:**
+- Re-running the same strategy/config creates a deterministic hash and does not flood duplicate trial rows.
+- A future agent can answer "what did we test and why did we reject/promote it?" from Mongo alone.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_strategy_trial_registry.py -q
+```
+
+---
+
+### ERL-02 — Robustness and Overfit Metrics
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `ERL-01`
+- **Files to touch**: `backend/core/research_metrics.py` (new), `backend/core/eod_options_backtest.py`, `backend/core/edge_lab.py`, `backend/tests/test_research_metrics.py` (new)
+
+**Goal:** judge whether a green backtest is robust or likely curve-fit.
+
+**Steps:**
+1. Add metrics: profit factor, max drawdown, worst month, worst year, green-month %, slippage sensitivity, sample-size status, and nearby-parameter stability.
+2. Add a conservative Deflated-Sharpe-style score or simpler "multiple-testing penalty" field for large sweeps.
+3. Add an overfit warning when the best cell is isolated while nearby cells fail.
+4. Keep the first implementation deterministic and transparent; do not add ML.
+
+**Acceptance:**
+- Edge Lab can mark a candidate as `CANDIDATE_EDGE_BUT_FRAGILE_TO_COSTS` or `OVERFIT_RISK` instead of just green/red.
+- Unit tests cover a robust plateau, one lucky isolated cell, and a high-P&L/high-drawdown failure.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_research_metrics.py -q
+```
+
+---
+
+### ERL-03 — Market Regime Tagging for Historical Backtests
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 4-6 hours
+- **Prerequisite**: `ERL-01`
+- **Files to touch**: `backend/core/historical_regimes.py` (new), `backend/core/eod_options_backtest.py`, `backend/tests/test_historical_regimes.py` (new)
+
+**Goal:** explain when a strategy works or fails.
+
+**Steps:**
+1. Tag each historical day/trade with simple deterministic regimes: uptrend, downtrend, range, high-vol, low-vol, gap day, expiry week, large-move day.
+2. Aggregate expectancy and hit-rate by regime in OOS results.
+3. Add clear labels to candidate/reject output: "works in range/uptrend, fails in crash/downtrend" etc.
+
+**Acceptance:**
+- QG-O1/QG-O4 reports include regime breakdowns.
+- Regime labels are deterministic from the same candle store and have no future lookahead.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_historical_regimes.py -q
+```
+
+---
+
+### ERL-04 — Parameter Heatmaps and Plateau Detection
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `ERL-02`
+- **Files to touch**: `backend/core/edge_lab.py`, `backend/routes/ops.py`, `frontend/src/pages/Analytics.jsx`, optional `frontend/src/components/analytics/*`
+
+**Goal:** make nearby-parameter robustness visible, not just the best result.
+
+**Steps:**
+1. Persist heatmap cells for OTM %, wing width, min/max DTE, exit mode, and cost/slippage assumptions.
+2. Add plateau score: how many neighboring cells remain positive OOS.
+3. Frontend: display compact heatmap panels and highlight isolated winners as risky.
+
+**Acceptance:**
+- Edge Lab can show "this edge exists across a region" vs "one lucky cell."
+- UI labels train/OOS and costs clearly.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_ops_edge_lab.py -q
+cd frontend
+$env:CI='false'; npm run build
+```
+
+---
+
+### ERL-05 — Reject-Reason Engine
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 3-5 hours
+- **Prerequisite**: `ERL-02`
+- **Files to touch**: `backend/core/strategy_reject_reasons.py` (new), `backend/core/edge_lab.py`, `backend/tests/test_strategy_reject_reasons.py` (new)
+
+**Goal:** make every failed strategy useful by explaining exactly why it failed.
+
+**Reject reasons to support:**
+- too few trades
+- negative OOS expectancy
+- only one lucky year
+- fails after realistic costs/slippage
+- drawdown too high
+- unstable nearby parameters
+- works only in one regime
+- daily EOD data cannot fairly judge intraday strategy
+- data-quality gap
+
+**Acceptance:**
+- Edge Lab rows have a `reject_reasons` array and a human-readable primary reason.
+- A `NO_EDGE_NEGATIVE` or `INSUFFICIENT_DATA` row never shows as a meaningless all-zero row.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_strategy_reject_reasons.py -q
+```
+
+---
+
+### ERL-06 — Evidence-Weighted Portfolio Allocation
+- **Status**: `[ ]` open
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `ERL-05` and at least one forward-paper checkpoint
+- **Files to touch**: `backend/core/evidence_allocator.py` (new), `backend/routes/ops.py`, `frontend/src/pages/Analytics.jsx`, `backend/tests/test_evidence_allocator.py` (new)
+
+**Goal:** convert strategy evidence into paper capital recommendations without auto-enabling live trading.
+
+**Steps:**
+1. Define allocation tiers: candidate edge, fragile, insufficient data, no edge, data-quality fail.
+2. Weight by OOS expectancy, drawdown, robustness score, correlation/family, and forward-paper result.
+3. Output recommended paper capital and promotion status; do not mutate strategies automatically.
+
+**Acceptance:**
+- QuantG can say "QG-O1 deserves larger paper allocation than QG-O5" with evidence fields.
+- Live promotion remains founder-gated and `CORE_ENGINE_LIVE_ENABLED=false`.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_evidence_allocator.py -q
+```
+
+---
+
+### ERL-07 — Edge Lab v2 Frontend Panels
+- **Status**: `[ ]` open
+- **Tier**: 2
+- **Session size**: 4-8 hours
+- **Prerequisite**: `ERL-05`
+- **Files to touch**: `frontend/src/pages/Analytics.jsx`, optional `frontend/src/components/analytics/*`, `frontend/src/index.css` only if required
+
+**Goal:** make the research judge understandable in the app.
+
+**Panels:**
+- Strategy trial history
+- Verdict and reject reasons
+- Regime performance
+- Robustness/overfit warnings
+- Parameter heatmap
+- Promotion ladder: rejected → watch → paper-forward → founder-gated live
+
+**Acceptance:**
+- The user can open Analytics and understand whether a strategy is good, fragile, unproven, or rejected without reading logs.
+- The UI does not imply paper P&L alone proves edge.
+
+**How to verify:**
+```powershell
+cd frontend
+$env:CI='false'; npm run build
 ```
 
 ---
