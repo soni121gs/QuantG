@@ -16423,6 +16423,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
     _index_flush_done_date: Optional[str] = None
+    _hist_validate_done_week: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -16520,6 +16521,22 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Candle backfill: %s", _cres)
                 except Exception as _cb_err:
                     logger.debug("Candle backfill failed: %s", _cb_err)
+
+            # Saturday 05:00 IST — weekly: re-validate STRUCTURE lessons against the
+            # 2yr bhavcopy OOS engine (heavy; run off-market on the weekend). Keeps the
+            # Hermes brain's structural OOS proof fresh + refreshes the advice surface.
+            _iso_week = f"{ist.year}-W{ist.isocalendar()[1]:02d}"
+            if ist.weekday() == 5 and hour == 5 and _hist_validate_done_week != _iso_week:
+                _hist_validate_done_week = _iso_week
+                try:
+                    from core.hermes_historical_validator import validate_structure_lessons
+                    from core.hermes_advisor import compile_hermes_advice
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
+                        _hv = await validate_structure_lessons(db, _row["id"])
+                        await compile_hermes_advice(db, _row["id"])
+                        logger.info("Weekly Hermes historical validation user=%s: %s", _row["id"], _hv.get("validated"))
+                except Exception as _hv_err:
+                    logger.error("Weekly historical validation failed: %s", _hv_err)
 
             # 15:35 IST — flush the day's captured index 1-minute bars (IMD-04) to
             # the index-minute store for the intraday backtester. Read-only, best-effort.
