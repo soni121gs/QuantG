@@ -157,6 +157,16 @@ class OptionsMinuteStore:
         pattern = os.path.join(self._day_dir(source, underlying, date), "*.csv.gz")
         return sorted(glob.glob(pattern))
 
+    def all_series_for_day(self, source: str, underlying: str, date: str) -> Dict[str, List[Dict[str, Any]]]:
+        """Every stored contract's full minute series for a day, keyed by expired
+        instrument key — the ``option_series`` input the backtester consumes."""
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for path in self._iter_day_files(source, underlying, date):
+            rows = self._read_file(path)
+            if rows:
+                out[str(rows[0].get("expired_instrument_key") or path)] = rows
+        return out
+
     def get_chain_at_time(
         self, source: str, underlying: str, date: str, timestamp_ist: str
     ) -> Dict[str, Dict[float, Dict[str, Dict[str, Any]]]]:

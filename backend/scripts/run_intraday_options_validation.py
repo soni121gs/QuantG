@@ -123,22 +123,29 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI glu
     ap.add_argument("--store-only", action="store_true", help="report coverage and exit")
     args = ap.parse_args(argv)
 
+    from core.index_minute_store import IndexMinuteStore
     store = OptionsMinuteStore()
+    index_store = IndexMinuteStore()
+    source = "upstox"
     names = [s.strip() for s in args.strategies.split(",") if s.strip()]
     templates = _template_index()
 
-    # Underlying 1-minute index candles are not yet in the store — judge-first
-    # returns INSUFFICIENT_DATA until IMD-04/index-import lands them.
-    def no_underlying(_u, _d):
-        return []
+    # Real providers: underlying minutes from the index store, chain + option
+    # series from the options store. Empty where a day has no data -> the
+    # validator counts it as missing and stays judge-first.
+    def underlying_fn(u, d):
+        return index_store.get_minutes(u, d)
 
-    def empty_chain(_u, _d):
-        return lambda ts: {}
+    def chain_fn(u, d):
+        return lambda ts: store.get_chain_at_time(source, u, d, ts)
 
-    def empty_series(_u, _d):
-        return {}
+    def series_fn(u, d):
+        return store.all_series_for_day(source, u, d)
 
-    days = [d for d in store.trading_days() if args.start <= d <= args.end]
+    no_underlying, empty_chain, empty_series = underlying_fn, chain_fn, series_fn
+
+    days = sorted(set(store.trading_days() + index_store.trading_days()))
+    days = [d for d in days if args.start <= d <= args.end]
     results = []
     for name in names:
         tpl = templates.get(name)

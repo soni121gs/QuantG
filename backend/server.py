@@ -16393,6 +16393,18 @@ async def _snapshot_option_chains(db) -> int:
     return written
 
 
+_LIVE_INDEX_CAPTURE = None
+
+
+def _get_live_index_capture():
+    """IMD-04: process-wide index 1-minute capture (lazy). Read-only w.r.t. trading."""
+    global _LIVE_INDEX_CAPTURE
+    if _LIVE_INDEX_CAPTURE is None:
+        from core.live_index_capture import LiveIndexCapture
+        _LIVE_INDEX_CAPTURE = LiveIndexCapture()
+    return _LIVE_INDEX_CAPTURE
+
+
 async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times.
 
@@ -16410,6 +16422,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _candle_backfill_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
+    _index_flush_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -16507,6 +16520,16 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Candle backfill: %s", _cres)
                 except Exception as _cb_err:
                     logger.debug("Candle backfill failed: %s", _cb_err)
+
+            # 15:35 IST — flush the day's captured index 1-minute bars (IMD-04) to
+            # the index-minute store for the intraday backtester. Read-only, best-effort.
+            if hour == 15 and minute == 35 and _index_flush_done_date != today:
+                _index_flush_done_date = today
+                try:
+                    _ic_res = await asyncio.to_thread(_get_live_index_capture().flush_day, today)
+                    logger.info("Index minute capture flush: %s", _ic_res)
+                except Exception as _ic_err:
+                    logger.debug("Index capture flush failed: %s", _ic_err)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
@@ -17377,6 +17400,11 @@ async def startup():
                 await _start_user_upstox_ticker(uid)
                 # Always subscribe baseline index tokens regardless of open positions
                 await asyncio.to_thread(gateway.start_market_data_ws, _BASELINE_TOKENS, "full")
+                # IMD-04: attach the read-only index 1-minute capture to this feed.
+                try:
+                    gateway._feed_v3.add_tick_listener(_get_live_index_capture().on_tick)
+                except Exception:
+                    pass
                 # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},

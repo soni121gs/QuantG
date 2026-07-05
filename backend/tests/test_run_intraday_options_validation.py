@@ -44,6 +44,51 @@ def test_validate_strategy_empty_data_is_insufficient():
     assert r["trades"] == 0
 
 
+def test_store_backed_providers_produce_trades():
+    import shutil
+    from core.options_minute_schema import OptionContractRef, build_manifest, normalize_candles
+    from core.options_minute_store import OptionsMinuteStore
+    from core.index_minute_store import IndexMinuteStore
+
+    oroot = os.path.join(os.path.dirname(__file__), "_tmp_e2e_opt")
+    iroot = os.path.join(os.path.dirname(__file__), "_tmp_e2e_idx")
+    shutil.rmtree(oroot, ignore_errors=True)
+    shutil.rmtree(iroot, ignore_errors=True)
+    try:
+        ostore = OptionsMinuteStore(root=oroot)
+        istore = IndexMinuteStore(root=iroot)
+        date = "2025-01-09"
+        # index: 3 minutes, spot ~24215 (ATM 24200)
+        istore.write_day("NIFTY", date, [
+            {"timestamp_ist": f"{date}T09:{15 + k:02d}:00+05:30", "underlying": "NIFTY",
+             "open": 24215, "high": 24215, "low": 24215, "close": 24215, "volume": 0} for k in range(3)])
+        # option CE 24200: entry 100 -> jumps to target
+        ref = OptionContractRef("NIFTY", date, 24200.0, "CE", "NSE_FO|CE24200", "NSE_FO|CE24200|exp")
+        raw = [[f"{date}T09:{15 + k:02d}:00+05:30", *ohlc, 1000, 250000]
+               for k, ohlc in enumerate([(100, 100, 100, 100), (150, 210, 95, 205), (205, 210, 200, 205)])]
+        res = normalize_candles(raw, ref)
+        ostore.write_contract_day(res.candles, build_manifest(
+            res.candles, ref, source="upstox", from_date=date, to_date=date, fetched_at="x", flags=res.flags))
+
+        code = ("def run(data):\n"
+                "    d = data[-1]\n"
+                "    if len(data) == 1:\n"
+                "        return [{'date': d['date'], 'action': 'BUY', 'direction': 'CE',"
+                " 'structure': 'single_leg', 'setup_type': 't', 'target_R': 1.0, 'initial_stop_R': 0.5}]\n"
+                "    return []\n")
+        r = validate_strategy(
+            "QG-TEST", code, underlying="NIFTY", structure="single_leg", days=[date],
+            underlying_minutes_fn=lambda u, d: istore.get_minutes(u, d),
+            chain_at_fn=lambda u, d: (lambda ts: ostore.get_chain_at_time("upstox", u, d, ts)),
+            option_series_fn=lambda u, d: ostore.all_series_for_day("upstox", u, d),
+        )
+        assert r["trades"] == 1
+        assert r["overall"]["net_pnl"] > 0  # bought 100, target 200
+    finally:
+        shutil.rmtree(oroot, ignore_errors=True)
+        shutil.rmtree(iroot, ignore_errors=True)
+
+
 def test_build_scorecard_ranks_candidates_first():
     results = [
         {"strategy": "A", "verdict": NO_EDGE_NEGATIVE, "overall": {"expectancy": -5}},

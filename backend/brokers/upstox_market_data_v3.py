@@ -457,6 +457,15 @@ class UpstoxMarketDataFeedV3:
         # reconnect loop tell a real connection (clean close => fast retry) apart
         # from a rejected handshake (failure => exponential backoff).
         self._session_opened = False
+        # Read-only tick listeners (IMD-04 minute capture). Each is called with
+        # (instrument_key, tick_dict) per accepted tick, fully guarded so a
+        # listener can NEVER break the feed or the trading loop.
+        self._tick_listeners: list = []
+
+    def add_tick_listener(self, fn: Callable[[str, Dict[str, Any]], None]) -> None:
+        with self._lock:
+            if fn not in self._tick_listeners:
+                self._tick_listeners.append(fn)
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -756,6 +765,11 @@ class UpstoxMarketDataFeedV3:
                     if not self._first_tick_logged:
                         self._first_tick_logged = True
                         logger.info("Upstox V3 first tick received key=%s ltp=%s", instrument_key, tick.get("ltp"))
+                    for listener in self._tick_listeners:
+                        try:
+                            listener(instrument_key, tick)
+                        except Exception:  # capture must never break the feed
+                            logger.debug("tick listener error for %s", instrument_key, exc_info=True)
         if updated:
             logger.debug("Upstox V3 feed updated %s ticks", updated)
 
