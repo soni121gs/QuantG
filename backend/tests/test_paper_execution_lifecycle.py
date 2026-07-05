@@ -66,12 +66,14 @@ def _mock_db():
 
 def test_seeded_strategy_exit_mode_matrix():
     """1. Seeded strategy exit_mode matrix test.
-    Verify that all option strategies are seeded with signal_or_tp_sl_trailing.
+    Verify that all option strategies are seeded with protective exits.
     """
     for strat in DEFAULT_OPTION_STRATEGIES:
         name = strat["name"]
         exit_mode = strat.get("risk", {}).get("exit_mode")
-        assert exit_mode == "signal_or_tp_sl_trailing", f"{name} should have exit_mode signal_or_tp_sl_trailing"
+        assert exit_mode in {"signal_or_tp_sl_trailing", "hold_to_expiry"}, f"{name} should have a protective exit mode"
+        if name.startswith("QG-O") and str(strat.get("structure") or "") == "credit_spread":
+            assert exit_mode == "hold_to_expiry", f"{name} should hold defined-risk spread to expiry"
 
 
 @pytest.mark.anyio

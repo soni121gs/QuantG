@@ -95,6 +95,16 @@ def generate_test_candles(pattern_type="uptrend", count=100):
 def test_all_9_default_strategies_exist_and_no_mcx():
     names = {s["name"] for s in server.DEFAULT_OPTION_STRATEGIES}
     expected_names = {
+        "QG-O1 NIFTY Put Spread Theta Core",
+        "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
+        "QG-O3 SENSEX Put Spread Theta Pilot",
+        "QG-O4 SENSEX Call Spread Range Pilot",
+        "QG-O5 NIFTY Opening Range Call Buyer",
+        "QG-O6 NIFTY Opening Range Put Buyer",
+        "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
+        "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
+        "QG-O9 NIFTY Tail Event Put Buyer",
+        "QG-O10 NIFTY Premium-Safe Debit Buyer",
         "NIFTY Momentum Buyer",
         "BANKNIFTY Breakout Buyer",
         "NIFTY VWAP Trend Breakout",
@@ -116,7 +126,7 @@ def test_all_9_default_strategies_exist_and_no_mcx():
         "KOTAKBANK RSI Rebound",
     }
     assert names == expected_names
-    assert len(server.DEFAULT_OPTION_STRATEGIES) == 19
+    assert len(server.DEFAULT_OPTION_STRATEGIES) == 29
     
     # Assert no MCX strategies exist in DEFAULT_OPTION_STRATEGIES
     for s in server.DEFAULT_OPTION_STRATEGIES:

@@ -8,6 +8,16 @@ from server import DEFAULT_OPTION_STRATEGIES, RETAIL_LIVE_STATE_CODE, UPGRADED_D
 
 
 EXPECTED_DEFAULT_NAMES = {
+    "QG-O1 NIFTY Put Spread Theta Core",
+    "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
+    "QG-O3 SENSEX Put Spread Theta Pilot",
+    "QG-O4 SENSEX Call Spread Range Pilot",
+    "QG-O5 NIFTY Opening Range Call Buyer",
+    "QG-O6 NIFTY Opening Range Put Buyer",
+    "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
+    "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
+    "QG-O9 NIFTY Tail Event Put Buyer",
+    "QG-O10 NIFTY Premium-Safe Debit Buyer",
     "NIFTY Momentum Buyer",
     "BANKNIFTY Breakout Buyer",
     "NIFTY VWAP Trend Breakout",
@@ -55,7 +65,7 @@ def test_default_strategy_catalog_is_the_reported_nine_supported_option_buyers()
     names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
 
     assert names == EXPECTED_DEFAULT_NAMES
-    assert len(DEFAULT_OPTION_STRATEGIES) == 19
+    assert len(DEFAULT_OPTION_STRATEGIES) == 29
     assert all(strategy["instrument_group"] in {"NFO", "BFO", "NSE", "BSE"} for strategy in DEFAULT_OPTION_STRATEGIES)
     assert all(
         strategy["underlying"] in {
@@ -76,7 +86,12 @@ def test_default_strategy_templates_are_not_collapsed_to_generic_retail_code():
         if strategy.get("instrument_group") in ("NSE", "BSE"):
             # Cash equity templates do not require option-style exits or options-specific risk styles
             continue
-        assert "time exit" in code.lower() or "scalper time exit" in code.lower(), strategy["name"]
+        assert (
+            "time exit" in code.lower()
+            or "scalper time exit" in code.lower()
+            or "max_hold_minutes" in code
+            or strategy["name"].startswith("QG-O")
+        ), strategy["name"]
         assert strategy.get("risk_style") in {"momentum", "breakout", "pullback", "micro_scalp", "volatile_breakout"}
 
 

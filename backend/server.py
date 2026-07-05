@@ -1558,6 +1558,19 @@ DEAD_STRATEGY_NAMES = frozenset({
     "BANKNIFTY Theta Credit Spread", "SENSEX Theta Credit Spread",
 })
 
+OPTION_ALPHA_REBUILD_NAMES = frozenset({
+    "QG-O1 NIFTY Put Spread Theta Core",
+    "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
+    "QG-O3 SENSEX Put Spread Theta Pilot",
+    "QG-O4 SENSEX Call Spread Range Pilot",
+    "QG-O5 NIFTY Opening Range Call Buyer",
+    "QG-O6 NIFTY Opening Range Put Buyer",
+    "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
+    "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
+    "QG-O9 NIFTY Tail Event Put Buyer",
+    "QG-O10 NIFTY Premium-Safe Debit Buyer",
+})
+
 CREDIT_SPREAD_THETA_RISK = {
     "cooldown_minutes": 15,
     "max_trades_day": 8,
@@ -3413,22 +3426,382 @@ DEFAULT_OPTION_STRATEGIES = [
         # downside vol-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy:
         # +₹214/trade, 95% WR, both years positive (EDR-09). short_otm_pct/wing_width/
         # exit_mode drive the Edge Lab OOS backtest (core/eod_options_backtest). Seeds
-        # DRAFT — live multi-day hold-to-expiry exit wiring is pending (EDR-11), so it
-        # must be validated forward-paper before going live.
-        "name": "NIFTY Put Spread Theta (OOS)",
-        "description": "First OOS-validated edge (EDR-09): sell a defined-risk ~3% OTM NIFTY put spread and hold to weekly expiry to harvest the downside volatility-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy (+₹214/trade, 95% WR, both years positive). Seeded DRAFT for forward-paper; live hold-to-expiry exit wiring pending (EDR-11).",
+        # PAPER-ACTIVE for forward testing only. CORE_ENGINE_LIVE_ENABLED stays false.
+        "name": "QG-O1 NIFTY Put Spread Theta Core",
+        "description": "Defined-risk NIFTY put-spread income pilot from EDR-09/QG-O1: sell a ~3% OTM put spread and hold to weekly expiry to harvest downside volatility-risk premium. This is the primary paper-forward candidate; real-live promotion still requires forward-paper evidence.",
         "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
         "structure": "credit_spread", "spread_width": 6,
         "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry", "short_delta": 0.12,
         "strategy_type": "Option Selling", "required_capital": 25000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 30000.0,
+                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
+                 "max_trades_day": 1},
         "python_code": """def run(data):
-    # Always the put side (BUY = sell put spread); the engine opens one spread per
-    # weekly expiry while flat and holds it to expiry.
-    if len(data) < 5:
+    position = "NONE"
+    if len(data) < 20:
         return []
-    return [{'date': d['date'], 'action': 'BUY', 'reason': 'sell 3% OTM put spread, hold to expiry'} for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '13:00'):
+        return []
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': 'CE',
+        'setup_type': 'defined_risk_put_spread_income',
+        'confidence': 72.0,
+        'entry_reason': 'QG-O1 sell 3% OTM NIFTY put spread, hold to expiry',
+        'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
+        'regime_required': 'range_to_up', 'option_selection_preference': 'OTM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
 """,
         "market_suitability": "Non-crash / range-to-up markets (short downside vol)",
+    },
+    {
+        "name": "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
+        "description": "Lower-frequency NIFTY put-spread income pilot. It sells a ~3% OTM defined-risk put spread only when the underlying is above its 20/50-period trend filter.",
+        "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
+        "structure": "credit_spread", "spread_width": 6,
+        "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry", "short_delta": 0.12,
+        "strategy_type": "Option Selling", "required_capital": 25000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 30000.0,
+                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
+                 "max_trades_day": 1},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 60:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '13:00'):
+        return []
+    ma20 = sum(closes[-20:]) / 20
+    ma50 = sum(closes[-50:]) / 50
+    if not (closes[-1] > ma20 > ma50):
+        return []
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': 'CE',
+        'setup_type': 'trend_filtered_put_spread_income',
+        'confidence': 68.0,
+        'entry_reason': 'QG-O2 NIFTY uptrend filter passed; sell OTM put spread',
+        'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
+        'regime_required': 'uptrend', 'option_selection_preference': 'OTM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "Uptrend / non-crash NIFTY weeks",
+    },
+    {
+        "name": "QG-O3 SENSEX Put Spread Theta Pilot",
+        "description": "SENSEX defined-risk put-spread pilot adapted from the short-vol research pack into the app's supported 2-leg credit-spread engine.",
+        "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
+        "structure": "credit_spread", "spread_width": 4,
+        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "expiry", "short_delta": 0.14,
+        "strategy_type": "Option Selling", "required_capital": 30000.0, "instrument_group": "BFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 25000.0,
+                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
+                 "max_trades_day": 1},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 30:
+        return []
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '13:00'):
+        return []
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': 'CE',
+        'setup_type': 'sensex_put_spread_income',
+        'confidence': 64.0,
+        'entry_reason': 'QG-O3 sell defined-risk SENSEX OTM put spread',
+        'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
+        'regime_required': 'range_to_up', 'option_selection_preference': 'OTM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "SENSEX range-to-up short-vol paper pilot",
+    },
+    {
+        "name": "QG-O4 SENSEX Call Spread Range Pilot",
+        "description": "SENSEX defined-risk call-spread pilot for range/down weeks. This is a 2-leg app-compatible substitute for the researched condor until 4-leg live support exists.",
+        "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
+        "structure": "credit_spread", "spread_width": 4,
+        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "expiry", "short_delta": 0.14,
+        "strategy_type": "Option Selling", "required_capital": 30000.0, "instrument_group": "BFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 25000.0,
+                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
+                 "max_trades_day": 1},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 40:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '13:00'):
+        return []
+    ten_range = (max(closes[-10:]) - min(closes[-10:])) / max(1.0, closes[-1])
+    if ten_range > 0.035:
+        return []
+    return [{
+        'date': d['date'], 'action': 'SELL', 'direction': 'PE',
+        'setup_type': 'sensex_range_call_spread_income',
+        'confidence': 58.0,
+        'entry_reason': 'QG-O4 SENSEX range filter passed; sell OTM call spread',
+        'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
+        'regime_required': 'range', 'option_selection_preference': 'OTM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "SENSEX range / capped-upside weeks",
+    },
+    {
+        "name": "QG-O5 NIFTY Opening Range Call Buyer",
+        "description": "Intraday NIFTY debit-spread call buyer. It trades only after a strong opening-range upside break and is sized as a paper-only buyer with defined debit risk.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 5000.0,
+                 "time_exit_minutes": 35, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 45,
+                 "max_trades_day": 1, "target_r_multiple": 1.4},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 30:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:35' or clock > '14:20'):
+        return []
+    opening_high = max(highs[-18:-6]) if len(highs) >= 24 else max(highs[:-1])
+    avg_range = sum(highs[-12:][i] - lows[-12:][i] for i in range(12)) / 12
+    body = closes[-1] - float(d.get('open', closes[-1]) or closes[-1])
+    if closes[-1] <= opening_high or body <= avg_range * 0.35:
+        return []
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': 'CE',
+        'setup_type': 'opening_range_call_breakout',
+        'confidence': 63.0,
+        'entry_reason': 'QG-O5 NIFTY opening range upside break',
+        'target_R': 1.4, 'initial_stop_R': 0.7, 'trail_after_R': 1.0,
+        'max_hold_minutes': 35, 'invalidation_rule': 'breakout_failure_or_time',
+        'regime_required': 'intraday_momentum_up', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "NIFTY intraday trend-up days only",
+    },
+    {
+        "name": "QG-O6 NIFTY Opening Range Put Buyer",
+        "description": "Intraday NIFTY debit-spread put buyer. It trades only after a strong opening-range downside break and uses defined debit risk.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 5000.0,
+                 "time_exit_minutes": 35, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 45,
+                 "max_trades_day": 1, "target_r_multiple": 1.4},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 30:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:35' or clock > '14:20'):
+        return []
+    opening_low = min(lows[-18:-6]) if len(lows) >= 24 else min(lows[:-1])
+    avg_range = sum(highs[-12:][i] - lows[-12:][i] for i in range(12)) / 12
+    body = float(d.get('open', closes[-1]) or closes[-1]) - closes[-1]
+    if closes[-1] >= opening_low or body <= avg_range * 0.35:
+        return []
+    return [{
+        'date': d['date'], 'action': 'SELL', 'direction': 'PE',
+        'setup_type': 'opening_range_put_breakdown',
+        'confidence': 63.0,
+        'entry_reason': 'QG-O6 NIFTY opening range downside break',
+        'target_R': 1.4, 'initial_stop_R': 0.7, 'trail_after_R': 1.0,
+        'max_hold_minutes': 35, 'invalidation_rule': 'breakdown_failure_or_time',
+        'regime_required': 'intraday_momentum_down', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "NIFTY intraday trend-down days only",
+    },
+    {
+        "name": "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
+        "description": "Intraday BANKNIFTY debit-spread call buyer for failed breakdown and VWAP reclaim days. Paper-sized and limited to one trade per day.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 6000.0,
+                 "time_exit_minutes": 25, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 1, "target_r_multiple": 1.2},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 35:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:40' or clock > '14:10'):
+        return []
+    avg_range = sum(highs[-14:][i] - lows[-14:][i] for i in range(14)) / 14
+    reclaimed = closes[-1] > sum(closes[-12:]) / 12 and closes[-2] <= sum(closes[-13:-1]) / 12
+    higher_low = lows[-1] > min(lows[-8:-1])
+    if not (reclaimed and higher_low and (highs[-1] - lows[-1]) > avg_range * 0.85):
+        return []
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': 'CE',
+        'setup_type': 'banknifty_vwap_reclaim_call',
+        'confidence': 58.0,
+        'entry_reason': 'QG-O7 BANKNIFTY failed breakdown and VWAP reclaim',
+        'target_R': 1.2, 'initial_stop_R': 0.6, 'trail_after_R': 0.9,
+        'max_hold_minutes': 25, 'invalidation_rule': 'reclaim_failure_or_time',
+        'regime_required': 'intraday_reversal_up', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "BANKNIFTY fast reversal-up days only",
+    },
+    {
+        "name": "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
+        "description": "Intraday BANKNIFTY debit-spread put buyer for VWAP rejection and lower-high breakdown days. Paper-sized and limited to one trade per day.",
+        "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 6000.0,
+                 "time_exit_minutes": 25, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 1, "target_r_multiple": 1.2},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 35:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:40' or clock > '14:10'):
+        return []
+    avg_range = sum(highs[-14:][i] - lows[-14:][i] for i in range(14)) / 14
+    rejected = closes[-1] < sum(closes[-12:]) / 12 and closes[-2] >= sum(closes[-13:-1]) / 12
+    lower_high = highs[-1] < max(highs[-8:-1])
+    if not (rejected and lower_high and (highs[-1] - lows[-1]) > avg_range * 0.85):
+        return []
+    return [{
+        'date': d['date'], 'action': 'SELL', 'direction': 'PE',
+        'setup_type': 'banknifty_vwap_reject_put',
+        'confidence': 58.0,
+        'entry_reason': 'QG-O8 BANKNIFTY VWAP reject and lower-high breakdown',
+        'target_R': 1.2, 'initial_stop_R': 0.6, 'trail_after_R': 0.9,
+        'max_hold_minutes': 25, 'invalidation_rule': 'reject_failure_or_time',
+        'regime_required': 'intraday_reversal_down', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "BANKNIFTY fast reversal-down days only",
+    },
+    {
+        "name": "QG-O9 NIFTY Tail Event Put Buyer",
+        "description": "Rare NIFTY intraday put buyer for sharp downside expansion days. This stays small and exits quickly because EOD-held long puts tested poorly.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "single_leg", "spread_width": 1,
+        "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "volatile_breakout", "strategy_category": "intraday", "daily_loss_limit": 3500.0,
+                 "time_exit_minutes": 20, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 90,
+                 "max_trades_day": 1, "target_r_multiple": 1.5},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 30:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '14:00'):
+        return []
+    move3 = (closes[-1] - closes[-4]) / max(1.0, closes[-4])
+    avg_range = sum(highs[-12:][i] - lows[-12:][i] for i in range(12)) / 12
+    if move3 > -0.006 or (highs[-1] - lows[-1]) < avg_range * 1.15:
+        return []
+    return [{
+        'date': d['date'], 'action': 'SELL', 'direction': 'PE',
+        'setup_type': 'nifty_tail_event_put',
+        'confidence': 56.0,
+        'entry_reason': 'QG-O9 NIFTY sharp downside expansion put buyer',
+        'target_R': 1.5, 'initial_stop_R': 0.7, 'trail_after_R': 1.0,
+        'max_hold_minutes': 20, 'invalidation_rule': 'snapback_or_time',
+        'regime_required': 'tail_downside_expansion', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "Rare NIFTY downside expansion days",
+    },
+    {
+        "name": "QG-O10 NIFTY Premium-Safe Debit Buyer",
+        "description": "NIFTY intraday debit-spread buyer that only enters when the candle expansion justifies paying option premium. Defined debit risk, one paper trade per day.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "debit_spread", "spread_width": 2,
+        "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "momentum", "strategy_category": "intraday", "daily_loss_limit": 4500.0,
+                 "time_exit_minutes": 35, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 1, "target_r_multiple": 1.3},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 45:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high', d.get('close')) or 0) for d in data]
+    lows = [float(d.get('low', d.get('close')) or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '14:15'):
+        return []
+    ma12 = sum(closes[-12:]) / 12
+    ma30 = sum(closes[-30:]) / 30
+    avg_range = sum(highs[-20:][i] - lows[-20:][i] for i in range(20)) / 20
+    expansion = highs[-1] - lows[-1]
+    if expansion < avg_range * 1.1:
+        return []
+    if closes[-1] > ma12 > ma30:
+        action, direction, reason = 'BUY', 'CE', 'QG-O10 premium-safe upside debit spread'
+    elif closes[-1] < ma12 < ma30:
+        action, direction, reason = 'SELL', 'PE', 'QG-O10 premium-safe downside debit spread'
+    else:
+        return []
+    return [{
+        'date': d['date'], 'action': action, 'direction': direction,
+        'setup_type': 'premium_safe_debit_spread',
+        'confidence': 60.0,
+        'entry_reason': reason,
+        'target_R': 1.3, 'initial_stop_R': 0.7, 'trail_after_R': 1.0,
+        'max_hold_minutes': 35, 'invalidation_rule': 'momentum_failure_or_time',
+        'regime_required': 'intraday_momentum', 'option_selection_preference': 'ATM',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "NIFTY intraday range-expansion days",
     },
     {
         "name": "NIFTY Momentum Buyer",
@@ -6059,7 +6432,10 @@ for _template in [*LEGACY_OPTION_STRATEGIES, *DEFAULT_OPTION_STRATEGIES, *STANDA
             _template["risk"] = {}
         _template["risk"]["exit_mode"] = "signal_or_tp_sl_trailing"
         continue
-    if str(_template.get("strategy_type") or "").lower() == "option buying":
+    if (
+        str(_template.get("strategy_type") or "").lower() == "option buying"
+        and _template.get("name") not in OPTION_ALPHA_REBUILD_NAMES
+    ):
         _template["python_code"] = RETAIL_LIVE_STATE_CODE
         _template["market_suitability"] = _template.get("market_suitability") or "Retail live momentum"
 
@@ -6088,18 +6464,24 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     if _template.get("name") in CREDIT_SPREAD_THETA_NAMES or str(_template.get("structure") or "") == "credit_spread":
         _template["structure"] = "credit_spread"
         _template["strategy_type"] = "Option Selling"
-        _template["required_capital"] = 8000.0
+        if _template.get("name") not in OPTION_ALPHA_REBUILD_NAMES:
+            _template["required_capital"] = 8000.0
         _risk.update(CREDIT_SPREAD_THETA_RISK)
     # EDR-11: the OOS-validated put spread holds to weekly expiry — its DEFINED RISK
     # (wing width) is the stop, so raise daily_loss_limit above one designed max loss
     # (~₹22k/lot) and disable the intraday time-exit so the killswitch/time-exit can't
     # force-close it before expiry. exit_mode="hold_to_expiry" (risk) mirrors the
     # options.exit_mode="expiry" the position monitor keys off.
-    if _template.get("name") == "NIFTY Put Spread Theta (OOS)":
+    if _template.get("name") == "QG-O1 NIFTY Put Spread Theta Core":
         _template["required_capital"] = 25000.0
         _risk.update({"daily_loss_limit": 30000.0, "time_exit_minutes": 0,
                       "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
                       "max_trades_day": 4, "strategy_category": "swing"})
+    if _template.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+        _template["initial_status"] = "live"
+        if _template.get("required_capital") is not None:
+            _template["required_capital"] = float(_template.get("required_capital") or 0)
+        _risk.update(dict(_template.get("risk") or {}))
     if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
     if str(_template.get("instrument_group") or "").upper() in {"NSE", "BSE"}:
@@ -6108,8 +6490,10 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 2500.0)
         _risk["entry_cutoff_ist"] = EQUITY_ENTRY_CUTOFF
     _risk.setdefault("exit_mode", "signal_or_tp_sl_trailing")
+    _template["risk_style"] = _risk.get("risk_style") or _template.get("risk_style") or _classify_strategy_risk_style(_template)
 
 STRATEGY_DISPLAY_NAME_RENAMES = {
+    "NIFTY Put Spread Theta (OOS)": "QG-O1 NIFTY Put Spread Theta Core",
     "UPSTOX NIFTY ATM Option Momentum Buyer": "NIFTY Momentum Buyer",
     "UPSTOX BANKNIFTY ATM Option Breakout Buyer": "BANKNIFTY Breakout Buyer",
     "UPSTOX RELIANCE Advanced Momentum Trend Rider": "RELIANCE Trend Rider",
@@ -6253,7 +6637,7 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             "options": options_block,
             "risk": risk_profile,
         },
-        "status": "draft",
+        "status": template.get("initial_status") or "draft",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_pnl": None,
         "evaluations": 0,
@@ -6448,6 +6832,12 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.otm_points": int(template.get("otm_points") or 0),
                 "visual_config.options.lots": int(template.get("lots") or 1),
                 "visual_config.options.product": template.get("product") or ("MIS" if is_eq_temp else "NRML"),
+                "visual_config.options.structure": template.get("structure") or ("single_leg" if not is_eq_temp else None),
+                "visual_config.options.spread_width": template.get("spread_width"),
+                "visual_config.options.short_otm_pct": template.get("short_otm_pct"),
+                "visual_config.options.wing_width": template.get("wing_width"),
+                "visual_config.options.exit_mode": template.get("exit_mode"),
+                "visual_config.options.short_delta": template.get("short_delta"),
                 **_risk_update_fields(risk_profile),
                 "default_strategy_version": "v13-live-brain-r1",
                 "strategy_logic_version": "1.0",
@@ -16423,6 +16813,13 @@ async def startup():
                         s_updates["mode"] = "paper"
                         s_updates["last_filter_reason"] = "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
                         logger.warning("Archived no-edge strategy %s (EDR-03)", s.get("name"))
+
+                    if s.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+                        s_updates["status"] = "live"
+                        s_updates["mode"] = "paper"
+                        s_updates["manual_paused"] = False
+                        s_updates["schedule_paused"] = False
+                        s_updates["last_filter_reason"] = "Paper-forward active: Options Alpha Rebuild pack seeded 2026-07-05."
 
                     if s_updates:
                         await db.strategies.update_one({"id": s["id"], "user_id": user_id}, {"$set": s_updates})
