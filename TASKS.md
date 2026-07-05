@@ -145,6 +145,7 @@ fetched_at, checksum
 
 **Attempt log:**
 - 2026-07-05 Codex ran the smoke test inside `quantg-backend` without printing secrets. `broker_keys` exist and an access token is stored, but `get_user_upstox_status()` reported `token_state="expired"`, `token_valid=false`, `reconnect_required=true`, error code `UDAPI100050`.
+- 2026-07-06 Codex reran the same VPS smoke test. Result unchanged: `token_present=true`, `token_state="expired"`, `token_valid=false`, `reconnect_required=true`, error code `UDAPI100050`; no expired-contract or candle endpoint was reached.
 - Because token validation failed first, no conclusion was reached on Upstox Plus entitlement (`UDAPI1149`) or 1-minute candle availability.
 - Current Upstox docs show the expired contracts and expired candles endpoints under `/v2/expired-instruments/...`; QuantG currently has `get_expired_historical_candles_v3()` using `/v3/expired-instruments/...`. When unblocked, test both the documented `/v2` path and the existing helper path, then correct the helper if needed.
 - Resume command shape: get contracts from `/v2/expired-instruments/option/contract?instrument_key=NSE_INDEX|Nifty 50&expiry_date=YYYY-MM-DD`, choose one returned `instrument_key`, then fetch `/v2/expired-instruments/historical-candle/{expired_instrument_key}/1minute/{to_date}/{from_date}` for one date.
