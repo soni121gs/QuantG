@@ -82,8 +82,8 @@ book." See [[project_base_rate_findings_07_04]].
 - Bigger builds: `WR-71` real options-chain backtest **✅ UNBLOCKED + DONE 2026-07-04** (free NSE bhavcopy replaced the Upstox expired-option 404 wall; EOD OOS validator shipped — see EDR program above) · `WR-73` enable live on 2–3 proven *(founder gate — now also requires an OOS `CANDIDATE_EDGE`, which NO current strategy has)*
 
 **Intraday Minute Data / Options Backtesting (IMD) — required before trusting QG-O5..QG-O10**
-- **NEXT → `IMD-01`** now that `IMD-00` proved legal Upstox expired-contract and 1-minute candle access. Build the schema/store layer before any importer/backtester.
-- Then build in order: `IMD-01` schema/store → `IMD-02` expired-contract resolver → `IMD-03` bounded importer → `IMD-04` forward live capture → `IMD-05` store reader → `IMD-06` no-lookahead selector replay → `IMD-07` backtester → `IMD-08` QG-O5..O10 validator → `IMD-09` Edge Lab UI/API → `IMD-10` quality gates.
+- **ALL IMD-01..IMD-10 code DONE 2026-07-06** (schema → resolver → store/importer → capture → reader → selector → backtester → OOS validator → Edge Lab UI → gate). The pipeline is built and unit-tested (76 tests). **Remaining to produce real verdicts: DATA.** (1) run the bounded importer against live Upstox for real option 1-min history, (2) supply UNDERLYING INDEX 1-min candles (IMD-04 forward capture wiring or an index-minute import) — the validator is JUDGE-FIRST and returns INSUFFICIENT_DATA until both mature. See CLAUDE.md §14.
+- ~~`IMD-01` schema~~ ✅ ~~`IMD-02` resolver~~ ✅ ~~`IMD-03` importer~~ ✅ ~~`IMD-04` capture~~ ✅ ~~`IMD-05` reader~~ ✅ ~~`IMD-06` selector~~ ✅ ~~`IMD-07` backtester~~ ✅ ~~`IMD-08` validator~~ ✅ ~~`IMD-09` Edge Lab UI~~ ✅ ~~`IMD-10` gate~~ ✅
 
 **Edge Lab Research Ledger (ERL) — future work to use historical data better**
 - **NEXT after current blockers → `ERL-01`** Strategy Trial Registry. Save every backtest/parameter run with config hash, train/OOS split, costs, verdict, and reject reason so QuantG stops remembering only the lucky run.
@@ -369,7 +369,7 @@ $env:CI='false'; npm run build
 ---
 
 ### IMD-01 — Define the 1-minute options store schema and manifest
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `backend/core/options_minute_schema.py` + `backend/tests/test_options_minute_schema.py` (15 tests, pass). Canonical 16-field candle row (`CANDLE_FIELDS`), IST timestamp normalization, per-row content checksum + order-independent manifest checksum, hard-fail reasons (row-too-short/bad-timestamp/non-numeric/negative/high<low/ohlc-out-of-range) vs collection DQ flags (zero-volume/dup-ts/non-monotonic/missing-oi). Pure logic, no broker/fs.
 - **Tier**: 2
 - **Session size**: 2-3 hours
 - **Prerequisite**: `IMD-00` usable legal data source
@@ -396,7 +396,7 @@ python -m pytest backend\tests\test_options_minute_schema.py -q
 ---
 
 ### IMD-02 — Expired-contract resolver for historical option universe
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `backend/core/expired_option_resolver.py` + gateway methods `get_expired_option_expiries`/`get_expired_option_contracts` (documented `/v2/expired-instruments/...` paths) + `backend/tests/test_expired_option_resolver.py` (16 tests, pass). `resolve(underlying,trade_date,expiry,strike,option_type)` → `ResolveResult` with a stable `expired_instrument_key` or a typed reason (`STRIKE_NOT_FOUND`/`EXPIRY_NOT_FOUND`/`BLOCKED_UNDERLYING`/`UNSUPPORTED_UNDERLYING`/`OPTION_TYPE_INVALID`/`FETCH_ERROR`) — never a guessed symbol. NIFTY+BANKNIFTY supported; SENSEX/BANKEX blocked. Helpers `select_weekly_expiry`, `atm_strike`, `resolve_atm`. Per-(underlying,expiry) mem + optional on-disk cache; tokens never persisted. Injected fetchers → unit-testable with no broker; `from_gateway()` wires the real path.
 - **Tier**: 3
 - **Session size**: 4-6 hours
 - **Prerequisite**: `IMD-01`
@@ -422,7 +422,7 @@ python -m pytest backend\tests\test_expired_option_resolver.py -q
 ---
 
 ### IMD-03 — Bounded Upstox 1-minute importer to Parquet/DuckDB
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `core/options_minute_store.py` (write side) + `scripts/options_1m_ingest_upstox.py` + `tests/test_options_minute_store.py`/`test_options_1m_ingest.py` (13 tests). NOTE: store format is **gzipped CSV per contract-day** (same house pattern as `core/bhavcopy_store`), NOT Parquet — pyarrow/duckdb are not installed and adding them is a founder-gated rebuild; the `./data` mount is already writable. Layout `data/options_1m/source=upstox/underlying=NIFTY/year=2025/date=YYYY-MM-DD/{strike}{CE|PE}_exp{YYYYMMDD}.csv.gz` + `.manifest.json` sidecar. Importer: pure `plan_contract_days` (ATM±N via bhavcopy spot, weekly expiry via resolver) + `ingest` (idempotent `is_clean` skip unless `--force`, `--dry-run` prints planned count). Bounded to NIFTY/BANKNIFTY, ATM±5, CE+PE.
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `IMD-02`
@@ -451,7 +451,7 @@ python backend\scripts\options_1m_ingest_upstox.py --from 2025-01-06 --to 2025-0
 ---
 
 ### IMD-04 — Forward live 1-minute option-candle capture
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `core/options_minute_capture.py` + `tests/test_options_minute_capture.py` (6 tests). `MinuteBarAggregator` rolls tick/LTP → completed 1-min OHLCV/OI bars; `OptionsMinuteCapture` buffers per-contract-day and flushes to the same store schema, with health counters (subscribed/ticks/bars/stale-feed-seconds) and fail-closed data-quality gaps (never fabricates a bar). NOTE: the live feed wiring (upstox_market_data_v3 tick callback → `on_tick`, server.py startup) was deliberately NOT added — that touches the live trading loop and can't be verified here; the module is ready for the caller to attach. Underlying INDEX 1-min capture is the remaining data dependency IMD-08 needs.
 - **Tier**: 3
 - **Session size**: 4-8 hours
 - **Prerequisite**: `IMD-01`; can run in parallel with `IMD-03` after schema is fixed
@@ -478,7 +478,7 @@ python -m pytest backend\tests\test_options_minute_capture.py -q
 ---
 
 ### IMD-05 — Options minute store reader and coverage report
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). Read side of `core/options_minute_store.py` (shipped with IMD-03) + `tests/test_options_minute_store.py`. `get_option_minutes`, `get_chain_at_time` (no-lookahead chain snapshot: last bar ≤ ts per contract), `missing_minutes` (deterministic vs the 375-bar IST session grid), `coverage` (by underlying/date/contract count/rows), `trading_days`. Missing contracts return TYPED EMPTY — never a nearest-strike substitute. IST-safe throughout.
 - **Tier**: 2
 - **Session size**: 3-5 hours
 - **Prerequisite**: `IMD-03`
@@ -504,7 +504,7 @@ python -m pytest backend\tests\test_options_minute_store.py -q
 ---
 
 ### IMD-06 — Historical no-lookahead option selection replay
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `core/intraday_option_selector.py` + `tests/test_intraday_option_selector.py` (7 tests). `select_contract(...)` picks single_leg or debit_spread legs from a chain snapshot (built by `get_chain_at_time`, so no lookahead by construction) + spot; ATM rounding via market_domains strike interval, OTM offset, wing exactly `spread_width` strikes further OTM (never snapped — the width IS the risk). Missing leg → typed `MISSING_LEG`. No-lookahead test proves selection is a pure function of the passed snapshot.
 - **Tier**: 3
 - **Session size**: 4-6 hours
 - **Prerequisite**: `IMD-05`
@@ -530,7 +530,7 @@ python -m pytest backend\tests\test_intraday_option_selector.py -q
 ---
 
 ### IMD-07 — Intraday options backtest engine
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `core/intraday_options_backtest.py` + `tests/test_intraday_options_backtest.py` (7 tests, hand-computed exact P&L). `run_day(...)` — deterministic minute event loop: signal → no-lookahead select → track net premium on the contract's own candles. Exit priority fixed STOP→TARGET→TRAILING→TIME/SQUAREOFF; R-based levels (R=entry net premium); slippage+brokerage; missing option price fails closed (exit at last-known mark + dq flag, never invents a fill). Emits Trade rows (entry/exit ts, gross/net P&L, R-multiple, MFE, MAE, exit_reason, dq flags). single_leg + debit_spread (buyers first).
 - **Tier**: 3
 - **Session size**: 8-12 hours
 - **Prerequisite**: `IMD-06`
@@ -558,7 +558,7 @@ python -m pytest backend\tests\test_intraday_options_backtest.py -q
 ---
 
 ### IMD-08 — QG-O5..QG-O10 intraday OOS validator
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). `core/intraday_options_oos.py` (pure metrics+verdict, 8 tests) + `scripts/run_intraday_options_validation.py` (orchestration, 4 helper tests). `evaluate_strategy` → temporal walk-forward (hold out latest months) → verdict CANDIDATE_EDGE/FRAGILE/NO_EDGE_NEGATIVE/INSUFFICIENT_DATA/DATA_QUALITY_FAIL against a `GATE` (min 30 trades / 3 months / ≤20% missing / OOS expectancy>0 / ≥50% green months). Metrics: trades, net P&L, expectancy, win rate, profit factor, max drawdown, avg MFE/MAE, avg hold. Script: `compile_signal_fn` wraps a strategy's `run(data)`, replays per day, persists to `db.intraday_options_oos_runs`. **JUDGE-FIRST: returns INSUFFICIENT_DATA until real 1-min data + UNDERLYING INDEX 1-min candles exist** (the outstanding data dependency — see IMD-04 note).
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `IMD-07` and at least 3 months clean NIFTY/BANKNIFTY minute data
@@ -586,7 +586,7 @@ python backend\scripts\run_intraday_options_validation.py --strategies QG-O5,QG-
 ---
 
 ### IMD-09 — Edge Lab API and UI for intraday OOS
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). Backend: `GET /ops/intraday-oos` (latest run + minute-data coverage) + `POST /ops/intraday-oos/refresh` (background validation) in `routes/ops.py`. Frontend: `IntradayOOS` panel in the Analytics Edge Lab tab (`Analytics.jsx`) — coverage stats + verdict table, **clearly labelled "Intraday 1m OOS — option buyers" and kept visually separate from the EOD theta OOS** so the two judges aren't mixed. Read-only; no seed/tune controls. Frontend build verified clean.
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `IMD-08`
@@ -614,7 +614,7 @@ $env:CI='false'; npm run build
 ---
 
 ### IMD-10 — Data-quality gate and promotion checklist
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-06 (Claude/Opus). Gate thresholds live in code (`core/intraday_options_oos.GATE`: 30 trades / 3 months / ≤20% missing / OOS>0 / ≥50% green). Documented the full IMD pipeline + intraday promotion ladder + daily forward-capture health checklist in CLAUDE.md §14; updated the Options Alpha pack wiki note with the final ladder. Live promotion stays founder-gated, `CORE_ENGINE_LIVE_ENABLED=false`.
 - **Tier**: 2
 - **Session size**: 3-5 hours
 - **Prerequisite**: `IMD-09`

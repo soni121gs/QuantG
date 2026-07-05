@@ -191,6 +191,19 @@ Starting assumption: paper wallet INR 500,000, but design for small retail risk.
 5. Manual founder approval.
 6. Live pilot at one lot / one strategy only.
 
+## Intraday Judge Built (IMD pipeline, 2026-07-06)
+
+The full **1-minute intraday OOS pipeline** is now implemented (IMD-01..IMD-10 — see CLAUDE.md §14). It is the dedicated judge for the intraday BUYERS `QG-O5`..`QG-O10`, which the EOD bhavcopy engine cannot fairly evaluate. It is JUDGE-FIRST: verdicts stay `INSUFFICIENT_DATA` until (a) real Upstox 1-minute option history is imported and (b) underlying index 1-minute candles are supplied.
+
+**Final intraday promotion ladder (the law for `QG-O5`..`QG-O10`):**
+1. Import real 1-minute option history (`scripts/options_1m_ingest_upstox.py`) + underlying index minutes.
+2. Pass `scripts/run_intraday_options_validation.py` — the `GATE`: **≥30 trades, ≥3 months, ≤20% missing-minute rate, OOS expectancy > 0 after costs, ≥50% green months.**
+3. Forward-paper 3–6 weeks; live paper P&L must track the OOS expectancy.
+4. Manual founder approval; `CORE_ENGINE_LIVE_ENABLED` stays false by default.
+5. Live pilot at one lot / one strategy only.
+
+Do NOT tune QG-O5..QG-O10 thresholds from one paper day. Paper P&L alone never proves an edge — only a passing intraday OOS verdict + forward-paper does. See [[Intraday Minute Data Pipeline 07-06]].
+
 ## Current Recommendation
 
-Run the seeded `QG-O1`..`QG-O10` pack in paper for the next live market session, then review evidence before changing thresholds. Prioritize QG-O1/QG-O2 first if multiple strategies fire, and treat QG-O5..QG-O10 as data-gathering intraday buyer hypotheses until 1-minute option history exists.
+Run the seeded `QG-O1`..`QG-O10` pack in paper for the next live market session, then review evidence before changing thresholds. Prioritize QG-O1/QG-O2 first if multiple strategies fire, and treat QG-O5..QG-O10 as data-gathering intraday buyer hypotheses until the intraday OOS judge has real 1-minute data.

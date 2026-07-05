@@ -356,6 +356,56 @@ async def ops_edge_lab_propose(req: EdgeLabProposeReq, user=Depends(get_current_
             "window": {"start": days[0], "end": days[-1]}, "config": req.dict()}
 
 
+# ---- IMD-09: intraday 1-minute OOS (QG-O5..QG-O10) --------------------------
+_intraday_oos_running = False
+
+
+async def _run_intraday_oos(start: str, end: str) -> None:
+    global _intraday_oos_running
+    try:
+        from scripts.run_intraday_options_validation import main as run_validation
+        await asyncio.to_thread(run_validation, ["--from", start, "--to", end])
+    except Exception as exc:  # noqa: BLE001
+        await db.intraday_options_oos_runs.insert_one({
+            "status": "error", "error": str(exc),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    finally:
+        _intraday_oos_running = False
+
+
+@router.get("/intraday-oos")
+async def ops_intraday_oos(user=Depends(get_current_user)):
+    """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data
+    coverage. Distinct from GET /edge-lab (EOD theta OOS) — this judges intraday
+    option BUYERS on 1-minute history. Read-only; INSUFFICIENT_DATA until IMD-04
+    forward capture / index-minute import matures the sample."""
+    from core.options_minute_store import OptionsMinuteStore
+    coverage = await asyncio.to_thread(OptionsMinuteStore().coverage)
+    latest = await db.intraday_options_oos_runs.find_one(
+        {"verdict_counts": {"$exists": True}}, {"_id": 0}, sort=[("generated_at", -1)])
+    return {
+        "kind": "intraday_1m_oos",
+        "coverage": coverage,
+        "latest_run": latest,
+        "running": _intraday_oos_running,
+        "note": "Intraday 1m OOS judges option buyers; separate from the EOD theta OOS in Edge Lab.",
+    }
+
+
+@router.post("/intraday-oos/refresh")
+async def ops_intraday_oos_refresh(start: str = "2025-01-01", end: str = "2025-12-31",
+                                   user=Depends(get_current_user)):
+    """Kick a background intraday OOS validation run. Returns immediately; poll
+    GET /ops/intraday-oos for the fresh verdicts."""
+    global _intraday_oos_running
+    if _intraday_oos_running:
+        return {"status": "running", "already_running": True}
+    _intraday_oos_running = True
+    asyncio.create_task(_run_intraday_oos(start, end))
+    return {"status": "running", "already_running": False}
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,

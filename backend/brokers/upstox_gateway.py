@@ -314,6 +314,22 @@ class UpstoxGateway:
             params["expiry_date"] = expiry_date
         return self._request("GET", "/v2/option/contract", params=params)
 
+    def get_expired_option_expiries(self, underlying_key: str) -> Dict[str, Any]:
+        """List expired option expiry dates for an index (documented /v2 path)."""
+        return self._request("GET", "/v2/expired-instruments/expiries", params={"instrument_key": underlying_key})
+
+    def get_expired_option_contracts(self, underlying_key: str, expiry_date: str) -> Dict[str, Any]:
+        """List the expired option contracts for one index expiry (documented /v2 path).
+
+        Returns the raw Upstox envelope; each contract item carries the
+        ``expired_instrument_key`` the historical-candle endpoint needs.
+        """
+        return self._request(
+            "GET",
+            "/v2/expired-instruments/option/contract",
+            params={"instrument_key": underlying_key, "expiry_date": expiry_date},
+        )
+
     def place_gtt_order(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request("POST", "/v3/order/gtt/place", json=payload)
 

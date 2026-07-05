@@ -717,3 +717,45 @@ hypothesis → OOS backtest (run_oos_validation / run_edge_sweep) → forward-pa
 
 ### 13.6 Removing a dead strategy (touch-points — a DB delete alone re-seeds)
 Strategies are re-created from CODE templates in `server.py` on startup. To remove one: (1) its dict in `DEFAULT_OPTION_STRATEGIES` (:~3394) or `STANDARD_STRATEGY_CATALOG` (:~5950); (2) `UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME` (:~5991); (3) `STRATEGY_DISPLAY_NAME_RENAMES`; (4) `CREDIT_SPREAD_THETA_NAMES` (:~1536); (5) `EQUITY_CAPITAL_TIERS` (:~1562); (6) `_debit_names`/`_credit_names` migrations (:~16914/16949); (7) DB: set `status="archived"` (preferred over delete — keeps P&L history); (8) update the catalog tests. Do it off-hours as one commit + rebuild, paired with validated replacements.
+
+---
+
+## 14. Intraday 1-Minute Options Pipeline (IMD) — the second OOS judge (added 2026-07-06)
+
+The EOD bhavcopy OOS engine (§13) judges **held-to-theta** structures on daily settle prices. It **cannot** judge intraday option BUYERS (`QG-O5`..`QG-O10` — ORB/VWAP/tail-event debit buyers) which live and die on minute-level moves. The IMD pipeline is the separate, legal, minute-granular judge for those. **All code (IMD-01..IMD-10) shipped 2026-07-06; it is judge-first and returns `INSUFFICIENT_DATA` until real minute data exists.**
+
+### 14.1 Legal data rule (unchanged)
+No pirated/scraped/mystery datasets. Only broker/API data under the account's terms (Upstox expired-instruments `/v2` 1-minute candles — proven usable in IMD-00), official exchange feeds, or clearly-licensed open data. Nothing else enters `data/`, Mongo, Edge Lab, or a promotion report.
+
+### 14.2 The modules (all `backend/`)
+| Layer | File | What it owns |
+|---|---|---|
+| Schema | `core/options_minute_schema.py` | canonical 16-field candle, IST normalize, per-row + manifest checksum, DQ flags |
+| Resolver | `core/expired_option_resolver.py` | `(underlying,date,expiry,strike,type)` → Upstox `expired_instrument_key` or typed reason; NIFTY/BANKNIFTY only (SENSEX/BANKEX blocked) |
+| Store | `core/options_minute_store.py` | gzipped-CSV per contract-day under `data/options_1m/…`, write + reader (`get_option_minutes`/`get_chain_at_time`/`missing_minutes`/`coverage`) |
+| Importer | `scripts/options_1m_ingest_upstox.py` | bounded fetch (NIFTY/BANKNIFTY, ATM±N, CE+PE), idempotent, `--dry-run` |
+| Capture | `core/options_minute_capture.py` | forward live tick→1-min bar aggregator + store flush (feed wiring NOT attached yet) |
+| Selector | `core/intraday_option_selector.py` | no-lookahead single_leg/debit_spread pick from a chain snapshot |
+| Backtester | `core/intraday_options_backtest.py` | deterministic minute event loop, exits STOP→TARGET→TRAILING→TIME/SQUAREOFF, fail-closed on missing price |
+| OOS | `core/intraday_options_oos.py` + `scripts/run_intraday_options_validation.py` | walk-forward verdict + `GATE`; persists `db.intraday_options_oos_runs` |
+| UI/API | `routes/ops.py` (`GET/POST /ops/intraday-oos`) + `frontend/src/pages/Analytics.jsx` (`IntradayOOS` panel) | shows verdicts + coverage, labelled distinct from the EOD theta OOS |
+
+Store format is **gzipped CSV** (matches `bhavcopy_store`), not Parquet — pyarrow/duckdb aren't installed and adding them is a founder-gated rebuild.
+
+### 14.3 What's left before real verdicts (DATA, not code)
+1. Run `scripts/options_1m_ingest_upstox.py` against a live Upstox token to build real option 1-min history (needs the daily token connected).
+2. Supply **UNDERLYING index 1-min candles** — the backtester evaluates the signal on index minutes, which the options importer does NOT fetch. Either wire IMD-04 forward capture into the live feed, or add an index-minute import. Until then `run_intraday_options_validation` reports `INSUFFICIENT_DATA` honestly.
+
+### 14.4 Intraday promotion ladder (the law for QG-O5..QG-O10)
+```
+hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper (3–6 wks) → founder-gated live pilot
+```
+- The `GATE` (`core/intraday_options_oos.GATE`): **≥30 trades, ≥3 months, ≤20% missing-minute rate, OOS expectancy > 0 after costs, ≥50% green months.** A thin sample or poor coverage → `INSUFFICIENT_DATA`/`DATA_QUALITY_FAIL`, never a flattering row.
+- Paper P&L alone NEVER proves an edge — only a passing OOS verdict + forward-paper does.
+- Live promotion stays **founder-gated**; `CORE_ENGINE_LIVE_ENABLED=false` by default. No UI control seeds or tunes a strategy.
+
+### 14.5 Daily forward-capture health checklist (once IMD-04 is wired)
+- subscribed option contracts > 0 and matches the tradeable set,
+- `bars_written` climbing during 09:15–15:30 IST,
+- `stale_feed_seconds` low (feed alive),
+- EOD `flush_day` `data_quality_gaps` reviewed — a `MISSING_n_MINUTES` gap is recorded, never back-filled with fabricated bars.

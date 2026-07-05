@@ -456,11 +456,91 @@ function EdgeLab({ data, loading, onRefresh }) {
   );
 }
 
+const VERDICT_CLS = {
+  CANDIDATE_EDGE: "text-[var(--qd-profit)]",
+  FRAGILE: "text-[var(--qd-warn,#d9a441)]",
+  NO_EDGE_NEGATIVE: "text-[var(--qd-loss)]",
+  INSUFFICIENT_DATA: "text-[var(--qd-text-3)]",
+  DATA_QUALITY_FAIL: "text-[var(--qd-loss)]",
+};
+
+// IMD-09: intraday 1-minute OOS for the QG-O5..QG-O10 buyers — clearly labelled
+// separate from the EOD theta OOS above so users never mix the two judges.
+function IntradayOOS({ data, onRefresh }) {
+  if (!data) return null;
+  const cov = data.coverage || {};
+  const latest = data.latest_run || null;
+  const rows = latest?.results || [];
+  return (
+    <section className="qd-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="qd-section-title flex items-center gap-2"><Zap size={14} /> Intraday 1m OOS — option buyers (QG-O5…O10)</div>
+          <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+            Judges intraday BUYERS on real 1-minute option history. Separate from the EOD theta OOS above.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={data.running}
+          className="inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-accent)]/40 bg-[var(--qd-surface-2)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-surface-3)] disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={data.running ? "animate-spin" : ""} /> {data.running ? "Running…" : "Run"}
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Minute-data days" value={cov.total_days ?? 0} />
+        <Stat label="Contract-days" value={cov.total_contract_days ?? 0} />
+        <Stat label="Coverage window" value={cov.first_day ? `${cov.first_day} → ${cov.last_day}` : "none"} />
+        <Stat label="Underlyings" value={(cov.underlyings || []).join(", ") || "-"} />
+      </div>
+
+      {!latest && (
+        <div className="mt-4 font-mono text-xs text-[var(--qd-text-3)]">
+          No intraday OOS run yet. Judge-first: until 1-minute index + option coverage matures, verdicts stay INSUFFICIENT_DATA.
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left font-mono text-xs">
+            <thead className="text-[var(--qd-text-3)]">
+              <tr><th className="py-1 pr-4">Strategy</th><th className="pr-4">Verdict</th><th className="pr-4">Trades</th><th className="pr-4">OOS exp.</th><th className="pr-4">Green mo.</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.strategy} className="border-t border-[var(--qd-border)]">
+                  <td className="py-1 pr-4 text-[var(--qd-text)]">{r.strategy}</td>
+                  <td className={`pr-4 ${VERDICT_CLS[r.verdict] || ""}`}>{r.verdict}</td>
+                  <td className="pr-4">{r.trades ?? 0}</td>
+                  <td className="pr-4">{num(r.oos?.expectancy)}</td>
+                  <td className="pr-4">{r.green_month_pct != null ? pct(r.green_month_pct * 100) : "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2">
+      <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
+      <div className="mt-0.5 text-sm text-[var(--qd-text)]">{value}</div>
+    </div>
+  );
+}
+
 export default function Analytics() {
   const [tab, setTab] = useState("realized"); // realized | edgelab
   const [scorecard, setScorecard] = useState(null);
   const [oos, setOos] = useState(null);
   const [edgeLab, setEdgeLab] = useState(null);
+  const [intradayOos, setIntradayOos] = useState(null);
   const [loading, setLoading] = useState(false);
   const [elLoading, setElLoading] = useState(false);
   const [error, setError] = useState("");
@@ -497,6 +577,26 @@ export default function Analytics() {
       setElLoading(false);
     }
   }, []);
+
+  const loadIntradayOos = useCallback(async () => {
+    try {
+      const r = await api.get("/ops/intraday-oos");
+      setIntradayOos(r.data);
+    } catch (e) {
+      // non-fatal — the EOD Edge Lab is the primary surface
+    }
+  }, []);
+
+  const refreshIntradayOos = useCallback(async () => {
+    try {
+      await api.post("/ops/intraday-oos/refresh");
+      setIntradayOos((d) => ({ ...(d || {}), running: true }));
+      toast.info("Running intraday 1m OOS validation…");
+      setTimeout(loadIntradayOos, 4000);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not start intraday OOS run");
+    }
+  }, [loadIntradayOos]);
 
   // Kick off a background rebuild, then poll the cached snapshot until it lands.
   const refreshEdgeLab = useCallback(async () => {
@@ -582,7 +682,7 @@ export default function Analytics() {
           <button
             key={t.id}
             type="button"
-            onClick={() => { setTab(t.id); if (t.id === "edgelab" && !edgeLab) loadEdgeLab(); }}
+            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); } }}
             className={`px-4 py-2.5 font-head text-xs font-semibold uppercase tracking-widest border-b-2 transition-colors ${
               tab === t.id ? "border-[var(--qd-accent)] text-[var(--qd-text)]" : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
@@ -718,7 +818,10 @@ export default function Analytics() {
       )}
 
       {tab === "edgelab" && (
-        <EdgeLab data={edgeLab} loading={elLoading} onRefresh={refreshEdgeLab} />
+        <div className="space-y-5">
+          <EdgeLab data={edgeLab} loading={elLoading} onRefresh={refreshEdgeLab} />
+          <IntradayOOS data={intradayOos} onRefresh={refreshIntradayOos} />
+        </div>
       )}
     </div>
   );
