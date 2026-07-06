@@ -17425,12 +17425,23 @@ async def startup():
                 # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
-                    {"instrument_key": 1, "_id": 0},
+                    {"instrument_key": 1, "legs": 1, "_id": 0},
                 ).to_list(200)
-                tokens = [
-                    p["instrument_key"] for p in open_positions
-                    if p.get("instrument_key") and "|" in str(p.get("instrument_key", ""))
-                ]
+                tokens = []
+                for p in open_positions:
+                    ik = p.get("instrument_key")
+                    if ik and "|" in str(ik):
+                        tokens.append(str(ik))
+                    # Spreads carry NO top-level instrument_key — their two tradable
+                    # legs live in legs[]. Subscribe each leg so the monitor prices
+                    # spreads off the warm WS V3 cache instead of hammering the REST
+                    # /market-quote/ltp endpoint every tick (which rate-limits (429)
+                    # and leaves every spread mark dark -> PNL shows Rs 0.00).
+                    for leg in (p.get("legs") or []):
+                        lk = (leg or {}).get("instrument_key")
+                        if lk and "|" in str(lk):
+                            tokens.append(str(lk))
+                tokens = list(dict.fromkeys(tokens))  # de-dup, preserve order
                 if tokens:
                     await asyncio.to_thread(gateway.start_market_data_ws, tokens, "full")
                     logger.info("Startup: subscribed %d open-position tokens + %d baseline for user %s", len(tokens), len(_BASELINE_TOKENS), uid)
