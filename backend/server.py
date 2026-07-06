@@ -1576,6 +1576,11 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
 PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
     "QG-O1 NIFTY Put Spread Theta Core",
     "QG-O5 NIFTY Opening Range Call Buyer",
+    # 2026-07-06: un-archived by founder direction. Sole archived strategy with a
+    # real OOS edge — EOD bhavcopy walk-forward: +₹74/tr (2024) and +₹19/tr (2025 OOS),
+    # 87% WR, 82% green months, all_years_positive. Paper-forward per the ladder;
+    # thin OOS margin + SENSEX (BFO) execution cost keep it paper-only until proven.
+    "QG-O4 SENSEX Call Spread Range Pilot",
 })
 PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
 
@@ -6784,7 +6789,7 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
             doc["manual_paused"] = True
             doc["schedule_paused"] = False
             doc["last_filter_reason"] = (
-                "Archived: not in the founder-approved paper-forward book (only QG-O1/QG-O5 active)."
+                "Archived: not in the founder-approved paper-forward book (only QG-O1/QG-O4/QG-O5 active)."
                 if doc.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
                 else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the old book."
             )
@@ -16951,7 +16956,7 @@ async def startup():
                         s_updates["manual_paused"] = True
                         s_updates["schedule_paused"] = False
                         s_updates["last_filter_reason"] = (
-                            "Archived: not in the founder-approved paper-forward book for the next session (only QG-O1/QG-O5 active)."
+                            "Archived: not in the founder-approved paper-forward book for the next session (only QG-O1/QG-O4/QG-O5 active)."
                             if s.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
                             else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
                         )

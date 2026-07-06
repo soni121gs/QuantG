@@ -122,9 +122,11 @@ def test_new_qg_pack_is_not_part_of_dead_strategy_archive_set():
 
 
 def test_only_qgo1_and_qgo5_are_paper_forward_active():
+    # 2026-07-06: QG-O4 un-archived — sole archived strategy with a real OOS edge.
     assert PAPER_FORWARD_ACTIVE_STRATEGY_NAMES == {
         "QG-O1 NIFTY Put Spread Theta Core",
         "QG-O5 NIFTY Opening Range Call Buyer",
+        "QG-O4 SENSEX Call Spread Range Pilot",
     }
     assert PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES == OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
     by_name = {strategy["name"]: strategy for strategy in DEFAULT_OPTION_STRATEGIES}
