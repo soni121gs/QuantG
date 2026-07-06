@@ -37,8 +37,8 @@ UNSUPPORTED = "UNSUPPORTED_DIMENSION"
 # so the OOS sign reflects the structure's real edge, not a tuned config.
 _CANONICAL: Dict[str, Dict[str, Any]] = {
     "credit_spread": {
-        "options": {"structure": "credit_spread", "short_otm_pct": 0.03, "wing_width": 6, "spread_width": 6, "exit_mode": "expiry"},
-        "params": {"short_otm_pct": 0.03, "wing_width": 6, "width": 6, "min_dte": 2, "max_dte": 8, "max_hold_days": 8, "exit_mode": "expiry", "credit_tp": 0.5, "credit_sl": 1.0},
+        "options": {"structure": "credit_spread", "short_otm_pct": 0.03, "wing_width": 10, "spread_width": 10, "exit_mode": "expiry"},
+        "params": {"short_otm_pct": 0.03, "wing_width": 10, "width": 10, "min_dte": 2, "max_dte": 8, "max_hold_days": 8, "exit_mode": "expiry", "credit_tp": 0.5, "credit_sl": 1.0},
     },
     "debit_spread": {
         "options": {"structure": "debit_spread", "spread_width": 2, "exit_mode": ""},

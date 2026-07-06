@@ -464,7 +464,7 @@ const VERDICT_CLS = {
   DATA_QUALITY_FAIL: "text-[var(--qd-loss)]",
 };
 
-// IMD-09: intraday 1-minute OOS for the QG-O5..QG-O10 buyers — clearly labelled
+// IMD-09: intraday 1-minute OOS for QG-O5..QG-O10 — clearly labelled
 // separate from the EOD theta OOS above so users never mix the two judges.
 function IntradayOOS({ data, onRefresh }) {
   if (!data) return null;
@@ -475,7 +475,7 @@ function IntradayOOS({ data, onRefresh }) {
     <section className="qd-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="qd-section-title flex items-center gap-2"><Zap size={14} /> Intraday 1m OOS — option buyers (QG-O5…O10)</div>
+          <div className="qd-section-title flex items-center gap-2"><Zap size={14} /> Intraday 1m OOS — QG-O5…O10</div>
           <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
             Judges intraday BUYERS on real 1-minute option history. Separate from the EOD theta OOS above.
           </p>

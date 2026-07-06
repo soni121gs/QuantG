@@ -1573,6 +1573,12 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
     "QG-O10 NIFTY Premium-Safe Debit Buyer",
 })
 
+PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
+    "QG-O1 NIFTY Put Spread Theta Core",
+    "QG-O5 NIFTY Opening Range Call Buyer",
+})
+PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
+
 CREDIT_SPREAD_THETA_RISK = {
     "cooldown_minutes": 15,
     "max_trades_day": 8,
@@ -3423,20 +3429,21 @@ BANKNIFTY_SENSITIVE_VOL_BREAKOUT_CODE = """def run(data):
 
 DEFAULT_OPTION_STRATEGIES = [
     {
-        # EDR-10 (2026-07-04): the FIRST OOS-validated edge. Sell a defined-risk ~3% OTM
-        # NIFTY put spread, hold to weekly expiry (no intraday stop) — harvest the
-        # downside vol-risk premium. Walk-forward CANDIDATE_EDGE on 2yr real bhavcopy:
-        # +₹214/trade, 95% WR, both years positive (EDR-09). short_otm_pct/wing_width/
-        # exit_mode drive the Edge Lab OOS backtest (core/eod_options_backtest). Seeds
+        # EDR-10/13 (2026-07-04/06): the FIRST OOS-validated edge. Sell a
+        # defined-risk ~3% OTM NIFTY put spread, hold to weekly expiry (no intraday
+        # stop) — harvest the downside vol-risk premium. 2026-07-06 focused sweep
+        # improved the paper-forward template from width=6 to width=10:
+        # +₹382/trade, OOS +₹549/trade, 95% WR, both years positive. This widens
+        # the defined-risk cap, so required_capital/daily_loss_limit stay honest.
         # PAPER-ACTIVE for forward testing only. CORE_ENGINE_LIVE_ENABLED stays false.
         "name": "QG-O1 NIFTY Put Spread Theta Core",
-        "description": "Defined-risk NIFTY put-spread income pilot from EDR-09/QG-O1: sell a ~3% OTM put spread and hold to weekly expiry to harvest downside volatility-risk premium. This is the primary paper-forward candidate; real-live promotion still requires forward-paper evidence.",
+        "description": "Defined-risk NIFTY put-spread income pilot from EDR-09/QG-O1: sell a ~3% OTM put spread with a wider 10-strike defined-risk wing and hold to weekly expiry to harvest downside volatility-risk premium. This is the primary paper-forward candidate; real-live promotion still requires forward-paper evidence.",
         "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
-        "structure": "credit_spread", "spread_width": 6,
-        "short_otm_pct": 0.03, "wing_width": 6, "exit_mode": "expiry", "short_delta": 0.12,
-        "strategy_type": "Option Selling", "required_capital": 25000.0, "instrument_group": "NFO",
+        "structure": "credit_spread", "spread_width": 10,
+        "short_otm_pct": 0.03, "wing_width": 10, "exit_mode": "expiry", "short_delta": 0.12,
+        "strategy_type": "Option Selling", "required_capital": 35000.0, "instrument_group": "NFO",
         "initial_status": "live",
-        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 30000.0,
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 40000.0,
                  "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
                  "max_trades_day": 1},
         "python_code": """def run(data):
@@ -3451,7 +3458,7 @@ DEFAULT_OPTION_STRATEGIES = [
         'date': d['date'], 'action': 'BUY', 'direction': 'CE',
         'setup_type': 'defined_risk_put_spread_income',
         'confidence': 72.0,
-        'entry_reason': 'QG-O1 sell 3% OTM NIFTY put spread, hold to expiry',
+        'entry_reason': 'QG-O1 sell 3% OTM NIFTY put spread with 10-strike wing, hold to expiry',
         'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
         'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
         'regime_required': 'range_to_up', 'option_selection_preference': 'OTM',
@@ -3567,14 +3574,15 @@ DEFAULT_OPTION_STRATEGIES = [
     },
     {
         "name": "QG-O5 NIFTY Opening Range Call Buyer",
-        "description": "Intraday NIFTY debit-spread call buyer. It trades only after a strong opening-range upside break and is sized as a paper-only buyer with defined debit risk.",
+        "description": "Intraday NIFTY opening-range credit-spread scalp. It keeps the QG-O5 bullish breakout trigger but sells a tiny bull-put spread instead of buying premium; paper-forward only until the IMD sample gate matures.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
-        "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
+        "structure": "credit_spread", "spread_width": 1, "short_offset_strikes": 2,
+        "candle_interval": "1minute",
+        "strategy_type": "Option Selling", "required_capital": 5000.0, "instrument_group": "NFO",
         "initial_status": "live",
-        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 5000.0,
-                 "time_exit_minutes": 35, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 45,
-                 "max_trades_day": 1, "target_r_multiple": 1.4},
+        "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 4000.0,
+                 "time_exit_minutes": 60, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 1, "target_r_multiple": 0.7},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 30:
@@ -3593,16 +3601,16 @@ DEFAULT_OPTION_STRATEGIES = [
         return []
     return [{
         'date': d['date'], 'action': 'BUY', 'direction': 'CE',
-        'setup_type': 'opening_range_call_breakout',
-        'confidence': 63.0,
-        'entry_reason': 'QG-O5 NIFTY opening range upside break',
-        'target_R': 1.4, 'initial_stop_R': 0.7, 'trail_after_R': 1.0,
-        'max_hold_minutes': 35, 'invalidation_rule': 'breakout_failure_or_time',
-        'regime_required': 'intraday_momentum_up', 'option_selection_preference': 'ATM',
+        'setup_type': 'opening_range_bull_put_credit_scalp',
+        'confidence': 61.0,
+        'entry_reason': 'QG-O5 NIFTY opening range upside break; sell 2-OTM/1-wide bull put credit spread',
+        'target_R': 0.7, 'initial_stop_R': 2.0, 'trail_after_R': 99.0,
+        'max_hold_minutes': 60, 'invalidation_rule': 'credit_spread_expansion_or_time',
+        'regime_required': 'intraday_momentum_up', 'option_selection_preference': 'OTM_CREDIT',
         'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
     }]
 """,
-        "market_suitability": "NIFTY intraday trend-up days only",
+        "market_suitability": "NIFTY intraday trend-up days; under-sampled paper-forward credit scalp",
     },
     {
         "name": "QG-O6 NIFTY Opening Range Put Buyer",
@@ -6469,20 +6477,23 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         if _template.get("name") not in OPTION_ALPHA_REBUILD_NAMES:
             _template["required_capital"] = 8000.0
         _risk.update(CREDIT_SPREAD_THETA_RISK)
-    # EDR-11: the OOS-validated put spread holds to weekly expiry — its DEFINED RISK
-    # (wing width) is the stop, so raise daily_loss_limit above one designed max loss
-    # (~₹22k/lot) and disable the intraday time-exit so the killswitch/time-exit can't
-    # force-close it before expiry. exit_mode="hold_to_expiry" (risk) mirrors the
-    # options.exit_mode="expiry" the position monitor keys off.
+    # EDR-11/13: the OOS-validated put spread holds to weekly expiry — its DEFINED
+    # RISK (wing width) is the stop, so keep required_capital/daily_loss_limit above
+    # one designed max loss and disable intraday time-exit so the killswitch/time-exit
+    # can't force-close it before expiry. exit_mode="hold_to_expiry" (risk) mirrors
+    # the options.exit_mode="expiry" the position monitor keys off.
     if _template.get("name") == "QG-O1 NIFTY Put Spread Theta Core":
-        _template["required_capital"] = 25000.0
-        _risk.update({"daily_loss_limit": 30000.0, "time_exit_minutes": 0,
+        _template["required_capital"] = 35000.0
+        _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 0,
                       "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
-                      "max_trades_day": 4, "strategy_category": "swing"})
-    if _template.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+                      "max_trades_day": 1, "strategy_category": "swing"})
+    if _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
         _template["initial_status"] = "live"
         if _template.get("required_capital") is not None:
             _template["required_capital"] = float(_template.get("required_capital") or 0)
+        _risk.update(dict(_template.get("risk") or {}))
+    elif _template.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES:
+        _template["initial_status"] = "archived"
         _risk.update(dict(_template.get("risk") or {}))
     if str(_template.get("instrument_group") or "").upper() in {"NFO", "BFO"}:
         _risk["daily_loss_limit"] = max(float(_risk.get("daily_loss_limit") or 0), 4000.0)
@@ -6757,7 +6768,7 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     except Exception:
         market_hours_active = False
     for doc in docs:
-        if doc.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+        if doc.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
             doc["status"] = "live" if market_hours_active else "paused"
             doc["mode"] = "paper"
             doc["manual_paused"] = False
@@ -6767,10 +6778,16 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
                 if market_hours_active
                 else "Market closed: queued for paper-forward activation at the next 09:15 IST open."
             )
-        elif doc.get("name") in DEAD_STRATEGY_NAMES:
+        elif doc.get("name") in DEAD_STRATEGY_NAMES or doc.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES:
             doc["status"] = "archived"
             doc["mode"] = "paper"
-            doc["last_filter_reason"] = "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the old book."
+            doc["manual_paused"] = True
+            doc["schedule_paused"] = False
+            doc["last_filter_reason"] = (
+                "Archived: not in the founder-approved paper-forward book (only QG-O1/QG-O5 active)."
+                if doc.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
+                else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the old book."
+            )
     await db.strategies.insert_many(docs)
     return len(docs)
 
@@ -6860,6 +6877,7 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.wing_width": template.get("wing_width"),
                 "visual_config.options.exit_mode": template.get("exit_mode"),
                 "visual_config.options.short_delta": template.get("short_delta"),
+                "visual_config.options.short_offset_strikes": template.get("short_offset_strikes"),
                 "visual_config.options.candle_interval": template.get("candle_interval") or "5minute",
                 **_risk_update_fields(risk_profile),
                 "default_strategy_version": "v13-live-brain-r1",
@@ -16603,7 +16621,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 _schedule_activate_done_date = today
                 try:
                     result = await db.strategies.update_many(
-                        {"schedule_paused": True, "manual_paused": {"$ne": True}},
+                        {"status": "paused", "schedule_paused": True, "manual_paused": {"$ne": True}},
                         {"$set": {"status": "live", "schedule_paused": False,
                                   "schedule_resumed_at": ist.isoformat()}},
                     )
@@ -16925,14 +16943,21 @@ async def startup():
                         s_updates["last_filter_reason"] = "MCX commodity strategies were removed; QuantG is Upstox-only for NSE/BSE/NFO/BFO."
                         logger.warning("Archived removed MCX strategy %s during startup cleanup", s.get("id"))
 
-                    # EDR-03: archive the zero-OOS-edge book (replaced by the OOS-validated put spread).
-                    if s.get("name") in DEAD_STRATEGY_NAMES and s.get("status") != "archived":
+                    # EDR-03/15: archive no-edge rows and every QG experiment
+                    # outside the explicit paper-forward allowlist.
+                    if (s.get("name") in DEAD_STRATEGY_NAMES or s.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES) and s.get("status") != "archived":
                         s_updates["status"] = "archived"
                         s_updates["mode"] = "paper"
-                        s_updates["last_filter_reason"] = "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
-                        logger.warning("Archived no-edge strategy %s (EDR-03)", s.get("name"))
+                        s_updates["manual_paused"] = True
+                        s_updates["schedule_paused"] = False
+                        s_updates["last_filter_reason"] = (
+                            "Archived: not in the founder-approved paper-forward book for the next session (only QG-O1/QG-O5 active)."
+                            if s.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
+                            else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
+                        )
+                        logger.warning("Archived strategy %s during startup allowlist enforcement", s.get("name"))
 
-                    if s.get("name") in OPTION_ALPHA_REBUILD_NAMES:
+                    if s.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
                         s_updates["status"] = "live" if market_hours_active else "paused"
                         s_updates["mode"] = "paper"
                         s_updates["manual_paused"] = False
@@ -17296,7 +17321,7 @@ async def startup():
                     # Phase 2 #5: build a credit or debit spread when this strategy opts in.
                     try:
                         from core.spread_builder import (
-                            build_credit_spread, CREDIT_SPREADS_ENABLED,
+                            build_credit_spread, build_credit_spread_by_offset, CREDIT_SPREADS_ENABLED,
                             CREDIT_SPREAD_SHORT_DELTA, CREDIT_SPREAD_WIDTH_STRIKES,
                             build_debit_spread, DEBIT_SPREADS_ENABLED,
                         )
@@ -17311,10 +17336,19 @@ async def startup():
                             _direction = "bullish" if action_u == "BUY" else "bearish"
                             
                             if _struct == "credit_spread" and CREDIT_SPREADS_ENABLED:
-                                _spread = build_credit_spread(
-                                    chain_nodes=_nodes, direction=_direction,
-                                    width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
-                                )
+                                _offset = _opts_cfg.get("short_offset_strikes")
+                                if _offset is not None:
+                                    _spread = build_credit_spread_by_offset(
+                                        chain_nodes=_nodes, direction=_direction,
+                                        spot=float(contract_payload.get("spot") or instrument.strike or 0),
+                                        offset_strikes=int(_offset),
+                                        width_points=_intervals.get(_u, 50) * _wstrikes,
+                                    )
+                                else:
+                                    _spread = build_credit_spread(
+                                        chain_nodes=_nodes, direction=_direction,
+                                        width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
+                                    )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"
                                     contract_payload["spread"] = _spread
@@ -17694,7 +17728,7 @@ async def startup():
             ist = get_ist_now()
             if ist.weekday() < 5 and is_trading_session_active():
                 result = await db.strategies.update_many(
-                    {"schedule_paused": True, "manual_paused": {"$ne": True}},
+                    {"status": "paused", "schedule_paused": True, "manual_paused": {"$ne": True}},
                     {"$set": {"status": "live", "schedule_paused": False,
                               "schedule_resumed_at": ist.isoformat()}},
                 )

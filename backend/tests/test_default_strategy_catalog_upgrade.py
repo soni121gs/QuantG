@@ -8,6 +8,8 @@ from server import (
     DEAD_STRATEGY_NAMES,
     DEFAULT_OPTION_STRATEGIES,
     OPTION_ALPHA_REBUILD_NAMES,
+    PAPER_FORWARD_ACTIVE_STRATEGY_NAMES,
+    PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES,
     RETAIL_LIVE_STATE_CODE,
     UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME,
 )
@@ -117,6 +119,18 @@ def test_new_qg_pack_is_not_part_of_dead_strategy_archive_set():
 
     assert OPTION_ALPHA_REBUILD_NAMES.issubset(names)
     assert OPTION_ALPHA_REBUILD_NAMES.isdisjoint(DEAD_STRATEGY_NAMES)
+
+
+def test_only_qgo1_and_qgo5_are_paper_forward_active():
+    assert PAPER_FORWARD_ACTIVE_STRATEGY_NAMES == {
+        "QG-O1 NIFTY Put Spread Theta Core",
+        "QG-O5 NIFTY Opening Range Call Buyer",
+    }
+    assert PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES == OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
+    by_name = {strategy["name"]: strategy for strategy in DEFAULT_OPTION_STRATEGIES}
+    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["structure"] == "credit_spread"
+    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["spread_width"] == 1
+    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["short_offset_strikes"] == 2
 
 
 def test_default_strategy_templates_are_sandbox_runnable():

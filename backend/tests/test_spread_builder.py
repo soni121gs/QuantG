@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.spread_builder import build_credit_spread, lots_for_risk
+from core.spread_builder import build_credit_spread, build_credit_spread_by_offset, lots_for_risk
 
 
 def _leg(key, delta, ltp, theta=-5.0):
@@ -63,6 +63,23 @@ def test_bear_call_spread():
     assert s["short_leg"]["strike"] == 23100
     assert s["long_leg"]["strike"] == 23200
     assert s["net_credit"] == 25.0 and s["max_loss"] == 75.0
+
+
+def test_bull_put_spread_by_offset():
+    s = build_credit_spread_by_offset(
+        chain_nodes=_pe_chain(),
+        direction="bullish",
+        spot=23000,
+        offset_strikes=2,
+        width_points=50,
+    )
+    assert s["ok"] is True
+    assert s["selection_method"] == "offset"
+    assert s["option_type"] == "PE"
+    assert s["short_leg"]["strike"] == 22900
+    assert s["long_leg"]["strike"] == 22850
+    assert s["net_credit"] == 15.0
+    assert s["max_loss"] == 35.0
 
 
 def test_invalid_direction():

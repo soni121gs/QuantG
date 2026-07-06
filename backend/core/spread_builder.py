@@ -154,6 +154,76 @@ def build_credit_spread(
     }
 
 
+def build_credit_spread_by_offset(
+    *,
+    chain_nodes: List[Dict[str, Any]],
+    direction: str,
+    spot: float,
+    offset_strikes: int,
+    width_points: float,
+) -> Dict[str, Any]:
+    """Build a credit spread by offset from ATM instead of target delta.
+
+    Used by QG-O5's intraday credit scalp where the OOS lead was defined as:
+    bullish ORB -> sell PE 2 strikes OTM, buy 1 strike lower.
+    """
+    direction = str(direction or "").lower()
+    if direction not in ("bullish", "bearish"):
+        return {"ok": False, "reason": "direction must be bullish or bearish"}
+    option_type = "PE" if direction == "bullish" else "CE"
+    strikes = sorted(s for s in (_node_strike(n) for n in chain_nodes or []) if s is not None)
+    if not strikes:
+        return {"ok": False, "reason": "no strikes in chain"}
+
+    atm = min(strikes, key=lambda s: abs(s - float(spot)))
+    sign = -1 if direction == "bullish" else 1
+    short_strike = atm + sign * max(0, int(offset_strikes)) * abs(float(width_points))
+    long_strike = short_strike + sign * abs(float(width_points))
+
+    short_node = _find_node_by_strike(chain_nodes, short_strike, option_type)
+    long_node = _find_node_by_strike(chain_nodes, long_strike, option_type)
+    if not short_node or not long_node:
+        return {"ok": False, "reason": "could not locate both spread legs in chain"}
+
+    short_leg = _leg_from_node(short_node, option_type, "SELL")
+    long_leg = _leg_from_node(long_node, option_type, "BUY")
+    if not short_leg or not long_leg:
+        return {"ok": False, "reason": "spread leg missing instrument_key or premium"}
+    if short_leg["strike"] == long_leg["strike"]:
+        return {"ok": False, "reason": "short and long legs resolved to the same strike"}
+
+    net_credit = round(short_leg["premium"] - long_leg["premium"], 2)
+    if net_credit <= 0:
+        return {"ok": False, "reason": f"non-positive net credit ({net_credit})"}
+
+    actual_width = abs(short_leg["strike"] - long_leg["strike"])
+    max_loss = round(actual_width - net_credit, 2)
+    if max_loss <= 0:
+        return {"ok": False, "reason": f"non-positive max loss ({max_loss})"}
+
+    sd = short_leg.get("delta") or 0.0
+    ld = long_leg.get("delta") or 0.0
+    st = short_leg.get("theta") or 0.0
+    lt = long_leg.get("theta") or 0.0
+    return {
+        "ok": True,
+        "reason": "ok",
+        "structure": "credit_spread",
+        "direction": direction,
+        "option_type": option_type,
+        "short_leg": short_leg,
+        "long_leg": long_leg,
+        "net_credit": net_credit,
+        "max_profit": net_credit,
+        "max_loss": max_loss,
+        "width_points": actual_width,
+        "net_delta": round(-sd + ld, 4),
+        "net_theta": round(-st + lt, 4),
+        "selection_method": "offset",
+        "offset_strikes": int(offset_strikes),
+    }
+
+
 DEBIT_SPREADS_ENABLED = os.environ.get("DEBIT_SPREADS_ENABLED", "true").strip().lower() == "true"
 DEBIT_SPREAD_LONG_DELTA = float(os.environ.get("DEBIT_SPREAD_LONG_DELTA", "0.50"))
 
