@@ -23,6 +23,16 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="No open position for that symbol")
     qty = abs(int(target["qty"]))
     side = "SELL" if target["qty"] > 0 else "BUY"
+    # Real mark for the exit fill. _fetch_broker_positions_for_user stamps `ltp`
+    # from the position's monitor-updated last_ltp; pass it so the MARKET exit
+    # books at the live price instead of hitting the price-unavailable skip.
+    exit_px = None
+    try:
+        _px = float(target.get("ltp") or 0)
+        if _px > 0:
+            exit_px = _px
+    except (TypeError, ValueError):
+        exit_px = None
     exchange = target.get("exchange") or ("NFO" if symbol.endswith(("CE", "PE")) else "NSE")
     instrument_token = str(target.get("instrument_token") or "").strip()
     if exchange in {"NFO", "BFO", "MCX"} or symbol.endswith(("CE", "PE")):
@@ -51,6 +61,7 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
             side=side,
             qty=max(1, math.ceil(qty / max(1, lot_size))),
             order_type="MARKET",
+            price=exit_px,
             product=target.get("product"),
             source="manual-exit",
             exchange=exchange,
@@ -60,12 +71,16 @@ async def exit_position(symbol: str, user=Depends(get_current_user)):
                 "instrument_token": instrument_token,
                 "lot_size": lot_size,
                 "transaction_type": side,
+                "ltp": exit_px or 0.0,
             },
+            is_exit_order=True,
+            exit_reason="manual-exit",
         )
     return await _place_order_core(
         user_id=user["id"], symbol=symbol, side=side, qty=qty,
-        order_type="MARKET", product=target.get("product"), source="manual-exit",
-        exchange=exchange,
+        order_type="MARKET", price=exit_px, product=target.get("product"),
+        source="manual-exit", exchange=exchange,
+        is_exit_order=True, exit_reason="manual-exit",
     )
 
 
