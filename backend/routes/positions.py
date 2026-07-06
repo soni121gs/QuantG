@@ -11,77 +11,36 @@ router = APIRouter(tags=["Positions"])
 
 @router.post("/positions/{symbol}/exit")
 async def exit_position(symbol: str, user=Depends(get_current_user)):
-    from server import (
-        _place_order_core, ACTIVE_STRATEGY_POSITION_STATUSES,
-        get_user_settings, _fetch_broker_positions_for_user,
-    )
+    from server import _close_strategy_positions, ACTIVE_STRATEGY_POSITION_STATUSES
     symbol = symbol.upper()
-    settings = await get_user_settings(user["id"])
-    positions = await _fetch_broker_positions_for_user(user, settings)
-    target = next((p for p in positions if p["symbol"] == symbol), None)
-    if not target or not target.get("qty"):
-        raise HTTPException(status_code=404, detail="No open position for that symbol")
-    qty = abs(int(target["qty"]))
-    side = "SELL" if target["qty"] > 0 else "BUY"
-    # Real mark for the exit fill. _fetch_broker_positions_for_user stamps `ltp`
-    # from the position's monitor-updated last_ltp; pass it so the MARKET exit
-    # books at the live price instead of hitting the price-unavailable skip.
-    exit_px = None
-    try:
-        _px = float(target.get("ltp") or 0)
-        if _px > 0:
-            exit_px = _px
-    except (TypeError, ValueError):
-        exit_px = None
-    exchange = target.get("exchange") or ("NFO" if symbol.endswith(("CE", "PE")) else "NSE")
-    instrument_token = str(target.get("instrument_token") or "").strip()
-    if exchange in {"NFO", "BFO", "MCX"} or symbol.endswith(("CE", "PE")):
-        if "|" not in instrument_token:
-            strategy_pos = await db.strategy_positions.find_one(
-                {
-                    "user_id": user["id"],
-                    "$or": [{"trading_symbol": symbol}, {"symbol": symbol}],
-                    "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
-                },
-                {"_id": 0},
-            )
-            instrument_token = str((strategy_pos or {}).get("instrument_token") or "").strip()
-        if "|" not in instrument_token:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Cannot exit {symbol} from QuantG: Upstox instrument_key is missing. "
-                    "Exit this position in Upstox now, then run Sync with Broker."
-                ),
-            )
-        lot_size = int(target.get("lot_size") or qty or 1)
-        return await _place_order_core(
-            user_id=user["id"],
-            symbol=symbol,
-            side=side,
-            qty=max(1, math.ceil(qty / max(1, lot_size))),
-            order_type="MARKET",
-            price=exit_px,
-            product=target.get("product"),
-            source="manual-exit",
-            exchange=exchange,
-            option_contract={
-                "tradingsymbol": symbol,
-                "exchange": exchange,
-                "instrument_token": instrument_token,
-                "lot_size": lot_size,
-                "transaction_type": side,
-                "ltp": exit_px or 0.0,
-            },
-            is_exit_order=True,
-            exit_reason="manual-exit",
-        )
-    return await _place_order_core(
-        user_id=user["id"], symbol=symbol, side=side, qty=qty,
-        order_type="MARKET", price=exit_px, product=target.get("product"),
-        source="manual-exit", exchange=exchange,
-        is_exit_order=True, exit_reason="manual-exit",
+    # Close the live position for this symbol through the SAME proven path the
+    # position monitor and strategy exit-all use. The old path placed a generic
+    # SELL/BUY order under a "manual_recovery" strategy bucket, but the portfolio
+    # ledger nets fills by (strategy_id, target_symbol): an exit whose strategy_id
+    # did not match the position's therefore created a phantom SHORT instead of
+    # closing the LONG (and equity/single-leg exits skipped entirely because
+    # paper_ltp resolved to 0 during market hours without is_exit_order).
+    # _close_strategy_positions closes the position it actually finds — correct
+    # netting, real-mark pricing, wallet credit, spreads and equity alike, and it
+    # works even for an orphaned position whose strategy doc no longer exists.
+    pos = await db.strategy_positions.find_one(
+        {
+            "user_id": user["id"],
+            "$or": [
+                {"trading_symbol": symbol},
+                {"symbol": symbol},
+                {"target_symbol": symbol},
+            ],
+            "status": {"$in": list(ACTIVE_STRATEGY_POSITION_STATUSES)},
+        },
+        {"_id": 0, "strategy_id": 1},
     )
+    if not pos or not pos.get("strategy_id"):
+        raise HTTPException(status_code=404, detail="No open position for that symbol")
+    result = await _close_strategy_positions(
+        user["id"], pos["strategy_id"], reason="manual-exit"
+    )
+    return {"ok": True, "symbol": symbol, "closed": result}
 
 
 @router.get("/positions")

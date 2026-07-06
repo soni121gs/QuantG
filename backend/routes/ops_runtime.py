@@ -65,26 +65,16 @@ async def squareoff_all_positions(user=Depends(get_current_user)):
         abs_qty = abs(qty)
         try:
             if paper:
-                _sq_px = None
-                try:
-                    _p = float(p.get("ltp") or 0)
-                    if _p > 0:
-                        _sq_px = _p
-                except (TypeError, ValueError):
-                    _sq_px = None
                 res = await _place_order_core(
                     user_id=user["id"],
                     symbol=symbol,
                     side=side,
                     qty=abs_qty,
                     order_type="MARKET",
-                    price=_sq_px,
                     product=p.get("product") or settings.get("default_product", "MIS"),
                     source="squareoff-all",
                     exchange=p.get("exchange") or "NSE",
                     idempotency_key=f"squareoff-all:{symbol}:{now}",
-                    is_exit_order=True,
-                    exit_reason="squareoff-all",
                 )
                 closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
             else:
