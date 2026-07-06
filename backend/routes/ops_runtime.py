@@ -41,72 +41,57 @@ async def activate_v12_upstox_retailer(user=Depends(get_current_user)):
 
 @router.post("/ops/squareoff-all")
 async def squareoff_all_positions(user=Depends(get_current_user)):
-    from server import _place_order_core, get_user_settings, get_user_upstox_gateway, list_positions
+    """Flatten the whole book. Closes every strategy that holds live positions
+    through the canonical `_close_strategy_positions` path — the same one the
+    position monitor and EOD square-off use. Each exit is netted against its own
+    position (correct wallet credit, NO phantom SHORT) and equity, single-leg
+    options and 2-leg spreads are all handled. The old implementation looped per
+    symbol through `_place_order_core` under a generic manual_recovery bucket,
+    which created phantom SHORTs (ledger nets by strategy_id), skipped equity on a
+    0 price, and mis-routed spread symbols as single-leg orders."""
+    from server import _close_strategy_positions, get_user_settings, get_user_upstox_gateway
 
-    settings = await get_user_settings(user["id"])
-    positions = await list_positions(user)
-    if not positions:
-        return {"ok": True, "closed": [], "failed": []}
-
-    closed, failed = [], []
-    now = datetime.now(timezone.utc).isoformat()
+    user_id = user["id"]
+    settings = await get_user_settings(user_id)
     paper = settings.get("paper_mode", True)
     if not paper:
-        gateway = await get_user_upstox_gateway(user["id"])
+        gateway = await get_user_upstox_gateway(user_id)
         if not gateway or not gateway.connected:
             raise HTTPException(status_code=400, detail="auth failed: Upstox is not connected.")
 
-    for p in positions:
-        symbol = p.get("symbol")
-        qty = int(p.get("qty") or 0)
-        if not symbol or qty == 0:
+    now_str = datetime.now(timezone.utc).isoformat()
+    # Free dead-end / mid-exit positions so the close path picks them up.
+    await db.strategy_positions.update_many(
+        {"user_id": user_id,
+         "status": {"$in": ["STALE_NEEDS_REVIEW", "CIRCUIT_BREAKER"]},
+         "open_quantity": {"$gt": 0}},
+        {"$set": {"status": "OPEN", "exit_order_failures": 0, "exit_data_failures": 0,
+                  "updated_at": now_str}},
+    )
+    await db.strategy_positions.update_many(
+        {"user_id": user_id, "status": "EXITING"},
+        {"$set": {"status": "OPEN", "updated_at": now_str}, "$unset": {"exit_attempt_at": ""}},
+    )
+
+    pairs = await db.strategy_positions.aggregate([
+        {"$match": {"user_id": user_id,
+                    "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
+                    "open_quantity": {"$gt": 0}}},
+        {"$group": {"_id": "$strategy_id"}},
+    ]).to_list(500)
+    if not pairs:
+        return {"ok": True, "closed": [], "failed": []}
+
+    closed, failed = [], []
+    for pair in pairs:
+        sid = pair["_id"]
+        if not sid:
             continue
-        side = "SELL" if qty > 0 else "BUY"
-        abs_qty = abs(qty)
         try:
-            if paper:
-                res = await _place_order_core(
-                    user_id=user["id"],
-                    symbol=symbol,
-                    side=side,
-                    qty=abs_qty,
-                    order_type="MARKET",
-                    product=p.get("product") or settings.get("default_product", "MIS"),
-                    source="squareoff-all",
-                    exchange=p.get("exchange") or "NSE",
-                    idempotency_key=f"squareoff-all:{symbol}:{now}",
-                )
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "paper", "order_id": res.get("id")})
-            else:
-                exchange = p.get("exchange") or ("NFO" if str(symbol).upper().endswith(("CE", "PE")) else "NSE")
-                option_contract = None
-                if exchange in {"NFO", "BFO", "MCX"} or str(symbol).upper().endswith(("CE", "PE")):
-                    token = str(p.get("instrument_token") or "").strip()
-                    if "|" not in token:
-                        failed.append({"symbol": symbol, "error": "Upstox instrument_key missing. Exit this position in Upstox, then sync broker state."})
-                        continue
-                    option_contract = {
-                        "tradingsymbol": str(symbol).upper(),
-                        "exchange": exchange,
-                        "instrument_token": token,
-                        "lot_size": max(1, abs_qty),
-                        "transaction_type": side,
-                    }
-                res = await _place_order_core(
-                    user_id=user["id"],
-                    symbol=str(symbol).upper(),
-                    side=side,
-                    qty=1 if option_contract else abs_qty,
-                    order_type="MARKET",
-                    product=p.get("product") or settings.get("default_product", "MIS"),
-                    source="squareoff",
-                    exchange=exchange,
-                    option_contract=option_contract,
-                    idempotency_key=f"squareoff-live:{symbol}:{now}",
-                )
-                closed.append({"symbol": symbol, "qty": abs_qty, "side": side, "mode": "live", "order_id": res.get("broker_order_id")})
+            res = await _close_strategy_positions(user_id, sid, reason="squareoff-all")
+            closed.append({"strategy_id": sid, "result": res})
         except Exception as e:
-            failed.append({"symbol": symbol, "error": str(e)})
+            failed.append({"strategy_id": sid, "error": str(e)[:200]})
     return {"ok": not failed, "closed": closed, "failed": failed}
 
 
