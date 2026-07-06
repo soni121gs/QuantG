@@ -1050,7 +1050,10 @@ def _plan_tools_via_gemini_sync(message: str, recent_messages: List[Dict[str, An
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"function_declarations": _tool_planner_declarations()}],
         "tool_config": {"function_calling_config": {"mode": "ANY"}},
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 256},
+        # gemini-2.5-flash is a thinking model (~200 hidden "thought" tokens);
+        # too small a budget truncates before the functionCall parts are emitted
+        # (intermittent empty selection). Give ample headroom for thoughts + calls.
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 768},
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     res = requests.post(
