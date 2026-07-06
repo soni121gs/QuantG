@@ -80,6 +80,8 @@ READ_ONLY_AGENT_TOOLS = [
     "get_trade_attribution",
     "get_hermes_brain_health",
     "get_hermes_oos_validation",
+    "get_edge_lab_snapshot",
+    "get_intraday_oos",
 ]
 
 
@@ -715,6 +717,55 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                     confidence = 0.6
                     warnings.append("EXTERNAL/UNVERIFIED web context (Gemini Google-Search grounding) — never use for a numeric P&L/score claim, macro/event context only.")
             source = "gemini-google-search-grounding"
+        elif name == "get_edge_lab_snapshot":
+            # EOD bhavcopy walk-forward OOS engine (CLAUDE.md §13). The single
+            # source of truth for "does this strategy have an out-of-sample edge?",
+            # short-vol base rates, config sweeps, and data coverage. Held-to-theta
+            # daily-settle granularity — NOT intraday (see get_intraday_oos).
+            snap = await db.edge_lab_snapshots.find_one({"_id": "latest"})
+            if not snap or snap.get("status") != "ready":
+                data = {"error": "No Edge Lab snapshot is ready yet. It is compiled off-hours from the bhavcopy OOS engine (run_oos_validation / edge_lab.build_snapshot)."}
+                warnings.append("Edge Lab snapshot not built or not ready.")
+                confidence = 0.5
+            else:
+                gen = str(snap.get("generated_at") or "")
+                try:
+                    age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(gen)).days
+                    if age_days >= 3:
+                        stale = True
+                        warnings.append(f"Edge Lab snapshot is {age_days} days old (rebuilt off-hours, not live).")
+                except Exception:
+                    pass
+                data = {
+                    "generated_at": snap.get("generated_at"),
+                    "coverage": snap.get("coverage"),
+                    "base_rate": snap.get("base_rate"),
+                    "oos_verdicts": (snap.get("oos") or {}).get("rows"),
+                    "config_sweep": snap.get("sweep"),
+                    "book": snap.get("book"),
+                }
+                warnings.append("EOD held-to-theta OOS (daily settle). Verdicts: CANDIDATE_EDGE / FRAGILE / NO_EDGE_NEGATIVE / INSUFFICIENT_DATA. Nothing is an edge without 30+ trades AND positive out-of-sample.")
+            source = "db.edge_lab_snapshots"
+        elif name == "get_intraday_oos":
+            # IMD 1-minute intraday OOS judge (CLAUDE.md §14) — the separate judge
+            # for intraday option BUYERS (QG-O5..O10). Distinct from the EOD
+            # held-to-theta OOS above; returns INSUFFICIENT_DATA until enough real
+            # minute data is captured.
+            run = await db.intraday_options_oos_runs.find_one({}, sort=[("generated_at", -1)])
+            if not run:
+                data = {"error": "No intraday (1-min) OOS run recorded yet — the IMD pipeline returns INSUFFICIENT_DATA until enough real minute data exists."}
+                warnings.append("No intraday OOS runs recorded.")
+                confidence = 0.5
+            else:
+                data = {
+                    "generated_at": run.get("generated_at"),
+                    "window": run.get("window"),
+                    "verdict_counts": run.get("verdict_counts"),
+                    "results": run.get("results"),
+                    "candidates": run.get("candidates"),
+                }
+                warnings.append("Intraday 1-min OOS judges option BUYERS (QG-O5..O10); GATE = 30+ trades, 3+ months, <=20% missing minutes, positive OOS, 50%+ green months. Distinct from the EOD theta OOS.")
+            source = "db.intraday_options_oos_runs"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -926,6 +977,118 @@ def _parse_and_store_recommendation(reply_text: str, user_id: str) -> tuple[str,
     return cleaned_text, rec_doc
 
 
+# ── Function-calling tool planner (Stage 2) ───────────────────────────────
+# Gemini decides which read-only tools to run for THIS question, so the agent is
+# not limited to the hardcoded keyword router (which misses any off-script
+# phrasing). Bounded to ONE planning round for cost; the picks are UNIONED with
+# the keyword router (kept as a safety net + always-on grounding) and we fail
+# open to keyword-only if Gemini is unavailable or errors. This is SELECTION
+# only — the model never sees data here; the tools still compute every number
+# (JUDGE-FIRST law: LLM narrates, code computes).
+TOOL_SPECS: Dict[str, str] = {
+    "get_execution_snapshot": "Live snapshot of open positions, working orders and account P&L right now.",
+    "get_orders": "The 15 most recent orders (paper and live), newest first.",
+    "get_today_orders": "Every order placed during today's trading session.",
+    "get_positions": "Current open and recently-closed positions (single-leg, spreads, equity).",
+    "get_open_positions": "Current open and recently-closed positions (single-leg, spreads, equity).",
+    "get_active_strategies": "All strategies with status, mode and today's P&L (no source code).",
+    "get_upstox_status": "Upstox broker connection / REST API health.",
+    "get_token_status": "Upstox access-token validity and expiry time.",
+    "get_market_data_status": "Market-data quote availability and any simulated-feed fallback.",
+    "get_feed_status": "WebSocket tick-feed health: connected state and last-tick age.",
+    "get_logs_errors": "Recent backend ERROR / exception log lines.",
+    "get_risk_snapshot": "Kill-switch state, daily loss limit, realized/unrealized P&L, drawdown, capital reservations.",
+    "get_live_readiness": "Pre-flight checklist gating live/paper trading readiness.",
+    "get_today_fills": "Fills executed today from the trade_fills ledger.",
+    "get_skipped_signals": "Signals that were filtered/skipped and the reason (diagnose 'why no trades').",
+    "get_strategy_scorecard": "Per-strategy performance: trades, win-rate, expectancy, Sharpe/Sortino, grade.",
+    "get_daily_report": "End-of-day aggregated report: best/worst strategies, P&L, trade count.",
+    "get_recent_alerts": "Recent notifications/alerts sent to the operator.",
+    "search_wiki": "Search the Obsidian knowledge base: trading rules, decisions, transcripts, projects.",
+    "get_knowledge_graph": "Wiki note interconnections — hubs, backlinks, orphaned notes.",
+    "get_backtest_summary": "Stored backtest results (expectancy, win-rate, profit factor, drawdown) per strategy.",
+    "get_core_events": "Core-engine lifecycle events: position/order state transitions.",
+    "get_agent_tool_audit": "Audit log of prior read-only tool executions.",
+    "get_strategy_score_explained": "Deep score breakdown for ONE strategy — use when the question names a specific strategy.",
+    "get_historical_context": "Past-days context: prior sessions, historical P&L and behavior.",
+    "recall_memory": "Hermes's own long-term memory notes relevant to the question.",
+    "get_external_context": "EXTERNAL/UNVERIFIED macro/news/event context via Google Search — never for any QuantG number.",
+    "get_trade_attribution": "Causal 'why' per closed trade: regime/bias/structure/hold/exit-reason/R-multiple.",
+    "get_hermes_brain_health": "Hermes's scored lessons: dimension/bucket, hit-rate, confidence, OOS-passed flag.",
+    "get_hermes_oos_validation": "Hypothesis-test OOS summary from db.hermes_hypothesis_tests.",
+    "get_edge_lab_snapshot": "EOD held-to-theta walk-forward OOS: per-strategy edge verdicts, short-vol base rates, config sweeps, data coverage. Answers 'does strategy X have an out-of-sample edge?'.",
+    "get_intraday_oos": "Intraday 1-minute OOS verdicts for option BUYERS/scalps (QG-O5..O10).",
+}
+
+
+def _tool_planner_declarations() -> List[Dict[str, Any]]:
+    return [
+        {"name": n, "description": d, "parameters": {"type": "object", "properties": {}}}
+        for n, d in TOOL_SPECS.items()
+        if n in READ_ONLY_AGENT_TOOLS
+    ]
+
+
+def _plan_tools_via_gemini_sync(message: str, recent_messages: List[Dict[str, Any]]) -> List[str]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return []
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    timeout = float(os.environ.get("GEMINI_PLANNER_TIMEOUT_SEC", "12"))
+    history_text = "\n".join(
+        f"{'User' if row.get('role') == 'user' else 'Agent'}: {str(row.get('content') or '')[:400]}"
+        for row in recent_messages[-6:]
+    )
+    prompt = (
+        "You are the tool planner for Hermes, a READ-ONLY trading research assistant in QuantG.\n"
+        "Choose EVERY read-only tool whose data is needed to answer the user's question well, and "
+        "call them as parallel function calls. Prefer 2-6 targeted tools. Do NOT answer the "
+        "question yourself — only select tools. When in doubt, include the tool.\n\n"
+        f"Recent conversation:\n{history_text or 'None'}\n\nUser question:\n{message}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "tools": [{"function_declarations": _tool_planner_declarations()}],
+        "tool_config": {"function_calling_config": {"mode": "ANY"}},
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 256},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    res = requests.post(
+        url,
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+    )
+    res.raise_for_status()
+    data = res.json()
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    picked: List[str] = []
+    for p in parts:
+        fc = p.get("functionCall") or {}
+        nm = fc.get("name")
+        if nm in TOOL_SPECS and nm in READ_ONLY_AGENT_TOOLS and nm not in picked:
+            picked.append(nm)
+    return picked
+
+
+async def _plan_tools_via_gemini(message: str, recent_messages: List[Dict[str, Any]]) -> List[str]:
+    """Best-effort function-calling tool selection. Returns [] to fall back to
+    the keyword router (never raises)."""
+    if os.environ.get("HERMES_TOOL_PLANNER_ENABLED", "true").lower() not in ("1", "true", "yes"):
+        return []
+    if not os.environ.get("GEMINI_API_KEY"):
+        return []
+    try:
+        budget = float(os.environ.get("GEMINI_PLANNER_TIMEOUT_SEC", "12")) + 3
+        return await asyncio.wait_for(
+            asyncio.to_thread(_plan_tools_via_gemini_sync, message, recent_messages),
+            timeout=budget,
+        )
+    except Exception as exc:
+        logger.warning("Tool planner (function-calling) failed; using keyword router only: %s", exc)
+        return []
+
+
 def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], recent_messages: List[Dict[str, Any]]) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -948,6 +1111,7 @@ You are equipped with a skill pack of standard playbooks. When the user asks que
 - `quantg-feed-token-diagnosis`: Playbook to check auth token or websocket feed connection stalls. Diagnose via `get_upstox_status` and `get_market_data_status`.
 - `quantg-eod-report`: Playbook to analyze session close metrics. Reconcile daily realized/unrealized P&L, best/worst strategies, and trades count using `get_daily_report` and `get_risk_snapshot`.
 - `quantg-backtest-review`: Playbook to review backtests. Analyze expectancies, win-rates, profit factors, and drawdowns via `get_backtest_summary`. You can guide the user to run customized backtests by providing the strategy ID and date range (YYYY-MM-DD) in their query.
+- `quantg-edge-lab`: Playbook to answer "does this strategy have a REAL edge?" — the governing question of the current discipline (CLAUDE.md §13/§14). Use `get_edge_lab_snapshot` for the EOD held-to-theta walk-forward: per-strategy OOS verdicts (CANDIDATE_EDGE / FRAGILE / NO_EDGE_NEGATIVE / INSUFFICIENT_DATA), short-vol base rates, config sweeps, and data coverage. Use `get_intraday_oos` for intraday 1-min option BUYERS (QG-O5..O10). LAW: nothing is "working" on paper P&L alone — an edge requires 30+ trades AND positive out-of-sample. Grade IDEAS on OOS expectancy, not daily paper P&L (noise). Never tune a NO_EDGE strategy — that is the treadmill; archive it and design a new hypothesis that passes the validator.
 - `quantg-vps-deploy-check`: Playbook to check the system's operational deployment. Synthesize `get_live_readiness`, `get_logs_errors`, and `get_recent_alerts`.
 - `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, `get_today_fills`, `get_core_events`, and `get_agent_tool_audit`. Trace order/fill logs, system warnings, and error timelines. Compile a clean markdown table of events leading up to the outage, outlining root cause and recovery details. Guide the user to draft a postmortem using the `draft_incident_report` action.
 
@@ -1179,7 +1343,8 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "strategy-loss-review": ["get_strategy_scorecard", "get_daily_report", "get_risk_snapshot", "get_strategy_score_explained", "get_historical_context"],
         "feed-token-diagnosis": ["get_upstox_status", "get_market_data_status", "get_feed_status", "get_token_status"],
         "eod-report": ["get_daily_report", "get_risk_snapshot", "get_today_fills", "get_today_orders", "get_historical_context"],
-        "backtest-review": ["get_backtest_summary", "get_hermes_oos_validation", "get_active_strategies"],
+        "backtest-review": ["get_backtest_summary", "get_hermes_oos_validation", "get_edge_lab_snapshot", "get_active_strategies"],
+        "edge-lab": ["get_edge_lab_snapshot", "get_hermes_oos_validation", "get_active_strategies"],
         "vps-deploy-check": ["get_live_readiness", "get_logs_errors", "get_recent_alerts"],
         "incident-postmortem": ["get_recent_alerts", "get_logs_errors", "get_today_fills", "get_core_events", "get_agent_tool_audit", "get_historical_context"],
     }
@@ -1212,6 +1377,21 @@ def classify_playbook_by_query(query: str) -> List[str]:
         
     if any(w in q for w in ["backtest", "backtests", "historical", "ohlc", "simulation"]):
         matched_tools.update(playbook_tools["backtest-review"])
+        has_matches = True
+
+    # EOD held-to-theta OOS / Edge Lab (CLAUDE.md §13): "does X have an edge?",
+    # base rates, walk-forward verdicts, config sweeps, data coverage.
+    if any(w in q for w in ["edge", "oos", "out-of-sample", "out of sample", "walk-forward",
+                            "walk forward", "candidate", "verdict", "no edge", "fragile",
+                            "edge lab", "base rate", "base-rate", "short vol", "short-vol",
+                            "coverage", "expectancy", "held to expiry", "hold to expiry"]):
+        matched_tools.update(playbook_tools["edge-lab"])
+        has_matches = True
+
+    # IMD intraday 1-min OOS (CLAUDE.md §14): option buyers / scalps QG-O5..O10.
+    if any(w in q for w in ["intraday oos", "1-min", "1 min", "one minute", "minute oos",
+                            "imd", "scalp", "scalper", "opening range", "orb", "buyer", "buyers"]):
+        matched_tools.add("get_intraday_oos")
         has_matches = True
         
     if any(w in q for w in ["vps", "deploy", "deployment", "container", "docker", "health", "restart"]):
@@ -1314,7 +1494,21 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     ).sort("created_at", -1).to_list(8)
     recent_messages = list(reversed(recent_messages))
 
-    active_tools = classify_playbook_by_query(content)
+    # Tool selection: the keyword router is the always-on safety net + baseline
+    # grounding; the Gemini function-calling planner adds any tool the keyword
+    # matcher missed for off-script phrasings. Union, dedup in READ_ONLY order,
+    # cap for cost. Fails open to keyword-only when the planner returns [].
+    keyword_tools = classify_playbook_by_query(content)
+    planned_tools = await _plan_tools_via_gemini(content, recent_messages)
+    _merged = set(keyword_tools) | set(planned_tools)
+    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "14"))
+    active_tools = [t for t in READ_ONLY_AGENT_TOOLS if t in _merged][:max_tools]
+    tool_selection = {
+        "keyword": keyword_tools,
+        "planned": planned_tools,
+        "active": active_tools,
+        "planner_used": bool(planned_tools),
+    }
     tool_results = await asyncio.gather(*[_run_agent_tool(name, user, query=content) for name in active_tools])
     reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
     
@@ -1396,6 +1590,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
             "can_change_strategy_risk_broker_settings": False,
         },
         "tool_calls": list(tool_results),
+        "tool_selection": tool_selection,
         "created_at": _utc_now(),
     }
     await db.ai_chats.insert_many([user_msg, bot_msg])
