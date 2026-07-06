@@ -980,7 +980,9 @@ async def _fetch_strategy_history(
                     # candle dates.  Using the UTC ISO received_at string broke signal
                     # dedup in strategy_runner (recent_dates uses the same format).
                     _ist_now = datetime.now(timezone.utc) + IST_OFFSET
-                    _floored = (_ist_now.minute // 5) * 5
+                    _bucket_min = {"1minute": 1, "minute": 1, "5minute": 5,
+                                   "15minute": 15, "30minute": 30}.get(interval, 5)
+                    _floored = (_ist_now.minute // _bucket_min) * _bucket_min
                     _tick_date = _ist_now.replace(minute=_floored, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
                     tick_bar = {
                         "date": _tick_date,
@@ -3567,7 +3569,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O5 NIFTY Opening Range Call Buyer",
         "description": "Intraday NIFTY debit-spread call buyer. It trades only after a strong opening-range upside break and is sized as a paper-only buyer with defined debit risk.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
+        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 5000.0,
@@ -3606,7 +3608,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O6 NIFTY Opening Range Put Buyer",
         "description": "Intraday NIFTY debit-spread put buyer. It trades only after a strong opening-range downside break and uses defined debit risk.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
+        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 5000.0,
@@ -3645,7 +3647,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
         "description": "Intraday BANKNIFTY debit-spread call buyer for failed breakdown and VWAP reclaim days. Paper-sized and limited to one trade per day.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
+        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 6000.0,
@@ -3684,7 +3686,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
         "description": "Intraday BANKNIFTY debit-spread put buyer for VWAP rejection and lower-high breakdown days. Paper-sized and limited to one trade per day.",
         "underlying": "BANKNIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
+        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 15000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "breakout", "strategy_category": "intraday", "daily_loss_limit": 6000.0,
@@ -3723,7 +3725,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O9 NIFTY Tail Event Put Buyer",
         "description": "Rare NIFTY intraday put buyer for sharp downside expansion days. This stays small and exits quickly because EOD-held long puts tested poorly.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "single_leg", "spread_width": 1,
+        "structure": "single_leg", "spread_width": 1, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 10000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "volatile_breakout", "strategy_category": "intraday", "daily_loss_limit": 3500.0,
@@ -3761,7 +3763,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "name": "QG-O10 NIFTY Premium-Safe Debit Buyer",
         "description": "NIFTY intraday debit-spread buyer that only enters when the candle expansion justifies paying option premium. Defined debit risk, one paper trade per day.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "debit_spread", "spread_width": 2,
+        "structure": "debit_spread", "spread_width": 2, "candle_interval": "1minute",
         "strategy_type": "Option Buying", "required_capital": 12000.0, "instrument_group": "NFO",
         "initial_status": "live",
         "risk": {"risk_style": "momentum", "strategy_category": "intraday", "daily_loss_limit": 4500.0,
@@ -6858,6 +6860,7 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.wing_width": template.get("wing_width"),
                 "visual_config.options.exit_mode": template.get("exit_mode"),
                 "visual_config.options.short_delta": template.get("short_delta"),
+                "visual_config.options.candle_interval": template.get("candle_interval") or "5minute",
                 **_risk_update_fields(risk_profile),
                 "default_strategy_version": "v13-live-brain-r1",
                 "strategy_logic_version": "1.0",
@@ -16995,11 +16998,16 @@ async def startup():
         settings = await get_user_settings(user_id)
         strategy_mode = (strategy or {}).get("mode") or ("paper" if settings.get("paper_mode", True) else "live")
         allow_mock = strategy_mode == "paper"
+        interval = ((strategy or {}).get("visual_config") or {}).get("options", {}).get("candle_interval") or "5minute"
+        if interval == "1minute":
+            # Upstox rejects minute-history older than ~1 month (UDAPI1148); 2 days
+            # of 1-min bars (~750) is far more than these strategies' 30-45 bar need.
+            days = min(days, 2)
         return await _fetch_strategy_history(
             user_id,
             symbol,
             days=days,
-            interval="5minute",
+            interval=interval,
             allow_mock=allow_mock,
             strategy=strategy,
         ) | {"paper_mode": allow_mock}
