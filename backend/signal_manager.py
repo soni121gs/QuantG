@@ -791,6 +791,36 @@ async def _dispatch_signal_via_unified_engine(
     )
     if option_contract is not None:
         option_contract["regime_at_entry"] = _regime_at_entry
+    # Anti-pyramiding guard for spreads. A hold-to-theta / hold-to-expiry spread
+    # strategy must hold ONE position per underlying, not open a fresh spread on
+    # every runner cycle. The single-leg BUY dedup guard above keys on the exact
+    # contract symbol, which shifts strike-by-strike for spreads (and SELL-entered
+    # credit spreads bypass that guard entirely), so spreads slipped through and
+    # pyramided — 8 stacked NIFTY/SENSEX spreads by mid-session, whose 2-leg REST
+    # re-pricing then rate-limited (429) the quote feed and left every mark at ₹0.
+    # Block a new spread entry when an active spread already exists for this
+    # (user, strategy, underlying, mode). Exits are owned by the monitor/guardian
+    # and are unaffected.
+    if _oc.get("structure") in ("credit_spread", "debit_spread") and _oc.get("spread"):
+        _existing_spread = await db.strategy_positions.find_one(
+            {
+                "user_id": user_id,
+                "strategy_id": sig["strategy_id"],
+                "underlying": symbol,
+                "mode": mode,
+                "structure": {"$in": ["credit_spread", "debit_spread"]},
+                "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+            },
+            {"_id": 0, "id": 1},
+        )
+        if _existing_spread:
+            return {
+                "ok": False,
+                "status": "SKIPPED",
+                "reason": f"Active spread already open for {symbol}; holding (no pyramiding).",
+                "reason_code": "SPREAD_POSITION_ALREADY_OPEN",
+            }
+
     if _oc.get("structure") == "credit_spread" and _oc.get("spread"):
         from core.spread_builder import CREDIT_SPREADS_ENABLED, lots_for_risk
         from core.spread_lifecycle import open_credit_spread
