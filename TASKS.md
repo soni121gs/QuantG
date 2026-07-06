@@ -93,6 +93,14 @@ book." See [[project_base_rate_findings_07_04]].
 
 **🔧 OPS hygiene (from 2026-07-02 live audit — do AFTER market close, § below):** `OPS-01` portfolio-stream 401 storm (P1) · `OPS-02` 429 rate-limiting · `OPS-03` RELIANCE Trend Rider orphaned-paused · `OPS-04` Hermes Telegram 404 · `OPS-05` verify wallet reconcile.
 
+**🛠 Shipped 2026-07-06 (live session — all deployed to VPS):**
+- `[x]` **OPS-06** Anti-pyramiding guard for spreads (`63e8e53`, `signal_manager.py`): hold-to-theta spread strategies re-opened a fresh spread every runner cycle (8+ stacked/underlying). Guard blocks a new spread entry when an active spread already exists for `(user, strategy, underlying, mode)`. Symbol-based dedup missed shifting strikes + SELL-entered credit spreads bypassed it.
+- `[x]` **OPS-07** Spread legs subscribed to WS feed (`b3ba091`, `server.py _subscribe_open_position_tokens_on_startup`): spreads have no top-level `instrument_key`, so their `legs[]` were REST-priced every tick → 429 storm → dark marks (PNL shown ₹0.00). Now collect `legs[].instrument_key`; marks price off the warm WS cache.
+- `[x]` **OPS-08** Manual exit + EXIT ALL no longer phantom-short (`79dce36`+`8efebda`): `/positions/{sym}/exit` and `/ops/squareoff-all` placed generic orders under a `manual_recovery` bucket → ledger nets by `(strategy_id,target_symbol)` → phantom SHORT / equity-skip on 0 price. Both now route through `_close_strategy_positions` (canonical path; equity+single-leg+spreads). **Rule: never close via a generic opposite order under manual_recovery — always `_close_strategy_positions`.**
+- `[x]` **OPS-09** QG-O4 (SENSEX Call Spread Range Pilot) PAUSED (`manual_paused=true`): −₹1,850/day, no OOS edge on the call side (fights bull drift); QG-O3 already harvests the SENSEX put-spread edge.
+- `[~]` **OPS-10 (QUEUED — after-close scheduled task, fires 16:00 IST 2026-07-06)** Wire per-strategy 1-minute candle feed for QG-O5..O10. Diagnosis: the 6 intraday buyers never fire because `_price_history` (server.py ~16994) hardcodes `interval="5minute"` but they were built/OOS-judged for 1-min. Fix (opt-in, default stays 5min): per-strategy `candle_interval` + clamp days≤2 for 1min (Upstox UDAPI1148). Must go through the IMD 1-min OOS gate before promotion — do NOT loosen their conditions to force trades.
+- **QG-O status (checked 07-06):** QG-O1 +₹452 & QG-O3 +₹816 working (both fire *unconditionally* in-window — time+bar gate only); QG-O2 1 position (trend-gated); QG-O4 PAUSED; QG-O5..O10 silent pending OPS-10.
+
 ---
 
 ## INTRADAY MINUTE DATA / OPTIONS BACKTESTING (IMD) — QG-O5..QG-O10 JUDGE
