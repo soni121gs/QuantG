@@ -164,12 +164,12 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
       {/* Metrics 3 x 2 */}
       <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2 relative z-10">
         <Metric
-          label={isOptionStrat ? "Risk budget" : "Capital"}
-          value={money(s.required_capital)}
+          label={isOptionStrat ? "Capital req." : "Capital"}
+          value={money(s.capital_required ?? s.required_capital)}
           compact
           title={
             isOptionStrat
-              ? "Per-trade max-loss budget used to size lots — NOT broker margin. Live orders are margin-checked against Upstox at entry (spreads typically need ~₹25k+ free funds per lot for the short leg)."
+              ? `Real money the strategy deploys — for a defined-risk spread this is its max loss (≈ the broker margin blocked), grounded in the latest actual position where one exists. Risk budget (lot-sizing input): ${money(s.required_capital)}.`
               : "Deployable capital tier used for position sizing."
           }
         />

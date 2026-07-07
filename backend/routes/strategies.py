@@ -431,8 +431,32 @@ async def create_strategy(req: StrategyReq, user=Depends(get_current_user)):
 @router.get("")
 async def list_strategies(user=Depends(get_current_user)):
     from server import _strategy_out
+    from core.capital_model import position_capital_blocked
     rows = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    return [_strategy_out(r) for r in rows]
+    outs = [_strategy_out(r) for r in rows]
+
+    # Ground "capital_required" in each strategy's most recent REAL position (its
+    # max-loss = the actual broker margin deployed), overriding the estimate. This is
+    # the truthful "real money required" number the card shows.
+    ids = [r.get("id") for r in rows if r.get("id")]
+    if ids:
+        real_cap: dict = {}
+        try:
+            pipeline = [
+                {"$match": {"user_id": user["id"], "strategy_id": {"$in": ids}}},
+                {"$sort": {"created_at": -1}},
+                {"$group": {"_id": "$strategy_id", "doc": {"$first": "$$ROOT"}}},
+            ]
+            async for g in db.strategy_positions.aggregate(pipeline):
+                cap = position_capital_blocked(g.get("doc") or {})
+                if cap and cap > 0:
+                    real_cap[str(g["_id"])] = round(cap, 2)
+        except Exception:
+            real_cap = {}
+        for o in outs:
+            if real_cap.get(str(o.id)):
+                o.capital_required = real_cap[str(o.id)]
+    return outs
 
 
 # ---------------------------------------------------------------------------

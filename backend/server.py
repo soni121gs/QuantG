@@ -337,6 +337,10 @@ class StrategyOut(BaseModel):
     asset_class: str = "equity"
     strategy_type: str = "Option Buying"
     required_capital: float = 0.0
+    # Real money the strategy actually deploys (broker margin for spreads = max loss,
+    # premium for buyers). Grounded in the latest real position where one exists, else
+    # a structure-aware estimate. Distinct from required_capital (the risk budget).
+    capital_required: Optional[float] = None
     instrument_group: Optional[str] = None
     ai_confidence_score: Optional[float] = None
     ai_confidence_reason: Optional[str] = None
@@ -6762,6 +6766,14 @@ def _strategy_out(row: Dict[str, Any]) -> StrategyOut:
     clean["asset_class"] = _strategy_asset_class(clean)
     clean["strategy_type"] = _strategy_type(clean)
     clean["required_capital"] = _strategy_required_capital(clean)
+    # Real money the strategy deploys — structure-aware estimate here; list_strategies
+    # overrides it with the latest real position's max-loss where one exists.
+    if clean.get("capital_required") is None:
+        try:
+            from core.capital_model import strategy_required_capital
+            clean["capital_required"] = strategy_required_capital(clean, fallback=clean["required_capital"])
+        except Exception:
+            clean["capital_required"] = clean["required_capital"]
     clean["instrument_group"] = _strategy_instrument_group(clean)
     clean["broker"] = row.get("broker") or "upstox"
     clean["mode"] = row.get("mode") or "paper"
