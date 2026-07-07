@@ -16777,6 +16777,7 @@ async def startup():
         ("positions", [("user_id", 1), ("symbol", 1), ("strategy_id", 1)], {"unique": True, "sparse": True}),
         ("processed_fill_ids", "fill_id", {"unique": True}),
         ("paper_wallet_credits", "order_id", {"unique": True}),
+        ("paper_margin_blocks", "position_id", {"unique": True}),
         ("signals", "id", {"unique": True}),
         ("signals", [("user_id", 1), ("status", 1), ("created_at", -1)], {}),
         ("signals", [("strategy_id", 1), ("created_at", -1)], {}),

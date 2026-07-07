@@ -184,6 +184,11 @@ async def open_credit_spread(
     }
     await db.strategy_positions.insert_one(position_doc)
 
+    # Live-account behaviour: block the spread's max loss as margin (a real broker
+    # reserves it even though the SELL leg credited premium). Released on close.
+    # Idempotent per position; only affects the "available funds" view, not P&L.
+    await wallet.block_margin(user_id, round(max_loss * qty, 2), pos_id)
+
     # Audit: one order row per leg (mode=paper, FILLED).
     for leg in (short, long):
         await db.orders.insert_one({
@@ -281,6 +286,10 @@ async def close_credit_spread(
             "unrealized_pnl": 0.0,
         }},
     )
+
+    # Release the margin reserved at open (idempotent; the close was already claimed
+    # atomically above, so this fires at most once per spread).
+    await wallet.release_margin(user_id, pos_id)
 
     # Round-trip trade row + scorecard (mirrors PortfolioLedger on a full close).
     await db.trades.insert_one({

@@ -150,6 +150,7 @@ async def funds(user=Depends(get_current_user)):
     wallet_doc = await _pw.get_or_initialize(user["id"])
     paper_capital = float(wallet_doc.get("balance", 500000.0))
     initial_balance = float(wallet_doc.get("initial_balance", 500000.0))
+    blocked_margin = float(wallet_doc.get("blocked_margin", 0.0))
     positions = await db.positions.find({"user_id": user["id"]}, {"_id": 0}).to_list(200)
     deployed = round(sum(abs(p.get("qty", 0)) * p.get("avg_price", 0) for p in positions), 2)
     open_sp = await db.strategy_positions.find(
@@ -161,15 +162,19 @@ async def funds(user=Depends(get_current_user)):
     ), 2)
     return {
         "source": "paper",
-        "available_cash": round(paper_capital, 2),
+        # Live-account view: free funds = equity balance − margin blocked on open
+        # short/spread positions. `account_balance` is the full equity for reference.
+        "available_cash": round(paper_capital - blocked_margin, 2),
+        "account_balance": round(paper_capital, 2),
+        "blocked_margin": round(blocked_margin, 2),
         "opening_balance": initial_balance,
         "intraday_payin": 0.0,
-        "used_margin": deployed,
+        "used_margin": round(blocked_margin + deployed, 2),
         "m2m_realized": round(paper_capital - initial_balance, 2),
         "m2m_unrealized": m2m_unrealized,
-        "span": 0.0,
+        "span": round(blocked_margin, 2),
         "delivery_margin": 0.0,
-        "note": "Paper-mode. Balance reflects actual fills from db.paper_wallets.",
+        "note": "Paper-mode. Balance reflects actual fills; margin blocked on open spreads like a live account.",
     }
 
 

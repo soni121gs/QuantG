@@ -356,7 +356,7 @@ export default function Dashboard() {
         <div className="space-y-3">
           {/* Main summary grid */}
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard label="Account Balance" value={money(funds?.available_cash)} icon={Wallet} sub={funds?.source === "live" ? "Live Account Balance" : "Simulated Paper Cash"} />
+            <KpiCard label="Account Balance" value={money(funds?.available_cash)} icon={Wallet} sub={funds?.source === "live" ? "Live Account Balance" : `Available${funds?.blocked_margin ? ` · ${money(funds.blocked_margin)} blocked` : " · paper cash"}`} />
             <KpiCard label="Utilized Margin" value={money(funds?.used_margin)} icon={Layers} sub={funds?.source === "live" ? "Live Blocked Margin" : "Paper Blocked Margin"} />
             <KpiCard label="Net P&L" value={money(pnl)} icon={pnl >= 0 ? TrendingUp : TrendingDown} tone={toneClass(pnl)} sub={`Gross ${money(grossPnl)} after charges ${money(charges)}`} />
             <KpiCard
