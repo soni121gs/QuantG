@@ -1575,6 +1575,9 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
     "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
     "QG-O9 NIFTY Tail Event Put Buyer",
     "QG-O10 NIFTY Premium-Safe Debit Buyer",
+    # QG-O11 belongs to the pack so the generic credit-spread required_capital
+    # override (8000) does not inflate its validated 1-lot sizing (3000).
+    "QG-O11 NIFTY Regime Seller Credit Scalp",
 })
 
 PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
