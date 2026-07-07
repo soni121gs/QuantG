@@ -466,7 +466,7 @@ async def get_trading_live_readiness(user=Depends(get_current_user)):
         "label": "System manually armed in database",
         "ok": live_db_armed and global_live_enabled,
         "detail": f"armed={live_db_armed}, global_live_enabled={global_live_enabled}",
-        "hint": "Arm system in Control Room or call /api/core/live/arm"
+        "hint": "Use Profile > Go LIVE and select exactly one strategy; backend calls /api/core/live/activate."
     })
 
     upstox_status = await get_user_upstox_status(user_id)

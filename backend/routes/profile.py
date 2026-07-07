@@ -225,7 +225,10 @@ async def update_profile(req: ProfileUpdateReq, user=Depends(get_current_user)):
     update = {k: v for k, v in req.model_dump().items() if v is not None}
 
     if "paper_mode" in update and update["paper_mode"] is False:
-        update["allow_simulated_prices"] = False
+        raise HTTPException(
+            status_code=400,
+            detail="Use /api/core/live/activate with exactly one selected strategy. Profile paper_mode=false is not a live-trading arm.",
+        )
 
     if "default_product" in update and update["default_product"] not in ("MIS", "CNC", "NRML"):
         raise HTTPException(status_code=400, detail="default_product must be MIS, CNC or NRML")

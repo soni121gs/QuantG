@@ -65,20 +65,36 @@ export default function Profile() {
     }
   };
 
-  const togglePaper = async () => {
-    const next = !form.paper_mode;
-    setForm({ ...form, paper_mode: next });
+  const activateLive = async (strategyId) => {
+    setBusy(true);
     try {
-      await api.put("/profile", {
-        paper_mode: next,
-        data_broker: "upstox",
-        execution_broker: "upstox",
-        fallback_broker: "none",
+      const res = await api.post("/core/live/activate", {
+        strategy_id: strategyId,
+        acknowledge_real_money: true,
       });
-      toast.success(next ? "Switched to PAPER mode" : "Switched to LIVE mode - real orders");
+      toast.success(`LIVE armed for ${res.data?.strategy?.name || "selected strategy"}`);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed");
+      const detail = e.response?.data?.detail;
+      const blockers = detail?.blockers;
+      toast.error(blockers?.length ? blockers[0] : detail?.message || detail || "Live activation failed");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchToPaper = async () => {
+    setBusy(true);
+    try {
+      await api.post("/core/live/disarm");
+      toast.success("Live disarmed. Switched to PAPER mode.");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to switch to paper");
+      throw e;
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -133,9 +149,11 @@ export default function Profile() {
       {showReadiness && (
         <ReadinessModal
           isPaper={form.paper_mode}
+          busy={busy}
           onClose={() => setShowReadiness(false)}
-          onConfirm={async () => {
-            await togglePaper();
+          onConfirm={async (strategyId) => {
+            if (form.paper_mode) await activateLive(strategyId);
+            else await switchToPaper();
             setShowReadiness(false);
           }}
         />
@@ -262,13 +280,34 @@ const PrefToggle = ({ label, description, checked, onChange }) => (
   </label>
 );
 
-function ReadinessModal({ isPaper, onClose, onConfirm }) {
+function ReadinessModal({ isPaper, busy, onClose, onConfirm }) {
   const [data, setData] = useState(null);
+  const [strategies, setStrategies] = useState([]);
+  const [margins, setMargins] = useState({});
+  const [selectedStrategyId, setSelectedStrategyId] = useState("");
+  const [activationError, setActivationError] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
-    api.get("/live/readiness").then((r) => alive && setData(r.data)).finally(() => alive && setLoading(false));
+    Promise.all([
+      api.get("/trading/live-readiness"),
+      api.get("/strategies"),
+      api.get("/strategies/margin-estimates").catch(() => ({ data: { estimates: {} } })),
+    ])
+      .then(([readyRes, strategiesRes, marginRes]) => {
+        if (!alive) return;
+        const rows = strategiesRes.data || [];
+        setData(readyRes.data);
+        setStrategies(rows);
+        setMargins(marginRes.data?.estimates || {});
+        const first = rows.find((s) => {
+          const opts = s.visual_config?.options || {};
+          return s.status !== "archived" && opts.structure === "credit_spread";
+        });
+        if (first) setSelectedStrategyId(first.id);
+      })
+      .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, []);
 
@@ -280,14 +319,31 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
           <p className="text-sm text-[var(--qd-text-2)] mb-4">Live strategies will continue running but orders will be simulated locally.</p>
           <div className="flex gap-2">
             <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2 text-xs font-mono uppercase rounded-sm text-white">Cancel</button>
-            <button onClick={onConfirm} className="flex-1 bg-[var(--qd-warn)] text-black py-2 text-xs font-mono uppercase rounded-sm" data-testid="confirm-paper">Switch to Paper</button>
+            <button onClick={() => onConfirm()} disabled={busy} className="flex-1 bg-[var(--qd-warn)] text-black py-2 text-xs font-mono uppercase rounded-sm disabled:opacity-50" data-testid="confirm-paper">Switch to Paper</button>
           </div>
         </div>
       </div>
     );
   }
 
-  const allOk = data?.ready;
+  const liveChecksOk = !!data?.live_order_placement_ready;
+  const candidates = strategies.filter((s) => {
+    const opts = s.visual_config?.options || {};
+    return s.status !== "archived" && opts.structure === "credit_spread";
+  });
+  const selectedMargin = margins[selectedStrategyId];
+  const canConfirm = !!selectedStrategyId && !busy;
+  const detailText = (value) => value == null ? "-" : Number(value).toLocaleString("en-IN", { style: "currency", currency: "INR" });
+
+  const confirmLive = async () => {
+    setActivationError(null);
+    try {
+      await onConfirm(selectedStrategyId);
+    } catch (e) {
+      setActivationError(e.response?.data?.detail || e.message || "Live activation failed");
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 z-[80] flex items-center justify-center p-4" onClick={onClose}>
       <div className="qd-card max-w-xl w-full max-h-[90vh] qd-modal-card p-6" onClick={(e) => e.stopPropagation()} data-testid="readiness-modal">
@@ -295,38 +351,74 @@ function ReadinessModal({ isPaper, onClose, onConfirm }) {
           <Zap size={22} className="text-[var(--qd-loss)]" />
           <h2 className="font-head text-xl text-white">Go LIVE - Pre-flight Check</h2>
         </div>
-        <p className="text-xs text-[var(--qd-text-2)] mb-4">Once enabled, orders go to Upstox. Real money at risk.</p>
+        <p className="text-xs text-[var(--qd-text-2)] mb-4">This calls the backend live activation gate. It arms exactly one strategy only if the server, broker, funds, and reconciliation checks are real.</p>
         {loading ? (
           <div className="text-center py-10 font-mono text-sm text-[var(--qd-text-2)]">Running checks...</div>
         ) : (
-          <div className="space-y-2 mb-4">
-            {data?.checks.map((c) => (
-              <div key={c.id} className="flex items-start gap-3 p-2 bg-[var(--qd-bg)] border border-[var(--qd-border)] rounded-sm" data-testid={`check-${c.id}`}>
-                {c.ok ? <CheckCircle2 size={18} className="text-[var(--qd-profit)] mt-0.5 flex-shrink-0" />
-                      : <XCircle size={18} className="text-[var(--qd-loss)] mt-0.5 flex-shrink-0" />}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white">{c.label}</div>
-                  {c.detail && <div className="text-xs font-mono text-[var(--qd-text-3)]">{c.detail}</div>}
-                  {!c.ok && c.hint && <div className="text-xs font-mono text-[var(--qd-warn)] mt-0.5">{c.hint}</div>}
+          <>
+            <div className="space-y-2 mb-4">
+              {data?.checks?.map((c) => (
+                <div key={c.id} className="flex items-start gap-3 p-2 bg-[var(--qd-bg)] border border-[var(--qd-border)] rounded-sm" data-testid={`check-${c.id}`}>
+                  {c.ok ? <CheckCircle2 size={18} className="text-[var(--qd-profit)] mt-0.5 flex-shrink-0" />
+                        : <XCircle size={18} className="text-[var(--qd-loss)] mt-0.5 flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-white">{c.label}</div>
+                    {c.detail && <div className="text-xs font-mono text-[var(--qd-text-3)]">{c.detail}</div>}
+                    {!c.ok && c.hint && <div className="text-xs font-mono text-[var(--qd-warn)] mt-0.5">{c.hint}</div>}
+                  </div>
                 </div>
+              ))}
+            </div>
+
+            <div className="mb-4 rounded-sm border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3">
+              <div className="mb-2 font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Live strategy</div>
+              {candidates.length ? (
+                <select
+                  value={selectedStrategyId}
+                  onChange={(e) => setSelectedStrategyId(e.target.value)}
+                  className="w-full rounded-sm border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2 font-mono text-xs text-[var(--qd-text)] outline-none"
+                  data-testid="live-strategy-select"
+                >
+                  {candidates.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="text-xs text-[var(--qd-loss)]">No live-capable credit-spread strategy is available.</div>
+              )}
+              {selectedMargin?.required_margin ? (
+                <div className="mt-2 grid grid-cols-2 gap-2 font-mono text-[11px] text-[var(--qd-text-3)]">
+                  <span>Broker margin/lot</span>
+                  <span className="text-right text-[var(--qd-warn)]">{detailText(selectedMargin.required_margin)}</span>
+                  <span>Structure</span>
+                  <span className="text-right">{selectedMargin.underlying} {selectedMargin.option_type} {selectedMargin.short_strike}/{selectedMargin.long_strike}</span>
+                </div>
+              ) : null}
+            </div>
+
+            {activationError ? (
+              <div className="mb-4 rounded-sm border border-[rgba(255,59,48,0.35)] bg-[rgba(255,59,48,0.08)] p-3 text-xs text-[var(--qd-loss)]">
+                {Array.isArray(activationError.blockers)
+                  ? activationError.blockers.join(" ")
+                  : activationError.message || String(activationError)}
               </div>
-            ))}
-          </div>
+            ) : null}
+          </>
         )}
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 border border-[var(--qd-border)] py-2.5 text-xs font-mono uppercase rounded-sm text-white" data-testid="cancel-readiness">Stay Paper</button>
           <button
-            onClick={onConfirm}
-            disabled={!allOk}
+            onClick={confirmLive}
+            disabled={!canConfirm}
             className={`flex-1 py-2.5 text-xs font-mono uppercase rounded-sm ${
-              allOk ? "qd-btn-sell" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] cursor-not-allowed"
+              canConfirm ? "qd-btn-sell" : "bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] cursor-not-allowed"
             }`}
             data-testid="confirm-live"
           >
-            {allOk ? "I understand - Go LIVE" : "Fix the issues above"}
+            {busy ? "Arming..." : liveChecksOk ? "Arm selected strategy" : "Run backend activation check"}
           </button>
         </div>
-        {!data?.market_open && allOk && (
+        {!data?.market_open && liveChecksOk && (
           <p className="mt-3 text-xs font-mono text-[var(--qd-warn)] text-center">
             Market is currently closed. Live mode can still be armed for setup.
           </p>

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -26,6 +28,170 @@ class BacktestReq(BaseModel):
         if v < 1:
             return 1
         return min(v, 365)
+
+
+class LiveActivateReq(BaseModel):
+    strategy_id: str
+    acknowledge_real_money: bool = False
+
+
+def _env_true(name: str) -> bool:
+    return os.environ.get(name, "false").strip().lower() == "true"
+
+
+def _strategy_structure(strategy: Dict[str, Any]) -> str:
+    opts = (strategy.get("visual_config") or {}).get("options") or {}
+    return str(strategy.get("structure") or opts.get("structure") or "").lower()
+
+
+async def _selected_strategy_margin(gw: Any, strategy: Dict[str, Any]) -> Dict[str, Any]:
+    from routes.strategies import (
+        _margin_estimate_for_combo,
+        _margin_est_option_types,
+        _margin_est_structure,
+        _margin_est_underlying,
+        _margin_est_width_strikes,
+    )
+
+    underlying = _margin_est_underlying(strategy)
+    structure = _margin_est_structure(strategy)
+    opts = (strategy.get("visual_config") or {}).get("options") or {}
+    try:
+        short_otm_pct = float(opts.get("short_otm_pct") or 0)
+    except (TypeError, ValueError):
+        short_otm_pct = 0.0
+    try:
+        short_offset_strikes = int(opts.get("short_offset_strikes") or 0)
+    except (TypeError, ValueError):
+        short_offset_strikes = 0
+    if not underlying:
+        return {"ok": False, "error": "strategy underlying could not be resolved"}
+    return await _margin_estimate_for_combo(
+        gw,
+        underlying,
+        structure,
+        width_strikes=_margin_est_width_strikes(strategy),
+        short_otm_pct=short_otm_pct,
+        short_offset_strikes=short_offset_strikes,
+        option_types=_margin_est_option_types(strategy, structure),
+    )
+
+
+async def _live_activation_preflight(user_id: str, strategy_id: str) -> Dict[str, Any]:
+    from server import (
+        _extract_available_margin,
+        broker_reconciliation_summary,
+        get_user_upstox_gateway,
+        get_user_upstox_status,
+    )
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    strategy = await db.strategies.find_one({"id": strategy_id, "user_id": user_id}, {"_id": 0})
+    if not strategy:
+        blockers.append("Selected strategy not found.")
+        return {"ok": False, "blockers": blockers, "warnings": warnings}
+
+    if str(strategy.get("status") or "").lower() == "archived":
+        blockers.append("Selected strategy is archived.")
+
+    structure = _strategy_structure(strategy)
+    if structure != "credit_spread":
+        blockers.append("Only credit_spread strategies are live-capable through this one-click pilot path.")
+
+    if not _env_true("CORE_ENGINE_LIVE_ENABLED"):
+        blockers.append("Server live engine is disabled: CORE_ENGINE_LIVE_ENABLED=false.")
+    if structure == "credit_spread" and not _env_true("LIVE_SPREADS_ENABLED"):
+        blockers.append("Live spread execution is disabled: LIVE_SPREADS_ENABLED=false.")
+
+    kill_switch = await db.risk_state.find_one({"_id": "global_kill_switch"})
+    if kill_switch and kill_switch.get("active"):
+        blockers.append("Global kill-switch is active.")
+
+    unknown_orders = await db.orders.count_documents({"user_id": user_id, "status": "UNKNOWN_NEEDS_REVIEW"})
+    if unknown_orders:
+        blockers.append(f"{unknown_orders} order(s) need manual reconciliation before live activation.")
+
+    open_live_positions = await db.strategy_positions.count_documents({
+        "user_id": user_id,
+        "mode": "live",
+        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+    })
+    if open_live_positions:
+        blockers.append("A live position is already open or closing.")
+
+    other_live = await db.strategies.count_documents({
+        "user_id": user_id,
+        "id": {"$ne": strategy_id},
+        "mode": "live",
+        "status": {"$nin": ["archived", "draft"]},
+    })
+    if other_live:
+        blockers.append("Another strategy is already configured for live mode.")
+
+    upstox_status = await get_user_upstox_status(user_id)
+    if not upstox_status.get("keys_saved"):
+        blockers.append("Upstox credentials are not saved.")
+    if not (upstox_status.get("connected") and upstox_status.get("token_valid")):
+        blockers.append("Upstox OAuth token is not valid. Reconnect Upstox first.")
+    if not (upstox_status.get("gateway") or {}).get("ws_running") and not (upstox_status.get("feed_status") or {}).get("connected"):
+        warnings.append("Upstox realtime feed is not confirmed running yet.")
+
+    gw = await get_user_upstox_gateway(user_id)
+    funds_payload: Dict[str, Any] = {}
+    available_margin = 0.0
+    required_margin = 0.0
+    margin_estimate: Dict[str, Any] = {}
+    if not gw or not getattr(gw, "connected", False):
+        blockers.append("Upstox gateway is not connected.")
+    else:
+        try:
+            funds_payload, margin_estimate = await asyncio.gather(
+                asyncio.to_thread(gw.get_margins),
+                _selected_strategy_margin(gw, strategy),
+            )
+            available_margin = _extract_available_margin(
+                funds_payload,
+                ((strategy.get("visual_config") or {}).get("exchange")
+                 or strategy.get("instrument_group")
+                 or "NSE_FO"),
+            )
+            if margin_estimate.get("ok"):
+                required_margin = float(margin_estimate.get("required_margin") or 0)
+            else:
+                blockers.append(f"Could not calculate broker margin: {margin_estimate.get('error') or 'unknown error'}.")
+        except Exception as exc:
+            blockers.append(f"Live funds/margin check failed: {str(exc)[:220]}")
+        if required_margin > 0:
+            needed = required_margin * 1.15
+            if available_margin < needed:
+                blockers.append(
+                    f"Insufficient Upstox margin buffer: need at least INR {needed:,.2f} "
+                    f"(margin INR {required_margin:,.2f} + 15% buffer), available INR {available_margin:,.2f}."
+                )
+
+    try:
+        reconciliation = await broker_reconciliation_summary(db, user_id, gw)
+        if str(reconciliation.get("status") or "").upper() not in {"OK", "READY", "NO_GATEWAY"} or reconciliation.get("errors"):
+            blockers.append(f"Broker reconciliation is not clean: {reconciliation.get('status')}.")
+    except Exception as exc:
+        blockers.append(f"Broker reconciliation check failed: {str(exc)[:220]}")
+
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "warnings": warnings,
+        "strategy": {
+            "id": strategy.get("id"),
+            "name": strategy.get("name"),
+            "status": strategy.get("status"),
+            "mode": strategy.get("mode"),
+            "structure": structure,
+        },
+        "available_margin": round(available_margin, 2),
+        "required_margin": round(required_margin, 2),
+        "margin_estimate": margin_estimate if margin_estimate else None,
+    }
 
 
 @router.get("/core/strategies")
@@ -123,26 +289,106 @@ async def run_core_backtest(req: BacktestReq, user=Depends(get_current_user)):
     return result
 
 
-@router.post("/core/live/arm")
-async def post_core_live_arm(user=Depends(get_current_user)):
+@router.post("/core/live/activate")
+async def post_core_live_activate(req: LiveActivateReq, user=Depends(get_current_user)):
     user_id = user["id"]
+    if not req.acknowledge_real_money:
+        raise HTTPException(status_code=400, detail="Real-money acknowledgement is required.")
+
+    preflight = await _live_activation_preflight(user_id, req.strategy_id)
+    if not preflight.get("ok"):
+        raise HTTPException(status_code=400, detail={
+            "message": "Live activation blocked.",
+            "blockers": preflight.get("blockers") or [],
+            "warnings": preflight.get("warnings") or [],
+        })
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "paper_mode": False,
+            "allow_simulated_prices": False,
+            "data_broker": "upstox",
+            "execution_broker": "upstox",
+            "fallback_broker": "none",
+            "live_pilot_strategy_id": req.strategy_id,
+            "live_pilot_started_at": now,
+        }},
+    )
+    await db.strategies.update_many(
+        {"user_id": user_id, "id": {"$ne": req.strategy_id}, "status": {"$ne": "archived"}},
+        {"$set": {
+            "mode": "paper",
+            "mode_pinned": True,
+            "live_pilot_managed": True,
+            "live_pilot_excluded_at": now,
+        }},
+    )
+    await db.strategies.update_one(
+        {"user_id": user_id, "id": req.strategy_id},
+        {"$set": {
+            "mode": "live",
+            "mode_pinned": True,
+            "live_pilot_active": True,
+            "live_pilot_managed": True,
+            "live_pilot_activated_at": now,
+            "status": "live",
+            "manual_paused": False,
+            "schedule_paused": False,
+            "broker": "upstox",
+            "requires_upstox_quality_checks": True,
+            "live_readiness_required": True,
+        }},
+    )
     await db.live_arm_state.update_one(
         {"user_id": user_id},
-        {"$set": {"armed": True, "global_live_enabled": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {
+            "armed": True,
+            "global_live_enabled": True,
+            "selected_strategy_id": req.strategy_id,
+            "updated_at": now,
+        }},
         upsert=True
     )
-    return {"ok": True, "status": "ARMED"}
+    return {"ok": True, "status": "LIVE_ARMED", **preflight}
+
+
+@router.post("/core/live/arm")
+async def post_core_live_arm(user=Depends(get_current_user)):
+    raise HTTPException(
+        status_code=400,
+        detail="Use /api/core/live/activate with a selected strategy_id. Blind live arming is disabled.",
+    )
 
 
 @router.post("/core/live/disarm")
 async def post_core_live_disarm(user=Depends(get_current_user)):
     user_id = user["id"]
+    now = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"paper_mode": True, "allow_simulated_prices": True, "live_pilot_stopped_at": now},
+         "$unset": {"live_pilot_strategy_id": "", "live_pilot_started_at": ""}},
+    )
+    await db.strategies.update_many(
+        {"user_id": user_id, "live_pilot_managed": True},
+        {"$set": {"mode": "paper", "live_pilot_stopped_at": now},
+         "$unset": {
+             "mode_pinned": "",
+             "live_pilot_active": "",
+             "live_pilot_managed": "",
+             "live_pilot_activated_at": "",
+             "live_pilot_excluded_at": "",
+         }},
+    )
     await db.live_arm_state.update_one(
         {"user_id": user_id},
-        {"$set": {"armed": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"armed": False, "global_live_enabled": False, "updated_at": now},
+         "$unset": {"selected_strategy_id": ""}},
         upsert=True
     )
-    return {"ok": True, "status": "DISARMED"}
+    return {"ok": True, "status": "DISARMED", "paper_mode": True}
 
 
 @router.post("/core/kill-switch")
