@@ -1579,12 +1579,19 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
 
 PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
     "QG-O1 NIFTY Put Spread Theta Core",
-    "QG-O5 NIFTY Opening Range Call Buyer",
+    # 2026-07-08: QG-O5 archived by founder direction ("only the best in the book").
+    # It never had OOS support (n=22, below every gate); its bull-day credit-scalp
+    # role is subsumed by QG-O11's OOS-validated bull gate.
     # 2026-07-06: un-archived by founder direction. Sole archived strategy with a
     # real OOS edge — EOD bhavcopy walk-forward: +₹74/tr (2024) and +₹19/tr (2025 OOS),
     # 87% WR, 82% green months, all_years_positive. Paper-forward per the ladder;
     # thin OOS margin + SENSEX (BFO) execution cost keep it paper-only until proven.
     "QG-O4 SENSEX Call Spread Range Pilot",
+    # 2026-07-07: regime-gated width-1 credit scalp — first design where every
+    # variant AND every gate passed the IMD 1-min walk-forward (CANDIDATE_EDGE,
+    # OOS +Rs194/tr, 100% green months at production geometry). Paper-forward
+    # per the ladder; slippage-fragile (avg credit ~Rs18) so live stays gated.
+    "QG-O11 NIFTY Regime Seller Credit Scalp",
 })
 PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
 
@@ -3821,6 +3828,103 @@ DEFAULT_OPTION_STRATEGIES = [
     }]
 """,
         "market_suitability": "NIFTY intraday range-expansion days",
+    },
+    {
+        # QG-O11 — regime-gated width-1 credit-spread scalp (2026-07-07).
+        # OOS-validated on 204 real 1-min days (scratch/regime_seller_oos.py) with
+        # PRODUCTION geometry (entries 09:45-12:30, 1-OTM short, width-1, TP 35% of
+        # credit, SL 1.5x credit): n=511, 88% WR, +Rs206/trade, pf 5.08, OOS +Rs194,
+        # 100% green months. All three gates independently positive (bull +262,
+        # bear +243, range +220 per trade). CAVEAT: avg credit ~Rs18 -> edge dies
+        # above ~5-8% slippage; forward-paper must precede any live pilot.
+        "name": "QG-O11 NIFTY Regime Seller Credit Scalp",
+        "description": "Regime-gated intraday NIFTY credit-spread scalp. One brain, three gates: trend-up day sells a bull-put spread on a VWAP-pullback hold; trend-down day sells a bear-call spread on a failed bounce at VWAP; choppy day fades RSI stretch. Width-1, 1-strike-OTM, books 35% of credit, stop at 1.5x credit. Paper-forward only.",
+        "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
+        "structure": "credit_spread", "spread_width": 1, "short_offset_strikes": 1,
+        "credit_tp_frac": 0.35, "credit_sl_mult": 1.5,
+        "candle_interval": "1minute",
+        "strategy_type": "Option Selling", "required_capital": 3000.0, "instrument_group": "NFO",
+        "initial_status": "live",
+        "risk": {"risk_style": "pullback", "strategy_category": "intraday", "daily_loss_limit": 8000.0,
+                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 20,
+                 "max_trades_day": 3, "target_r_multiple": 0.5},
+        "python_code": """def run(data):
+    position = "NONE"
+    if len(data) < 40:
+        return []
+    d = data[-1]
+    today = str(d.get('date', ''))[:10]
+    day = [x for x in data if str(x.get('date', ''))[:10] == today]
+    if len(day) < 30:
+        return []
+    clock = str(d.get('date', ''))[11:16]
+    if not clock or clock < '09:45' or clock > '12:30':
+        return []
+    closes = [float(x.get('close') or 0) for x in day]
+    highs = [float(x.get('high', x.get('close')) or 0) for x in day]
+    lows = [float(x.get('low', x.get('close')) or 0) for x in day]
+    # ATR(14)
+    trs = []
+    for i in range(1, len(closes)):
+        trs.append(max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1])))
+    atr = sum(trs[-14:]) / len(trs[-14:]) if trs else 0.0
+    if atr <= 0:
+        return []
+    # session VWAP proxy (index has no volume): cumulative mean of typical price
+    vw, s = [], 0.0
+    for i in range(len(day)):
+        s += (highs[i] + lows[i] + closes[i]) / 3.0
+        vw.append(s / (i + 1))
+    def ema(vals, period):
+        k = 2.0 / (period + 1)
+        e = vals[0]
+        for v in vals[1:]:
+            e = v * k + e * (1 - k)
+        return e
+    ema_f = ema(closes[-63:], 9)
+    ema_s = ema(closes[-63:], 21)
+    band = 0.25 * atr
+    up = closes[-1] > vw[-1] and ema_f > ema_s and vw[-1] > vw[-15] and (max(highs) - vw[-1]) >= 2.0 * atr
+    dn = closes[-1] < vw[-1] and ema_f < ema_s and vw[-1] < vw[-15] and (vw[-1] - min(lows)) >= 2.0 * atr
+    action = None
+    if up:
+        touched = any(lows[-i] <= vw[-i] + band for i in range(1, 8))
+        if touched and closes[-1] > vw[-1]:
+            action, direction, gate = 'BUY', 'CE', 'bull_vwap_pullback'
+    if action is None and dn:
+        approached = any(highs[-i] >= vw[-i] - band for i in range(1, 8))
+        if approached and closes[-1] < vw[-1]:
+            action, direction, gate = 'SELL', 'PE', 'bear_failed_bounce'
+    if action is None and not up and not dn:
+        # Kaufman efficiency ratio over 20 bars: low = choppy/range tape
+        net = abs(closes[-1] - closes[-21])
+        path = sum(abs(closes[i] - closes[i - 1]) for i in range(-20, 0))
+        er = net / path if path else 1.0
+        if er <= 0.45:
+            gains = losses = 0.0
+            for i in range(-14, 0):
+                ch = closes[i] - closes[i - 1]
+                gains += max(ch, 0.0)
+                losses += max(-ch, 0.0)
+            rsi = 100.0 if losses == 0 else 100.0 - 100.0 / (1.0 + (gains / 14) / (losses / 14))
+            if rsi >= 58:
+                action, direction, gate = 'SELL', 'PE', 'range_fade_overbought'
+            elif rsi <= 42:
+                action, direction, gate = 'BUY', 'CE', 'range_fade_oversold'
+    if action is None:
+        return []
+    return [{
+        'date': d['date'], 'action': action, 'direction': direction,
+        'setup_type': 'regime_seller_' + gate,
+        'confidence': 62.0,
+        'entry_reason': 'QG-O11 ' + gate + ' gate; sell 1-OTM width-1 credit spread',
+        'target_R': 0.5, 'initial_stop_R': 1.5, 'trail_after_R': 99.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'credit_spread_tp_sl',
+        'regime_required': 'any', 'option_selection_preference': 'OTM_CREDIT',
+        'signal_version': 'v13', 'strategy_logic_version': 'qg-alpha-2026-07'
+    }]
+""",
+        "market_suitability": "NIFTY intraday — all regimes, one gate per day-type (OOS CANDIDATE_EDGE 2026-07-07)",
     },
     {
         "name": "NIFTY Momentum Buyer",
@@ -6496,6 +6600,10 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 0,
                       "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
                       "max_trades_day": 1, "strategy_category": "swing"})
+    # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
+    # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
+    if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
+        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3})
     if _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
         _template["initial_status"] = "live"
         if _template.get("required_capital") is not None:
@@ -6636,6 +6744,12 @@ def _build_default_strategy_doc(template: Dict[str, Any], user_id: str) -> Dict[
             # EDR-11: short-leg |delta| the LIVE spread builder targets (server.py spread
             # build reads options.short_delta). ~0.12 ≈ 3% OTM. None → default 0.30.
             "short_delta": template.get("short_delta"),
+            # IMD/QG-O11: fixed short-leg strike offset (overrides delta pick), per-strategy
+            # credit-spread TP/SL geometry, and runner candle interval.
+            "short_offset_strikes": template.get("short_offset_strikes"),
+            "credit_tp_frac": template.get("credit_tp_frac"),
+            "credit_sl_mult": template.get("credit_sl_mult"),
+            "candle_interval": template.get("candle_interval"),
         }
         
     risk_profile = {**_strategy_risk_profile(template), "required_capital": required_capital}
@@ -6810,7 +6924,7 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
             doc["manual_paused"] = True
             doc["schedule_paused"] = False
             doc["last_filter_reason"] = (
-                "Archived: not in the founder-approved paper-forward book (only QG-O1/QG-O4/QG-O5 active)."
+                "Archived: not in the founder-approved paper-forward book (only QG-O1/QG-O4/QG-O11 active)."
                 if doc.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
                 else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the old book."
             )
@@ -6904,6 +7018,8 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
                 "visual_config.options.exit_mode": template.get("exit_mode"),
                 "visual_config.options.short_delta": template.get("short_delta"),
                 "visual_config.options.short_offset_strikes": template.get("short_offset_strikes"),
+                "visual_config.options.credit_tp_frac": template.get("credit_tp_frac"),
+                "visual_config.options.credit_sl_mult": template.get("credit_sl_mult"),
                 "visual_config.options.candle_interval": template.get("candle_interval") or "5minute",
                 **_risk_update_fields(risk_profile),
                 "default_strategy_version": "v13-live-brain-r1",
@@ -16978,7 +17094,7 @@ async def startup():
                         s_updates["manual_paused"] = True
                         s_updates["schedule_paused"] = False
                         s_updates["last_filter_reason"] = (
-                            "Archived: not in the founder-approved paper-forward book for the next session (only QG-O1/QG-O4/QG-O5 active)."
+                            "Archived: not in the founder-approved paper-forward book for the next session (only QG-O1/QG-O4/QG-O11 active)."
                             if s.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES
                             else "Archived 2026-07-04 (EDR-03): 0 out-of-sample edge across the whole book; replaced by NIFTY Put Spread Theta (OOS)."
                         )

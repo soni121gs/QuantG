@@ -26,6 +26,7 @@ EXPECTED_DEFAULT_NAMES = {
     "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
     "QG-O9 NIFTY Tail Event Put Buyer",
     "QG-O10 NIFTY Premium-Safe Debit Buyer",
+    "QG-O11 NIFTY Regime Seller Credit Scalp",
     "NIFTY Momentum Buyer",
     "BANKNIFTY Breakout Buyer",
     "NIFTY VWAP Trend Breakout",
@@ -73,7 +74,7 @@ def test_default_strategy_catalog_is_the_reported_nine_supported_option_buyers()
     names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
 
     assert names == EXPECTED_DEFAULT_NAMES
-    assert len(DEFAULT_OPTION_STRATEGIES) == 29
+    assert len(DEFAULT_OPTION_STRATEGIES) == 30
     assert all(strategy["instrument_group"] in {"NFO", "BFO", "NSE", "BSE"} for strategy in DEFAULT_OPTION_STRATEGIES)
     assert all(
         strategy["underlying"] in {
@@ -123,16 +124,28 @@ def test_new_qg_pack_is_not_part_of_dead_strategy_archive_set():
 
 def test_only_qgo1_and_qgo5_are_paper_forward_active():
     # 2026-07-06: QG-O4 un-archived — sole archived strategy with a real OOS edge.
+    # 2026-07-07: QG-O11 regime-gated credit scalp added (IMD OOS CANDIDATE_EDGE).
+    # 2026-07-08: QG-O5 archived — no OOS support; subsumed by QG-O11's bull gate.
     assert PAPER_FORWARD_ACTIVE_STRATEGY_NAMES == {
         "QG-O1 NIFTY Put Spread Theta Core",
-        "QG-O5 NIFTY Opening Range Call Buyer",
         "QG-O4 SENSEX Call Spread Range Pilot",
+        "QG-O11 NIFTY Regime Seller Credit Scalp",
     }
     assert PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES == OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
     by_name = {strategy["name"]: strategy for strategy in DEFAULT_OPTION_STRATEGIES}
     assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["structure"] == "credit_spread"
     assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["spread_width"] == 1
     assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["short_offset_strikes"] == 2
+    o11 = by_name["QG-O11 NIFTY Regime Seller Credit Scalp"]
+    assert o11["structure"] == "credit_spread"
+    assert o11["spread_width"] == 1
+    assert o11["short_offset_strikes"] == 1
+    assert o11["credit_tp_frac"] == 0.35
+    assert o11["credit_sl_mult"] == 1.5
+    assert o11["candle_interval"] == "1minute"
+    # scalp pacing must survive the blanket CREDIT_SPREAD_THETA_RISK update
+    assert o11["risk"]["max_trades_day"] == 3
+    assert o11["risk"]["cooldown_minutes"] == 20
 
 
 def test_default_strategy_templates_are_sandbox_runnable():

@@ -65,9 +65,19 @@ def spread_exit_reason(position: Dict[str, Any], value: float) -> Optional[str]:
     return None
 
 
-def compute_exit_levels(net_credit: float, width: float) -> Dict[str, float]:
-    tp_value = round(net_credit * (1.0 - SPREAD_TP_FRAC), 2)
-    sl_value = round(min(net_credit * (1.0 + SPREAD_SL_MULT), float(width)), 2)
+def compute_exit_levels(
+    net_credit: float,
+    width: float,
+    tp_frac: Optional[float] = None,
+    sl_mult: Optional[float] = None,
+) -> Dict[str, float]:
+    """TP/SL spread values. Per-strategy tp_frac/sl_mult override the env defaults
+    (visual_config.options.credit_tp_frac / credit_sl_mult) so a scalp strategy can
+    book 35% of credit with a 1.5x stop without changing the global theta book."""
+    _tp = SPREAD_TP_FRAC if tp_frac is None else float(tp_frac)
+    _sl = SPREAD_SL_MULT if sl_mult is None else float(sl_mult)
+    tp_value = round(net_credit * (1.0 - _tp), 2)
+    sl_value = round(min(net_credit * (1.0 + _sl), float(width)), 2)
     return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
 
 
@@ -84,6 +94,8 @@ async def open_credit_spread(
     idempotency_key: str,
     signal_id: Optional[str] = None,
     regime_at_entry: str = "UNKNOWN",
+    tp_frac: Optional[float] = None,
+    sl_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Open a credit spread as one position with embedded legs (paper only).
 
@@ -128,7 +140,7 @@ async def open_credit_spread(
     await wallet.credit(user_id, short_proceeds, f"{pos_id}:short:open")
 
     entry_charges = round(short_charges + long_charges, 2)
-    levels = compute_exit_levels(net_credit, width)
+    levels = compute_exit_levels(net_credit, width, tp_frac=tp_frac, sl_mult=sl_mult)
 
     for leg, side in ((short, "SELL"), (long, "BUY")):
         leg["qty"] = qty

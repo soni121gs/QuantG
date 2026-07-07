@@ -81,6 +81,32 @@ class _Coll:
             self.docs.append(dict(doc))
         return type("R", (), {"modified_count": 0})()
 
+    async def find_one_and_update(self, query, update):
+        for d in self.docs:
+            if _match(d, query):
+                before = dict(d)
+                for k, v in update.get("$set", {}).items():
+                    d[k] = v
+                for k, v in update.get("$inc", {}).items():
+                    d[k] = (d.get(k) or 0) + v
+                return before
+        return None
+
+    async def update_many(self, query, update):
+        modified = 0
+        for d in self.docs:
+            if _match(d, query):
+                for k, v in update.get("$set", {}).items():
+                    d[k] = v
+                modified += 1
+        return type("R", (), {"modified_count": modified})()
+
+    async def delete_many(self, query):
+        keep = [d for d in self.docs if not _match(d, query)]
+        deleted = len(self.docs) - len(keep)
+        self.docs = keep
+        return type("R", (), {"deleted_count": deleted})()
+
 
 class _DB:
     def __init__(self):
@@ -92,6 +118,8 @@ class _DB:
         self.positions = _Coll()
         self.paper_wallets = _Coll(unique_field="user_id")
         self.paper_wallet_credits = _Coll(unique_field="order_id")
+        # 29c4a78: wallet blocks max-loss margin on spread open (unique per position)
+        self.paper_margin_blocks = _Coll(unique_field="position_id")
 
 
 def _spread(short_premium=55.0, long_premium=30.0, width=100.0):

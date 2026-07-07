@@ -834,11 +834,20 @@ async def _dispatch_signal_via_unified_engine(
             or 15000.0
         )
         _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        # Per-strategy TP/SL geometry (visual_config.options.credit_tp_frac /
+        # credit_sl_mult) — lets a credit scalp book 35% of credit with a 1.5x
+        # stop while the theta book keeps the global env defaults.
+        _sig_opts = (sig.get("visual_config") or {}).get("options", {}) or {}
+        _strat_opts = (strategy.get("visual_config") or {}).get("options", {}) or {}
+        _tp_frac = _sig_opts.get("credit_tp_frac", _strat_opts.get("credit_tp_frac"))
+        _sl_mult = _sig_opts.get("credit_sl_mult", _strat_opts.get("credit_sl_mult"))
         return await open_credit_spread(
             db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
             idempotency_key=idem_key, signal_id=sig["id"],
             regime_at_entry=_regime_at_entry,
+            tp_frac=float(_tp_frac) if _tp_frac is not None else None,
+            sl_mult=float(_sl_mult) if _sl_mult is not None else None,
         )
 
     if _oc.get("structure") == "debit_spread" and _oc.get("spread"):
