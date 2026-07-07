@@ -255,6 +255,10 @@ class UpstoxGateway:
     def cancel_order(self, order_id: str) -> Dict[str, Any]:
         return self._request("DELETE", "/v2/order/cancel", hft=True, params={"order_id": order_id})
 
+    def get_order_details(self, order_id: str) -> Dict[str, Any]:
+        """Fetch a single order's current status/avg fill price (V2 order details)."""
+        return self._request("GET", "/v2/order/details", params={"order_id": order_id})
+
     def get_order_book(self) -> Dict[str, Any]:
         payload = self._request("GET", "/v2/order/retrieve-all")
         items = order_items(payload)

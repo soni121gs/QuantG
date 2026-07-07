@@ -120,6 +120,8 @@ class _DB:
         self.paper_wallet_credits = _Coll(unique_field="order_id")
         # 29c4a78: wallet blocks max-loss margin on spread open (unique per position)
         self.paper_margin_blocks = _Coll(unique_field="position_id")
+        # live spread executor incident log (orphan leg / partial close)
+        self.live_spread_incidents = _Coll()
 
 
 def _spread(short_premium=55.0, long_premium=30.0, width=100.0):

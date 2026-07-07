@@ -97,14 +97,20 @@ async def open_credit_spread(
     tp_frac: Optional[float] = None,
     sl_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Open a credit spread as one position with embedded legs (paper only).
+    """Open a credit spread as one position with embedded legs.
+
+    mode="paper": simulated fills at quoted premiums via PaperWallet.
+    mode="live":  real Upstox fills via core/live_spread_executor (gated by
+    CORE_ENGINE_LIVE_ENABLED + LIVE_SPREADS_ENABLED + arm state); the doc is
+    repriced off actual fills. Debit spreads remain paper-only.
 
     Wallet: SELL short leg credits proceeds, BUY long leg debits cost — net
     effect ≈ +net_credit×qty − charges. Both legs are filled together; if funds
     are insufficient for the long leg the whole spread is rejected (no naked short).
     """
-    if mode != "paper":
-        return {"ok": False, "status": "SKIPPED", "reason": "credit spreads are paper-only for now"}
+    is_live = str(mode).lower() == "live"
+    if mode != "paper" and not is_live:
+        return {"ok": False, "status": "SKIPPED", "reason": f"credit spreads do not support mode={mode}"}
     if not spread.get("ok"):
         return {"ok": False, "status": "SKIPPED", "reason": spread.get("reason") or "invalid spread"}
 
@@ -124,20 +130,41 @@ async def open_credit_spread(
     width = float(spread["width_points"])
     max_loss = float(spread["max_loss"])
 
-    wallet = PaperWallet(db)
     pos_id = f"pos_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
 
+    entry_order_ids: Dict[str, Any] = {}
+    if is_live:
+        # Real broker fills via the live executor (gated: CORE_ENGINE_LIVE_ENABLED +
+        # LIVE_SPREADS_ENABLED + arm state + real pipe keys). BUY long wing first,
+        # SELL short second; a short-leg failure unwinds the long — never naked short.
+        from core.live_spread_executor import execute_spread_entry
+        live = await execute_spread_entry(
+            db, user_id=user_id, spread=spread, qty=qty, tag_prefix=f"sp:{pos_id[:14]}",
+        )
+        if not live.get("ok"):
+            return {"ok": False, "status": "SKIPPED",
+                    "reason": f"live spread entry failed ({live.get('stage')}): {live.get('error')}"}
+        # Reprice the spread off REAL fills — credit, max loss and exit levels must
+        # reflect what the broker actually gave us, not the quoted chain.
+        short["premium"] = float(live["short_fill"])
+        long["premium"] = float(live["long_fill"])
+        net_credit = round(short["premium"] - long["premium"], 2)
+        max_loss = round(width - net_credit, 2)
+        entry_order_ids = live.get("entry_order_ids") or {}
+
     short_charges = _leg_charges("SELL", short["premium"], qty)
     long_charges = _leg_charges("BUY", long["premium"], qty)
-    long_cost = round(long["premium"] * qty + long_charges, 2)
-    short_proceeds = round(short["premium"] * qty - short_charges, 2)
 
-    # Fund the protective (long) leg first; reject the whole spread if short.
-    funded = await wallet.debit(user_id, long_cost, f"{pos_id}:long:open")
-    if not funded:
-        return {"ok": False, "status": "SKIPPED", "reason": "insufficient paper funds for spread long leg"}
-    await wallet.credit(user_id, short_proceeds, f"{pos_id}:short:open")
+    if not is_live:
+        wallet = PaperWallet(db)
+        long_cost = round(long["premium"] * qty + long_charges, 2)
+        short_proceeds = round(short["premium"] * qty - short_charges, 2)
+        # Fund the protective (long) leg first; reject the whole spread if short.
+        funded = await wallet.debit(user_id, long_cost, f"{pos_id}:long:open")
+        if not funded:
+            return {"ok": False, "status": "SKIPPED", "reason": "insufficient paper funds for spread long leg"}
+        await wallet.credit(user_id, short_proceeds, f"{pos_id}:short:open")
 
     entry_charges = round(short_charges + long_charges, 2)
     levels = compute_exit_levels(net_credit, width, tp_frac=tp_frac, sl_mult=sl_mult)
@@ -194,14 +221,18 @@ async def open_credit_spread(
         "regime_at_entry": str(regime_at_entry or "UNKNOWN").upper(),
         "planned_risk": round(max_loss * qty, 2),
     }
+    if is_live:
+        position_doc["entry_broker_order_ids"] = entry_order_ids
+        position_doc["charges_estimated"] = True  # Upstox actuals arrive on the contract note
     await db.strategy_positions.insert_one(position_doc)
 
-    # Live-account behaviour: block the spread's max loss as margin (a real broker
-    # reserves it even though the SELL leg credited premium). Released on close.
-    # Idempotent per position; only affects the "available funds" view, not P&L.
-    await wallet.block_margin(user_id, round(max_loss * qty, 2), pos_id)
+    if not is_live:
+        # Live-account behaviour: block the spread's max loss as margin (a real broker
+        # reserves it even though the SELL leg credited premium). Released on close.
+        # Idempotent per position; only affects the "available funds" view, not P&L.
+        await wallet.block_margin(user_id, round(max_loss * qty, 2), pos_id)
 
-    # Audit: one order row per leg (mode=paper, FILLED).
+    # Audit: one order row per leg (FILLED — fills are confirmed before this point).
     for leg in (short, long):
         await db.orders.insert_one({
             "id": f"ord_{uuid.uuid4().hex[:12]}",
@@ -220,7 +251,8 @@ async def open_credit_spread(
             "status": "FILLED",
             "execution_status": "FILLED",
             "mode": mode,
-            "broker": "paper",
+            "broker": "upstox" if is_live else "paper",
+            "broker_order_id": entry_order_ids.get(leg["role"]) if is_live else None,
             "structure": "credit_spread",
             "spread_role": leg["role"],
             "idempotency_key": f"{idempotency_key}:{leg['role']}",
@@ -265,18 +297,44 @@ async def close_credit_spread(
     if claim.modified_count == 0:
         return {"ok": False, "status": "SKIPPED", "reason": "spread already closing/closed"}
 
+    is_live = str(position.get("mode") or "").lower() == "live"
+    if is_live:
+        # Real broker unwind: BUY back the short leg first, then SELL the long.
+        # Per-leg progress persists on the doc, so a partial close resumes safely
+        # (the EXITING>5min auto-revert re-enters here and skips filled legs).
+        from core.live_spread_executor import unwind_spread_legs
+        live = await unwind_spread_legs(db, position, reason=reason)
+        if not live.get("ok"):
+            if live.get("stage") == "short_close":
+                # Nothing closed yet — hand the position back to the monitor.
+                await db.strategy_positions.update_one(
+                    {"id": pos_id, "user_id": user_id, "status": "EXITING"},
+                    {"$set": {"status": "OPEN", "close_error": str(live.get("error")),
+                              "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            # Partial (short bought back, long sell failed): STAY in EXITING with
+            # live_close_state persisted; the auto-revert path retries the long leg.
+            logger.error("Live spread close failed pos=%s stage=%s: %s",
+                         pos_id, live.get("stage"), live.get("error"))
+            return {"ok": False, "status": "CLOSE_FAILED", "stage": live.get("stage"),
+                    "reason": str(live.get("error"))}
+        # Value the close off REAL fills, not the LTPs the monitor passed in.
+        short_ltp = float(live["short_fill"])
+        long_ltp = float(live["long_fill"])
+
     short_ltp = float(short_ltp)
     long_ltp = float(long_ltp)
     close_value = round(short_ltp - long_ltp, 2)
 
-    wallet = PaperWallet(db)
     buyback_charges = _leg_charges("BUY", short_ltp, qty)    # buy back the short
     sell_charges = _leg_charges("SELL", long_ltp, qty)       # sell the long
     exit_charges = round(buyback_charges + sell_charges, 2)
 
-    # Fund the buy-back of the short leg; credit the long-leg sale.
-    await wallet.debit(user_id, round(short_ltp * qty + buyback_charges, 2), f"{pos_id}:short:close")
-    await wallet.credit(user_id, max(0.0, round(long_ltp * qty - sell_charges, 2)), f"{pos_id}:long:close")
+    wallet = PaperWallet(db)
+    if not is_live:
+        # Fund the buy-back of the short leg; credit the long-leg sale.
+        await wallet.debit(user_id, round(short_ltp * qty + buyback_charges, 2), f"{pos_id}:short:close")
+        await wallet.credit(user_id, max(0.0, round(long_ltp * qty - sell_charges, 2)), f"{pos_id}:long:close")
 
     gross_pnl = round((net_credit - close_value) * qty, 2)
     entry_charges = float(position.get("entry_charges") or 0.0)

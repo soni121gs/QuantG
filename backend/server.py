@@ -16869,6 +16869,21 @@ async def startup():
     app.state.execution_state = execution_state_manager
     app.state.upstox_instrument_sync_task = asyncio.create_task(sync_upstox_instruments(db, force=False))
 
+    # Live spread executor wiring: inject the Upstox order primitives so
+    # core/spread_lifecycle can fill spread legs for mode="live" positions.
+    # Dormant until CORE_ENGINE_LIVE_ENABLED + LIVE_SPREADS_ENABLED are true.
+    async def _get_upstox_order_details(user_id: str, order_id: str) -> Dict[str, Any]:
+        gateway = await get_user_upstox_gateway(user_id)
+        if not gateway or not gateway.connected:
+            raise RuntimeError("Upstox is not connected")
+        return await asyncio.to_thread(gateway.get_order_details, order_id)
+
+    import core.live_spread_executor as _live_spread_executor
+    _live_spread_executor.configure(
+        place_order_fn=_place_upstox_order,
+        order_details_fn=_get_upstox_order_details,
+    )
+
     # Dynamic lot sizes & strike intervals loading from MongoDB system_config
     try:
         config = await db.system_config.find_one({"_id": "exchange_rules"})
