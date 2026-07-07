@@ -72,11 +72,26 @@ export default function Positions() {
         </div>
       )}
 
-      <div className="qd-card p-4 flex items-center justify-between">
-        <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Total Unrealized PnL</span>
-        <span className={`font-mono text-2xl font-bold ${total >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`} data-testid="total-pnl">
-          {total >= 0 ? "+" : ""}₹{formatINR(total)}
-        </span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="qd-card p-4 flex items-center justify-between">
+          <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Total Unrealized PnL</span>
+          <span className={`font-mono text-2xl font-bold ${total >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`} data-testid="total-pnl">
+            {total >= 0 ? "+" : ""}₹{formatINR(total)}
+          </span>
+        </div>
+        <div className="qd-card p-4 flex items-center justify-between" title="Real market margin this book would tie up in a LIVE account right now (spreads: max loss, buys: premium). Distinct from the paper wallet balance, which tracks realized P&L.">
+          <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--qd-text-3)]">Margin Utilized (real capital)</span>
+          <div className="text-right">
+            <span className="font-mono text-2xl font-bold text-[var(--qd-text)]" data-testid="margin-utilized">
+              ₹{formatINR(summary.margin_utilized || 0)}
+            </span>
+            {summary.paper_capital_base ? (
+              <span className="block font-mono text-[11px] text-[var(--qd-text-3)]">
+                of ₹{formatINR(summary.paper_capital_base)} · {((100 * (summary.margin_utilized || 0)) / summary.paper_capital_base).toFixed(1)}% used
+              </span>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <div className="qd-card">
@@ -104,6 +119,7 @@ export default function Positions() {
                   <th className="px-4 py-2">LTP</th>
                   <th className="px-4 py-2">Target</th>
                   <th className="px-4 py-2">Stop</th>
+                  <th className="px-4 py-2 text-right">Capital</th>
                   <th className="px-4 py-2">Status</th>
                   <th className="px-4 py-2 text-right">PnL</th>
                   <th className="px-4 py-2 text-right">Mode</th>
@@ -159,6 +175,9 @@ export default function Positions() {
                       </td>
                       <td className="px-4 py-2.5 text-[var(--qd-profit)]">{p.take_profit != null ? formatINR(p.take_profit) : "—"}</td>
                       <td className="px-4 py-2.5 text-[var(--qd-loss)]">{p.stop_loss != null ? formatINR(p.stop_loss) : "—"}</td>
+                      <td className="px-4 py-2.5 text-right text-[var(--qd-text-2)]" title={isSpread ? "Real margin blocked = spread max loss" : "Real capital = premium paid"}>
+                        {p.capital_blocked != null ? `₹${formatINR(p.capital_blocked)}` : "—"}
+                      </td>
                       <td className={`px-4 py-2.5 text-[11px] uppercase ${statusTone(p.execution_status || p.ledger_status)}`}>{p.execution_status || p.ledger_status || "—"}</td>
                       <td className={`px-4 py-2.5 text-right ${pnlTone}`}>
                         <FlashingValue value={p.pnl}>
@@ -192,7 +211,7 @@ export default function Positions() {
                     </tr>
                     {isSpread && isOpen && (
                       <tr className="bg-[var(--qd-surface-2)]" data-testid={`spread-detail-${p.symbol}`}>
-                        <td colSpan={11} className="px-4 py-3">
+                        <td colSpan={12} className="px-4 py-3">
                           {(() => {
                             const short = legs.find((l) => l.role === "short");
                             const long = legs.find((l) => l.role === "long");

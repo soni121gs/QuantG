@@ -6740,6 +6740,15 @@ def _strategy_required_capital(row: Dict[str, Any]) -> float:
     }.get(underlying, 25000.0)
     if _strategy_type(row) == "Option Selling":
         base = max(base, 125000.0)
+    # No explicit config capital — use the structure-aware estimate (real margin for
+    # the configured structure/size) instead of a flat per-underlying guess.
+    try:
+        from core.capital_model import strategy_required_capital
+        est = strategy_required_capital(row, fallback=base)
+        if est and est > 0:
+            return round(float(est), 2)
+    except Exception:
+        pass
     return base
 
 

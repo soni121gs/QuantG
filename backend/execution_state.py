@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from execution_bridge import normalize_order_row, segment_from_exchange
 from order_lifecycle import ORDER_ACTIVE_STATUSES, ORDER_TERMINAL_STATUSES, LEGACY_OPEN_STATUSES, LEGACY_TERMINAL_STATUSES
+from core.capital_model import position_capital_blocked
 
 logger = logging.getLogger("quantg.execution_state")
 
@@ -248,6 +249,10 @@ class ExecutionStateManager:
                 "mode": row.get("mode") or "paper",  # default to paper — never assume live
                 "greeks": greeks_lite,
                 "target_delta": target_delta,
+                # Truthful real-money margin this position holds (display-only; the
+                # paper wallet money-path is unchanged). Spreads -> max loss; buys ->
+                # premium paid. See core/capital_model.py.
+                "capital_blocked": position_capital_blocked(row),
             }
             if is_spread:
                 pos_out.update({
@@ -346,6 +351,7 @@ class ExecutionStateManager:
                     "legs": sp.get("legs"),
                     "greeks": sp.get("greeks"),
                     "target_delta": sp.get("target_delta"),
+                    "capital_blocked": sp.get("capital_blocked"),
                 })
                 if ledger.get("ltp") is not None:
                     bp_merged["ltp"] = ledger.get("ltp")
@@ -375,6 +381,7 @@ class ExecutionStateManager:
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "trailing_sl": trailing_sl,
+                    "capital_blocked": position_capital_blocked(bp_merged),
                 })
                 if ledger.get("ltp") is not None:
                     bp_merged["ltp"] = ledger.get("ltp")
@@ -425,6 +432,7 @@ class ExecutionStateManager:
                 "legs": sp.get("legs"),
                 "greeks": sp.get("greeks"),
                 "target_delta": sp.get("target_delta"),
+                "capital_blocked": sp.get("capital_blocked"),
             })
 
         return merged_positions
@@ -553,6 +561,15 @@ class ExecutionStateManager:
                 "failed_orders": len(failed_orders),
                 "skipped_signals": sum(int(row.get("count") or 1) for row in skipped_signals),
                 "total_unrealized_pnl": round(sum(float(p.get("pnl") or 0) for p in positions), 2),
+                # Truthful real-money margin currently deployed across open positions
+                # (spreads -> max loss, buys -> premium). This is what the book would
+                # tie up in a LIVE account right now — distinct from the paper wallet
+                # balance (which only tracks realized P&L). See core/capital_model.py.
+                "margin_utilized": round(sum(
+                    float(p.get("capital_blocked") or 0)
+                    for p in positions if int(p.get("qty") or 0) != 0
+                ), 2),
+                "paper_capital_base": round(float((wallet_row or {}).get("initial_balance") or 500000.0), 2),
                 # Canonical realized P&L from db.trade_fills (single source of truth).
                 # NOT recomputed by summing order docs — that produced phantom
                 # numbers via gross_pnl/realized_pnl/pnl fallback chains.
