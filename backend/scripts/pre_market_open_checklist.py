@@ -184,14 +184,19 @@ def verdict(results: list, for_live: bool = False) -> tuple[bool, list[str]]:
     if for_live:
         # Live requires: token present, not mock, armed, global_live_enabled, kill switch off,
         #                no unknown review orders, no reconciliation mismatch
-        live_required = {
-            "Upstox access_token present",
-            "Access token is real (not mock)",
-            "live_arm_state.armed = true",
-            "live_arm_state.global_live_enabled = true",
+        live_required_prefixes = (
+            "Upstox access_token",
+            "Access token",
+            "live_arm_state.armed",
+            "live_arm_state.global_live_enabled",
             "Global kill switch inactive",
-        }
-        live_blockers = [r["label"] for r in results if not r["ok"] and r["label"] in live_required]
+        )
+        live_blockers = [
+            r["label"]
+            for r in results
+            if r["ok"] is False
+            and any(str(r["label"]).startswith(prefix) for prefix in live_required_prefixes)
+        ]
         # Also block on review orders / mismatch
         for r in results:
             if not r["ok"] and ("UNKNOWN_NEEDS_REVIEW" in r["label"] or "reconciliation" in r["label"].lower()):
