@@ -474,10 +474,18 @@ _MARGIN_EST_SPOT_KEYS = {
 }
 
 
-def _margin_est_underlying(name: str) -> Optional[str]:
+def _margin_est_underlying(doc_or_name: Any) -> Optional[str]:
+    if isinstance(doc_or_name, dict):
+        opts = (doc_or_name.get("visual_config") or {}).get("options") or {}
+        configured = str(opts.get("underlying") or doc_or_name.get("underlying") or "").upper()
+        if configured in {"BANKNIFTY", "NIFTY", "SENSEX"}:
+            return configured
+        name = doc_or_name.get("name")
+    else:
+        name = doc_or_name
     upper = str(name or "").upper()
     for underlying in ("BANKNIFTY", "NIFTY", "SENSEX"):
-        if upper.startswith(underlying):
+        if underlying in upper:
             return underlying
     return None
 
@@ -485,6 +493,31 @@ def _margin_est_underlying(name: str) -> Optional[str]:
 def _margin_est_structure(doc: Dict[str, Any]) -> str:
     opts = (doc.get("visual_config") or {}).get("options") or {}
     return str(doc.get("structure") or opts.get("structure") or "single_leg")
+
+
+def _margin_est_width_strikes(doc: Dict[str, Any]) -> int:
+    opts = (doc.get("visual_config") or {}).get("options") or {}
+    try:
+        return max(1, int(opts.get("spread_width") or doc.get("spread_width") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _margin_est_option_types(doc: Dict[str, Any], structure: str) -> list[str]:
+    opts = (doc.get("visual_config") or {}).get("options") or {}
+    explicit = str(opts.get("option_type") or opts.get("direction") or "").upper()
+    if explicit in {"CE", "PE"}:
+        return [explicit]
+    name = str(doc.get("name") or "").upper()
+    if "CALL" in name:
+        return ["CE"]
+    if "PUT" in name:
+        return ["PE"]
+    # Regime seller/scalp strategies can choose either side at runtime; show the
+    # larger broker requirement so the operator funds the account conservatively.
+    if structure == "credit_spread":
+        return ["PE", "CE"]
+    return ["CE"]
 
 
 def _margin_est_required(payload: Any) -> float:
@@ -515,11 +548,21 @@ def _margin_est_required(payload: Any) -> float:
     return 0.0
 
 
-async def _margin_estimate_for_combo(gw: Any, underlying: str, structure: str) -> Dict[str, Any]:
-    """One-lot Upstox margin for a representative ATM structure. Cached per combo."""
+async def _margin_estimate_for_combo(
+    gw: Any,
+    underlying: str,
+    structure: str,
+    *,
+    width_strikes: int = 1,
+    short_otm_pct: float = 0.0,
+    short_offset_strikes: int = 0,
+    option_types: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    """One-lot Upstox margin for the strategy's representative structure."""
     import time
 
-    cache_key = f"{underlying}:{structure}"
+    option_types = option_types or ["PE" if structure == "credit_spread" else "CE"]
+    cache_key = f"{underlying}:{structure}:w{width_strikes}:otm{short_otm_pct}:off{short_offset_strikes}:{','.join(option_types)}"
     cached = _MARGIN_EST_CACHE.get(cache_key)
     if cached:
         ttl = _MARGIN_EST_TTL_SECONDS if cached.get("ok") else _MARGIN_EST_ERROR_TTL_SECONDS
@@ -561,7 +604,7 @@ async def _margin_estimate_for_combo(gw: Any, underlying: str, structure: str) -
             if spot <= 0:
                 spot = strikes[len(strikes) // 2]
             step = min((b - a) for a, b in zip(strikes, strikes[1:])) if len(strikes) > 1 else 50.0
-            width = step * max(1, CREDIT_SPREAD_WIDTH_STRIKES)
+            width = step * max(1, width_strikes or CREDIT_SPREAD_WIDTH_STRIKES)
             atm = min(strikes, key=lambda s: abs(s - spot))
             by_strike = {float(r["strike_price"]): r for r in rows}
 
@@ -569,37 +612,63 @@ async def _margin_estimate_for_combo(gw: Any, underlying: str, structure: str) -
                 node = (by_strike.get(strike) or {}).get("call_options" if option_type == "CE" else "put_options") or {}
                 return node.get("instrument_key")
 
+            def _nearest_strike(target: float) -> float:
+                return min(strikes, key=lambda s: abs(s - target))
+
             domain = resolve_domain_by_underlying(underlying)
             lot_size = int(domain.get_lot_size(underlying)) if domain else 1
             product = UpstoxGateway.normalize_product("MIS")
 
-            if structure == "credit_spread":
-                legs = [(_leg_key(atm, "PE"), "SELL"), (_leg_key(atm - width, "PE"), "BUY")]
-            elif structure == "debit_spread":
-                legs = [(_leg_key(atm, "CE"), "BUY"), (_leg_key(atm + width, "CE"), "SELL")]
-            else:
-                legs = [(_leg_key(atm, "CE"), "BUY")]
+            candidates: list[Dict[str, Any]] = []
+            errors: list[str] = []
+            for option_type in option_types:
+                if structure == "credit_spread":
+                    if short_otm_pct:
+                        target = spot * (1 + short_otm_pct) if option_type == "CE" else spot * (1 - short_otm_pct)
+                        short_strike = _nearest_strike(target)
+                    elif short_offset_strikes:
+                        short_strike = atm + (step * short_offset_strikes if option_type == "CE" else -step * short_offset_strikes)
+                        short_strike = _nearest_strike(short_strike)
+                    else:
+                        short_strike = atm
+                    long_strike = short_strike + width if option_type == "CE" else short_strike - width
+                    legs = [(_leg_key(short_strike, option_type), "SELL"), (_leg_key(long_strike, option_type), "BUY")]
+                elif structure == "debit_spread":
+                    long_strike = atm
+                    short_strike = atm + width if option_type == "CE" else atm - width
+                    legs = [(_leg_key(long_strike, option_type), "BUY"), (_leg_key(short_strike, option_type), "SELL")]
+                else:
+                    legs = [(_leg_key(atm, option_type), "BUY")]
 
-            if all(key for key, _ in legs):
+                if not all(key for key, _ in legs):
+                    errors.append(f"{option_type}: strikes not found in chain")
+                    continue
                 instruments = [
                     {"instrument_key": key, "quantity": lot_size, "transaction_type": side, "product": product}
                     for key, side in legs
                 ]
                 payload = await asyncio.to_thread(gw.get_margin_details, instruments)
                 required = _margin_est_required(payload)
-                if required > 0:
-                    result = {
-                        "ok": True,
-                        "required_margin": round(required, 2),
-                        "lot_size": lot_size,
-                        "atm_strike": atm,
-                        "width_points": width if "spread" in structure else 0,
-                        "spot": round(spot, 2),
-                    }
-                else:
-                    result = {"ok": False, "error": "margin API returned no requirement"}
+                if required <= 0:
+                    errors.append(f"{option_type}: margin API returned no requirement")
+                    continue
+                candidates.append({
+                    "ok": True,
+                    "required_margin": round(required, 2),
+                    "lot_size": lot_size,
+                    "atm_strike": atm,
+                    "short_strike": short_strike if "spread" in structure else atm,
+                    "long_strike": long_strike if "spread" in structure else None,
+                    "option_type": option_type,
+                    "width_points": width if "spread" in structure else 0,
+                    "spot": round(spot, 2),
+                })
+            if candidates:
+                result = max(candidates, key=lambda r: float(r.get("required_margin") or 0))
+                if len(candidates) > 1:
+                    result["conservative_side"] = "max_of_call_put"
             else:
-                result = {"ok": False, "error": "strikes not found in chain"}
+                result = {"ok": False, "error": "; ".join(errors) or "margin estimate unavailable"}
     except Exception as exc:
         result = {"ok": False, "error": str(exc)[:200]}
 
@@ -623,7 +692,7 @@ async def strategy_margin_estimates(user=Depends(get_current_user)):
     option_rows = [
         r for r in rows
         if str(r.get("instrument_group") or "").upper() in {"NFO", "BFO"}
-        and _margin_est_underlying(r.get("name"))
+        and _margin_est_underlying(r)
     ]
 
     gw = await get_user_upstox_gateway(user["id"])
@@ -634,9 +703,26 @@ async def strategy_margin_estimates(user=Depends(get_current_user)):
     estimates: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
     for row in option_rows:
-        underlying = _margin_est_underlying(row.get("name"))
+        underlying = _margin_est_underlying(row)
         structure = _margin_est_structure(row)
-        est = await _margin_estimate_for_combo(gw, underlying, structure)
+        opts = (row.get("visual_config") or {}).get("options") or {}
+        try:
+            short_otm_pct = float(opts.get("short_otm_pct") or 0)
+        except (TypeError, ValueError):
+            short_otm_pct = 0.0
+        try:
+            short_offset_strikes = int(opts.get("short_offset_strikes") or 0)
+        except (TypeError, ValueError):
+            short_offset_strikes = 0
+        est = await _margin_estimate_for_combo(
+            gw,
+            underlying,
+            structure,
+            width_strikes=_margin_est_width_strikes(row),
+            short_otm_pct=short_otm_pct,
+            short_offset_strikes=short_offset_strikes,
+            option_types=_margin_est_option_types(row, structure),
+        )
         if est.get("ok"):
             estimates[row["id"]] = {
                 "required_margin": est["required_margin"],
@@ -644,6 +730,10 @@ async def strategy_margin_estimates(user=Depends(get_current_user)):
                 "structure": structure,
                 "lot_size": est.get("lot_size"),
                 "atm_strike": est.get("atm_strike"),
+                "short_strike": est.get("short_strike"),
+                "long_strike": est.get("long_strike"),
+                "option_type": est.get("option_type"),
+                "conservative_side": est.get("conservative_side"),
                 "width_points": est.get("width_points"),
             }
         else:

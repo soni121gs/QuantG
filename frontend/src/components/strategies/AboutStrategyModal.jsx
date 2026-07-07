@@ -14,10 +14,12 @@ function Metric({ label, value, tone, compact = false }) {
   );
 }
 
-export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onClose }) => {
+export const AboutStrategyModal = ({ s, score, marginEstimate, testing, testResult, testRun, onClose }) => {
   const live = s.status === "live";
   const risk = s.visual_config?.risk || {};
   const options = s.visual_config?.options || {};
+  const brokerMargin = marginEstimate?.required_margin;
+  const deployedCapital = s.capital_required ?? s.required_capital;
 
   // AI score values
   const aiScore = score?.score ?? s.ai_confidence_score;
@@ -161,7 +163,21 @@ export const AboutStrategyModal = ({ s, score, testing, testResult, testRun, onC
               <div className="rounded-md border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Allocated Capital</span>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">
+                      {brokerMargin ? "Broker Margin / Lot" : "Real Money Required"}
+                    </span>
+                    <strong className="block text-sm text-[var(--qd-text)] font-mono mt-0.5">
+                      {money(brokerMargin ?? deployedCapital)}
+                    </strong>
+                    {brokerMargin ? (
+                      <span className="mt-1 block font-mono text-[10px] text-[var(--qd-text-3)]">
+                        {marginEstimate.option_type ? `${marginEstimate.option_type} ` : ""}
+                        {marginEstimate.short_strike ? `${marginEstimate.short_strike}/${marginEstimate.long_strike}` : "representative structure"}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div>
+                    <span className="text-[var(--qd-text-3)] uppercase tracking-wider font-mono text-[11px]">Sizing Budget</span>
                     <strong className="block text-sm text-[var(--qd-text)] font-mono mt-0.5">{money(s.required_capital)}</strong>
                   </div>
                   <div>

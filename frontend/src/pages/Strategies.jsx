@@ -433,6 +433,7 @@ export default function Strategies() {
         <AboutStrategyModal
           s={aboutStrategy}
           score={scores[aboutStrategy.id]}
+          marginEstimate={marginEstimates[aboutStrategy.id]}
           testing={testing}
           testResult={testResult}
           testRun={testRun}
