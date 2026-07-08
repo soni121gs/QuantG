@@ -131,18 +131,39 @@ def run_day(
 
         entry_key = _minute(ts)
         entry_mark = net_at(entry_key)
-        if entry_mark is None or entry_mark["close"] <= 0:
+        if entry_mark is None:
             i += 1  # fail closed — no price, no trade
             continue
 
         entry_net = entry_mark["close"]
-        R = entry_net
-        target_R = float(sig.get("target_R", 1.4))
-        stop_R = float(sig.get("initial_stop_R", 0.7))
-        trail_R = float(sig.get("trail_after_R", 1e9))
+        # Long premium (single_leg / debit_spread) has a POSITIVE net (a debit
+        # paid); a credit_spread has a NEGATIVE net (premium received). Reject the
+        # wrong sign — fail closed, never trade a mispriced entry.
+        is_credit = str(sig.get("structure", "")) == "credit_spread"
+        if (is_credit and entry_net >= 0) or (not is_credit and entry_net <= 0):
+            i += 1
+            continue
+
         max_hold = int(sig.get("max_hold_minutes", 999))
-        target_level = entry_net * (1 + target_R)
-        stop_level = entry_net * (1 - stop_R)
+        trail_R = float(sig.get("trail_after_R", 1e9))
+        if is_credit:
+            # Short premium: profit as the net rises toward 0 (spread decays). Book
+            # tp_frac of the credit; stop at sl_mult x the credit; trail the peak.
+            credit = -entry_net
+            tp_frac = float(sig.get("credit_tp_frac", 0.35))
+            sl_mult = float(sig.get("credit_sl_mult", 1.5))
+            stop_R = float(sig.get("trail_giveback_R", 0.5))
+            R = credit
+            target_level = entry_net + tp_frac * credit
+            stop_level = entry_net - sl_mult * credit
+            trail_arm_level = entry_net + trail_R * credit
+        else:
+            R = entry_net
+            target_R = float(sig.get("target_R", 1.4))
+            stop_R = float(sig.get("initial_stop_R", 0.7))
+            target_level = entry_net * (1 + target_R)
+            stop_level = entry_net * (1 - stop_R)
+            trail_arm_level = entry_net * (1 + trail_R)
 
         peak = entry_net
         trailing_armed = False
@@ -172,7 +193,7 @@ def run_day(
             mfe = max(mfe, mark["high"] - entry_net)
             mae = min(mae, mark["low"] - entry_net)
             peak = max(peak, mark["high"])
-            if not trailing_armed and mark["high"] >= entry_net * (1 + trail_R):
+            if not trailing_armed and mark["high"] >= trail_arm_level:
                 trailing_armed = True
 
             # deterministic priority within the bar
@@ -198,10 +219,12 @@ def run_day(
         lot = sel.lot_size
         qty = lot * lots
         gross = (exit_net - entry_net) * qty
-        entry_fill = entry_net * (1 + costs.slippage_pct)
-        exit_fill = exit_net * (1 - costs.slippage_pct)
+        # Adverse slippage always REDUCES P&L regardless of sign (long or short):
+        # charge it on the magnitude of both fills, so a credit spread (negative
+        # net) isn't rewarded by the old positive-premium-only fill formula.
         brokerage = costs.brokerage_per_leg * len(sel.legs) * 2
-        net = (exit_fill - entry_fill) * qty - brokerage
+        slippage_cost = costs.slippage_pct * (abs(entry_net) + abs(exit_net)) * qty
+        net = gross - slippage_cost - brokerage
         trades.append(Trade(
             underlying=underlying, date=date, setup_type=str(sig.get("setup_type", "")),
             direction=str(sig.get("direction", "")), structure=sel.structure,

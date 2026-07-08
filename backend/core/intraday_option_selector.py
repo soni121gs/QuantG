@@ -121,4 +121,17 @@ def select_contract(
             return Selection(False, MISSING_LEG, detail=f"wing {wing_strike} {opt}")
         return Selection(True, OK, "debit_spread", expiry, lot, [near_leg, wing_leg])
 
+    if structure == "credit_spread":
+        # SELL the near leg (short premium), BUY the wing `spread_width` strikes
+        # further OTM as defined-risk protection — never naked. Bull-put sells PE
+        # and buys a lower PE; bear-call sells CE and buys a higher CE.
+        wing_strike = near_strike + otm_sign * spread_width * step
+        if wing_strike not in strikes_map:
+            return Selection(False, MISSING_LEG, detail=f"wing {wing_strike} {opt}")
+        short_leg = _leg(strikes_map[near_strike], near_strike, opt, "SELL")
+        long_leg = _leg(strikes_map[wing_strike], wing_strike, opt, "BUY")
+        if short_leg is None or long_leg is None:
+            return Selection(False, MISSING_LEG, detail=f"credit legs {near_strike}/{wing_strike} {opt}")
+        return Selection(True, OK, "credit_spread", expiry, lot, [short_leg, long_leg])
+
     return Selection(False, BAD_DIRECTION, detail=f"structure={structure}")
