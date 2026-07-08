@@ -77,7 +77,8 @@ class EODOptionsBacktest:
 
     def run(self, strategy: Dict[str, Any], start: Optional[str] = None,
             end: Optional[str] = None, starting_capital: float = 100_000.0,
-            params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            params: Optional[Dict[str, Any]] = None,
+            signals: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """`params` (optional) overrides config for edge-search sweeps:
         credit_tp / credit_sl (spread exit geometry), debit_tp / debit_sl,
         width (strikes), min_dte / max_dte (expiry choice), max_hold_days."""
@@ -111,38 +112,45 @@ class EODOptionsBacktest:
             return {"error": f"insufficient bhavcopy history for {u} ({len(candles)} days)",
                     "underlying": u, "structure": structure}
 
-        code = strategy.get("python_code")
-        if not code:
-            return {"error": "strategy has no python_code", "underlying": u, "structure": structure}
-        try:
-            signals = safe_run_strategy(code, candles)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": f"strategy code failed: {exc}", "underlying": u, "structure": structure}
-
         days = [c["date"][:10] for c in candles]
         close_by_day = {c["date"][:10]: c["close"] for c in candles}
-        sig_days = _signal_days_from(signals or [])
-        signal_eval = "whole_history"
 
-        # Live strategies commonly evaluate only the latest candle (`data[-1]`).
-        # A single whole-history call then emits only the final day's signal, which
-        # cannot open/close historically. Replay prefixes to backtest that style.
-        if len(sig_days) <= 1:
-            rolling_sig_days: Dict[str, Dict[str, Any]] = {}
-            for j in range(1, len(candles) - 1):
-                prefix = candles[: j + 1]
-                day = days[j]
-                try:
-                    prefix_signals = safe_run_strategy(code, prefix) or []
-                except Exception as exc:  # noqa: BLE001
-                    return {"error": f"strategy code failed during rolling evaluation on {day}: {exc}",
-                            "underlying": u, "structure": structure}
-                today = [s for s in prefix_signals if str(s.get("date"))[:10] == day]
-                if today:
-                    rolling_sig_days[day] = today[-1]
-            if len(rolling_sig_days) > len(sig_days):
-                sig_days = rolling_sig_days
-                signal_eval = "rolling_latest_window"
+        # RES-8: externally-generated signals (from a reconstructed historical
+        # market_context) can be injected directly, bypassing python_code — the
+        # same pricing/settlement engine then grades them identically.
+        if signals is not None:
+            sig_days = _signal_days_from(signals or [])
+            signal_eval = "injected"
+        else:
+            code = strategy.get("python_code")
+            if not code:
+                return {"error": "strategy has no python_code", "underlying": u, "structure": structure}
+            try:
+                signals = safe_run_strategy(code, candles)
+            except Exception as exc:  # noqa: BLE001
+                return {"error": f"strategy code failed: {exc}", "underlying": u, "structure": structure}
+            sig_days = _signal_days_from(signals or [])
+            signal_eval = "whole_history"
+
+            # Live strategies commonly evaluate only the latest candle (`data[-1]`).
+            # A single whole-history call then emits only the final day's signal, which
+            # cannot open/close historically. Replay prefixes to backtest that style.
+            if len(sig_days) <= 1:
+                rolling_sig_days: Dict[str, Dict[str, Any]] = {}
+                for j in range(1, len(candles) - 1):
+                    prefix = candles[: j + 1]
+                    day = days[j]
+                    try:
+                        prefix_signals = safe_run_strategy(code, prefix) or []
+                    except Exception as exc:  # noqa: BLE001
+                        return {"error": f"strategy code failed during rolling evaluation on {day}: {exc}",
+                                "underlying": u, "structure": structure}
+                    today = [s for s in prefix_signals if str(s.get("date"))[:10] == day]
+                    if today:
+                        rolling_sig_days[day] = today[-1]
+                if len(rolling_sig_days) > len(sig_days):
+                    sig_days = rolling_sig_days
+                    signal_eval = "rolling_latest_window"
 
         self._close_by = close_by_day   # index close per day, for cash-settled expiry payoff
         trades: List[Dict[str, Any]] = []
