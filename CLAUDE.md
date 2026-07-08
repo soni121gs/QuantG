@@ -792,7 +792,7 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 ✅ 4. Re-entry / multi-trade policy              ← DONE (core/reentry.py); wiring w/ RES-7
 ✅ 5. Side-rotation (CE vs PE from context)      ← DONE (core/side_selector.py); wiring w/ RES-7
 ✅ 6. Portfolio risk layer                       ← DONE (core/portfolio_risk.py); wiring w/ RES-7
-   7. The regime-conditioned seller scalper (assembles 2–6)
+✅ 7. Seller scalper BRAIN                        ← DONE (core/seller_scalper.py decide()); unactivated until RES-8 + founder
    8. OOS + forward-paper gate (proves #7 before any live pilot)
 ```
 Items 1–6 are reusable machinery; 7 is the strategy; 8 is the truth check. `CORE_ENGINE_LIVE_ENABLED=false` stays until founder-gated after #8.
