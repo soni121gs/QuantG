@@ -775,3 +775,43 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 - `bars_written` climbing during 09:15–15:30 IST,
 - `stale_feed_seconds` low (feed alive),
 - EOD `flush_day` `data_quality_gaps` reviewed — a `MISSING_n_MINUTES` gap is recorded, never back-filled with fabricated bars.
+
+---
+
+## 15. Real-Edge System Roadmap (RES) — founder-directed rebuild (added 2026-07-08)
+
+**This is the current active build program. It supersedes ad-hoc strategy work.** The founder rejected the existing book on 2026-07-08 after a −₹4,571 day: the book holds ONE position all day, has no intraday profit-lock (green round-tripped to red), and put two of three positions on the *same* NIFTY bull-put bet — QG-O1 even sold puts into a `TREND_DOWN` and lost ₹5.2k. The mandate: replace the "sell one spread and sit" machine with a **dynamic, regime-aware seller scalper** that banks profits, trails, re-enters, rotates CE/PE with the market, cuts losers fast — and is **validated on the OOS judge before it trades**.
+
+**Framing law:** there is no "foolproof" system. The target is **validated + cost-robust + risk-controlled**, not guaranteed. More intelligence ≠ a smarter LLM or more indicators — it is truthful costs, regime/vol conditioning, and portfolio risk. **Hermes stays the researcher/disciplinarian, NEVER the trader** (LLM narrates, code computes).
+
+### 15.1 The 8 tasks (build in dependency order)
+```
+✅ 1. Realistic cost model                       ← DONE 2026-07-08 (see §15.2)
+   2. Market Intelligence Engine (5 signals)     ← Phase 1, spec in §15.3
+   3. Dynamic exit engine (bank + trail + fast stop)
+   4. Re-entry / multi-trade loop (lift hold-all-day + anti-pyramid for scalps)
+   5. Side-rotation (consumes #2's chain skew: CE vs PE)
+   6. Portfolio risk layer (heat cap + correlation guard + daily-loss kill)
+   7. The regime-conditioned seller scalper (assembles 2–6)
+   8. OOS + forward-paper gate (proves #7 before any live pilot)
+```
+Items 1–6 are reusable machinery; 7 is the strategy; 8 is the truth check. `CORE_ENGINE_LIVE_ENABLED=false` stays until founder-gated after #8.
+
+### 15.2 Task 1 — realistic cost model (SHIPPED, commit 06b04c2)
+Paper credit spreads filled BOTH legs at raw MID premium with zero bid/ask crossing, on entry AND exit → paper P&L overstated every spread edge (worst for a frequent scalper). Fix in `core/spread_lifecycle.py`: `_apply_paper_slippage(price, side)` + `PAPER_SPREAD_SLIPPAGE_PCT` (env, default 0.03), applied per leg, **paper-only** (live fills are real, untouched): open `else` branch (SELL short below mid, BUY long above mid → recompute net_credit/max_loss); close `if not is_live` branch (BUY back short above mid, SELL long below mid → widens close_value). Mirrors what the OOS engines already do (eod 3%/leg, intraday 2%/side). NOTE: single-leg paper already had slippage via `execution_router._estimate_slippage`; only the spread path (the whole live book) was free. Consequence: **the existing book's paper P&L now reads worse — that is the illusion being removed, not a regression.**
+
+### 15.3 Task 2 — the Market Intelligence Engine (Phase 1 spec)
+Produce ONE `market_context` snapshot bundling five signals, **computable identically live (feed) AND historically (index_1m + option-minute stores)** — the non-negotiable rule, because a signal that can't be reconstructed historically can never be OOS-validated. ~60% of the base already exists (`market_regime.py`, `iv_regime.py`, `order_flow.py`).
+
+| # | Input | Role | Status | Build |
+|---|---|---|---|---|
+| A | **IV − realized_vol** | THE edge — sell only when implied vol is expensive vs delivered vol, and the gap is fat | 🆕 NEW (`iv_regime` has IV level only) | compute realized vol from index returns; emit signed, sized richness; sell-gate fires only when positive & above threshold |
+| B | **Regime (trend/range/high-vol)** | Gate + side-picker — seller edge lives in RANGE, dies in TREND | 🔧 FIX `market_regime` (price-only, thresholds fixed, flags NOT enforced) | add vol-state, vol-adjust thresholds, ENFORCE `short_entries_allowed` |
+| C | **Chain intel: OI walls, PCR, skew** | Which side is safer to sell (feeds #5) | 🆕 mostly NEW | read chain snapshot → richer/safer side |
+| D | **Top-of-book order-flow imbalance** | ENTRY FILTER only (no latency edge on ₹5k VPS) — avoid selling into a sweep | 🔌 WIRE (`order_flow.py` exists) | feed in "full" mode so bid/ask sizes populate; veto only, never trigger |
+| E | **Event calendar** | Fat-tail gate — don't sell premium into expiry-day/macro/results | 🆕 NEW | known-events table; flagged day → block/shrink seller entries |
+
+Plus **F** (the `market_context` bundle object, one interface both scalper and backtester read) and **G** (historical reconstruction of A–E). Recommended Phase-1 build order: **A → B → F → G → C → E → D**.
+
+### 15.4 Where the state lives
+Harness task tracker + `TASKS.md` (RES-1..RES-8 block) + memory `project_realedge_roadmap_costmodel_07_08.md`. Keep all four in sync when a task lands.

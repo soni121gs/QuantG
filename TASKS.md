@@ -7,7 +7,23 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked (prerequisi
 
 ---
 
-## CURRENT STATE & ACTIVE QUEUE (updated 2026-07-04)
+## CURRENT STATE & ACTIVE QUEUE (updated 2026-07-08)
+
+**▶▶ ACTIVE PROGRAM (2026-07-08) — Real-Edge System (RES) — founder-directed book rebuild. This is now the top priority.**
+The founder rejected the existing book after a −₹4,571 day (holds ONE position all day, no profit-lock so green round-tripped to red, two of three positions the SAME NIFTY bull-put bet, QG-O1 sold puts into a `TREND_DOWN` for −₹5.2k). Replace the "sell one spread and sit" machine with a **dynamic regime-aware seller scalper** (banks profits + trails, re-enters, rotates CE/PE, cuts losers fast) — **validated on the OOS judge before it trades.** Framing law: no "foolproof" — target is validated + cost-robust + risk-controlled. Hermes stays researcher/disciplinarian, NEVER the trader. Full spec: CLAUDE.md §15. Build 1→8 in order (1–6 = reusable machinery, 7 = the strategy, 8 = truth check).
+
+- `[x]` **RES-1** *(DONE 2026-07-08, `06b04c2`)* Realistic cost model — the truth layer. Paper credit spreads filled both legs at raw MID (zero bid/ask crossing) on entry AND exit → paper overstated every spread edge. `core/spread_lifecycle.py` `_apply_paper_slippage` + `PAPER_SPREAD_SLIPPAGE_PCT` (env, default 0.03), per-leg, paper-only (live untouched). Single-leg already had slippage via `execution_router`; only the spread path (whole book) was free. 29 spread/paper tests green. Existing book's paper P&L now reads worse — the illusion removed, not a regression.
+- `[ ]` **RES-2** Market Intelligence Engine (Phase 1) — ONE `market_context` snapshot, computable identically live AND historically (index_1m + option-minute stores), else it can't be OOS-validated. Five signals: **A** IV−realized_vol (THE edge, NEW — `iv_regime` has IV level only); **B** regime trend/range/high-vol that GATES + picks side (FIX `market_regime`: vol-state, vol-adjust thresholds, ENFORCE `short_entries_allowed`); **C** chain OI-walls/PCR/skew → safer side (feeds RES-5); **D** top-of-book order-flow imbalance = ENTRY FILTER only (WIRE `order_flow.py`, feed→full mode); **E** event calendar = fat-tail gate (NEW). Plus **F** context-bundle object + **G** historical reconstruction. Build order A→B→F→G→C→E→D. ~60% base exists (`market_regime`,`iv_regime`,`order_flow`).
+- `[ ]` **RES-3** Dynamic exit engine — bank-profit + trailing lock + fast stop (replaces fixed hold-to-EOD geometry; fixes green→red round-trip). ⛔ blocked-by RES-2.
+- `[ ]` **RES-4** Re-entry / multi-trade loop — strategy re-arms after exit; lift hold-all-day + anti-pyramid guard for scalp strategies. ⛔ RES-3.
+- `[ ]` **RES-5** Side-rotation — pick CE-side vs PE-side spread from RES-2 regime+skew each entry. ⛔ RES-2.
+- `[ ]` **RES-6** Portfolio risk layer — total-risk (heat) cap + correlation guard + daily-loss kill (stops 3 strategies being the same bet). ⛔ RES-4.
+- `[ ]` **RES-7** The regime-conditioned seller scalper — assembles RES-2..6. ⛔ RES-6.
+- `[ ]` **RES-8** OOS + forward-paper gate — run RES-7 through the cost-aware OOS judge, then 3–6 wks forward-paper before any founder-gated live pilot. `CORE_ENGINE_LIVE_ENABLED=false` until then. ⛔ RES-7.
+
+---
+
+## PRIOR STATE (updated 2026-07-04)
 
 **⭐ HEADLINE (2026-07-04): the data wall is broken, and the OOS verdict is in — the current book has NO EDGE.**
 2 years of real NSE option prices are ingested (`backend/scripts/bhavcopy_ingest.py`, 494 days, ~2.5M rows) and the EOD OOS validator (`backend/core/eod_options_backtest.py`) graded the whole book: **0 of 11 option strategies are positive out-of-sample**; a **72-config sweep found 0 winners**. Corroborates live ~−₹86/trade. This UNBLOCKS old `WR-71` (real options-chain backtest) and completes the data layer for HSI Stage 4. See CLAUDE.md §13.
