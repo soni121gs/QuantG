@@ -789,9 +789,9 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 ✅ 1. Realistic cost model                       ← DONE 2026-07-08 (see §15.2)
 ✅ 2. Market Intelligence Engine (5 signals)     ← ENGINE DONE (core/market_context.py); wiring lands w/ RES-7/8
 ✅ 3. Dynamic exit engine (bank + trail + fast stop) ← DONE (core/dynamic_exit.py, wired into position_monitor)
-   4. Re-entry / multi-trade loop (lift hold-all-day + anti-pyramid for scalps)
-   5. Side-rotation (consumes #2's chain skew: CE vs PE)
-   6. Portfolio risk layer (heat cap + correlation guard + daily-loss kill)
+✅ 4. Re-entry / multi-trade policy              ← DONE (core/reentry.py); wiring w/ RES-7
+✅ 5. Side-rotation (CE vs PE from context)      ← DONE (core/side_selector.py); wiring w/ RES-7
+✅ 6. Portfolio risk layer                       ← DONE (core/portfolio_risk.py); wiring w/ RES-7
    7. The regime-conditioned seller scalper (assembles 2–6)
    8. OOS + forward-paper gate (proves #7 before any live pilot)
 ```
