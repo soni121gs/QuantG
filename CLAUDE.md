@@ -787,8 +787,8 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 ### 15.1 The 8 tasks (build in dependency order)
 ```
 ✅ 1. Realistic cost model                       ← DONE 2026-07-08 (see §15.2)
-   2. Market Intelligence Engine (5 signals)     ← Phase 1, spec in §15.3
-   3. Dynamic exit engine (bank + trail + fast stop)
+✅ 2. Market Intelligence Engine (5 signals)     ← ENGINE DONE (core/market_context.py); wiring lands w/ RES-7/8
+✅ 3. Dynamic exit engine (bank + trail + fast stop) ← DONE (core/dynamic_exit.py, wired into position_monitor)
    4. Re-entry / multi-trade loop (lift hold-all-day + anti-pyramid for scalps)
    5. Side-rotation (consumes #2's chain skew: CE vs PE)
    6. Portfolio risk layer (heat cap + correlation guard + daily-loss kill)
