@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { Archive, RotateCcw, Shield, Play, Pause, HelpCircle, Zap, Code2 } from "lucide-react";
+import { Archive, RotateCcw, Shield, Play, Pause, HelpCircle, Code2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatINR } from "../../lib/api";
 import { reasonLabel } from "../../lib/reasonLabels";
@@ -85,34 +85,26 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
     }
   };
 
-  const isHft = s.name?.toLowerCase().includes("hft") || s.name?.toLowerCase().includes("upstox") || s.description?.toLowerCase().includes("hft") || s.description?.toLowerCase().includes("upstox");
-
   const speedLabel = () => {
-    if (s.name?.toLowerCase().includes("hft") || s.description?.toLowerCase().includes("hft")) {
-      return "⚡ HFT (1-Sec Tick)";
-    }
-    if (s.name?.toLowerCase().includes("scalper") || s.description?.toLowerCase().includes("scalper")) {
-      return "⚡ Scalper (30-Sec)";
+    const interval = cardOpts.candle_interval || s.candle_interval || "";
+    if (interval) {
+      return `${interval} bars`;
     }
     if (s.last_data_source && s.last_data_source.includes("5minute")) {
-      return "⏱️ Intraday (5-Min)";
+      return "5minute bars";
     }
-    return "📈 Swing (Daily)";
+    return s.visual_config?.risk?.strategy_category || "strategy";
   };
 
   const getBrokerStatus = () => {
-    return { name: "Upstox HFT", connected: upstoxStatus?.connected };
+    return { name: "Upstox", connected: upstoxStatus?.connected };
   };
 
   const broker = getBrokerStatus();
 
   return (
     <article
-      className={`qd-card qd-strategy-card flex flex-col gap-1.5 p-2.5 relative overflow-hidden ${
-        isHft
-          ? "border-[var(--qd-border-strong)]"
-          : "hover:border-[var(--qd-border-strong)]"
-      }`}
+      className="qd-card qd-strategy-card flex flex-col gap-1.5 p-2.5 relative overflow-hidden hover:border-[var(--qd-border-strong)]"
       data-testid={`strategy-${s.id}`}
     >
       {/* Header: title + status */}
@@ -130,11 +122,6 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
 
       {/* Tag badges */}
       <div className="flex items-center gap-1 flex-wrap relative z-10">
-        {isHft && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-[var(--qd-warn)] font-mono text-[10px] uppercase tracking-wider font-semibold">
-            <Zap size={9} /> Upstox
-          </span>
-        )}
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider ${s.mode === "live" ? "bg-rose-500/10 border border-rose-500/30 text-[var(--qd-loss)] animate-pulse" : "bg-cyan-500/10 border border-cyan-500/30 text-[var(--qd-cyan)]"}`}>
           {s.mode === "live" ? "LIVE" : "PAPER"}
         </span>

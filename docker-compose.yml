@@ -92,6 +92,7 @@ services:
       DEBIT_SPREAD_LONG_DELTA: "${DEBIT_SPREAD_LONG_DELTA:-0.65}"
     volumes:
       - backend-state:/data
+      - ./.git:/app/.git:ro
       - ./wiki:/app/wiki
       # Free EOD bhavcopy stores for the OOS backtester: bhavcopy_fo (index F&O) +
       # bhavcopy_cm (NSE equity EOD, EDR-05). Writable so the daily ingest cron

@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 # Ensure backend is in the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from routes.ai import _run_agent_tool, READ_ONLY_AGENT_TOOLS
+from routes.ai import (
+    _build_research_context,
+    _run_agent_tool,
+    ai_strategy_scores,
+    ai_training_context,
+    READ_ONLY_AGENT_TOOLS,
+)
 
 @pytest.mark.anyio
 async def test_run_agent_tool_envelope_fields():
@@ -44,6 +50,74 @@ async def test_run_agent_tool_envelope_fields():
     
     # Verify audit collection insert was called
     mock_db.agent_tool_audit.insert_one.assert_called_once()
+
+
+def test_build_research_context_marks_retired_domains():
+    context = _build_research_context([
+        {"symbol": "NIFTY", "status": "ok"},
+        {"symbol": "SENSEX", "status": "ok"},
+    ])
+
+    assert context["source"] == "routes.market.watchlist"
+    assert context["sample_n"] == 2
+    assert context["confidence"] == 1.0
+    assert context["stale"] is False
+    assert context["domain"]["broker"] == "Upstox V3"
+    assert "commodities" in context["domain"]["retired_domains"]
+
+
+@pytest.mark.anyio
+async def test_ai_strategy_scores_uses_current_market_context_not_commodities():
+    mock_db = MagicMock()
+    strategy_cursor = MagicMock()
+    strategy_cursor.to_list = AsyncMock(return_value=[
+        {"id": "strat-1", "name": "QG Test", "underlying": "NIFTY"}
+    ])
+    mock_db.strategies.find.return_value = strategy_cursor
+    mock_db.strategy_ai_scores.update_one = AsyncMock()
+
+    user = {"id": "test-trader-1"}
+
+    def fake_score(row, market_by_symbol):
+        assert "NIFTY" in market_by_symbol
+        return {"strategy_id": row["id"], "score": 72.0}
+
+    with patch("routes.ai.db", mock_db), \
+         patch("routes.ai._STRATEGY_SCORES_CACHE", {}), \
+         patch("routes.market.watchlist", AsyncMock(return_value=[{"symbol": "NIFTY", "status": "ok"}])), \
+         patch("routes.market.commodity_watchlist", side_effect=AssertionError("commodity context must not be called")), \
+         patch("server._market_score_for_strategy", side_effect=fake_score):
+        result = await ai_strategy_scores(user)
+
+    assert result["research_context"]["domain"]["broker"] == "Upstox V3"
+    assert result["retired_context"]["commodities"]["status"] == "retired"
+    assert result["scores"][0]["research_context"]["sample_n"] == 1
+    mock_db.strategy_ai_scores.update_one.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_ai_training_context_exposes_research_context_without_commodity_call():
+    mock_db = MagicMock()
+
+    strategy_cursor = MagicMock()
+    strategy_cursor.to_list = AsyncMock(return_value=[])
+    score_cursor = MagicMock()
+    score_cursor.sort.return_value = score_cursor
+    score_cursor.to_list = AsyncMock(return_value=[])
+    mock_db.strategies.find.return_value = strategy_cursor
+    mock_db.strategy_ai_scores.find.return_value = score_cursor
+
+    user = {"id": "test-trader-1"}
+
+    with patch("routes.ai.db", mock_db), \
+         patch("routes.market.watchlist", AsyncMock(return_value=[{"symbol": "BANKNIFTY", "status": "ok"}])), \
+         patch("routes.market.commodity_watchlist", side_effect=AssertionError("commodity context must not be called")):
+        result = await ai_training_context(user)
+
+    assert result["research_context"]["sample_n"] == 1
+    assert result["research_context"]["domain"]["markets"] == ["NSE", "BSE"]
+    assert result["commodities"] == []
+    assert result["retired_context"]["commodities"]["status"] == "retired"
 
 
 @pytest.mark.anyio

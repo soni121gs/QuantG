@@ -158,7 +158,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
           }}
           className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
         >
-          <option value="scalper">SCALPER — high frequency (cooldown ≤ 3m, ≥ 5 trades/day)</option>
+          <option value="scalper">SCALPER - intraday multi-entry (cooldown &lt;= 3m, &gt;= 5 trades/day)</option>
           <option value="intraday">INTRADAY — moderate frequency</option>
           <option value="swing">SWING — low frequency</option>
         </select>
@@ -230,7 +230,7 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
             onChange={(e) => setForm({ ...form, broker: e.target.value })}
             className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1.5 text-[11px] text-[var(--qd-text)]"
           >
-            <option value="upstox">Upstox (HFT Enabled)</option>
+            <option value="upstox">Upstox</option>
           </select>
         </div>
         <div>

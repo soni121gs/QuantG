@@ -337,35 +337,35 @@ export default function Strategies() {
             <Zap className="mx-auto mb-4 text-[var(--qd-accent)]" size={42} />
             <h2 className="mb-2 font-head text-2xl font-bold text-[var(--qd-text)]">No Option Strategies Found</h2>
             <p className="text-sm text-[var(--qd-text-2)] max-w-lg mx-auto mb-8">
-              Initialize your QuantG terminal with HFT and low-latency option-trading presets tailored specifically for Upstox.
+              Initialize your QuantG terminal with backend-gated index-option presets tailored for Upstox.
             </p>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left mb-8">
               <div className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4 transition-all hover:border-[var(--qd-border-strong)]">
                 <div className="flex items-center gap-2 mb-1">
                   <Zap size={14} className="text-orange-400" />
-                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">Upstox HFT Low-Latency Scalper</span>
+                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">QG Regime Seller Scalp</span>
                 </div>
                 <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
-                  Tick-based EMA crossover and ATR compression setups with direct order routing to `api-hft.upstox.com`.
+                  Regime-aware credit-spread entries with paper-forward validation gates.
                 </p>
               </div>
               <div className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4 transition-all hover:border-[var(--qd-border-strong)]">
                 <div className="flex items-center gap-2 mb-1">
                   <Zap size={14} className="text-orange-400" />
-                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">Upstox HFT Multi-Leg Neutral Straddle</span>
+                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">QG Theta Credit Spread</span>
                 </div>
                 <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
-                  Options multi-leg delta-neutral entry/exit preset utilizing historical price band squeezes.
+                  Defined-risk premium-selling templates with broker margin visibility.
                 </p>
               </div>
               <div className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4 transition-all hover:border-[var(--qd-border-strong)]">
                 <div className="flex items-center gap-2 mb-1">
                   <Zap size={14} className="text-indigo-400" />
-                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">Bank Nifty Volatility Breakout HFT</span>
+                  <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">OOS-Gated Research Book</span>
                 </div>
                 <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
-                  Fast Bank Nifty breakout model monitoring sudden volume surges and ATR threshold violations.
+                  Archived and active rows stay separated so stale strategies do not auto-wake.
                 </p>
               </div>
               <div className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-4 transition-all hover:border-[var(--qd-border-strong)]">
@@ -374,7 +374,7 @@ export default function Strategies() {
                   <span className="font-mono text-xs font-semibold text-[var(--qd-text)]">NIFTY Low-Latency Scalper</span>
                 </div>
                 <p className="text-xs text-[var(--qd-text-3)] leading-relaxed">
-                  High-frequency options buying relying on short-term VWAP standard deviation envelope breakouts.
+                  Intraday option hypotheses stay paper-only until the minute-data judge passes them.
                 </p>
               </div>
             </div>

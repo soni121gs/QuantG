@@ -96,7 +96,7 @@ export default function Auth({ mode: initialMode = "login" }) {
           </div>
 
           <p className="text-xs text-[var(--qd-text-3)] font-mono leading-normal">
-            The owner has been notified. Once approved, your default HFT strategies will be seeded and your login unlocked.
+            The owner has been notified. Once approved, your paper trading workspace will be seeded and your login unlocked.
           </p>
 
           <button
@@ -143,10 +143,10 @@ export default function Auth({ mode: initialMode = "login" }) {
             </div>
             <h1 className="font-head text-4xl lg:text-5xl font-black tracking-tight text-white leading-tight">
               Institutional-grade <br />
-              <span className="cyber-gradient-text">HFT Trading Terminal.</span>
+              <span className="cyber-gradient-text">Options Trading Terminal.</span>
             </h1>
             <p className="text-base text-[var(--qd-text-2)] leading-relaxed">
-              A high-precision, low-latency execution desk tailored for index options and commodities, routed through Upstox API v2.
+              A broker-gated execution desk tailored for NSE/BSE index options, routed through Upstox V3 market data and REST orders.
             </p>
           </div>
 
@@ -154,13 +154,13 @@ export default function Auth({ mode: initialMode = "login" }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="qd-card-tight p-4 bg-[var(--qd-surface)]/40 hover:bg-[var(--qd-surface-2)]/60">
               <div className="text-[var(--qd-cyan)] mb-2"><Zap size={20} /></div>
-              <h3 className="text-white font-bold text-sm">Upstox HFT Pipeline</h3>
-              <p className="text-xs text-[var(--qd-text-3)] mt-1">Direct API integration utilizing low-latency order endpoints to maximize execution speed.</p>
+              <h3 className="text-white font-bold text-sm">Upstox V3 Pipeline</h3>
+              <p className="text-xs text-[var(--qd-text-3)] mt-1">Real market-data and order-routing integration with backend live gates.</p>
             </div>
             <div className="qd-card-tight p-4 bg-[var(--qd-surface)]/40 hover:bg-[var(--qd-surface-2)]/60">
               <div className="text-[var(--qd-accent)] mb-2"><TrendingUp size={20} /></div>
-              <h3 className="text-white font-bold text-sm">Low Capital Strategies</h3>
-              <p className="text-xs text-[var(--qd-text-3)] mt-1">Premium options strategies for NIFTY, SENSEX, Crude & Gas, optimized for INR 10,000–20,000 capital.</p>
+              <h3 className="text-white font-bold text-sm">Validated Strategy Book</h3>
+              <p className="text-xs text-[var(--qd-text-3)] mt-1">Defined-risk NIFTY and SENSEX options systems with explicit sizing, costs, and paper-forward gates.</p>
             </div>
             <div className="qd-card-tight p-4 bg-[var(--qd-surface)]/40 hover:bg-[var(--qd-surface-2)]/60">
               <div className="text-emerald-400 mb-2"><BarChart2 size={20} /></div>

@@ -80,6 +80,9 @@ READ_ONLY_AGENT_TOOLS = [
     "get_trade_attribution",
     "get_hermes_brain_health",
     "get_hermes_oos_validation",
+    "get_research_hypotheses",
+    "get_research_critique",
+    "get_research_desk",
     "get_edge_lab_snapshot",
     "get_intraday_oos",
 ]
@@ -147,6 +150,63 @@ def _clip_json(value: Any, limit: int = 24000) -> Any:
         "truncated": True,
         "limit_chars": limit,
         "preview": text[:limit],
+    }
+
+
+def _build_research_context(
+    market_rows: List[Dict[str, Any]],
+    *,
+    source: str = "routes.market.watchlist",
+    limitations: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    rows = market_rows or []
+    stale_rows = [
+        row for row in rows
+        if row.get("stale") is True
+        or str(row.get("status") or "").lower() in {"stale", "unavailable", "error"}
+    ]
+    sample_n = len(rows)
+    confidence = 1.0
+    if sample_n == 0:
+        confidence = 0.0
+    elif stale_rows:
+        confidence = max(0.3, 1.0 - (len(stale_rows) / sample_n))
+
+    return {
+        "source": source,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "sample_n": sample_n,
+        "confidence": round(confidence, 3),
+        "stale": bool(stale_rows) or sample_n == 0,
+        "domain": {
+            "broker": "Upstox V3",
+            "markets": ["NSE", "BSE"],
+            "asset_classes": ["index_options", "cash_equity"],
+            "retired_domains": ["commodities", "MCX", "HFT"],
+        },
+        "limitations": limitations or [
+            "Market context is current-domain only: NSE/BSE index options and NSE cash equity.",
+            "Commodity/MCX/HFT-era context is retired and intentionally excluded from Hermes research.",
+            "LLM analysis may explain context, but OOS validators and forward-paper evidence decide strategy truth.",
+        ],
+    }
+
+
+async def _load_current_market_context(user: Dict[str, Any]) -> Dict[str, Any]:
+    from routes.market import watchlist
+
+    market_rows = await watchlist(user=user)
+    return {
+        "rows": market_rows,
+        "by_symbol": {row.get("symbol"): row for row in market_rows if row.get("symbol")},
+        "research_context": _build_research_context(market_rows),
+        "retired_context": {
+            "commodities": {
+                "status": "retired",
+                "rows": [],
+                "reason": "QuantG current trading/research domain is Upstox V3 NSE/BSE options and equities; commodity_watchlist is not a Hermes truth source.",
+            }
+        },
     }
 
 
@@ -495,6 +555,28 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 warnings.append("No OOS tests have run yet - held-out evidence is still accumulating.")
                 confidence = 0.5
             source = "db.hermes_hypothesis_tests"
+        elif name in ("get_research_hypotheses", "get_research_critique", "get_research_desk"):
+            rows = await db.research_hypotheses.find(
+                {"user_id": user["id"]},
+                {"_id": 0},
+            ).sort("updated_at", -1).to_list(10)
+            if name == "get_research_hypotheses":
+                data = {"hypotheses": rows}
+            elif name == "get_research_critique":
+                from core.research_critic import critique_research_answer
+                data = critique_research_answer(query or "research review", rows)
+            else:
+                from core.research_agents import run_research_desk
+                data = {
+                    "desk_reviews": [
+                        run_research_desk(row, evidence=row.get("evidence_links") or [])
+                        for row in rows[:5]
+                    ]
+                }
+            if not rows:
+                warnings.append("No research hypotheses in the HIRB ledger yet.")
+                confidence = 0.5
+            source = "db.research_hypotheses / core.hirb"
         elif name == "get_recent_alerts":
             data = await db.notifications.find(
                 {"user_id": user["id"]},
@@ -542,13 +624,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                         data = {"error": f"Strategy {strategy_id} not found."}
                     else:
                         vc = strat_doc.get("visual_config") or {}
-                        from routes.market import watchlist, commodity_watchlist
                         from server import _market_score_for_strategy
                         try:
-                            m_rows = await watchlist(user=user)
-                            c_rows = await commodity_watchlist(user=user)
-                            market_by_symbol = {r["symbol"]: r for r in [*m_rows, *c_rows]}
-                            regime_fit_res = _market_score_for_strategy(strat_doc, market_by_symbol)
+                            market_context = await _load_current_market_context(user)
+                            regime_fit_res = _market_score_for_strategy(strat_doc, market_context["by_symbol"])
+                            regime_fit_res["research_context"] = market_context["research_context"]
                         except Exception as reg_exc:
                             regime_fit_res = {"score": 50.0, "reason": f"Failed to compute: {reg_exc}"}
                         
@@ -570,13 +650,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                             "regime_fit": regime_fit_res
                         }
                 else:
-                    from routes.market import watchlist, commodity_watchlist
                     from server import _market_score_for_strategy
                     try:
-                        m_rows = await watchlist(user=user)
-                        c_rows = await commodity_watchlist(user=user)
-                        market_by_symbol = {r["symbol"]: r for r in [*m_rows, *c_rows]}
-                        regime_fit_res = _market_score_for_strategy(strat_doc or {}, market_by_symbol)
+                        market_context = await _load_current_market_context(user)
+                        regime_fit_res = _market_score_for_strategy(strat_doc or {}, market_context["by_symbol"])
+                        regime_fit_res["research_context"] = market_context["research_context"]
                     except Exception as reg_exc:
                         regime_fit_res = {"score": 50.0, "reason": f"Failed to compute: {reg_exc}"}
                         
@@ -1016,6 +1094,9 @@ TOOL_SPECS: Dict[str, str] = {
     "get_trade_attribution": "Causal 'why' per closed trade: regime/bias/structure/hold/exit-reason/R-multiple.",
     "get_hermes_brain_health": "Hermes's scored lessons: dimension/bucket, hit-rate, confidence, OOS-passed flag.",
     "get_hermes_oos_validation": "Hypothesis-test OOS summary from db.hermes_hypothesis_tests.",
+    "get_research_hypotheses": "HIRB research hypothesis ledger: structured ideas, evidence links, and verdicts.",
+    "get_research_critique": "HIRB verifier/critic: what is proven, missing, contradictory, or falsifiable.",
+    "get_research_desk": "HIRB multi-agent research desk: regime, volatility, flow, risk, execution-cost, skeptic, and founder-briefing reviews.",
     "get_edge_lab_snapshot": "EOD held-to-theta walk-forward OOS: per-strategy edge verdicts, short-vol base rates, config sweeps, data coverage. Answers 'does strategy X have an out-of-sample edge?'.",
     "get_intraday_oos": "Intraday 1-minute OOS verdicts for option BUYERS/scalps (QG-O5..O10).",
 }
@@ -1115,6 +1196,7 @@ You are equipped with a skill pack of standard playbooks. When the user asks que
 - `quantg-eod-report`: Playbook to analyze session close metrics. Reconcile daily realized/unrealized P&L, best/worst strategies, and trades count using `get_daily_report` and `get_risk_snapshot`.
 - `quantg-backtest-review`: Playbook to review backtests. Analyze expectancies, win-rates, profit factors, and drawdowns via `get_backtest_summary`. You can guide the user to run customized backtests by providing the strategy ID and date range (YYYY-MM-DD) in their query.
 - `quantg-edge-lab`: Playbook to answer "does this strategy have a REAL edge?" — the governing question of the current discipline (CLAUDE.md §13/§14). Use `get_edge_lab_snapshot` for the EOD held-to-theta walk-forward: per-strategy OOS verdicts (CANDIDATE_EDGE / FRAGILE / NO_EDGE_NEGATIVE / INSUFFICIENT_DATA), short-vol base rates, config sweeps, and data coverage. Use `get_intraday_oos` for intraday 1-min option BUYERS (QG-O5..O10). LAW: nothing is "working" on paper P&L alone — an edge requires 30+ trades AND positive out-of-sample. Grade IDEAS on OOS expectancy, not daily paper P&L (noise). Never tune a NO_EDGE strategy — that is the treadmill; archive it and design a new hypothesis that passes the validator.
+- `quantg-hirb-research-brain`: Playbook for hypotheses, proof, falsification, and research memory. Use `get_research_hypotheses`, `get_research_critique`, and `get_research_desk`. HARD LAW: never call an idea proven unless HIRB returns `can_call_proven=true` or the evidence explicitly shows CANDIDATE_EDGE with adequate sample, OOS/walk-forward evidence, and cost/forward-paper context. If HIRB says missing data, fragile, rejected, or insufficient, say that plainly and list the next test.
 - `quantg-vps-deploy-check`: Playbook to check the system's operational deployment. Synthesize `get_live_readiness`, `get_logs_errors`, and `get_recent_alerts`.
 - `quantg-incident-postmortem`: Playbook to compile incident postmortem timelines. Synthesize `get_recent_alerts`, `get_logs_errors`, `get_today_fills`, `get_core_events`, and `get_agent_tool_audit`. Trace order/fill logs, system warnings, and error timelines. Compile a clean markdown table of events leading up to the outage, outlining root cause and recovery details. Guide the user to draft a postmortem using the `draft_incident_report` action.
 
@@ -1389,6 +1471,8 @@ def classify_playbook_by_query(query: str) -> List[str]:
                             "edge lab", "base rate", "base-rate", "short vol", "short-vol",
                             "coverage", "expectancy", "held to expiry", "hold to expiry"]):
         matched_tools.update(playbook_tools["edge-lab"])
+        matched_tools.add("get_research_hypotheses")
+        matched_tools.add("get_research_critique")
         has_matches = True
 
     # IMD intraday 1-min OOS (CLAUDE.md §14): option buyers / scalps QG-O5..O10.
@@ -1448,6 +1532,16 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "what has hermes learned", "confidence", "decayed",
     ]):
         matched_tools.add("get_hermes_brain_health")
+        has_matches = True
+
+    if any(w in q for w in [
+        "hypothesis", "hypotheses", "research ledger", "research desk", "prove",
+        "proven", "unproven", "falsify", "falsification", "critic", "critique",
+        "verifier", "verification", "what is missing", "missing data",
+    ]):
+        matched_tools.add("get_research_hypotheses")
+        matched_tools.add("get_research_critique")
+        matched_tools.add("get_research_desk")
         has_matches = True
 
     if not has_matches:
@@ -1946,15 +2040,13 @@ async def ai_strategy_scores(user=Depends(get_current_user)):
     rows = await db.strategies.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(500)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from routes.market import watchlist, commodity_watchlist
     from server import _market_score_for_strategy
     
-    market_rows = await watchlist(user=user)
-    commodity_rows = await commodity_watchlist(user=user)
-    market_by_symbol = {r["symbol"]: r for r in [*market_rows, *commodity_rows]}
-    scores = [_market_score_for_strategy(row, market_by_symbol) for row in rows]
+    market_context = await _load_current_market_context(user)
+    scores = [_market_score_for_strategy(row, market_context["by_symbol"]) for row in rows]
     for score in scores:
         score["user_id"] = user_id
+        score["research_context"] = market_context["research_context"]
         await db.strategy_ai_scores.update_one(
             {"strategy_id": score["strategy_id"], "user_id": user_id},
             {"$set": score},
@@ -1963,6 +2055,8 @@ async def ai_strategy_scores(user=Depends(get_current_user)):
     result = {
         "scores": [{k: v for k, v in score.items() if k != "user_id"} for score in scores],
         "provider": "gemini-context" if os.environ.get("GEMINI_API_KEY") else "local-market-structure",
+        "research_context": market_context["research_context"],
+        "retired_context": market_context["retired_context"],
     }
     _STRATEGY_SCORES_CACHE[user_id] = {
         "timestamp": now,
@@ -1976,11 +2070,11 @@ async def ai_market_analysis(user=Depends(get_current_user)):
     strategies = await db.strategies.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).to_list(50)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from routes.market import watchlist
     from server import _market_score_for_strategy, _google_ai_reply
     
-    market_rows = await watchlist(user=user)
-    scores = [_market_score_for_strategy(row, {r["symbol"]: r for r in market_rows}) for row in strategies]
+    market_context = await _load_current_market_context(user)
+    market_rows = market_context["rows"]
+    scores = [_market_score_for_strategy(row, market_context["by_symbol"]) for row in strategies]
     prompt = (
         "Analyze this QuantG market structure snapshot for educational risk context only. "
         "Mention NIFTY/BANKNIFTY/SENSEX when relevant. "
@@ -1994,6 +2088,7 @@ async def ai_market_analysis(user=Depends(get_current_user)):
         "provider": "google-ai-studio" if os.environ.get("GEMINI_API_KEY") else "local-fallback",
         "content": await _google_ai_reply(prompt, []),
         "scores": scores,
+        "research_context": market_context["research_context"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2004,14 +2099,16 @@ async def ai_training_context(user=Depends(get_current_user)):
     recent_scores = await db.strategy_ai_scores.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("generated_at", -1).to_list(100)
     
     # Runtime dynamic imports to avoid circular dependencies
-    from routes.market import watchlist, commodity_watchlist
     from server import _strategy_out
+    market_context = await _load_current_market_context(user)
     
     return {
         "purpose": "Context-feed payload for Gemini prompts and offline fine-tuning experiments.",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "market": await watchlist(user=user),
-        "commodities": await commodity_watchlist(user=user),
+        "research_context": market_context["research_context"],
+        "market": market_context["rows"],
+        "commodities": market_context["retired_context"]["commodities"]["rows"],
+        "retired_context": market_context["retired_context"],
         "strategies": [_strategy_out(row).model_dump() for row in strategies],
         "recent_ai_scores": recent_scores,
     }

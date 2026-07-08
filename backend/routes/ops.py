@@ -18,6 +18,52 @@ class OpsActionReq(BaseModel):
     confirm: Optional[bool] = False
 
 
+class ResearchHypothesisReq(BaseModel):
+    hypothesis: str
+    market_premise: Optional[str] = None
+    instrument: Optional[str] = None
+    timeframe: Optional[str] = None
+    entry_exit_idea: Optional[str] = None
+    data_window: Optional[Dict[str, Any]] = None
+    null_hypothesis: Optional[str] = None
+    expected_edge: Optional[Dict[str, Any]] = None
+    cost_model: Optional[Dict[str, Any]] = None
+    risk_thesis: Optional[str] = None
+    failure_modes: Optional[List[str]] = None
+    evidence_links: Optional[List[Dict[str, Any]]] = None
+    research_context: Optional[Dict[str, Any]] = None
+    tags: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+class ResearchEvidenceReq(BaseModel):
+    source: str
+    summary: Optional[str] = ""
+    metrics: Optional[Dict[str, Any]] = None
+    sample_n: Optional[int] = 0
+    confidence: Optional[float] = 0.0
+    limitations: Optional[List[str]] = None
+
+
+class ResearchVerdictReq(BaseModel):
+    status: str
+    summary: Optional[str] = ""
+    confidence: Optional[float] = 0.0
+    sample_n: Optional[int] = 0
+    metrics: Optional[Dict[str, Any]] = None
+    limitations: Optional[List[str]] = None
+
+
+class FrozenEvidenceReq(BaseModel):
+    source_type: str
+    content: Any
+    source_uri: Optional[str] = None
+    observed_at: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+
 RECONCILIATION_RESOLVE_PHRASE = "RESOLVE_RECONCILIATION_AFTER_MANUAL_BROKER_CHECK"
 
 
@@ -195,6 +241,99 @@ async def ops_run_hermes_historical_validation(underlying: str = "NIFTY", user=D
     except Exception as exc:  # noqa: BLE001
         result["advice_refresh_error"] = str(exc)
     return result
+
+
+@router.post("/research/hypotheses")
+async def ops_create_research_hypothesis(req: ResearchHypothesisReq, user=Depends(get_current_user)):
+    from core.research_ledger import create_hypothesis
+
+    try:
+        return await create_hypothesis(db, user["id"], req.model_dump(exclude_none=True), created_by="operator")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/research/hypotheses")
+async def ops_list_research_hypotheses(
+    status: Optional[str] = None,
+    limit: int = 50,
+    user=Depends(get_current_user),
+):
+    from core.research_ledger import list_hypotheses
+
+    return await list_hypotheses(db, user["id"], status=status, limit=limit)
+
+
+@router.get("/research/hypotheses/{hypothesis_id}")
+async def ops_get_research_hypothesis(hypothesis_id: str, user=Depends(get_current_user)):
+    from core.research_ledger import get_hypothesis
+
+    try:
+        return await get_hypothesis(db, user["id"], hypothesis_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Research hypothesis not found")
+
+
+@router.post("/research/hypotheses/{hypothesis_id}/evidence")
+async def ops_attach_research_evidence(
+    hypothesis_id: str,
+    req: ResearchEvidenceReq,
+    user=Depends(get_current_user),
+):
+    from core.research_ledger import attach_evidence
+
+    try:
+        return await attach_evidence(db, user["id"], hypothesis_id, req.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Research hypothesis not found")
+
+
+@router.post("/research/hypotheses/{hypothesis_id}/verdict")
+async def ops_set_research_verdict(
+    hypothesis_id: str,
+    req: ResearchVerdictReq,
+    user=Depends(get_current_user),
+):
+    from core.research_ledger import set_verdict
+
+    try:
+        return await set_verdict(db, user["id"], hypothesis_id, req.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Research hypothesis not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/research/evidence")
+async def ops_freeze_research_evidence(req: FrozenEvidenceReq, user=Depends(get_current_user)):
+    from core.evidence_store import freeze_evidence
+
+    try:
+        return await freeze_evidence(db, user["id"], req.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/research/evidence")
+async def ops_list_research_evidence(
+    source_type: Optional[str] = None,
+    as_of: Optional[str] = None,
+    limit: int = 50,
+    user=Depends(get_current_user),
+):
+    from core.evidence_store import list_evidence
+
+    return await list_evidence(db, user["id"], source_type=source_type, as_of=as_of, limit=limit)
+
+
+@router.get("/research/evidence/{evidence_snapshot_id}")
+async def ops_get_research_evidence(evidence_snapshot_id: str, user=Depends(get_current_user)):
+    from core.evidence_store import get_evidence
+
+    try:
+        return await get_evidence(db, user["id"], evidence_snapshot_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Frozen evidence snapshot not found")
 
 
 # FE-03 (2026-07-04): the old in-sample option-priced backtester (/options-backtest

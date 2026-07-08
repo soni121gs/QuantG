@@ -376,7 +376,7 @@ export default function OpsConsole() {
       {/* CORE DESK GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         
-        {/* LEFT PANEL: UPSTOX HFT & TELEMETRY */}
+        {/* LEFT PANEL: UPSTOX FEED & TELEMETRY */}
         <div className="lg:col-span-8 space-y-5">
           
           <BrokerStatusPanel
@@ -661,5 +661,4 @@ const ChecklistItem = ({ label, checked, details }) => (
     <span className="text-[11px] text-[var(--qd-text-3)] font-mono text-right truncate max-w-[120px]">{details}</span>
   </div>
 );
-
 

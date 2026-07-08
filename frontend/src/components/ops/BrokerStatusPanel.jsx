@@ -48,15 +48,15 @@ export default function BrokerStatusPanel({ data, busy, onUpstoxLogin }) {
             <Zap size={18} className="animate-pulse" />
           </div>
           <div>
-            <h2 className="font-head text-base font-bold text-white">Upstox API v2 HFT & Telemetry</h2>
-            <p className="text-[11px] text-[var(--qd-text-3)] font-mono">High-Frequency Order Routing Engine</p>
+            <h2 className="font-head text-base font-bold text-white">Upstox V3 Feed & Broker Telemetry</h2>
+            <p className="text-[11px] text-[var(--qd-text-3)] font-mono">Backend-gated market data and order-routing state</p>
           </div>
         </div>
 
         {upstox.connected ? (
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono font-semibold text-[var(--qd-profit)] bg-[rgba(0,230,118,0.1)] border border-[var(--qd-profit)]/30 rounded-full">
-              <CheckCircle2 size={12} /> {upstox.feed_running ? "HFT READY" : "AUTH OK / FEED STOPPED"}
+              <CheckCircle2 size={12} /> {upstox.feed_running ? "FEED READY" : "AUTH OK / FEED STOPPED"}
             </span>
             <button 
               onClick={onUpstoxLogin}
@@ -85,7 +85,7 @@ export default function BrokerStatusPanel({ data, busy, onUpstoxLogin }) {
           status={upstox.connected ? "success" : upstox.keys_saved ? "warn" : "error"}
         />
         <TelemetryMetric 
-          label="HFT Dispatcher" 
+          label="V3 Tick Feed"
           value={upstox.feed_running ? "ACTIVE PULSE" : "STOPPED"} 
           desc={feedState.last_error || upstox.reason || "Websocket feed state"}
           status={upstox.feed_running ? "success" : "error"}
@@ -114,11 +114,11 @@ export default function BrokerStatusPanel({ data, busy, onUpstoxLogin }) {
         </div>
         <div className="flex justify-between items-center text-[var(--qd-text-2)]">
           <span>Broker Gateway Provider</span>
-          <span className="text-white">Upstox API v2 REST/WS Gateway</span>
+          <span className="text-white">Upstox V3 WS + REST Gateway</span>
         </div>
         <div className="flex justify-between items-center text-[var(--qd-text-2)]">
           <span>API Endpoint Gateway</span>
-          <span className="text-blue-400 select-all font-semibold">https://api-hft.upstox.com</span>
+          <span className="text-blue-400 select-all font-semibold">api.upstox.com</span>
         </div>
         <div className="flex justify-between items-center text-[var(--qd-text-2)]">
           <span>Encrypted Access Token</span>

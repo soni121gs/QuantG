@@ -148,16 +148,32 @@ SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
 APP_VERSION = "12.0"
 START_TIME = datetime.now(timezone.utc)
 
+def _read_git_metadata_from_dir(git_dir: Path) -> tuple[Optional[str], Optional[str]]:
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            commit = (git_dir / ref).read_text(encoding="utf-8").strip()
+            return commit, ref.rsplit("/", 1)[-1]
+        if head:
+            return head, "detached"
+    except Exception:
+        return None, None
+    return None, None
+
 def get_git_info():
     import subprocess
+    env_commit = os.environ.get("GIT_COMMIT") or os.environ.get("SOURCE_COMMIT") or os.environ.get("RENDER_GIT_COMMIT")
+    env_branch = os.environ.get("GIT_BRANCH") or os.environ.get("SOURCE_BRANCH")
+    file_commit, file_branch = _read_git_metadata_from_dir(ROOT_DIR / ".git")
     try:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
     except Exception:
-        commit = "unknown"
+        commit = env_commit or file_commit or "unknown"
     try:
         branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
     except Exception:
-        branch = "unknown"
+        branch = env_branch or file_branch or "unknown"
     try:
         status = subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
         dirty = bool(status)

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { Bot, Send, Plus, PanelRight, PanelRightClose, PanelLeft, PanelLeftClose, X, ShieldCheck } from "lucide-react";
+import { Bot, Send, Plus, PanelRight, PanelRightClose, PanelLeft, PanelLeftClose, X, ShieldCheck, Microscope, RefreshCw, AlertTriangle, CheckCircle2, FlaskConical } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
@@ -29,8 +29,10 @@ export default function AIBot() {
   const [sessions, setSessions] = useState(loadSessions);
   const [sessionId, setSessionId] = useState(() => loadSessions()[0]?.id || newSessionId());
   const [railOpen, setRailOpen] = useState(false); // mobile context drawer
-  const [activeTab, setActiveTab] = useState("chat"); // "chat" or "approvals"
+  const [activeTab, setActiveTab] = useState("chat"); // "chat", "approvals", or "research"
   const [pendingActions, setPendingActions] = useState([]);
+  const [researchRows, setResearchRows] = useState([]);
+  const [researchLoading, setResearchLoading] = useState(false);
 
   // Collapsible sidebar states for desktop
   const [showHistory, setShowHistory] = useState(true);
@@ -53,10 +55,23 @@ export default function AIBot() {
     } catch {}
   };
 
+  const fetchResearchLedger = async () => {
+    setResearchLoading(true);
+    try {
+      const r = await api.get("/ops/research/hypotheses?limit=50");
+      setResearchRows(r.data || []);
+    } catch {
+      setResearchRows([]);
+    } finally {
+      setResearchLoading(false);
+    }
+  };
+
   useEffect(() => {
     api.get("/ai/status").then((r) => setAiStatus(r.data)).catch(() => {});
     fetchProfile();
     fetchPendingActions();
+    fetchResearchLedger();
     if (loadSessions().length === 0) {
       const seed = [{ id: sessionId, title: "New chat", updatedAt: Date.now() }];
       setSessions(seed);
@@ -259,6 +274,22 @@ export default function AIBot() {
                     </span>
                   )}
                 </button>
+                <button
+                  onClick={() => { setActiveTab("research"); fetchResearchLedger(); }}
+                  className={`flex items-center gap-1.5 rounded-[var(--qd-radius-sm)] border px-2.5 py-1.5 font-head text-xs font-semibold transition-colors cursor-pointer ${
+                    activeTab === "research"
+                      ? "border-[var(--qd-border-strong)] bg-[var(--qd-surface)] text-[var(--qd-text)]"
+                      : "border-transparent text-[var(--qd-text-3)] hover:border-[var(--qd-border)] hover:text-[var(--qd-text-2)]"
+                  }`}
+                >
+                  <Microscope size={13} />
+                  Research
+                  {researchRows.length > 0 && (
+                    <span className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-[var(--qd-accent)] text-[9px] font-bold text-white px-1 shadow-sm">
+                      {researchRows.length}
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
             
@@ -357,7 +388,7 @@ export default function AIBot() {
                 </div>
               </div>
             </>
-          ) : (
+          ) : activeTab === "approvals" ? (
             /* Approvals Queue */
             <div className="flex-1 space-y-4 overflow-y-auto p-3 md:p-4" data-testid="approvals-queue">
               {pendingActions.length === 0 ? (
@@ -439,6 +470,13 @@ export default function AIBot() {
                 </div>
               )}
             </div>
+          ) : (
+            <ResearchLabPanel
+              rows={researchRows}
+              loading={researchLoading}
+              onRefresh={fetchResearchLedger}
+              onAsk={send}
+            />
           )}
         </div>
 
@@ -471,6 +509,153 @@ export default function AIBot() {
     </div>
   );
 }
+
+const verdictTone = (status) => {
+  const s = String(status || "UNTESTED").toUpperCase();
+  if (s === "CANDIDATE_EDGE") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-500";
+  if (s === "FRAGILE" || s === "INSUFFICIENT_DATA") return "border-amber-500/30 bg-amber-500/10 text-amber-500";
+  if (s === "NO_EDGE_NEGATIVE" || s === "REJECTED") return "border-rose-500/30 bg-rose-500/10 text-rose-500";
+  return "border-[var(--qd-border)] bg-[var(--qd-surface-3)] text-[var(--qd-text-2)]";
+};
+
+const statusIcon = (status) => {
+  const s = String(status || "").toUpperCase();
+  if (s === "CANDIDATE_EDGE") return <CheckCircle2 size={13} />;
+  if (s === "FRAGILE" || s === "INSUFFICIENT_DATA") return <AlertTriangle size={13} />;
+  return <FlaskConical size={13} />;
+};
+
+const ResearchLabPanel = ({ rows, loading, onRefresh, onAsk }) => {
+  const total = rows.length;
+  const validated = rows.filter((r) => r.verdict?.status === "CANDIDATE_EDGE").length;
+  const watch = rows.filter((r) => ["FRAGILE", "INSUFFICIENT_DATA"].includes(r.verdict?.status)).length;
+  const rejected = rows.filter((r) => ["NO_EDGE_NEGATIVE", "REJECTED"].includes(r.verdict?.status)).length;
+
+  return (
+    <div className="flex-1 overflow-y-auto p-3 md:p-4" data-testid="research-lab">
+      <div className="mb-3 flex flex-col gap-3 border-b border-[var(--qd-border)] pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Microscope size={16} className="text-[var(--qd-accent)]" />
+            <h2 className="font-head text-sm font-semibold text-[var(--qd-text)]">Hermes Research Lab</h2>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+            <span>{total} hypotheses</span>
+            <span>{validated} validated</span>
+            <span>{watch} watch</span>
+            <span>{rejected} rejected</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="inline-flex items-center justify-center gap-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)] disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          Refresh
+        </button>
+      </div>
+
+      {loading && rows.length === 0 ? (
+        <div className="grid gap-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-28 animate-pulse rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)]" />
+          ))}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="flex min-h-[48vh] flex-col items-center justify-center text-center">
+          <Microscope size={40} className="text-[var(--qd-text-3)]" />
+          <p className="mt-4 font-head text-base font-bold text-[var(--qd-text)]">No research hypotheses yet</p>
+          <p className="mt-1 max-w-xl text-sm text-[var(--qd-text-2)]">
+            Hermes will show structured hypotheses here once the research ledger has entries from Edge Lab, OOS studies, or manually saved research ideas.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {rows.map((row) => {
+            const verdict = row.verdict || {};
+            const evidence = row.evidence_links || [];
+            const limitations = verdict.limitations || [];
+            return (
+              <div key={row.hypothesis_id} className="rounded-[var(--qd-radius)] border border-[var(--qd-border)] bg-[var(--qd-surface)] p-3 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider ${verdictTone(verdict.status)}`}>
+                        {statusIcon(verdict.status)}
+                        {verdict.status || "UNTESTED"}
+                      </span>
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                        {row.status || "draft"} · n={verdict.sample_n || 0} · conf={Number(verdict.confidence || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <h3 className="mt-2 font-head text-sm font-semibold leading-snug text-[var(--qd-text)]">{row.hypothesis}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--qd-text-2)]">{row.market_premise || row.entry_exit_idea || "No premise recorded."}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onAsk(`Critique research hypothesis ${row.hypothesis_id}. Tell me what is proven, what is missing, what would falsify it, and what the research desk says.`)}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-2)] hover:border-[var(--qd-accent)] hover:text-[var(--qd-text)]"
+                  >
+                    <Bot size={12} />
+                    Ask Hermes
+                  </button>
+                </div>
+
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                  <MetricTile label="Instrument" value={row.instrument || "-"} />
+                  <MetricTile label="Timeframe" value={row.timeframe || "-"} />
+                  <MetricTile label="Evidence" value={`${evidence.length} links`} />
+                </div>
+
+                {verdict.summary && (
+                  <div className="mt-3 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-2 text-xs leading-relaxed text-[var(--qd-text-2)]">
+                    {verdict.summary}
+                  </div>
+                )}
+
+                {evidence.length > 0 && (
+                  <div className="mt-3 overflow-hidden rounded border border-[var(--qd-border)]">
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                      <span>Source</span>
+                      <span>Sample</span>
+                      <span>Confidence</span>
+                    </div>
+                    {evidence.slice(0, 4).map((ev) => (
+                      <div key={ev.evidence_id || ev.source} className="grid grid-cols-[1fr_auto_auto] gap-2 border-b border-[var(--qd-border)]/70 px-2 py-1.5 text-xs last:border-b-0">
+                        <span className="min-w-0 truncate text-[var(--qd-text-2)]">{ev.source || "unknown"}</span>
+                        <span className="font-mono text-[var(--qd-text-3)]">{ev.sample_n || 0}</span>
+                        <span className="font-mono text-[var(--qd-text-3)]">{Number(ev.confidence || 0).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {limitations.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {limitations.slice(0, 4).map((item) => (
+                      <span key={item} className="rounded-sm border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const MetricTile = ({ label, value }) => (
+  <div className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-2">
+    <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{label}</div>
+    <div className="mt-1 truncate font-mono text-xs font-semibold text-[var(--qd-text)]">{value}</div>
+  </div>
+);
 
 const TypingIndicator = () => (
   <div className="flex gap-3.5 items-center animate-pulse">

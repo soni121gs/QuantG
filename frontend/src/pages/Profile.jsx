@@ -415,7 +415,7 @@ function ReadinessModal({ isPaper, busy, onClose, onConfirm }) {
             }`}
             data-testid="confirm-live"
           >
-            {busy ? "Arming..." : liveChecksOk ? "Arm selected strategy" : "Run backend activation check"}
+            {busy ? "Arming..." : liveChecksOk ? "Arm selected strategy" : "Attempt backend-gated activation"}
           </button>
         </div>
         {!data?.market_open && liveChecksOk && (

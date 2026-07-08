@@ -96,6 +96,10 @@ book." See [[project_base_rate_findings_07_04]].
 - **Stages 1–4 SHIPPED** ✅ `HSI-11..15` Stage 1 attribution · `HSI-21..23` Stage 2 grounded EOD · `HSI-31..34` Stage 3 scored lesson store (`fb486ef`, 2026-07-01) · `HSI-41..44` Stage 4 OOS validator (`d1553fc`, 2026-07-03 — judge-first, returns `INSUFFICIENT_DATA` until held-out samples mature).
 - **Stages 1–5 SHIPPED** ✅ `HSI-51..54` Stage 5 gated advisor DONE 2026-07-06 (`core/hermes_advisor.py`): OOS-gated `draft_config_change` approval action, observe-only advice surface (flag `HERMES_ADVICE_ENABLED`), lesson-tagged attribution, and reversible/rate-limited/auto-reverting safety rails. The full self-improvement loop is now built end-to-end; it only gets *smart* as clean attribution + OOS windows mature. **NEXT (founder):** enable `HERMES_ADVICE_ENABLED` once lessons pass OOS, or approve a `draft_config_change` card.
 
+**🧠 Hermes Intelligence Research Brain (HIRB) — founder-directed 2026-07-09**
+- **HIRB-01..07 complete. NEXT frontier:** feed HIRB from more truthful data sources and wire the verifier/critic outputs deeper into Hermes answers, while preserving the no-trading/no-self-mutation boundary.
+- Build order: `HIRB-01` truth contracts ✅ → `HIRB-02` research hypothesis ledger ✅ → `HIRB-03` quant math kernel ✅ → `HIRB-04` verifier/critic loop ✅ → `HIRB-05` frozen evidence anti-leakage store ✅ → `HIRB-06` multi-agent research desk ✅ → `HIRB-07` Hermes Research Lab UI ✅. Hermes remains researcher/disciplinarian only; code/OOS judges decide truth, not LLM confidence.
+
 **📈 Win-Rate / Expectancy (cleaned active remainder)**
 - Active only after `AR-08`: `WR-45` correlation matrix · `WR-51` risk sizing · `WR-54` auto-pause. `WR-33` is closed/deferred; reopen only if AR-08 proves winners are being cut early. **Folded 07-02:** `WR-42`/`WR-43` → AR-07/AR-08 · `WR-44`/`WR-72` → HSI-41..44.
 - Done / not active: `WR-71` real options-chain backtest **DONE 2026-07-04** via free NSE bhavcopy + EOD OOS validator. `WR-73` live enablement is founder-gated, not agent-pickable, and still requires OOS candidate edge + forward-paper evidence.
@@ -392,6 +396,123 @@ python -m pytest backend\tests\test_evidence_allocator.py -q
 cd frontend
 $env:CI='false'; npm run build
 ```
+
+---
+
+## HERMES INTELLIGENCE RESEARCH BRAIN (HIRB) — TRUTHFUL QUANT RESEARCH OS
+
+**Created 2026-07-09 after external research into agentic trading systems, QRAFTI-style typed research workflows, TradingAgents-style specialist desks, TrustTrade-style selective evidence trust, and LLM backtest leakage risks.**
+
+**Goal:** expand Hermes beyond an in-app assistant into a disciplined quant research brain: it proposes hypotheses, gathers evidence, runs math, tries to falsify itself, stores verdicts, and recommends human-gated research actions. It never places trades, never enables live trading, and never treats an LLM narrative as proof.
+
+**Operating law:** Hermes can narrate and reason, but only deterministic code, clean data, OOS/walk-forward validation, cost/slippage stress, and forward-paper evidence decide what is true. Every research claim must carry source, timestamp, sample size, confidence, stale state, limitations, and a verdict.
+
+### HIRB-01 — Truthful Research Context Contract
+- **Status**: `[x]` DONE 2026-07-09 (Codex). `backend/routes/ai.py` now routes strategy scoring, explained scoring, market analysis, and training-context payloads through one current-domain research context helper. Retired commodity/MCX/HFT context is explicit metadata, not a dead route call. `backend/tests/test_agent_tools.py` pins the contract.
+- **Tier**: 2
+- **Session size**: 2-4 hours
+- **Prerequisite**: HSI stages shipped; existing `/ai` and `/agent` routes working
+- **Files to touch**: `backend/routes/ai.py`, `backend/tests/test_agent_tools.py`, `TASKS.md`, `wiki/memory.md`
+
+**Goal:** clean the Hermes/AI data-source wiring before adding intelligence. Stale commodity/HFT-era context must not enter Hermes research prompts, and research payloads must explicitly declare their truth quality.
+
+**Steps:**
+1. Remove `commodity_watchlist` dependencies from AI strategy scoring, explained scoring, and training-context payloads.
+2. Build one current-domain market context helper for NSE/BSE/Upstox V3 watchlist rows.
+3. Add a standard `research_context` payload with source, generated_at, sample_n, confidence, stale, limitations, and domain.
+4. Keep existing API shapes backward-compatible where practical, but mark removed domains as `deprecated`/empty rather than calling dead routes.
+5. Add focused tests that prove the AI routes do not call `commodity_watchlist` and expose the research context metadata.
+
+**Acceptance:**
+- Hermes scoring/training-context endpoints work when commodity routes are absent or retired.
+- Returned context clearly says it covers current QuantG domains only: NSE/BSE index options, equities, Upstox V3, OOS/forward-paper research.
+- No trading behavior changes and no live-enablement flags changed.
+
+**How to verify:**
+```powershell
+python -m pytest backend\tests\test_agent_tools.py -q
+python -m py_compile backend\routes\ai.py
+```
+
+---
+
+### HIRB-02 — Research Hypothesis Ledger
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added `backend/core/research_ledger.py` plus `/api/ops/research/hypotheses` create/list/get/evidence/verdict routes. Hypotheses dedupe by canonical hash, carry evidence links and verdicts, and never mutate strategy configs.
+- **Tier**: 2
+- **Session size**: 4-6 hours
+- **Prerequisite**: `HIRB-01`
+- **Files to touch**: `backend/core/research_ledger.py` (new), `backend/routes/ops.py` or `backend/routes/ai.py`, `backend/tests/test_research_ledger.py` (new)
+
+**Goal:** every idea becomes a structured, testable hypothesis instead of a chat note.
+
+**Schema:** hypothesis, market premise, instrument, timeframe, entry/exit idea, data window, null hypothesis, expected edge, cost model, risk thesis, failure modes, evidence links, status, verdict, created_by, created_at.
+
+**Acceptance:** Hermes can save/list/fetch hypotheses and attach evidence/verdict ids without mutating strategy configs.
+
+---
+
+### HIRB-03 — Quant Math Kernel
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added `backend/core/quant_research_metrics.py` with deterministic expectancy, payoff, profit factor, max drawdown, CVaR, bootstrap CI, Monte Carlo drawdown, fractional Kelly, Bayesian win-rate, slippage stress, and multiple-testing penalty summary.
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `HIRB-02`
+- **Files to touch**: `backend/core/quant_research_metrics.py` (new), tests
+
+**Goal:** centralize research math: expectancy, R multiple, payoff skew, profit factor, max drawdown, CVaR, bootstrap confidence, Monte Carlo path risk, fractional Kelly, Bayesian hit-rate confidence, slippage stress, and multiple-testing penalty.
+
+**Acceptance:** deterministic unit tests cover robust edge, fragile edge, overfit winner, and high-win-rate negative-expectancy cases.
+
+---
+
+### HIRB-04 — Hermes Verifier and Critic Loop
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added `backend/core/research_critic.py` plus Hermes tools `get_research_hypotheses`, `get_research_critique`, and `get_research_desk`. The critic enforces allowed claim strength from evidence, OOS/forward-paper/cost coverage, sample size, confidence, contradictions, and falsification tests.
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `HIRB-02`, `HIRB-03`
+- **Files to touch**: `backend/routes/ai.py`, `backend/core/research_critic.py` (new), tests
+
+**Goal:** every serious Hermes research answer follows: plan → retrieve → compute → challenge → verify → summarize. The answer must state what would falsify it and what data is missing.
+
+**Acceptance:** Hermes refuses to label ideas as proven without OOS/forward-paper evidence and includes contradiction/limitation notes in research answers.
+
+---
+
+### HIRB-05 — Frozen Evidence and Anti-Leakage Store
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added `backend/core/evidence_store.py` to freeze source snapshots with observed_at/collected_at, content hash, source metadata, dedupe, as-of listing, and explicit anti-leakage rules.
+- **Tier**: 3
+- **Session size**: 6-10 hours
+- **Prerequisite**: `HIRB-02`
+- **Files to touch**: `backend/core/evidence_store.py` (new), optional scripts/tests
+
+**Goal:** timestamp external/news/context evidence so historical research cannot accidentally leak future-updated web data into backtests.
+
+**Acceptance:** a research run can cite exactly what Hermes knew at collection time; future-updated sources are not silently reused as historical evidence.
+
+---
+
+### HIRB-06 — Multi-Agent Quant Research Desk
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added `backend/core/research_agents.py`, a deterministic specialist research desk with regime, volatility, flow, strategy scientist, backtest engineer, risk officer, execution-cost auditor, skeptic, memory curator, and founder-briefing outputs. Outputs are evidence/review objects only, not trades or config mutations.
+- **Tier**: 3
+- **Session size**: 8-12 hours
+- **Prerequisite**: `HIRB-04`
+- **Files to touch**: `backend/core/research_agents.py` (new), `backend/routes/ai.py`, tests
+
+**Goal:** specialist roles with strict schemas: regime analyst, volatility analyst, flow analyst, strategy scientist, backtest engineer, risk officer, execution-cost auditor, skeptic, memory curator, founder-briefing agent.
+
+**Acceptance:** agents debate only inside research workflows; their outputs are evidence objects, not trade orders or config mutations.
+
+---
+
+### HIRB-07 — Hermes Research Lab UI
+- **Status**: `[x]` DONE 2026-07-09 (Codex). Added a Research tab to `frontend/src/pages/AIBot.jsx` that loads `/api/ops/research/hypotheses`, shows hypothesis/verdict/evidence/sample/confidence/limitations, summarizes validated/watch/rejected counts, and lets the founder ask Hermes to critique a hypothesis through the new read-only HIRB tools.
+- **Tier**: 2
+- **Session size**: 6-10 hours
+- **Prerequisite**: `HIRB-02`, `HIRB-04`
+- **Files to touch**: `frontend/src/pages/AIBot.jsx` or new research components, backend list endpoints if needed
+
+**Goal:** expose active hypotheses, test runs, verdicts, sample sizes, confidence, contradictions, and pending founder-approved research actions.
+
+**Acceptance:** the founder can see what Hermes believes, why it believes it, what failed, and what should be tested next.
 
 ---
 

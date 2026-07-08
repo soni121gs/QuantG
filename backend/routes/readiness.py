@@ -533,7 +533,7 @@ async def get_trading_live_readiness(user=Depends(get_current_user)):
         "label": "Instrument lot sizes and exchange rules resolution",
         "ok": rules_ok,
         "detail": f"rules_present={rules_ok}",
-        "hint": "Run MCX resolver initialization or verify MongoDB system_config."
+        "hint": "Verify MongoDB system_config.exchange_rules contains current NSE/BSE lot-size rules."
     })
 
     funds = await db.funds.find_one({"user_id": user_id})

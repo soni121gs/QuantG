@@ -94,7 +94,7 @@ export default function ApiKeys() {
       <PageHeader
         eyebrow="Upstox Credentials"
         title="Broker Keys"
-        subtitle="Connect Upstox API v2 for live market data, order sync, and controlled algo execution."
+        subtitle="Connect Upstox for V3 market data, order sync, and backend-gated execution."
         badge={<StatusBadge tone={upstoxStatus.connected ? "healthy" : "warning"}>{upstoxStatus.connected ? "Connected" : "Setup Required"}</StatusBadge>}
       />
 
