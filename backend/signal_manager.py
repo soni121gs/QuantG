@@ -839,6 +839,22 @@ async def _dispatch_signal_via_unified_engine(
         # stop while the theta book keeps the global env defaults.
         _sig_opts = (sig.get("visual_config") or {}).get("options", {}) or {}
         _strat_opts = (strategy.get("visual_config") or {}).get("options", {}) or {}
+        # RES-2 entry gate (opt-in via visual_config.options.res2_gate): only sell
+        # premium when IV−RV is rich AND the regime is sell-safe (RANGE). Validated
+        # in RES-8 (turned the put spread NO_EDGE→CANDIDATE). FAIL-OPEN so a data
+        # hiccup never silently stops the strategy. Exits are unaffected.
+        if _sig_opts.get("res2_gate") or _strat_opts.get("res2_gate"):
+            from core.entry_gate import evaluate_entry_gate_live
+            _short_iv = ((_spread.get("short_leg") or {}).get("iv"))
+            _min_edge = _sig_opts.get("res2_gate_min_edge", _strat_opts.get("res2_gate_min_edge"))
+            _gate = await evaluate_entry_gate_live(
+                underlying=symbol, regime=_regime_at_entry, iv=_short_iv,
+                min_edge=float(_min_edge) if _min_edge is not None else 0.0,
+            )
+            if not _gate.get("allow"):
+                return {"ok": False, "status": "SKIPPED",
+                        "reason": _gate.get("reason") or "RES2_GATE blocked",
+                        "reason_code": "RES2_GATE_BLOCKED"}
         _tp_frac = _sig_opts.get("credit_tp_frac", _strat_opts.get("credit_tp_frac"))
         _sl_mult = _sig_opts.get("credit_sl_mult", _strat_opts.get("credit_sl_mult"))
         return await open_credit_spread(
