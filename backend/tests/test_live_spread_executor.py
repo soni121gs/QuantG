@@ -252,7 +252,9 @@ def test_paper_mode_untouched_by_live_wiring():
                                        spread=_spread(), lots=1, lot_size=65, mode="paper",
                                        idempotency_key="k1")
         assert res["ok"] is True
-        assert res["net_credit"] == 20.0  # quoted premiums, not broker fills
+        # Paper applies adverse slippage to the QUOTED premiums (not the live broker
+        # fills, which the wiring would have used) — so net credit is below the 20.0 mid.
+        assert res["net_credit"] < 20.0
         assert db.strategy_positions.docs[0]["mode"] == "paper"
         assert len(db.paper_margin_blocks.docs) == 1  # paper margin block still applies
     asyncio.run(run())
