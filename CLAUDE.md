@@ -798,7 +798,13 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 ### 15.5 RES-8 OOS verdict (2026-07-08, NIFTY 2024–25 real bhavcopy)
 - **BUYER confirmed dead (5th time):** IV-cheap+trending debit spread = NO_EDGE_NEGATIVE, −₹380/tr, n=50, both years negative. Stop building option buyers.
 - **The RES-2 market_context gate demonstrably ADDS edge:** on the EOD-gradeable 3% OTM put spread held-to-expiry, ungated = NO_EDGE_NEGATIVE (−₹14/tr, 2025 −₹145); gated by IV−RV rich + RANGE it's monotonic — CANDIDATE_EDGE at min_edge 0.0 (n=36, +₹112/tr, both years +ve, 74% green), rising to +₹487/tr at the strictest gate (n shrinks <30). Monotonic expectancy-vs-gate = a real signal, not a fluke. **First strategy in the rebuild to PASS OOS.**
-- **CAVEATS:** the intraday scalp geometry (ATM width-1) held DAILY is negative — the EOD judge is the wrong instrument for the intraday scalp exit; that needs the IMD 1-min judge (§14) + a ~3-month data backfill. Bull-biased (2 up years). NEXT: forward-paper the gated hold-to-expiry seller (EOD-validated, deployable) + backfill intraday data for the true scalp verdict. `CORE_ENGINE_LIVE_ENABLED=false` — founder-gated.
+- **CAVEATS:** the intraday scalp geometry (ATM width-1) held DAILY is negative — the EOD judge is the wrong instrument for the intraday scalp exit; that needs the IMD 1-min judge (§14). Bull-biased (2 up years). `CORE_ENGINE_LIVE_ENABLED=false` — founder-gated.
+
+### 15.6 Intraday scalp verdict (2026-07-08 — IMD judge on 204 real 1-min days)
+- Data was ALREADY backfilled: `data/options_1m` = 204 days (2024-08-23..2025-06-25) + `data/index_1m` 498 days. No fetch needed.
+- **Made the core IMD judge seller-capable** (was buyer-only): `intraday_option_selector` credit_spread branch + `intraday_options_backtest.run_day` is_credit path (book `credit_tp_frac`, stop `credit_sl_mult`×credit, trail peak, sign-correct slippage). 3 tests. This lets the CORE judge grade sellers, not just the scratch harness.
+- **VERDICT (`scratch/regime_seller_oos.py`, local-only, gitignored):** regime-gated intraday seller ALL_w1 = **CANDIDATE_EDGE, n=587, 88% WR, +₹232/tr, PF 3.71, net +₹136k; OOS n=54 +₹139/tr, 91% green; all 3 regimes +ve.** Both judges (EOD gated put spread + IMD scalp) now confirm the seller edge.
+- **CRITICAL — slippage-fragile:** cost stress passes at 2% slip, FRAGILE at 5% (OOS −₹57), DEAD at 10% (−₹218). avg credit only ₹21. → forward-paper (RES-1 slippage now in paper) is the true test; never scale on backtest.
 ```
 Items 1–6 are reusable machinery; 7 is the strategy; 8 is the truth check. `CORE_ENGINE_LIVE_ENABLED=false` stays until founder-gated after #8.
 
