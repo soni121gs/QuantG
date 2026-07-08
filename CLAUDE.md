@@ -792,8 +792,13 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 ✅ 4. Re-entry / multi-trade policy              ← DONE (core/reentry.py); wiring w/ RES-7
 ✅ 5. Side-rotation (CE vs PE from context)      ← DONE (core/side_selector.py); wiring w/ RES-7
 ✅ 6. Portfolio risk layer                       ← DONE (core/portfolio_risk.py); wiring w/ RES-7
-✅ 7. Seller scalper BRAIN                        ← DONE (core/seller_scalper.py decide()); unactivated until RES-8 + founder
-   8. OOS + forward-paper gate (proves #7 before any live pilot)
+✅ 7. Seller scalper BRAIN                        ← DONE (core/seller_scalper.py decide()); unactivated until founder
+✅ 8. OOS gate                                   ← DONE (core/res8_oos.py). VERDICT: buyer dead (5th time); RES-2 gate turns the 3% OTM put spread from NO_EDGE→CANDIDATE_EDGE (both years +ve). See §15.5
+```
+### 15.5 RES-8 OOS verdict (2026-07-08, NIFTY 2024–25 real bhavcopy)
+- **BUYER confirmed dead (5th time):** IV-cheap+trending debit spread = NO_EDGE_NEGATIVE, −₹380/tr, n=50, both years negative. Stop building option buyers.
+- **The RES-2 market_context gate demonstrably ADDS edge:** on the EOD-gradeable 3% OTM put spread held-to-expiry, ungated = NO_EDGE_NEGATIVE (−₹14/tr, 2025 −₹145); gated by IV−RV rich + RANGE it's monotonic — CANDIDATE_EDGE at min_edge 0.0 (n=36, +₹112/tr, both years +ve, 74% green), rising to +₹487/tr at the strictest gate (n shrinks <30). Monotonic expectancy-vs-gate = a real signal, not a fluke. **First strategy in the rebuild to PASS OOS.**
+- **CAVEATS:** the intraday scalp geometry (ATM width-1) held DAILY is negative — the EOD judge is the wrong instrument for the intraday scalp exit; that needs the IMD 1-min judge (§14) + a ~3-month data backfill. Bull-biased (2 up years). NEXT: forward-paper the gated hold-to-expiry seller (EOD-validated, deployable) + backfill intraday data for the true scalp verdict. `CORE_ENGINE_LIVE_ENABLED=false` — founder-gated.
 ```
 Items 1–6 are reusable machinery; 7 is the strategy; 8 is the truth check. `CORE_ENGINE_LIVE_ENABLED=false` stays until founder-gated after #8.
 
