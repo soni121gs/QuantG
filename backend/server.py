@@ -861,6 +861,43 @@ def _merge_tick_bars(historical: List[Dict[str, Any]], tick_bars: List[Dict[str,
     return historical
 
 
+def _normalize_live_candle_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    text = str(row.get("date") or row.get("timestamp_ist") or "").strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("+")[0].replace("T", " ")[:16]
+    else:
+        text = text[:16]
+    try:
+        return {
+            "date": text,
+            "open": float(row.get("open") or 0),
+            "high": float(row.get("high") or 0),
+            "low": float(row.get("low") or 0),
+            "close": float(row.get("close") or 0),
+            "volume": int(row.get("volume") or 0),
+        }
+    except Exception:
+        return None
+
+
+def _merge_live_candle_rows(
+    historical: Optional[List[Dict[str, Any]]],
+    live_rows: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for row in historical or []:
+        normalized = _normalize_live_candle_row(row)
+        if normalized:
+            merged[normalized["date"]] = normalized
+    for row in live_rows or []:
+        normalized = _normalize_live_candle_row(row)
+        if normalized:
+            merged[normalized["date"]] = normalized
+    return [merged[k] for k in sorted(merged.keys())]
+
+
 def _parse_candle_datetime_ist(value: Any) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -977,6 +1014,17 @@ async def _fetch_strategy_history(
                 # refreshed from websocket cache when a live tick exists.
                 feed_started = upstox_gw.start_market_data_ws([token], mode="full")
                 live_data = await asyncio.to_thread(upstox_gw.get_historical_candles, token, interval, days)
+                capture_rows: List[Dict[str, Any]] = []
+                if interval in {"1minute", "minute"} and sym_upper in {"NIFTY", "BANKNIFTY"}:
+                    try:
+                        capture = _get_live_index_capture()
+                        snapshot = getattr(capture, "snapshot_minutes", None)
+                        if callable(snapshot):
+                            capture_rows = snapshot(sym_upper, include_open=True) or []
+                            if capture_rows:
+                                live_data = _merge_live_candle_rows(live_data or [], capture_rows)
+                    except Exception as exc:
+                        logger.debug("live index capture merge skipped for %s: %s", sym_upper, exc)
                 tick = upstox_gw.latest_tick(token)
                 candle_freshness = _latest_candle_fresh_for_live(live_data or [], exchange)
                 if tick and live_data:
@@ -997,6 +1045,7 @@ async def _fetch_strategy_history(
                         "volume": int(tick.get("last_trade_quantity") or 0),
                     }
                     live_data = _merge_tick_bars(live_data, [tick_bar])
+                    candle_freshness = _latest_candle_fresh_for_live(live_data or [], exchange)
                 elif not tick:
                     _log_throttled(
                         f"upstox-bootstrap-empty:{token}",
@@ -1008,12 +1057,20 @@ async def _fetch_strategy_history(
                     )
                 min_required = min_intraday_bars if interval != "day" else 2
                 if live_data and len(live_data) >= min_required:
-                    is_live_source = bool(tick) or bool(candle_freshness.get("fresh"))
+                    is_live_source = bool(tick) or bool(capture_rows) or bool(candle_freshness.get("fresh"))
+                    live_reason = (
+                        "websocket tick" if tick else
+                        "live index capture" if capture_rows else
+                        candle_freshness.get("reason")
+                    )
+                    source = f"upstox-v3-websocket+historical:{interval}:{sym_upper}"
+                    if capture_rows:
+                        source += "+live-index-capture"
                     return {
                         "data": live_data,
-                        "source": f"upstox-v3-websocket+historical:{interval}:{sym_upper}",
+                        "source": source,
                         "is_live": is_live_source,
-                        "live_reason": "websocket tick" if tick else candle_freshness.get("reason"),
+                        "live_reason": live_reason,
                         "last_candle_at": candle_freshness.get("last_candle_at"),
                         "latest_candle_age_sec": candle_freshness.get("age_sec"),
                         "interval": interval,

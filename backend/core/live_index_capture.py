@@ -12,7 +12,7 @@ follow-up; the aggregator + options store already support it once refs are wired
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from core.index_minute_store import IndexMinuteStore
 from core.options_minute_capture import MinuteBarAggregator
@@ -66,6 +66,47 @@ class LiveIndexCapture:
         self._bars = {}
         logger.info("LiveIndexCapture flushed %s index-days (%s bars) for %s", written, rows, date)
         return {"date": date, "underlyings_written": written, "bars": rows, "ticks_seen": self._ticks}
+
+    def snapshot_minutes(self, underlying: str = None, include_open: bool = True) -> List[Dict[str, Any]]:
+        """Return buffered live bars without mutating the EOD flush buffer."""
+        wanted = str(underlying or "").upper()
+        rows: List[Dict[str, Any]] = []
+
+        def add_row(u: str, b) -> None:
+            if wanted and u != wanted:
+                return
+            rows.append({
+                "timestamp_ist": b.minute_ts,
+                "underlying": u,
+                "date": b.minute_ts,
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": int(getattr(b, "volume", 0) or 0),
+            })
+
+        for u, bars in self._bars.items():
+            for bar in bars:
+                add_row(u, bar)
+
+        if include_open:
+            for key, bar in self.agg._open.items():
+                u = self.map.get(key)
+                if not u:
+                    continue
+                rows.append({
+                    "timestamp_ist": bar.minute_ts,
+                    "underlying": u,
+                    "date": bar.minute_ts,
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": int(max(0.0, float(bar.last_cum or 0) - float(bar.start_cum or 0))),
+                })
+
+        return sorted(rows, key=lambda r: str(r.get("timestamp_ist") or r.get("date") or ""))
 
     def health(self) -> Dict[str, Any]:
         return {"index_tokens": len(self.map), "ticks_seen": self._ticks,

@@ -584,10 +584,10 @@ class UpstoxGateway:
         ohlc_interval_code = OHLC_INTERVAL_MAP.get(interval, "I1")
         encoded_key = quote(instrument_key)
 
-        # 0. V3 historical multi-day 5-min bars (primary for intraday strategies).
-        # Returns pure consistent 5-min bars across multiple trading days so EMA/
-        # SMA calculations are meaningful. Eliminates the need to mix daily bars
-        # with intraday bars which produces wrong indicator values.
+        # 0. V3 historical multi-day bars (primary context for intraday strategies).
+        # The historical endpoint can lag the active session, so merge today's
+        # intraday endpoint before returning.
+        v3_hist_bars: List[Dict[str, Any]] = []
         if interval != "day":
             v3_hist_interval = {"5minute": 5, "1minute": 1, "minute": 1,
                                 "15minute": 15, "30minute": 30}.get(interval, 5)
@@ -598,13 +598,12 @@ class UpstoxGateway:
                 v3_hist_bars = self.get_historical_candles_v3(
                     instrument_key, unit="minutes", interval=v3_hist_interval,
                     from_date=hist_from, to_date=hist_to,
-                )
+                ) or []
                 if v3_hist_bars and len(v3_hist_bars) >= 50:
                     logger.info(
                         "Upstox index V3 historical ok key=%s bars=%d interval=%dmin",
                         instrument_key, len(v3_hist_bars), v3_hist_interval,
                     )
-                    return v3_hist_bars
             except Exception as exc:
                 logger.debug("Upstox V3 historical failed key=%s: %s", instrument_key, exc)
 
@@ -656,8 +655,19 @@ class UpstoxGateway:
                     "Upstox index V3 intraday ok key=%s bars=%d interval=%dmin",
                     instrument_key, len(v3_bars), v3_interval,
                 )
+                if v3_hist_bars:
+                    merged_v3 = self._merge_candle_series(v3_hist_bars, intraday_bars)
+                    if merged_v3:
+                        logger.info(
+                            "Upstox index V3 merged historical+intraday key=%s bars=%d interval=%dmin",
+                            instrument_key, len(merged_v3), v3_interval,
+                        )
+                        return merged_v3
         except Exception as exc:
             logger.debug("Upstox V3 intraday failed key=%s: %s", instrument_key, exc)
+
+        if v3_hist_bars and len(v3_hist_bars) >= 50:
+            return v3_hist_bars
 
         # 3. Fallback: single OHLC bar from market-quote/ohlc
         if not intraday_bars:
