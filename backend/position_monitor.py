@@ -39,6 +39,7 @@ from core.spread_lifecycle import (
     value_credit_spread, spread_exit_reason, close_credit_spread,
     value_debit_spread, debit_spread_exit_reason, close_debit_spread,
 )
+from core.dynamic_exit import update_peak_pnl, evaluate_spread_exit
 
 logger = logging.getLogger("quantg.position_monitor")
 
@@ -759,11 +760,17 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         v = value_credit_spread(pos, short_ltp, long_ltp)
 
     now_str = datetime.now(timezone.utc).isoformat()
+    # RES-3: track the running peak favourable P&L so the dynamic exit engine can
+    # trail-lock a fading winner. Only meaningful on live marks (fallback value ≈
+    # entry credit → peak stays ~0, no premature arming).
+    peak_pnl = update_peak_pnl(pos.get("peak_pnl"), v["pnl"]) if have_live else pos.get("peak_pnl")
     # Status-guarded: if this position was closed concurrently (e.g. by
     # position_guardian) while we were awaiting leg LTPs above, this write
     # must not resurrect stale mark-to-market fields onto a CLOSED/EXITING doc.
     set_fields = {"spread_value": v["value"], "unrealized_pnl": v["pnl"],
                   "last_tick_at": now_str, "updated_at": now_str}
+    if peak_pnl is not None:
+        set_fields["peak_pnl"] = peak_pnl
     # Refresh last_fresh_tick_at whenever BOTH legs priced live. The single-leg
     # staleness guard keys off last_fresh_tick_at; a spread never gets it
     # refreshed elsewhere (the guardian skips spreads, the single-leg monitor
@@ -812,9 +819,13 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
             logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
             await close_debit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
     else:
-        reason = spread_exit_reason(pos, v["value"])
+        # RES-3 dynamic exit: hard stop + take-profit (unchanged) PLUS a trailing
+        # lock that banks a faded winner before it round-trips to red.
+        reason = evaluate_spread_exit(position=pos, current_value=v["value"],
+                                      current_pnl=v["pnl"], peak_pnl=peak_pnl)
         if reason:
-            logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
+            logger.info("spread monitor exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",
+                        pos.get("id"), reason, v["value"], v["pnl"], peak_pnl or 0.0)
             await close_credit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
 
 
