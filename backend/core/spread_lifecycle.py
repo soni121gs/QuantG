@@ -32,6 +32,23 @@ SPREAD_TP_FRAC = float(os.environ.get("CREDIT_SPREAD_TP_FRAC", "0.5"))   # captu
 SPREAD_SL_MULT = float(os.environ.get("CREDIT_SPREAD_SL_MULT", "2.0"))   # stop at 2x credit loss
 DEBIT_SPREAD_SL_FRAC = float(os.environ.get("DEBIT_SPREAD_SL_FRAC", "0.5"))  # exit once 50% of debit is lost
 
+# Adverse slippage on PAPER spread fills. A real market order crosses the bid/ask,
+# so a SELL is filled BELOW mid and a BUY ABOVE mid. Applied per leg on BOTH entry
+# and exit — the same conservative model the OOS backtesters use (eod 3%/leg,
+# intraday 2%/side). WITHOUT this, paper credit spreads fill at mid and overstate
+# every edge; this is the single biggest way paper P&L lies (a frequently-trading
+# scalper is maximally exposed to it). Live fills are real, so this is paper-only.
+PAPER_SPREAD_SLIPPAGE_PCT = float(os.environ.get("PAPER_SPREAD_SLIPPAGE_PCT", "0.03"))
+
+
+def _apply_paper_slippage(price: float, side: str) -> float:
+    """Adverse fill on a paper leg: a BUY pays up, a SELL receives less."""
+    px = float(price)
+    if px <= 0:
+        return px
+    slip = px * PAPER_SPREAD_SLIPPAGE_PCT
+    return round(px + slip if str(side).upper() == "BUY" else px - slip, 2)
+
 
 def _leg_charges(side: str, price: float, qty: int) -> float:
     """Upstox-like paper charge model (mirrors PaperAdapter)."""
@@ -152,6 +169,14 @@ async def open_credit_spread(
         net_credit = round(short["premium"] - long["premium"], 2)
         max_loss = round(width - net_credit, 2)
         entry_order_ids = live.get("entry_order_ids") or {}
+    else:
+        # Paper fills cross the bid/ask: SELL the short leg below mid, BUY the long
+        # above mid. This shrinks the net credit to a realistic fill and flows into
+        # the recorded entry_price, wallet debit/credit, max_loss and exit levels.
+        short["premium"] = _apply_paper_slippage(short["premium"], "SELL")
+        long["premium"] = _apply_paper_slippage(long["premium"], "BUY")
+        net_credit = round(short["premium"] - long["premium"], 2)
+        max_loss = round(width - net_credit, 2)
 
     short_charges = _leg_charges("SELL", short["premium"], qty)
     long_charges = _leg_charges("BUY", long["premium"], qty)
@@ -324,6 +349,12 @@ async def close_credit_spread(
 
     short_ltp = float(short_ltp)
     long_ltp = float(long_ltp)
+    if not is_live:
+        # Paper exit crosses the bid/ask too: buy back the short ABOVE mid, sell the
+        # long BELOW mid. This widens the close value to a realistic fill so a paper
+        # round-trip pays slippage on both ends (live fills at 322-323 are already real).
+        short_ltp = _apply_paper_slippage(short_ltp, "BUY")   # buying back the short
+        long_ltp = _apply_paper_slippage(long_ltp, "SELL")    # selling the long
     close_value = round(short_ltp - long_ltp, 2)
 
     buyback_charges = _leg_charges("BUY", short_ltp, qty)    # buy back the short

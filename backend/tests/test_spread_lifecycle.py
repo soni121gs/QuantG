@@ -183,11 +183,17 @@ def test_open_credits_net_and_creates_position():
 
     res, before, after, pos = asyncio.run(run())
     assert res["ok"] and res["status"] == "FILLED"
-    # Net credit collected (≈ +1250) minus entry charges → balance rises by < 1250.
+    # Net credit collected (mid ≈ +1250, less adverse paper slippage) minus entry
+    # charges → balance rises by < 1250.
     assert before < after < before + 1250
     assert pos["structure"] == "credit_spread" and pos["position_side"] == "SHORT"
     assert len(pos["legs"]) == 2 and pos["open_quantity"] == 50
-    assert pos["spread_tp_value"] == 12.5 and pos["spread_sl_value"] == 75.0
+    # Exit levels derive from the realistic (post-slippage) net credit recorded on
+    # the position, not the raw mid credit.
+    lv = compute_exit_levels(pos["net_credit"], 100.0)
+    assert pos["spread_tp_value"] == lv["spread_tp_value"]
+    assert pos["spread_sl_value"] == lv["spread_sl_value"]
+    assert pos["net_credit"] < 25.0   # mid credit was 25; paper fill receives less
 
 
 def test_open_then_close_wallet_equals_realized_pnl_win():
