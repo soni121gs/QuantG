@@ -294,6 +294,74 @@ async def open_credit_spread(
             "net_credit": net_credit, "max_loss": max_loss}
 
 
+async def _record_spread_exit_orders(
+    db,
+    position: Dict[str, Any],
+    *,
+    structure: str,
+    exit_price_by_role: Dict[str, float],
+    qty: int,
+    net_pnl: float,
+    reason: str,
+    closed_at: str,
+    is_live: bool,
+    exit_broker_ids: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Audit: write one FILLED CLOSE order row per leg so the order ledger shows the
+    spread EXIT — mirrors the two entry rows the open path writes. Without this the
+    ledger only ever showed spread entries, never the closing trades. Display-only:
+    the canonical P&L stays in db.trade_fills; the spread's net realized P&L is
+    attributed to the buy-to-close (short) row so it appears exactly once.
+    Best-effort: an audit-row failure must never break the close/accounting."""
+    pos_id = position["id"]
+    user_id = position["user_id"]
+    strategy_id = position.get("strategy_id")
+    underlying = position.get("underlying") or position.get("symbol")
+    mode = position.get("mode") or "paper"
+    lot_size = int(position.get("lot_size") or 0)
+    exit_broker_ids = exit_broker_ids or {}
+    for leg in (position.get("legs") or []):
+        role = leg.get("role")
+        # short leg was SOLD at open -> BUY to close; long leg was BOUGHT -> SELL to close.
+        exit_side = "BUY" if role == "short" else "SELL"
+        price = exit_price_by_role.get(role)
+        try:
+            await db.orders.insert_one({
+                "id": f"ord_{uuid.uuid4().hex[:12]}",
+                "user_id": user_id,
+                "strategy_id": strategy_id,
+                "position_id": pos_id,
+                "symbol": underlying,
+                "target_symbol": leg.get("tradingsymbol") or f"{underlying} {leg.get('strike')} {leg.get('option_type')}",
+                "instrument_key": leg.get("instrument_key"),
+                "side": exit_side,
+                "qty": qty,
+                "lot_size": lot_size,
+                "filled_qty": qty,
+                "price": price,
+                "requested_price": price,
+                "status": "FILLED",
+                "execution_status": "FILLED",
+                "mode": mode,
+                "broker": "upstox" if is_live else "paper",
+                "broker_order_id": exit_broker_ids.get(role) if is_live else None,
+                "structure": structure,
+                "spread_role": role,
+                "action": "CLOSE",
+                "exit_reason": reason,
+                # Net spread P&L on the defining (short-close) row only, so the ledger
+                # shows it once. Readers that sum realized P&L use db.trade_fills, not
+                # order docs, so this is purely for the per-row display.
+                "realized_pnl": net_pnl if role == "short" else None,
+                "net_pnl": net_pnl if role == "short" else None,
+                "idempotency_key": f"exit:{pos_id}:{role}",
+                "created_at": closed_at,
+                "updated_at": closed_at,
+            })
+        except Exception as exc:  # noqa: BLE001 — audit row must never break the close
+            logger.error("Spread exit order row failed pos=%s role=%s: %s", pos_id, role, exc)
+
+
 async def close_credit_spread(
     db,
     position: Dict[str, Any],
@@ -460,6 +528,15 @@ async def close_credit_spread(
         })
     except Exception as exc:  # audit row must never break the close/accounting
         logger.error("Spread close trade_fills insert failed for %s: %s", pos_id, exc)
+
+    # Audit: exit order rows (one per leg) so the order ledger shows the closing
+    # trades, not just the entries. Uses the real exit LTPs (post-slippage for paper,
+    # real fills for live via short_ltp/long_ltp reassigned above).
+    await _record_spread_exit_orders(
+        db, position, structure="credit_spread",
+        exit_price_by_role={"short": short_ltp, "long": long_ltp},
+        qty=qty, net_pnl=net_pnl, reason=reason, closed_at=closed_at, is_live=is_live,
+    )
 
     # strategy.today_pnl / total_pnl is a CACHE field maintained identically by
     # PortfolioLedger on every full close (each writer counts its own trades once,
@@ -773,6 +850,13 @@ async def close_debit_spread(
         {"$set": {"last_pnl": net_pnl},
          "$inc": {"today_pnl": net_pnl, "total_pnl": net_pnl, "total_trades": 1,
                   "wins": 1 if net_pnl > 0 else 0, "losses": 1 if net_pnl < 0 else 0}},
+    )
+
+    # Audit: exit order rows (one per leg) so the ledger shows the closing trades.
+    await _record_spread_exit_orders(
+        db, position, structure="debit_spread",
+        exit_price_by_role={"short": short_ltp, "long": long_ltp},
+        qty=qty, net_pnl=net_pnl, reason=reason, closed_at=closed_at, is_live=False,
     )
 
     logger.info(
