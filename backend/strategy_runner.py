@@ -89,7 +89,10 @@ EQUITY_COUNTERTREND_BLOCK_STRENGTH = float(os.environ.get("EQUITY_COUNTERTREND_B
 # per stock) is unaffected. 0 disables. Env-tunable.
 MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING = int(os.environ.get("MAX_DIRECTIONAL_EXPOSURE_PER_UNDERLYING", "3"))
 _EXPOSURE_OPEN_STATUSES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]
-CREDIT_ENTRY_WINDOW = os.environ.get("CREDIT_ENTRY_WINDOW", "0945-1300").strip()
+# 2026-07-09 (founder-directed): widened 0945-1300 -> 0945-1500 so credit spreads
+# can enter the full session, matching the per-strategy code windows. 09:45 open
+# guard + 15:00 pre-squareoff guard kept; "off" disables entirely.
+CREDIT_ENTRY_WINDOW = os.environ.get("CREDIT_ENTRY_WINDOW", "0945-1500").strip()
 EQUITY_ENTRY_CUTOFF = os.environ.get("EQUITY_ENTRY_CUTOFF", "1430").strip()
 BANKNIFTY_THETA_EXPIRY_WEEK_ONLY = os.environ.get("BANKNIFTY_THETA_EXPIRY_WEEK_ONLY", "true").lower() == "true"
 
