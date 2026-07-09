@@ -3548,7 +3548,7 @@ DEFAULT_OPTION_STRATEGIES = [
         return []
     d = data[-1]
     clock = str(d.get('date', ''))[11:16]
-    if clock and (clock < '09:45' or clock > '13:00'):
+    if clock and (clock < '09:45' or clock > '15:00'):
         return []
     return [{
         'date': d['date'], 'action': 'BUY', 'direction': 'CE',
@@ -3581,7 +3581,7 @@ DEFAULT_OPTION_STRATEGIES = [
     closes = [float(d.get('close') or 0) for d in data]
     d = data[-1]
     clock = str(d.get('date', ''))[11:16]
-    if clock and (clock < '09:45' or clock > '13:00'):
+    if clock and (clock < '09:45' or clock > '15:00'):
         return []
     ma20 = sum(closes[-20:]) / 20
     ma50 = sum(closes[-50:]) / 50
@@ -3617,7 +3617,7 @@ DEFAULT_OPTION_STRATEGIES = [
         return []
     d = data[-1]
     clock = str(d.get('date', ''))[11:16]
-    if clock and (clock < '09:45' or clock > '13:00'):
+    if clock and (clock < '09:45' or clock > '15:00'):
         return []
     return [{
         'date': d['date'], 'action': 'BUY', 'direction': 'CE',
@@ -3653,7 +3653,7 @@ DEFAULT_OPTION_STRATEGIES = [
     closes = [float(d.get('close') or 0) for d in data]
     d = data[-1]
     clock = str(d.get('date', ''))[11:16]
-    if clock and (clock < '09:45' or clock > '13:00'):
+    if clock and (clock < '09:45' or clock > '15:00'):
         return []
     ten_range = (max(closes[-10:]) - min(closes[-10:])) / max(1.0, closes[-1])
     if ten_range > 0.035:
@@ -3920,6 +3920,10 @@ DEFAULT_OPTION_STRATEGIES = [
         # 100% green months. All three gates independently positive (bull +262,
         # bear +243, range +220 per trade). CAVEAT: avg credit ~Rs18 -> edge dies
         # above ~5-8% slippage; forward-paper must precede any live pilot.
+        # 2026-07-09 (founder-directed): entry window widened 12:30 -> 15:00 so the
+        # scalper works the full session instead of one morning trade. This DEVIATES
+        # from the OOS geometry (validated on 09:45-12:30 entries); the afternoon
+        # window is unvalidated and forward-paper is the judge.
         "name": "QG-O11 NIFTY Regime Seller Credit Scalp",
         "description": "Regime-gated intraday NIFTY credit-spread scalp. One brain, three gates: trend-up day sells a bull-put spread on a VWAP-pullback hold; trend-down day sells a bear-call spread on a failed bounce at VWAP; choppy day fades RSI stretch. Width-1, 1-strike-OTM, books 35% of credit, stop at 1.5x credit. Paper-forward only.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
@@ -3941,7 +3945,7 @@ DEFAULT_OPTION_STRATEGIES = [
     if len(day) < 30:
         return []
     clock = str(d.get('date', ''))[11:16]
-    if not clock or clock < '09:45' or clock > '12:30':
+    if not clock or clock < '09:45' or clock > '15:00':
         return []
     closes = [float(x.get('close') or 0) for x in day]
     highs = [float(x.get('high', x.get('close')) or 0) for x in day]

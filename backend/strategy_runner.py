@@ -124,10 +124,13 @@ def _equity_entry_cutoff_minutes() -> Optional[int]:
     return _parse_hhmm_minutes(EQUITY_ENTRY_CUTOFF)
 
 
-# Book-wide new-entry cutoff (2026-07-03): attribution since 06-25 shows midday +
-# afternoon entries at −₹13.1k combined vs morning/open +₹2.8k. Exits and EOD
-# square-off are unaffected. "off"/"0" disables.
-ENTRY_CUTOFF_IST = os.environ.get("ENTRY_CUTOFF_IST", "1230")
+# Book-wide new-entry cutoff. DISABLED 2026-07-09 (founder-directed): the 12:30
+# book-wide block was starving the strategies of the whole afternoon session. Each
+# strategy now owns its own entry window in its python_code (09:45–15:00), and the
+# per-position 15:25 spread square-off / 15:10 intraday square-off still prevent
+# holding into the close — so protection lives at the strategy/exit layer, not a
+# blanket midday gate. Set ENTRY_CUTOFF_IST to e.g. "1230" to re-enable book-wide.
+ENTRY_CUTOFF_IST = os.environ.get("ENTRY_CUTOFF_IST", "off")
 
 
 def _global_entry_cutoff_minutes() -> Optional[int]:
