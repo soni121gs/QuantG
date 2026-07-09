@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 import pymongo  # noqa: E402
 from core.edge_lab import build_snapshot  # noqa: E402
 from core.bhavcopy_store import BhavcopyStore  # noqa: E402
+from core.edge_research_ledger import trial_document  # noqa: E402
 
 
 def main():
@@ -38,6 +39,16 @@ def main():
         raise
     snap["_id"] = "latest"
     db.edge_lab_snapshots.replace_one({"_id": "latest"}, snap, upsert=True)
+    for row in snap.get("oos", {}).get("rows") or []:
+        user_id = next((str(s.get("user_id")) for s in strategies if s.get("name") == row.get("name")), "system")
+        trial = trial_document(user_id=user_id, row=row, snapshot=snap)
+        db.strategy_trials.update_one(
+            {"_id": trial["_id"]},
+            {"$set": {**trial, "last_run_at": snap.get("generated_at")},
+             "$setOnInsert": {"created_at": datetime.now(timezone.utc)},
+             "$inc": {"run_count": 1}},
+            upsert=True,
+        )
     print(f"done: status={snap.get('status')} generated_at={snap.get('generated_at')}", flush=True)
     if snap.get("oos"):
         print("OOS verdict counts:", snap["oos"]["counts"])
