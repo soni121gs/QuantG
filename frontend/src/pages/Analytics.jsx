@@ -541,6 +541,7 @@ export default function Analytics() {
   const [oos, setOos] = useState(null);
   const [edgeLab, setEdgeLab] = useState(null);
   const [intradayOos, setIntradayOos] = useState(null);
+  const [edgeMath, setEdgeMath] = useState(null);
   const [loading, setLoading] = useState(false);
   const [elLoading, setElLoading] = useState(false);
   const [error, setError] = useState("");
@@ -551,12 +552,14 @@ export default function Analytics() {
     setLoading(true);
     setError("");
     try {
-      const [r, o] = await Promise.all([
+      const [r, o, e] = await Promise.all([
         api.get("/ops/risk-scorecard"),
         api.get("/ops/hermes-oos-validation").catch(() => ({ data: null })),
+        api.get("/execution/snapshot").catch(() => ({ data: null })),
       ]);
       setScorecard(r.data);
       setOos(o.data);
+      setEdgeMath(e.data?.edge_math || null);
     } catch (e) {
       setError(e?.response?.data?.detail || e.message || "Failed to load scorecard");
     } finally {
@@ -706,6 +709,23 @@ export default function Analytics() {
 
       {tab === "realized" && (
         <>
+          <section className="qd-card p-4">
+            <div className="qd-section-title">EdgeMath — current contract decisions</div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {(edgeMath?.positions || []).slice(0, 6).map((row, i) => (
+                <div key={`${row.selection_signature || row.target_symbol}-${i}`} className="rounded border border-[var(--qd-border)] p-3">
+                  <div className="text-sm font-semibold text-[var(--qd-text)]">{row.target_symbol || row.selection_signature}</div>
+                  <div className="mt-1 font-mono text-xs text-[var(--qd-text-2)]">
+                    contract {Number(row.contract_edge_score || 0).toFixed(3)} · size {Number(row.edge_math?.edge_score || 0).toFixed(3)} · lots {row.edge_math?.final_lots ?? "-"}
+                  </div>
+                  <div className="mt-1 text-xs text-[var(--qd-text-3)]">
+                    {row.edge_math?.reason || "Awaiting rolling expectancy"}
+                  </div>
+                </div>
+              ))}
+              {!(edgeMath?.positions || []).length && <div className="text-xs text-[var(--qd-text-3)]">No EdgeMath-sized spread has entered yet.</div>}
+            </div>
+          </section>
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryTile
               label="Verdicts"

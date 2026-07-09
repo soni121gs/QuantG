@@ -245,6 +245,7 @@ async def open_credit_spread(
         "contract_size_mult": spread.get("contract_size_mult"),
         "selection_signature": spread.get("selection_signature"),
         "selection_factors": spread.get("selection_factors"),
+        "edge_math": spread.get("edge_math"),
         "spread_tp_value": levels["spread_tp_value"],
         "spread_sl_value": levels["spread_sl_value"],
         "net_delta": spread.get("net_delta"),

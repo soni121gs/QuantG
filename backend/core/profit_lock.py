@@ -110,9 +110,10 @@ async def _square_off_and_stand_down(
     await db.strategies.update_one(
         {"id": sid, "user_id": uid},
         {"$set": {
-            "day_profit_locked": True,
+            "day_profit_locked": False,
             "day_profit_locked_date": _ist_date(),
             "day_profit_locked_reason": f"{scope}-{reason}",
+            "day_profit_size_mult": 0.25,
             "updated_at": _now(),
         }},
     )
@@ -197,9 +198,10 @@ async def evaluate_and_apply_locks(db, close_fn: Callable[..., Coroutine]) -> No
             await db.strategies.update_many(
                 {"user_id": uid, "status": "live"},
                 {"$set": {
-                    "day_profit_locked": True,
+                    "day_profit_locked": False,
                     "day_profit_locked_date": date,
                     "day_profit_locked_reason": f"book-{breason}",
+                    "day_profit_size_mult": 0.25,
                     "updated_at": _now(),
                 }},
             )

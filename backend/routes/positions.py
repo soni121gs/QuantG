@@ -67,4 +67,14 @@ async def execution_snapshot(sync: bool = False, user=Depends(get_current_user))
     except Exception as exc:
         snapshot["upstox_data_health"] = {"readiness": "UNKNOWN", "reason": str(exc)[:200]}
         snapshot["broker_reconciliation"] = {"status": "UNKNOWN", "errors": [str(exc)[:200]]}
+    positions = await db.strategy_positions.find(
+        {"user_id": user["id"], "edge_math": {"$exists": True}},
+        {"_id": 0, "strategy_id": 1, "target_symbol": 1, "status": 1,
+         "contract_edge_score": 1, "selection_signature": 1, "selection_factors": 1,
+         "edge_math": 1, "created_at": 1},
+    ).sort("created_at", -1).limit(25).to_list(25)
+    advice = await db.edge_math_advice.find_one(
+        {"user_id": user["id"]}, {"_id": 0},
+    )
+    snapshot["edge_math"] = {"positions": positions, "advice": advice}
     return snapshot

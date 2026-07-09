@@ -357,6 +357,8 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                                 "expectancy": sum(float(r.get("realized_pnl") or 0) for r in rows) / len(rows)}
 
                     await compile_hermes_advice(db, user_id)
+                    from core.edge_runtime import compile_edge_advice
+                    await compile_edge_advice(db, user_id)
                     reverted = await check_and_autorevert(db, user_id, _strategy_expectancy)
                     if reverted:
                         logger.warning("HSI-54 auto-reverted %d Hermes config change(s): %s", len(reverted), reverted)

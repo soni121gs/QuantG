@@ -52,6 +52,7 @@ def _score(
             "time_scale": round(time_scale, 4),
             "reuse_mult": reuse_mult,
         },
+        "vol_ratio": round(max(0.7, min(1.5, float(short.get("iv") or 15.0) / 15.0)), 4),
     })
     return spread
 

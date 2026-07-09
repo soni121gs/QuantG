@@ -462,13 +462,6 @@ class SignalManager:
         # 0. Day profit lock — once a strategy (or the whole book) has booked its
         # gains for the day, position_monitor flags day_profit_locked and squares
         # off. Block any re-entry for the rest of that IST day. (See core/profit_lock.)
-        if strategy.get("day_profit_locked"):
-            today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-            if strategy.get("day_profit_locked_date") == today_ist:
-                logger.info("[LIMITS] strategy=%s blocked: day-profit-locked (%s)",
-                            strategy_id, strategy.get("day_profit_locked_reason"))
-                return False, "profit-locked-day", 1.0
-
         # 0b. Day loss kill-switch — once a strategy (or the whole book) breaches its
         # daily loss floor, position_monitor flags day_loss_locked and squares off.
         # Block any re-entry for the rest of that IST day. (See core/loss_killswitch.)
@@ -599,6 +592,61 @@ def _positive_float(*values: Any) -> Optional[float]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+async def _edge_math_spread_size(
+    db, *, user_id: str, strategy: Dict[str, Any], spread: Dict[str, Any],
+    lot_size: int, risk_budget: float, regime: str,
+) -> tuple[int, Dict[str, Any]]:
+    from core.edge_runtime import cached_rolling_edge_stats
+    from core.edge_sizer import edge_size, payoff_ratio
+    from core.spread_builder import lots_for_risk
+
+    sid = strategy.get("id")
+    vol_state = str(spread.get("vol_state") or "UNKNOWN")
+    stats = await cached_rolling_edge_stats(
+        db, user_id=user_id, strategy_id=sid, regime=regime,
+        vol_state=vol_state,
+    )
+    wallet = await db.paper_wallets.find_one(
+        {"user_id": user_id}, {"_id": 0, "balance": 1, "available_cash": 1},
+    ) or {}
+    equity = float(wallet.get("balance") or wallet.get("available_cash") or risk_budget)
+    day_pnl = float(strategy.get("today_pnl") or 0)
+    risk_cfg = (strategy.get("visual_config") or {}).get("risk") or {}
+    daily_budget = float(risk_cfg.get("daily_loss_limit") or risk_budget or 1)
+    peak_doc = await db.profit_lock_state.find_one(
+        {"scope": "strat", "key": sid}, {"_id": 0, "peak": 1}, sort=[("updated_at", -1)],
+    ) or {}
+    per_lot_loss = float(spread.get("max_loss") or 0) * max(1, int(lot_size))
+    decision = edge_size(
+        stats=stats,
+        payoff_b=payoff_ratio(stats.avg_win, stats.avg_loss),
+        equity=equity,
+        per_lot_max_loss=per_lot_loss,
+        day_pnl=day_pnl,
+        daily_risk_budget=daily_budget,
+        peak_day_pnl=peak_doc.get("peak"),
+        floor_lots=1 if str(strategy.get("mode") or "paper").lower() == "paper" else 0,
+    )
+    capital_cap = lots_for_risk(float(spread.get("max_loss") or 0), lot_size, risk_budget)
+    contract_mult = max(0.10, min(1.0, float(spread.get("contract_size_mult") or 1.0)))
+    profit_mult = max(0.10, min(1.0, float(strategy.get("day_profit_size_mult") or 1.0)))
+    lots = min(max(1, capital_cap), max(1, int(round(decision.lots * contract_mult * profit_mult))))
+    telemetry = {
+        **decision.__dict__,
+        "rolling_n": stats.n,
+        "win_rate": stats.win_rate,
+        "avg_win": stats.avg_win,
+        "avg_loss": stats.avg_loss,
+        "contract_mult": contract_mult,
+        "profit_mult": profit_mult,
+        "capital_cap_lots": capital_cap,
+        "final_lots": lots,
+        "regime": regime,
+        "vol_state": vol_state,
+    }
+    return lots, telemetry
 
 
 async def _publish_signal_event(
@@ -842,9 +890,11 @@ async def _dispatch_signal_via_unified_engine(
             or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
             or 15000.0
         )
-        _base_spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
-        _contract_mult = max(0.10, min(1.0, float(_spread.get("contract_size_mult") or 1.0)))
-        _spread_lots = max(1, int(round(_base_spread_lots * _contract_mult)))
+        _spread_lots, _edge_telemetry = await _edge_math_spread_size(
+            db, user_id=user_id, strategy=strategy, spread=_spread,
+            lot_size=lot_size, risk_budget=_risk_budget, regime=_regime_at_entry,
+        )
+        _spread["edge_math"] = _edge_telemetry
         # Per-strategy TP/SL geometry (visual_config.options.credit_tp_frac /
         # credit_sl_mult) — lets a credit scalp book 35% of credit with a 1.5x
         # stop while the theta book keeps the global env defaults.

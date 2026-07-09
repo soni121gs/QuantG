@@ -86,3 +86,33 @@ def build_market_context(*, source: str, **inputs: Any) -> Dict[str, Any]:
     if source not in {"live", "historical"}:
         raise ValueError("source must be live or historical")
     return build_context(source=source, **inputs)
+
+
+async def compile_edge_advice(db, user_id: str, *, limit: int = 60) -> Dict[str, Any]:
+    """Observe-only EOD ratchet suggestions; never mutates strategy config."""
+    strategies = await db.strategies.find(
+        {"user_id": user_id}, {"_id": 0, "id": 1, "name": 1},
+    ).to_list(500)
+    rows = []
+    for strategy in strategies:
+        trades = await db.trade_attribution.find(
+            {"user_id": user_id, "strategy_id": strategy["id"]},
+            {"_id": 0, "realized_pnl": 1},
+        ).sort("exit_time", -1).limit(limit).to_list(limit)
+        stats = rolling_stats_from_pnls([float(r.get("realized_pnl") or 0) for r in reversed(trades)])
+        rows.append({
+            "strategy_id": strategy["id"],
+            "strategy_name": strategy.get("name"),
+            "n": stats.n,
+            "expectancy": stats.expectancy,
+            "suggested_risk_mult": round(max(0.25, min(1.25, 1.0 + stats.expectancy / 2000.0)), 3),
+            "status": "observe_only",
+        })
+    doc = {
+        "user_id": user_id,
+        "generated_at": datetime.now(timezone.utc),
+        "enabled": False,
+        "rows": rows,
+    }
+    await db.edge_math_advice.update_one({"user_id": user_id}, {"$set": doc}, upsert=True)
+    return doc
