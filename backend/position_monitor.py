@@ -124,6 +124,29 @@ async def _strategy_holds_to_expiry(db, strategy_id) -> bool:
     return val
 
 
+# Per-strategy time-based recycle for spreads (2026-07-09): a spread that drifts
+# sideways never hits TP/SL/trail and would sit until the 15:25 square-off, tying
+# up the one-spread-per-strategy slot all day. If risk.time_exit_minutes > 0, close
+# it after that many minutes so the strategy can re-enter (turnover > a dead hold).
+_TIME_EXIT_SIDS: Dict[str, Optional[int]] = {}
+
+
+async def _strategy_time_exit_minutes(db, strategy_id) -> Optional[int]:
+    if not strategy_id:
+        return None
+    if strategy_id in _TIME_EXIT_SIDS:
+        return _TIME_EXIT_SIDS[strategy_id]
+    doc = await db.strategies.find_one({"id": strategy_id}, {"visual_config.risk.time_exit_minutes": 1})
+    raw = (((doc or {}).get("visual_config") or {}).get("risk") or {}).get("time_exit_minutes")
+    try:
+        val: Optional[int] = int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        val = 0
+    val = val if (val and val > 0) else None
+    _TIME_EXIT_SIDS[strategy_id] = val
+    return val
+
+
 def _spread_past_expiry(pos) -> bool:
     """True if today (IST) is on/after the spread's option expiry — settle now.
     Unknown/unparseable expiry → True (never hold a spread indefinitely)."""
@@ -813,19 +836,33 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     if hold_to_expiry:
         return
 
+    # Price-based exit first: SL / TP / trailing-lock (credit) or TP/SL (debit).
     if structure == "debit_spread":
         reason = debit_spread_exit_reason(pos, v["value"])
-        if reason:
-            logger.info("spread monitor exit pos=%s reason=%s value=%.2f", pos.get("id"), reason, v["value"])
-            await close_debit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
     else:
         # RES-3 dynamic exit: hard stop + take-profit (unchanged) PLUS a trailing
         # lock that banks a faded winner before it round-trips to red.
         reason = evaluate_spread_exit(position=pos, current_value=v["value"],
                                       current_pnl=v["pnl"], peak_pnl=peak_pnl)
-        if reason:
-            logger.info("spread monitor exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",
-                        pos.get("id"), reason, v["value"], v["pnl"], peak_pnl or 0.0)
+
+    # Time-based recycle: if no price trigger fired and the spread has been held past
+    # the strategy's time_exit_minutes, close it so the slot frees for re-entry. This
+    # is what makes a scalper actually turn over instead of holding one drift all day.
+    if reason is None:
+        _max_hold = await _strategy_time_exit_minutes(db, pos.get("strategy_id"))
+        if _max_hold:
+            _entry = parse_iso_dt(pos.get("entry_time") or pos.get("created_at"))
+            if _entry is not None:
+                _held_min = (datetime.now(timezone.utc) - _entry).total_seconds() / 60.0
+                if _held_min >= _max_hold:
+                    reason = "spread-time-exit"
+
+    if reason:
+        logger.info("spread monitor exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",
+                    pos.get("id"), reason, v["value"], v["pnl"], peak_pnl or 0.0)
+        if structure == "debit_spread":
+            await close_debit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
+        else:
             await close_credit_spread(db, pos, reason=reason, short_ltp=short_ltp, long_ltp=long_ltp)
 
 

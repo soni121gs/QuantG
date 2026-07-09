@@ -6686,13 +6686,19 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # variant (aligned with the RES §15 dynamic-seller mandate); forward-paper evidence.
     if _template.get("name") == "QG-O1 NIFTY Put Spread Theta Core":
         _template["required_capital"] = 35000.0
-        _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 0,
+        # time_exit_minutes 120: recycle a drifting spread after 2h so the slot frees
+        # for re-entry (TP 50% / SL 2x / trailing-lock still exit earlier when hit).
+        _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 120,
                       "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
                       "max_trades_day": 6, "strategy_category": "swing"})
+    if _template.get("name") == "QG-O4 SENSEX Call Spread Range Pilot":
+        _risk["time_exit_minutes"] = 120  # same 2h recycle as QG-O1
     # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
+    # time_exit_minutes 45: a scalp that hasn't hit TP(35%)/SL(1.5x) in 45 min is
+    # cut so the strategy can take its next scalp instead of holding one all day.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
-        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3})
+        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 45})
     if _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
         _template["initial_status"] = "live"
         if _template.get("required_capital") is not None:
