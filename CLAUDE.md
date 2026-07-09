@@ -59,6 +59,7 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | Auth routes | `backend/routes/auth.py` |
 | AI bot routes | `backend/routes/ai.py` |
 | Pre-trade risk checks (Greeks, kill-switch, sizing) | `backend/core/risk_manager.py` |
+| **EdgeMath sizing core** (pure Kelly/vol-target/day-governor, §16) | `backend/core/edge_sizer.py` |
 | Position ledger (create/close positions from fills) | `backend/core/portfolio_ledger.py` |
 | Order routing (paper vs live) | `backend/core/execution_router.py` |
 | Idempotency key generation | `backend/core/order_manager.py` |
@@ -836,3 +837,24 @@ Plus **F** (the `market_context` bundle object, one interface both scalper and b
 
 ### 15.4 Where the state lives
 Harness task tracker + `TASKS.md` (RES-1..RES-8 block) + memory `project_realedge_roadmap_costmodel_07_08.md`. Keep all four in sync when a task lands.
+
+---
+
+## 16. EdgeMath (EM) — continuous edge-based sizing & P&L intelligence (added 2026-07-09)
+
+**Active program. Founder mandate: no more hard gates/blockers — replace every binary allow/block with a continuous edge→size function.** The book should size UP when a strategy's own edge is fat and the day is green, and fade toward ZERO as the edge decays or the day turns red — smoothly, never a block. **Honest target: `E[daily P&L] > 0` with an asymmetric, bounded loss tail** (small capped losses, larger let-run wins). NOT a guaranteed green day — variance forbids that; say so plainly, no "this concept should work" hearsay.
+
+### 16.1 The three layers (all PURE — one code path for live monitor + OOS backtester)
+- **L1 signal→edge score:** expectancy `E = W·μ_win − (1−W)·μ_loss` + payoff `b = μ_win/μ_loss`, from the strategy's OWN rolling closed trades (source: `trade_attribution.attribution_rollup`, already computes win_rate/expectancy by regime/bias/hold_bucket).
+- **L2 edge→base size:** fractional-Kelly conviction (`f = W − (1−W)/b` → conviction∈[0,1] vs `EDGE_KELLY_REF`) × volatility-target lots (`EDGE_RISK_PER_TRADE_PCT × equity ÷ per-lot-max-loss`). Weak/negative edge → conviction→0 = **soft stand-down** — this is the loss-streak GATE replaced by math.
+- **L3 day-P&L governor:** `m = clamp(1 + day_pnl/budget, 0.25, 1.5)` — green compounds, red de-risks (each further trade smaller → no revenge blow-up) + profit ratchet (gave back > `EDGE_DAY_GOV_GIVEBACK` of peak → clamp to min). **This is the "loss ≤ profit" shaping** — asymmetry, not a promise.
+
+### 16.2 State + conflict map (verified 2026-07-09)
+Plan/tasks in **`TASKS.md`** (EM-1..EM-9, top of ACTIVE QUEUE) + memory `project_edgemath_sizing_system_07_09.md`. Keep both + the harness tracker in sync.
+- **EM-1 DONE:** `core/edge_sizer.py` (pure, 25 tests, isolated — nothing imports it yet; ships on the next backend rebuild at EM-4).
+- Sizing injection point = `signal_manager.py:845/890` (`_spread_lots = lots_for_risk(...)` → `open_credit_spread`). EM-4 replaces this, capped to `risk_manager` capital + `core/capital_model` margin.
+- **Biggest overlap: `core/profit_lock.py`** is an existing L3 that HARD-BLOCKS re-entry (`day_profit_locked`, its only writer; `signal_manager` reads+blocks). **EM-5 must convert it to continuous size-down (no block).**
+- Legacy `alloc_mult` loss-streak throttle (`signal_manager.py:1110`) → subsumed by EM-4. Spreads bypass the single-leg 1-lot cap → EM targets the spread path first.
+
+### 16.3 Discipline
+`OOS proof (EM-7) BEFORE live wiring (EM-4)` — dynamic sizing must beat FLAT sizing on OOS expectancy AND compress the daily-loss distribution before it touches the live path. `CORE_ENGINE_LIVE_ENABLED=false` throughout. Hermes narrates the "why"; the code computes the numbers.
