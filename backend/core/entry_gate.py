@@ -55,17 +55,42 @@ def seller_entry_gate(
     return {"allow": True, "reason": "RES2_GATE: passed (rich + sell-safe)", "vol_edge": ve}
 
 
+# A day-to-day gap larger than this (calendar days) is a DATA HOLE, not a holiday
+# cluster — the return across it is spurious and must not enter realized vol. NSE's
+# longest real gap (long weekend + festival) is ~4 days; 6 gives margin.
+_MAX_CONTIGUOUS_GAP_DAYS = int(os.environ.get("RES2_RV_MAX_GAP_DAYS", "6"))
+
+
 def _recent_daily_closes(underlying: str, lookback: int = 30) -> List[float]:
     """Recent daily closes from the bhavcopy store (trailing, up to yesterday —
-    fine for a realized-vol measure). Cached per underlying per day."""
+    fine for a realized-vol measure). Cached per underlying per day.
+
+    Gap-robust (2026-07-09): the store is backfilled in chunks and can have a
+    multi-month HOLE (e.g. 2025-12-31 → 2026-07-01). Concatenating across that hole
+    injects a fake ~-8% 'daily' return that blew realized vol up to ~32% and
+    permanently blocked the RES2 seller gate. We keep only the CONTIGUOUS recent run
+    (restart the run whenever two dated bars are >6 calendar days apart) so RV is
+    measured on real consecutive sessions, never across a data hole."""
     key = f"{underlying.upper()}:{datetime.now(timezone.utc):%Y-%m-%d}"
     if key in _rv_cache:
         return _rv_cache[key]
     closes: List[float] = []
     try:
         from core.bhavcopy_store import BhavcopyStore
-        candles = BhavcopyStore().underlying_daily(underlying.upper()) or []
-        closes = [float(c["close"]) for c in candles[-(lookback + 2):] if c.get("close")]
+        candles = [c for c in (BhavcopyStore().underlying_daily(underlying.upper()) or []) if c.get("close")]
+        recent = candles[-(lookback + 2):]
+        run: List[float] = []
+        prev_d = None
+        for c in recent:
+            try:
+                d = datetime.strptime(str(c.get("date"))[:10], "%Y-%m-%d").date()
+            except Exception:  # noqa: BLE001
+                d = None
+            if prev_d is not None and d is not None and (d - prev_d).days > _MAX_CONTIGUOUS_GAP_DAYS:
+                run = []  # data hole → drop everything before it, restart the run
+            run.append(float(c["close"]))
+            prev_d = d
+        closes = run
     except Exception as exc:  # noqa: BLE001 — fail-open
         logger.debug("entry_gate: daily closes unavailable for %s: %s", underlying, exc)
     _rv_cache[key] = closes
