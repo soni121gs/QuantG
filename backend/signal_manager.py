@@ -29,6 +29,15 @@ ACTIVE_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN"
 SUPPORTED_SIGNAL_SYMBOLS = {"NIFTY", "BANKNIFTY", "SENSEX"}
 SIGNAL_SPAM_WINDOW_SECONDS = int(os.environ.get("SIGNAL_SPAM_WINDOW_SECONDS", "300"))
 SIGNAL_SPAM_THRESHOLD = int(os.environ.get("SIGNAL_SPAM_THRESHOLD", "0"))
+# 2026-07-09 (founder-directed): the loss-streak HARD BLOCK cut a strategy off after
+# N consecutive SLs — but for a validated edge a losing streak is variance, not a
+# broken strategy, and the block bites right before mean-reversion. Disabled by
+# default (0). The soft size-throttle (below) still trims size on a streak without
+# blocking. Set LOSS_STREAK_BLOCK_AT to e.g. 6 to re-arm the hard block.
+LOSS_STREAK_BLOCK_AT = int(os.environ.get("LOSS_STREAK_BLOCK_AT", "0"))
+# Defined-risk credit/debit spreads own their fill decision (both legs, capped loss);
+# skip the buyer-oriented option-quality gate for them by default. "false" re-arms.
+QUALITY_GATE_SKIP_SPREADS = os.environ.get("QUALITY_GATE_SKIP_SPREADS", "true").lower() == "true"
 STRATEGY_QUARANTINE_THRESHOLD = int(os.environ.get("STRATEGY_QUARANTINE_THRESHOLD", "5"))
 PAPER_SIMULATED_SOURCES = {"PAPER_SIMULATED_CONTRACT", "PAPER_SIMULATED_PRICE"}
 PAPER_OPTION_MIN_SCORE = int(os.environ.get("PAPER_OPTION_MIN_SCORE", "35"))
@@ -531,8 +540,8 @@ class SignalManager:
         # over to block today's first signals (fixes the all-signals-filtered 0-trade day).
         if streak and not loss_streak_is_current((streak_doc or {}).get("last_sl_at")):
             streak = 0
-        if streak >= 6:
-            logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= 6 (blocked until next day reset)", strategy_id, streak)
+        if LOSS_STREAK_BLOCK_AT and streak >= LOSS_STREAK_BLOCK_AT:
+            logger.info("[THROTTLE] strategy=%s BLOCKED: loss_streak=%d >= %d (blocked until next day reset)", strategy_id, streak, LOSS_STREAK_BLOCK_AT)
             return False, "loss-streak-blocked", 1.0
         if streak >= 5:
             logger.info("[THROTTLE] strategy=%s THROTTLED: loss_streak=%d >= 5 — allocation_multiplier=0.25", strategy_id, streak)
@@ -1115,7 +1124,10 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                             # NO_DEPTH is informational: the score threshold still applies,
                             # but only a true BLOCK hard-stops the signal here.
                             quality_block_reason = None
-                            if quality_readiness == "BLOCK":
+                            _q_structure = str(contract.get("structure") or ((sig.get("visual_config") or {}).get("options") or {}).get("structure") or "")
+                            if QUALITY_GATE_SKIP_SPREADS and _q_structure in ("credit_spread", "debit_spread"):
+                                pass  # defined-risk spread: both legs priced, loss capped by wing — skip the buyer-oriented quality gate
+                            elif quality_readiness == "BLOCK":
                                 quality_block_reason = "option-quality-readiness-block"
                             elif quality_score is not None and float(quality_score) < min_score:
                                 quality_block_reason = f"option-quality-score-low:{quality_score:.0f}<{min_score}"

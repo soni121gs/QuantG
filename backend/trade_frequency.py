@@ -57,9 +57,14 @@ _CLASS_CAPS: Dict[str, Dict[str, Any]] = {
     "default":      {"daily_cap": int(os.environ.get("FREQ_CAP_DEFAULT",      "8")), "cooldown_bars": 4},
 }
 
-LOSS_STREAK_TRIGGER  = int(os.environ.get("LOSS_STREAK_TRIGGER",  "3"))
+# 2026-07-09 (founder-directed): loss-streak pause + half-cap disabled by default.
+# A losing streak on a validated edge is variance, not a broken strategy; pausing/
+# halving right before mean-reversion is overprotection that blocks good trades. The
+# per-day daily-loss kill switch (risk_manager) still caps a genuinely bad day.
+# Set LOSS_STREAK_TRIGGER to e.g. 3 and LOSS_STREAK_HALF_CAP=true to re-arm.
+LOSS_STREAK_TRIGGER  = int(os.environ.get("LOSS_STREAK_TRIGGER",  "99"))
 LOSS_STREAK_PAUSE_MIN= int(os.environ.get("LOSS_STREAK_PAUSE_MIN","30"))
-LOSS_STREAK_HALF_CAP = os.environ.get("LOSS_STREAK_HALF_CAP", "true").lower() == "true"
+LOSS_STREAK_HALF_CAP = os.environ.get("LOSS_STREAK_HALF_CAP", "false").lower() == "true"
 PROFIT_CAP_BOOST_MAX = int(os.environ.get("FREQ_PROFIT_CAP_BOOST_MAX", "2"))
 
 

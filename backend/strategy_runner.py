@@ -95,6 +95,12 @@ _EXPOSURE_OPEN_STATUSES = ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN",
 CREDIT_ENTRY_WINDOW = os.environ.get("CREDIT_ENTRY_WINDOW", "0945-1500").strip()
 EQUITY_ENTRY_CUTOFF = os.environ.get("EQUITY_ENTRY_CUTOFF", "1430").strip()
 BANKNIFTY_THETA_EXPIRY_WEEK_ONLY = os.environ.get("BANKNIFTY_THETA_EXPIRY_WEEK_ONLY", "true").lower() == "true"
+# 2026-07-09 (founder-directed): the external REGIME_GATE was built for single-leg
+# directional CE/PE BUYERS. A defined-risk credit/debit SPREAD owns its own regime
+# logic (QG-O11's regime brain, QG-O1's RES2 gate, QG-O4's range filter) and its
+# downside is capped by the wing — so the generic runner-level regime veto is
+# redundant overprotection for spreads. Skip it for spreads by default. "false" re-arms.
+REGIME_GATE_SKIP_SPREADS = os.environ.get("REGIME_GATE_SKIP_SPREADS", "true").lower() == "true"
 
 
 def _parse_hhmm_minutes(value: str) -> Optional[int]:
@@ -884,7 +890,9 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                             )
                             continue
 
-                    if _is_ce_exposure and not _long_ok:
+                    _sig_structure = str(((vc or {}).get("options") or {}).get("structure") or "")
+                    _skip_regime_gate = REGIME_GATE_SKIP_SPREADS and _sig_structure in ("credit_spread", "debit_spread")
+                    if not _skip_regime_gate and _is_ce_exposure and not _long_ok:
                         _reason = f"REGIME_GATE: {_regime.get('regime','?')} — CE/long exposure blocked"
                         await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_GATE", _reason)
                         await db.strategies.update_one(
@@ -895,7 +903,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                              "$inc": inc_set},
                         )
                         continue
-                    if _is_pe_exposure and not _short_ok:
+                    if not _skip_regime_gate and _is_pe_exposure and not _short_ok:
                         _reason = f"REGIME_GATE: {_regime.get('regime','?')} — PE/short exposure blocked"
                         await record_strategy_filter(db, s["id"], s.get("user_id"), "REGIME_GATE", _reason)
                         await db.strategies.update_one(
