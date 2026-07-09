@@ -3532,12 +3532,16 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "Defined-risk NIFTY put-spread income pilot from EDR-09/QG-O1: sell a ~3% OTM put spread with a wider 10-strike defined-risk wing and hold to weekly expiry to harvest downside volatility-risk premium. This is the primary paper-forward candidate; real-live promotion still requires forward-paper evidence.",
         "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
         "structure": "credit_spread", "spread_width": 10,
-        "short_otm_pct": 0.03, "wing_width": 10, "exit_mode": "expiry", "short_delta": 0.12,
+        "short_otm_pct": 0.03, "wing_width": 10, "exit_mode": "", "short_delta": 0.12,
+        "credit_tp_frac": 0.5, "credit_sl_mult": 2.0,
         "strategy_type": "Option Selling", "required_capital": 35000.0, "instrument_group": "NFO",
         "initial_status": "live",
+        # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
+        # credit (credit_tp_frac 0.5), stop at 2x credit (credit_sl_mult 2.0), then
+        # re-enter when the setup fires again (max_trades_day 6 / paper lifts to 24).
         "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 40000.0,
-                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
-                 "max_trades_day": 1},
+                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 6},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 20:
@@ -3633,12 +3637,15 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "SENSEX defined-risk call-spread pilot for range/down weeks. This is a 2-leg app-compatible substitute for the researched condor until 4-leg live support exists.",
         "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
         "structure": "credit_spread", "spread_width": 4,
-        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "expiry", "short_delta": 0.14,
+        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "", "short_delta": 0.14,
+        "credit_tp_frac": 0.5, "credit_sl_mult": 2.0,
         "strategy_type": "Option Selling", "required_capital": 30000.0, "instrument_group": "BFO",
         "initial_status": "live",
+        # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
+        # credit, stop at 2x credit, then re-enter when the range setup fires again.
         "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 25000.0,
-                 "time_exit_minutes": 0, "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
-                 "max_trades_day": 1},
+                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 6},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 40:
@@ -6666,16 +6673,18 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         if _template.get("name") not in OPTION_ALPHA_REBUILD_NAMES:
             _template["required_capital"] = 8000.0
         _risk.update(CREDIT_SPREAD_THETA_RISK)
-    # EDR-11/13: the OOS-validated put spread holds to weekly expiry — its DEFINED
-    # RISK (wing width) is the stop, so keep required_capital/daily_loss_limit above
-    # one designed max loss and disable intraday time-exit so the killswitch/time-exit
-    # can't force-close it before expiry. exit_mode="hold_to_expiry" (risk) mirrors
-    # the options.exit_mode="expiry" the position monitor keys off.
+    # 2026-07-09 (founder-directed): QG-O1 no longer holds to weekly expiry. It now
+    # books intraday at its credit TP (50% of credit) / SL (2x credit) and re-enters
+    # when the setup fires again. Keep required_capital/daily_loss_limit generous (the
+    # wing width still caps per-trade loss); exit_mode is intraday tp/sl/trailing so
+    # the position monitor evaluates targets instead of skipping them. NOTE: this
+    # removes QG-O1's held-to-expiry OOS validation — it is now an unvalidated intraday
+    # variant (aligned with the RES §15 dynamic-seller mandate); forward-paper evidence.
     if _template.get("name") == "QG-O1 NIFTY Put Spread Theta Core":
         _template["required_capital"] = 35000.0
         _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 0,
-                      "exit_mode": "hold_to_expiry", "cooldown_minutes": 60,
-                      "max_trades_day": 1, "strategy_category": "swing"})
+                      "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                      "max_trades_day": 6, "strategy_category": "swing"})
     # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":

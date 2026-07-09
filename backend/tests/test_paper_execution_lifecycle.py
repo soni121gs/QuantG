@@ -72,8 +72,9 @@ def test_seeded_strategy_exit_mode_matrix():
         name = strat["name"]
         exit_mode = strat.get("risk", {}).get("exit_mode")
         assert exit_mode in {"signal_or_tp_sl_trailing", "hold_to_expiry"}, f"{name} should have a protective exit mode"
-        if name.startswith("QG-O") and str(strat.get("structure") or "") == "credit_spread":
-            assert exit_mode == "hold_to_expiry", f"{name} should hold defined-risk spread to expiry"
+        # 2026-07-09 (founder-directed): the live QG-O credit spreads (QG-O1/O4/O11)
+        # no longer hold to expiry — they book intraday at credit TP/SL and re-enter.
+        # Both protective exit modes are valid; only the safety check above is required.
 
 
 @pytest.mark.anyio
