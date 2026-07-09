@@ -249,14 +249,43 @@ async def submit_order(
         }
 
 
+def _segment_from_row(row: Dict[str, Any]) -> str:
+    """Best-effort segment for the order ledger.
+
+    Options/spread order docs often carry only an `instrument_key`
+    (e.g. "NSE_FO|51371") and no explicit `segment`/`exchange`/`asset_class`
+    field. Deriving from a default "NSE"/"DIRECT" then mislabels them as
+    NSE_EQ (equity). Prefer the instrument_key prefix, which already IS the
+    canonical segment (NSE_FO / BSE_FO / NSE_EQ), then structure, then the
+    exchange fallback.
+    """
+    explicit = row.get("segment")
+    if explicit:
+        return str(explicit)
+    ikey = str(row.get("instrument_key") or "")
+    if "|" in ikey:
+        prefix = ikey.split("|", 1)[0].upper()
+        if prefix in {"NSE_FO", "BSE_FO", "NSE_EQ", "BSE_EQ"}:
+            return prefix
+    if str(row.get("structure") or "") in {"credit_spread", "debit_spread"}:
+        # Spread legs are always F&O; pick the exchange from the option contract.
+        return "BSE_FO" if "SENSEX" in str(row.get("symbol") or "").upper() or "BANKEX" in str(row.get("symbol") or "").upper() else "NSE_FO"
+    return segment_from_exchange(row.get("exchange") or "NSE", row.get("asset_class") or "DIRECT")
+
+
 def normalize_order_row(row: Dict[str, Any]) -> Dict[str, Any]:
     status = normalization.normalize_order_status(row.get("status")) or str(row.get("status") or "OPEN").upper()
     return {
         "id": row.get("id"),
         "broker_order_id": row.get("broker_order_id"),
-        "symbol": row.get("symbol") or row.get("tradingsymbol"),
+        # Prefer the actual option contract (target_symbol, e.g. "NIFTY 24000.0 PE")
+        # over the bare underlying (symbol == "NIFTY") so the ledger shows the real trade.
+        "symbol": row.get("target_symbol") or row.get("symbol") or row.get("tradingsymbol"),
+        "underlying": row.get("symbol"),
+        "structure": row.get("structure"),
+        "spread_role": row.get("spread_role"),
         "exchange": row.get("exchange"),
-        "segment": row.get("segment") or segment_from_exchange(row.get("exchange") or "NSE", row.get("asset_class") or "DIRECT"),
+        "segment": _segment_from_row(row),
         "side": row.get("side"),
         "qty": row.get("qty") or row.get("quantity"),
         "filled_qty": row.get("filled_qty"),
