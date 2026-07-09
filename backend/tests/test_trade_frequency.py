@@ -107,6 +107,11 @@ async def test_frequency_gate_blocks_when_true_buy_entries_hit_boosted_cap():
         freq_multiplier=0.5,
     )
 
+    # "NIFTY Momentum Buyer" is deliberately mapped to the "default" class
+    # (base cap 8) in _STRATEGY_CLASSES — the former per-name momentum caps were
+    # collapsed to default for the data-gathering phase, and this strategy is
+    # archived. So effective cap = int(8 * 0.5) + profit_boost(2) = 6, not 10.
     assert not ok
-    assert "DAILY_CAP: 10/10" in reason
+    assert "DAILY_CAP: 10/6" in reason
+    assert "class=default" in reason
     assert "profit_boost=2" in reason
