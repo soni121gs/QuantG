@@ -17578,6 +17578,7 @@ async def startup():
                             CREDIT_SPREAD_SHORT_DELTA, CREDIT_SPREAD_WIDTH_STRIKES,
                             build_debit_spread, DEBIT_SPREADS_ENABLED,
                         )
+                        from core.dynamic_contract_selector import select_dynamic_credit_spread
                         _opts_cfg = ((strategy or {}).get("visual_config") or {}).get("options", {}) or {}
                         _struct = str(_opts_cfg.get("structure") or (strategy or {}).get("structure") or "single_leg")
                         if _struct in ("credit_spread", "debit_spread") and _nodes:
@@ -17589,8 +17590,28 @@ async def startup():
                             _direction = "bullish" if action_u == "BUY" else "bearish"
                             
                             if _struct == "credit_spread" and CREDIT_SPREADS_ENABLED:
-                                _offset = _opts_cfg.get("short_offset_strikes")
-                                if _offset is not None:
+                                _previous = await db.strategy_positions.find_one(
+                                    {
+                                        "user_id": user_id,
+                                        "strategy_id": strategy.get("id"),
+                                        "structure": "credit_spread",
+                                        "status": {"$in": ["CLOSED", "CANCELLED"]},
+                                    },
+                                    {"_id": 0, "selection_signature": 1},
+                                    sort=[("closed_at", -1), ("created_at", -1)],
+                                )
+                                _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+                                _minutes_to_close = max(0, (15 * 60 + 30) - (_now_ist.hour * 60 + _now_ist.minute))
+                                if _opts_cfg.get("dynamic_chain_selection", True):
+                                    _spread = select_dynamic_credit_spread(
+                                        chain_nodes=_nodes,
+                                        preferred_direction=_direction,
+                                        width_points=_intervals.get(_u, 50) * _wstrikes,
+                                        previous_signature=(_previous or {}).get("selection_signature"),
+                                        minutes_to_close=_minutes_to_close,
+                                    )
+                                elif _opts_cfg.get("short_offset_strikes") is not None:
+                                    _offset = _opts_cfg.get("short_offset_strikes")
                                     _spread = build_credit_spread_by_offset(
                                         chain_nodes=_nodes, direction=_direction,
                                         spot=float(contract_payload.get("spot") or instrument.strike or 0),

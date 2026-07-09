@@ -158,6 +158,13 @@ def test_exit_levels_capped_by_width():
     assert lv["spread_sl_value"] == 100.0     # 40*3=120 capped to width 100
 
 
+def test_exit_levels_scale_continuously_with_contract_edge_and_vol():
+    weak = compute_exit_levels(25.0, 100.0, contract_edge_score=0.1, vol_ratio=0.8)
+    strong = compute_exit_levels(25.0, 100.0, contract_edge_score=0.9, vol_ratio=1.3)
+    assert weak["spread_tp_value"] > strong["spread_tp_value"]
+    assert strong["spread_sl_value"] > weak["spread_sl_value"]
+
+
 def test_value_and_exit_reason():
     pos = {"open_quantity": 50, "net_credit": 25.0, "spread_tp_value": 12.5, "spread_sl_value": 75.0}
     v = value_credit_spread(pos, short_ltp=20.0, long_ltp=8.0)  # value 12

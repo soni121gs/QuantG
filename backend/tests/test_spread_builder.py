@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.spread_builder import build_credit_spread, build_credit_spread_by_offset, lots_for_risk
+from core.dynamic_contract_selector import select_dynamic_credit_spread, spread_signature
 
 
 def _leg(key, delta, ltp, theta=-5.0):
@@ -107,3 +108,32 @@ def test_lots_for_risk():
     assert lots_for_risk(75.0, 65, 10000) == 2     # 75*65=4875 → 10000//4875 = 2
     assert lots_for_risk(75.0, 65, 4000) == 0      # can't afford one lot
     assert lots_for_risk(0, 65, 10000) == 0
+
+
+def test_dynamic_selector_scores_both_sides_and_penalizes_repeat():
+    chain = _pe_chain() + _ce_chain()
+    first = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=120,
+    )
+    assert first["ok"] and first["candidate_count"] >= 2
+    repeated = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        previous_signature=spread_signature(first), minutes_to_close=120,
+    )
+    assert repeated["selection_method"] == "dynamic-chain-rank"
+    if spread_signature(repeated) == spread_signature(first):
+        assert repeated["selection_factors"]["reuse_mult"] == 0.55
+
+
+def test_dynamic_selector_fades_contract_score_near_close():
+    chain = _pe_chain() + _ce_chain()
+    early = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=120,
+    )
+    late = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=20,
+    )
+    assert late["contract_edge_score"] < early["contract_edge_score"]

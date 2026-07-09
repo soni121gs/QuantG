@@ -87,12 +87,21 @@ def compute_exit_levels(
     width: float,
     tp_frac: Optional[float] = None,
     sl_mult: Optional[float] = None,
+    contract_edge_score: Optional[float] = None,
+    vol_ratio: Optional[float] = None,
 ) -> Dict[str, float]:
     """TP/SL spread values. Per-strategy tp_frac/sl_mult override the env defaults
     (visual_config.options.credit_tp_frac / credit_sl_mult) so a scalp strategy can
     book 35% of credit with a 1.5x stop without changing the global theta book."""
     _tp = SPREAD_TP_FRAC if tp_frac is None else float(tp_frac)
     _sl = SPREAD_SL_MULT if sl_mult is None else float(sl_mult)
+    if contract_edge_score is not None:
+        edge = max(0.0, min(1.0, float(contract_edge_score)))
+        _tp *= 0.75 + 0.5 * edge
+    if vol_ratio is not None:
+        from core.edge_sizer import vol_scaled_exit_frac
+        scaled = vol_scaled_exit_frac(_tp, _sl, float(vol_ratio))
+        _tp, _sl = scaled["tp_frac"], scaled["sl_mult"]
     tp_value = round(net_credit * (1.0 - _tp), 2)
     sl_value = round(min(net_credit * (1.0 + _sl), float(width)), 2)
     return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
@@ -192,7 +201,11 @@ async def open_credit_spread(
         await wallet.credit(user_id, short_proceeds, f"{pos_id}:short:open")
 
     entry_charges = round(short_charges + long_charges, 2)
-    levels = compute_exit_levels(net_credit, width, tp_frac=tp_frac, sl_mult=sl_mult)
+    levels = compute_exit_levels(
+        net_credit, width, tp_frac=tp_frac, sl_mult=sl_mult,
+        contract_edge_score=spread.get("contract_edge_score"),
+        vol_ratio=spread.get("vol_ratio"),
+    )
 
     for leg, side in ((short, "SELL"), (long, "BUY")):
         leg["qty"] = qty
@@ -228,6 +241,10 @@ async def open_credit_spread(
         "entry_price": round(net_credit, 2),
         "max_loss": round(max_loss, 2),
         "max_loss_total": round(max_loss * qty, 2),
+        "contract_edge_score": spread.get("contract_edge_score"),
+        "contract_size_mult": spread.get("contract_size_mult"),
+        "selection_signature": spread.get("selection_signature"),
+        "selection_factors": spread.get("selection_factors"),
         "spread_tp_value": levels["spread_tp_value"],
         "spread_sl_value": levels["spread_sl_value"],
         "net_delta": spread.get("net_delta"),

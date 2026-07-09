@@ -858,3 +858,6 @@ Plan/tasks in **`TASKS.md`** (EM-1..EM-9, top of ACTIVE QUEUE) + memory `project
 
 ### 16.3 Discipline
 `OOS proof (EM-7) BEFORE live wiring (EM-4)` — dynamic sizing must beat FLAT sizing on OOS expectancy AND compress the daily-loss distribution before it touches the live path. `CORE_ENGINE_LIVE_ENABLED=false` throughout. Hermes narrates the "why"; the code computes the numbers.
+
+### 16.4 Dynamic contract edge (landed 2026-07-09)
+`core/dynamic_contract_selector.py` rescans the current chain on every credit-spread entry instead of treating a fixed offset as the strategy. It ranks CE and PE candidates across several deltas using continuous credit/width, theta, OI-liquidity, delta-fit, directional-fit, time-remaining, and repeated-signature factors. Reusing the same expiry/strikes is penalized, not blocked. The winner carries `contract_edge_score`, `contract_size_mult`, `selection_signature`, and factor telemetry into `spread_lifecycle`; lots and TP/SL geometry fade or expand continuously from that contract evidence. This is an EM L1 contract-quality input. It does not override the EM-7 law: portfolio sizing from rolling expectancy remains unapproved until dynamic sizing beats flat sizing OOS.

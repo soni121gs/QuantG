@@ -842,7 +842,9 @@ async def _dispatch_signal_via_unified_engine(
             or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
             or 15000.0
         )
-        _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        _base_spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        _contract_mult = max(0.10, min(1.0, float(_spread.get("contract_size_mult") or 1.0)))
+        _spread_lots = max(1, int(round(_base_spread_lots * _contract_mult)))
         # Per-strategy TP/SL geometry (visual_config.options.credit_tp_frac /
         # credit_sl_mult) — lets a credit scalp book 35% of credit with a 1.5x
         # stop while the theta book keeps the global env defaults.
