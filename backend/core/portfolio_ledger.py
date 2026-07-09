@@ -75,6 +75,24 @@ class PortfolioLedger:
     def __init__(self, db):
         self.db = db
 
+    async def update_position_mark(
+        self,
+        *,
+        position_id: str,
+        user_id: str,
+        fields: Dict[str, Any],
+        allowed_statuses: tuple[str, ...] = ("PENDING_BROKER", "OPEN", "FILLED"),
+        clear_last_error: bool = False,
+    ):
+        """Single-owner compare-and-swap for non-lifecycle position marks."""
+        update: Dict[str, Any] = {"$set": dict(fields)}
+        if clear_last_error:
+            update["$unset"] = {"last_error": ""}
+        return await self.db.strategy_positions.update_one(
+            {"id": position_id, "user_id": user_id, "status": {"$in": list(allowed_statuses)}},
+            update,
+        )
+
     async def _record_trade_fill(self, fill: FillDoc, position_id: str,
                                  action: str, realized_pnl: float = 0.0) -> None:
         """Immutable audit row for every fill the ledger ACCEPTED."""

@@ -269,12 +269,13 @@ async def _guard_one(
                         # Status-guarded: position_monitor's close_fn may have closed this
                         # position while we were awaiting the REST quote above — don't
                         # restamp ltp fields onto an already CLOSED/EXITING doc.
-                        await db.strategy_positions.update_one(
-                            {"id": pos_id, "user_id": user_id, "status": {"$in": ["OPEN", "FILLED"]}},
-                            {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat(),
-                                      "last_ltp": ltp,
-                                      "ltp_source": ltp_source,
-                                      "updated_at": datetime.now(timezone.utc).isoformat()}}
+                        from core.portfolio_ledger import PortfolioLedger
+                        await PortfolioLedger(db).update_position_mark(
+                            position_id=pos_id, user_id=user_id,
+                            allowed_statuses=("OPEN", "FILLED"),
+                            fields={"last_fresh_tick_at": datetime.now(timezone.utc).isoformat(),
+                                    "last_ltp": ltp, "ltp_source": ltp_source,
+                                    "updated_at": datetime.now(timezone.utc).isoformat()},
                         )
                     else:
                         logger.warning(
@@ -295,9 +296,11 @@ async def _guard_one(
                 should_update = False
         if should_update:
             # Status-guarded for the same reason as above.
-            await db.strategy_positions.update_one(
-                {"id": pos_id, "user_id": user_id, "status": {"$in": ["OPEN", "FILLED"]}},
-                {"$set": {"last_fresh_tick_at": datetime.now(timezone.utc).isoformat()}}
+            from core.portfolio_ledger import PortfolioLedger
+            await PortfolioLedger(db).update_position_mark(
+                position_id=pos_id, user_id=user_id,
+                allowed_statuses=("OPEN", "FILLED"),
+                fields={"last_fresh_tick_at": datetime.now(timezone.utc).isoformat()},
             )
 
     # ── 5. Deadline exceeded with no LTP → force MARKET exit ─────────────────

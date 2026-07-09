@@ -2507,6 +2507,41 @@ Files changed: docs/architecture/STAGE_1_APPROVAL_MEMO.md
 
 Context: Founder approved Stage 1A defaults on 2026-06-18: UPPER_SNAKE_CASE event names, Pydantic payload contracts, `corr:<signal_id>` correlation ids, causation id as previous event id or source record id, existing Mongo `core_events` storage, and signal manager as the first publish-only slice.
 
+## PRIORITY 8A — Architecture Redesign Stage 2 (Single-Writer Ownership)
+
+Founder approved 2026-07-09: `core/portfolio_ledger.py` becomes the owner of
+`strategy_positions`; `strategies.today_pnl` becomes a derived compatibility view from
+canonical `trade_fills`; legacy fill/monitor/SQLite paths are deprecated before deletion.
+Work one rung per commit and obtain a deploy approval after tests.
+
+### ARCH-2A — Ledger-owned position mark writes
+- **Status**: `[x]` DONE 2026-07-09 (Codex)
+- **Tier**: 3
+- **Files**: `backend/core/portfolio_ledger.py`, `backend/position_monitor.py`,
+  `backend/position_guardian.py`, focused tests
+- **Acceptance**: monitor and guardian no longer write mark fields directly; both call
+  one ledger compare-and-swap method that refuses to update a position closed while a
+  quote was awaited. No mark/P&L calculation changes.
+
+### ARCH-2B — Ledger-owned position lifecycle transitions
+- **Status**: `[ ]`
+- **Prerequisite**: ARCH-2A deployed and observed
+- **Scope**: route OPEN/EXITING/CLOSED/CANCELLED transitions from server, reconciler and
+  spread lifecycle through explicit ledger commands; preserve spread atomicity.
+
+### ARCH-2C — Derived strategy P&L compatibility view
+- **Status**: `[ ]`
+- **Prerequisite**: ARCH-2B
+- **Scope**: make `trade_fills` the only P&L truth; replace runtime `today_pnl` writers
+  with one derived projection and parity-check every consumer before removing writes.
+
+### ARCH-2D — Deprecate parallel legacy state paths
+- **Status**: `[ ]`
+- **Prerequisite**: ARCH-2C
+- **Scope**: add deprecation inventory/telemetry for the legacy fill engine,
+  `_mongo_position_monitor_loop`, and SQLite `option_state_ledger`; delete nothing until
+  a clean observation window and separate founder approval.
+
 ### TASK-034 — Stage 1A: Publish-only signal lifecycle events
 - **Status**: `[x]` Completed by Codex
 - **Commit**: `cebefca`

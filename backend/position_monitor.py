@@ -805,9 +805,9 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # it fresh so the spread is never mistaken for a dead single-leg quote.
     if have_live:
         set_fields["last_fresh_tick_at"] = now_str
-    await db.strategy_positions.update_one(
-        {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
-        {"$set": set_fields},
+    from core.portfolio_ledger import PortfolioLedger
+    await PortfolioLedger(db).update_position_mark(
+        position_id=pos["id"], user_id=user_id, fields=set_fields,
     )
 
     # EDR-11: hold-to-expiry spreads keep the position across days and only settle on
@@ -1064,12 +1064,10 @@ async def _process_one_position(
     # close_fn (guardian or this same loop) already moved this position out of
     # PENDING_BROKER/OPEN/FILLED while we awaited the LTP lookup, this becomes
     # a no-op instead of stamping stale ltp/pnl onto a CLOSED/EXITING doc.
-    await db.strategy_positions.update_one(
-        {"id": pos["id"], "user_id": user_id, "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]}},
-        {
-            "$set": set_fields,
-            "$unset": {"last_error": ""},
-        },
+    from core.portfolio_ledger import PortfolioLedger
+    await PortfolioLedger(db).update_position_mark(
+        position_id=pos["id"], user_id=user_id, fields=set_fields,
+        clear_last_error=True,
     )
 
     # ── Exit check (only during market hours) ─────────────────────────────────

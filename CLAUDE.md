@@ -695,6 +695,15 @@ Stage 0** (event catalog + collection ownership map) — pure documentation, zer
 
 ---
 
+### 11.11 Stage 2 progress (2026-07-09)
+Founder approved `core.portfolio_ledger` as the owner of `strategy_positions`,
+canonical `trade_fills` as the source for derived strategy P&L, and
+deprecate-before-delete treatment for parallel legacy paths. ARCH-2A is complete:
+position monitor and guardian route live mark/freshness writes through
+`PortfolioLedger.update_position_mark`, preserving the existing status-guarded
+compare-and-swap and mark calculations. Lifecycle transitions remain distributed and
+are the separately gated ARCH-2B rung.
+
 ## 12. Knowledge Hub (Obsidian Wiki & Auto-Memory)
 
 QuantG features a bidirectional Knowledge Hub synchronizing markdown files with MongoDB.
