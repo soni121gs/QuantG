@@ -226,7 +226,7 @@ python -m py_compile backend\brokers\upstox_gateway.py
 **Research law:** do not tune strategies by eyeballing one green backtest. Every candidate must go through: hypothesis → saved experiment → train/OOS result → robustness/overfit check → forward-paper checkpoint → founder-gated live promotion. If many variants were tested, the winner must be penalized for data snooping.
 
 ### ERL-01 — Strategy Trial Registry
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (`strategy_trials`, deterministic config/window hash, deduplicated run count, list/history API)
 - **Tier**: 2
 - **Session size**: 3-5 hours
 - **Prerequisite**: current EOD Edge Lab working
@@ -252,7 +252,7 @@ python -m pytest backend\tests\test_strategy_trial_registry.py -q
 ---
 
 ### ERL-02 — Robustness and Overfit Metrics
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (sample, expectancy, green-month, plateau and multiple-testing robustness score)
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `ERL-01`
@@ -278,7 +278,7 @@ python -m pytest backend\tests\test_research_metrics.py -q
 ---
 
 ### ERL-03 — Market Regime Tagging for Historical Backtests
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (no-lookahead trend/vol/gap/large-move tags and per-regime expectancy)
 - **Tier**: 2
 - **Session size**: 4-6 hours
 - **Prerequisite**: `ERL-01`
@@ -303,7 +303,7 @@ python -m pytest backend\tests\test_historical_regimes.py -q
 ---
 
 ### ERL-04 — Parameter Heatmaps and Plateau Detection
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (sweep heatmaps and positive-neighbor plateau score)
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `ERL-02`
@@ -330,7 +330,7 @@ $env:CI='false'; npm run build
 ---
 
 ### ERL-05 — Reject-Reason Engine
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (explicit sample/OOS/consistency/data-domain reject reasons)
 - **Tier**: 2
 - **Session size**: 3-5 hours
 - **Prerequisite**: `ERL-02`
@@ -361,7 +361,7 @@ python -m pytest backend\tests\test_strategy_reject_reasons.py -q
 ---
 
 ### ERL-06 — Evidence-Weighted Portfolio Allocation
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (paper-only evidence weights and recommended capital; never auto-applies)
 - **Tier**: 3
 - **Session size**: 6-10 hours
 - **Prerequisite**: `ERL-05` and at least one forward-paper checkpoint
@@ -386,7 +386,7 @@ python -m pytest backend\tests\test_evidence_allocator.py -q
 ---
 
 ### ERL-07 — Edge Lab v2 Frontend Panels
-- **Status**: `[ ]` open
+- **Status**: `[x]` DONE 2026-07-09 (research ledger ladder, parameter plateaus and paper allocation in Analytics)
 - **Tier**: 2
 - **Session size**: 4-8 hours
 - **Prerequisite**: `ERL-05`

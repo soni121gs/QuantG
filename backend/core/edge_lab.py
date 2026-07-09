@@ -202,6 +202,8 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             "pnl": o["pnl"], "oos_year": wf.get("oos_year"),
             "oos_expectancy": wf.get("oos", {}).get("expectancy", 0),
             "pct_green_months": wf.get("pct_green_months"),
+            "all_years_positive": wf.get("all_years_positive"),
+            "regime_breakdown": res.get("regime_breakdown") or {},
             "signals": res.get("signals", 0),
             "signal_evaluation": res.get("signal_evaluation"),
         })
@@ -284,6 +286,7 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
         "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
     oos = _phase("oos", lambda: _oos(active_strategies, store, present))
     sweep = _phase("sweep", lambda: _sweep(active_strategies, store, present)) if include_sweep else None
-    return {"status": "ready", "generated_at": now, "coverage": coverage,
-            "base_rate": base_rate, "oos": oos, "sweep": sweep,
-            "book": {"active_strategies": len(active_strategies), "archived_strategies": archived_count}}
+    from core.edge_research_ledger import enrich_snapshot
+    return enrich_snapshot({"status": "ready", "generated_at": now, "coverage": coverage,
+                            "base_rate": base_rate, "oos": oos, "sweep": sweep,
+                            "book": {"active_strategies": len(active_strategies), "archived_strategies": archived_count}})

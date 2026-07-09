@@ -413,6 +413,8 @@ async def _run_edge_lab_build(user_id: str) -> None:
             {"user_id": user_id, "python_code": {"$nin": [None, ""]}}
         ).to_list(500)
         snap = await asyncio.to_thread(build_snapshot, strategies, BhavcopyStore())
+        from core.edge_research_ledger import persist_trials
+        await persist_trials(db, user_id, snap)
         snap["_id"] = "latest"
         snap["built_by"] = user_id
         await db.edge_lab_snapshots.replace_one({"_id": "latest"}, snap, upsert=True)
@@ -458,6 +460,17 @@ async def ops_edge_lab_refresh(user=Depends(get_current_user)):
     )
     asyncio.create_task(_run_edge_lab_build(user["id"]))
     return {"status": "building", "already_running": False}
+
+
+@router.get("/edge-lab/trials")
+async def ops_edge_lab_trials(strategy: str = "", limit: int = 100, user=Depends(get_current_user)):
+    query = {"user_id": user["id"]}
+    if strategy:
+        query["strategy_name"] = strategy
+    rows = await db.strategy_trials.find(query, {"_id": 0}).sort(
+        "last_run_at", -1
+    ).limit(min(max(limit, 1), 500)).to_list(min(max(limit, 1), 500))
+    return {"count": len(rows), "rows": rows}
 
 
 class EdgeLabProposeReq(BaseModel):

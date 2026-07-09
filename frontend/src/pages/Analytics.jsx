@@ -276,6 +276,7 @@ function EdgeLab({ data, loading, onRefresh }) {
   const oos = data.oos || {};
   const oosCounts = oos.counts || {};
   const sweep = data.sweep || [];
+  const erl = data.erl || {};
 
   return (
     <div className="space-y-5">
@@ -301,6 +302,43 @@ function EdgeLab({ data, loading, onRefresh }) {
       </div>
 
       <Proposer />
+
+      <section className="qd-card p-5">
+        <div className="qd-section-title">// Edge Lab v2 research ledger</div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(erl.promotion_ladder || []).map((stage) => (
+            <span key={stage} className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-1 font-mono text-[11px] text-[var(--qd-text-2)]">{stage}</span>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {(erl.heatmaps || []).map((h) => (
+            <div key={h.strategy} className="rounded border border-[var(--qd-border)] p-3">
+              <div className="text-sm font-semibold text-[var(--qd-text)]">{h.strategy}</div>
+              <div className="mt-1 font-mono text-xs text-[var(--qd-text-2)]">parameter plateau {pct((h.plateau_score || 0) * 100)}</div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(h.cells || []).slice(0, 12).map((c, i) => (
+                  <span key={i} title={`tp ${c.tp}, sl ${c.sl}, width ${c.width}, dte ${c.dte}`}
+                    className={`h-5 w-5 rounded-sm ${Number(c.oos_expectancy || 0) > 0 ? "bg-[var(--qd-profit)]" : "bg-[var(--qd-loss)]"} opacity-70`} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(erl.allocation || []).length > 0 && (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="text-[var(--qd-text-3)]"><tr><th className="py-2">Strategy</th><th>Stage</th><th>Weight</th><th>Paper capital</th></tr></thead>
+              <tbody>{erl.allocation.slice(0, 12).map((r) => (
+                <tr key={r.strategy} className="border-t border-[var(--qd-border)]">
+                  <td className="py-2 text-[var(--qd-text)]">{r.strategy}</td>
+                  <td>{r.promotion_stage}</td><td>{pct((r.evidence_weight || 0) * 100)}</td><td>{money(r.recommended_paper_capital)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-[var(--qd-text-3)]">Trials are deduplicated by config and data window. Recommendations are paper-only and never auto-applied.</p>
+      </section>
 
       {/* Data coverage — honesty about what can/can't be tested */}
       <section className="qd-card p-5">

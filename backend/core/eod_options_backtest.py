@@ -203,12 +203,17 @@ class EODOptionsBacktest:
 
         pnls = [t["pnl"] for t in trades]
         metrics = compute_metrics(pnls, starting_capital=starting_capital)
+        from core.historical_regimes import aggregate_by_regime, tag_regimes
+        regime_rows = tag_regimes(candles)
+        regime_breakdown = aggregate_by_regime(
+            trades, {row["date"]: row for row in regime_rows},
+        )
         return {
             "strategy_id": strategy.get("id"), "name": strategy.get("name"),
             "underlying": u, "structure": structure, "lots": lots,
             "window": {"start": days[0], "end": days[-1], "n_days": len(days)},
             "signals": len(sig_days), "signal_evaluation": signal_eval, "grade": grade(metrics),
-            **metrics, "trades": trades,
+            **metrics, "trades": trades, "regime_breakdown": regime_breakdown,
         }
 
     # ---- structure open / value / close --------------------------------------
