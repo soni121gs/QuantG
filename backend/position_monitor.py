@@ -843,9 +843,14 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         reason = debit_spread_exit_reason(pos, v["value"])
     else:
         # RES-3 dynamic exit: hard stop + take-profit (unchanged) PLUS a trailing
-        # lock that banks a faded winner before it round-trips to red.
+        # lock that banks a faded winner before it round-trips to red. RAE-5 tunes
+        # the trail (wide for TREND, tight for RANGE/INSIDE) by the entry regime —
+        # a no-op returning the global defaults unless RAE_ROUTER_ENABLED=true.
+        from core.regime_exit import regime_exit_params
+        _ep = regime_exit_params(pos.get("regime_at_entry") or pos.get("regime"))
         reason = evaluate_spread_exit(position=pos, current_value=v["value"],
-                                      current_pnl=v["pnl"], peak_pnl=peak_pnl)
+                                      current_pnl=v["pnl"], peak_pnl=peak_pnl,
+                                      arm_frac=_ep["arm_frac"], giveback_frac=_ep["giveback_frac"])
 
     # Time-based recycle: if no price trigger fired and the spread has been held past
     # the strategy's time_exit_minutes, close it so the slot frees for re-entry. This

@@ -914,3 +914,16 @@ Two hard truths from the study: (1) a delta-1 trend module (deep-ITM/future, ~ze
 - **Precision > payoff for the trend gate.** Trend winners are huge; the failure mode is range fakeouts, so the gate must be selective (IV-cheap + daily-trend alignment), validated by whether it flips the *all-days* number positive.
 - **No specialist scales on backtest** — regime-conditional OOS → forward-paper-on-regime → founder-gated live. Hermes narrates the "why"; code computes the numbers.
 - **What already exists is the foundation, not the gap:** EdgeMath sizing, dynamic exits, portfolio risk, the data layer, and one proven regime-gated strategy (QG-O1). The gap is the classifier, the router, the non-seller specialists, and the regime-aware judge.
+
+### 18.5 Build status (2026-07-10) — RAE-0..6 built, RAE-7 gated
+All pure modules, all validated on the 498-day NIFTY index store; live hooks are OBSERVE-ONLY behind `RAE_ROUTER_ENABLED` (default false → zero trade-path change until the founder flips it in paper).
+- **RAE-0** `core/regime_taxonomy.py` — canonical labels + thresholds + `classify_day` + `REGIME_OWNER` + base rates (match the study to the decimal).
+- **RAE-1** `core/regime_classifier.py` — no-lookahead `classify_intraday`→`RegimeSnapshot(label,confidence)`, maturity-aware. Validated: intraday TREND call is 16% precise (trends rare/fakeouts common) but confidence separates (0.95 correct vs 0.83 fakeout).
+- **RAE-2** `core/regime_conditional_oos.py` — `evaluate_regime_conditional`: grades ONLY on-regime days, walk-forward within regime, thin→`NEEDS_FORWARD_PAPER` never a veto (the OOS-distrust fix).
+- **RAE-3** `core/regime_specialists.py` — `chop_stand_down` (3a; avoids ~₹72k on 65 chop days), `inside_mean_revert` (3b; +₹103/day INSIDE, NEEDS_FORWARD_PAPER), `trend_delta1/long/short` (3c; +₹423/day trend, NEEDS_FORWARD_PAPER + needs an IV-cheap gate), sellers=RANGE owner (3d, REGIME_OWNER).
+- **RAE-4** `core/regime_router.py` — `route()`: regime ownership + CHOP/EVENT stand-down + trend confidence gate → `size_mult` (0 = stand down). Wired observe-only into `signal_manager._edge_math_spread_size` (`telemetry["router"]`, skip `RAE_ROUTER_STAND_DOWN` only when enforced). Validated: naive book −₹203k → routed −₹5.6k (+₹197k, stands down 250/498 days).
+- **RAE-5** `core/regime_exit.py` — `regime_exit_params()` tunes the RES-3 trail (TREND wide / RANGE tight); wired into `position_monitor` as a no-op unless enforced. Hard SL/TP untouched.
+- **RAE-6** `GET /api/ops/regime-status` — ensemble watch view (regime per index, per-strategy ACTIVE/STAND_DOWN, P&L by entry-regime). Forward-paper STARTS when the founder sets `RAE_ROUTER_ENABLED=true` in paper.
+- **RAE-7** `GET /api/ops/rae-live-readiness` — read-only pilot gate (READY/NOT_READY + blockers). NEVER enables anything; live is the founder flipping `RAE_ROUTER_ENABLED`→paper-evidence→`CORE_ENGINE_LIVE_ENABLED`+`LIVE_SPREADS_ENABLED`+arm.
+
+**To activate the ensemble (founder):** set `RAE_ROUTER_ENABLED=true` (paper) → watch `GET /api/ops/regime-status` accumulate regime-bucketed P&L → when `GET /api/ops/rae-live-readiness` reads READY, decide on the live flags. `CORE_ENGINE_LIVE_ENABLED=false` until then.

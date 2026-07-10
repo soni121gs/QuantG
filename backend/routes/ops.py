@@ -555,6 +555,111 @@ async def _run_intraday_oos(start: str, end: str) -> None:
         _intraday_oos_running = False
 
 
+@router.get("/regime-status")
+async def ops_regime_status(user=Depends(get_current_user)):
+    """RAE-6: the ensemble watch view — the current regime per index, which live
+    strategy the router would ACTIVATE vs STAND DOWN right now, whether enforcement
+    is on, and realized P&L bucketed by the regime each trade was entered in.
+    Read-only. `enforced=false` means the router is observe-only (default)."""
+    from core.regime_router import route, enabled as _rae_enabled
+    uid = user["id"]
+
+    # current regime per index (from the live regime engine's state)
+    regimes = {}
+    async for r in db.market_regime_state.find({}, {"_id": 0, "index": 1, "regime": 1, "bias": 1}):
+        regimes[r.get("index")] = {"regime": r.get("regime"), "bias": r.get("bias")}
+
+    # per live strategy: would the router activate or stand it down right now?
+    strat_routing = []
+    async for s in db.strategies.find(
+        {"user_id": uid, "status": {"$in": ["live", "paused"]}},
+        {"_id": 0, "name": 1, "visual_config.options.underlying": 1, "visual_config.options.structure": 1},
+    ):
+        underlying = ((s.get("visual_config") or {}).get("options") or {}).get("underlying") or "NIFTY"
+        structure = ((s.get("visual_config") or {}).get("options") or {}).get("structure")
+        reg = (regimes.get(underlying) or {}).get("regime") or "UNKNOWN"
+        specialist = "range_seller" if structure in ("credit_spread", "debit_spread") else None
+        d = route(str(reg), 0.5, specialist=specialist)
+        strat_routing.append({"strategy": s.get("name"), "underlying": underlying,
+                              "regime": reg, "specialist": specialist,
+                              "action": "STAND_DOWN" if d.stand_down else "ACTIVE",
+                              "size_mult": round(d.size_mult, 2), "why": (d.reasons or [""])[0]})
+
+    # realized P&L bucketed by the regime each closed trade was entered in
+    by_regime = {}
+    async for p in db.strategy_positions.find(
+        {"user_id": uid, "status": {"$in": ["CLOSED", "EXITED"]}},
+        {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1},
+    ):
+        reg = str(p.get("regime_at_entry") or "UNKNOWN")
+        pnl = float(p.get("realized_pnl") or p.get("pnl") or 0.0)
+        b = by_regime.setdefault(reg, {"trades": 0, "pnl": 0.0})
+        b["trades"] += 1
+        b["pnl"] = round(b["pnl"] + pnl, 2)
+
+    return _json_safe({
+        "kind": "rae_regime_status",
+        "enforced": _rae_enabled(),
+        "note": "Router is observe-only until RAE_ROUTER_ENABLED=true (founder gate)." if not _rae_enabled()
+                else "Router ENFORCED: off-regime strategies stand down.",
+        "index_regimes": regimes,
+        "strategy_routing": strat_routing,
+        "pnl_by_entry_regime": by_regime,
+    })
+
+
+@router.get("/rae-live-readiness")
+async def ops_rae_live_readiness(user=Depends(get_current_user)):
+    """RAE-7: the founder-gated live-pilot GATE. Read-only status only — this route
+    NEVER enables anything. It reports whether the preconditions for a live pilot are
+    met; the founder alone flips the env flags. Stays NOT_READY until (a) the ensemble
+    has forward-papered enough (RAE_ROUTER_ENABLED=true) with positive regime-
+    conditional evidence, and (b) the live flags are set. Live requires
+    CORE_ENGINE_LIVE_ENABLED=true AND LIVE_SPREADS_ENABLED=true AND an armed account —
+    all founder actions, none automatable here."""
+    uid = user["id"]
+    router_on = os.environ.get("RAE_ROUTER_ENABLED", "false").lower() == "true"
+    live_on = os.environ.get("CORE_ENGINE_LIVE_ENABLED", "false").lower() == "true"
+    live_spreads_on = os.environ.get("LIVE_SPREADS_ENABLED", "false").lower() == "true"
+    min_trades = int(os.environ.get("RAE_PILOT_MIN_TRADES", "30"))
+
+    # forward-paper evidence: closed trades bucketed by entry regime, positive?
+    by_regime, total = {}, 0
+    async for p in db.strategy_positions.find(
+        {"user_id": uid, "status": {"$in": ["CLOSED", "EXITED"]}},
+        {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1},
+    ):
+        reg = str(p.get("regime_at_entry") or "UNKNOWN")
+        b = by_regime.setdefault(reg, {"trades": 0, "pnl": 0.0})
+        b["trades"] += 1
+        b["pnl"] = round(b["pnl"] + float(p.get("realized_pnl") or p.get("pnl") or 0.0), 2)
+        total += 1
+
+    blocking = []
+    if not router_on:
+        blocking.append("RAE_ROUTER_ENABLED=false — forward-paper the ensemble first (founder flips in PAPER).")
+    if total < min_trades:
+        blocking.append(f"forward-paper sample too thin: {total} closed trades (<{min_trades}).")
+    positive_regimes = [r for r, v in by_regime.items() if v["pnl"] > 0]
+    if router_on and total >= min_trades and not positive_regimes:
+        blocking.append("no regime shows positive forward-paper P&L yet.")
+    if not live_on:
+        blocking.append("CORE_ENGINE_LIVE_ENABLED=false (founder gate — not automatable).")
+    if not live_spreads_on:
+        blocking.append("LIVE_SPREADS_ENABLED=false (founder gate).")
+
+    return _json_safe({
+        "kind": "rae_live_readiness",
+        "status": "READY" if not blocking else "NOT_READY",
+        "flags": {"RAE_ROUTER_ENABLED": router_on, "CORE_ENGINE_LIVE_ENABLED": live_on,
+                  "LIVE_SPREADS_ENABLED": live_spreads_on},
+        "forward_paper": {"closed_trades": total, "pnl_by_entry_regime": by_regime,
+                          "positive_regimes": positive_regimes},
+        "blocking": blocking,
+        "note": "This endpoint only REPORTS. Enabling live is a founder decision (flip the env flags + arm).",
+    })
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data
