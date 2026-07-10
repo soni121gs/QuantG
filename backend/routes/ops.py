@@ -588,14 +588,18 @@ async def ops_regime_status(user=Depends(get_current_user)):
     strat_routing = []
     async for s in db.strategies.find(
         {"user_id": uid, "status": {"$in": ["live", "paused"]}},
-        {"_id": 0, "name": 1, "visual_config.options.underlying": 1, "visual_config.options.structure": 1},
+        {"_id": 0, "name": 1, "visual_config.options.underlying": 1,
+         "visual_config.options.structure": 1, "visual_config.options.specialist_role": 1},
     ):
-        underlying = ((s.get("visual_config") or {}).get("options") or {}).get("underlying") or "NIFTY"
-        structure = ((s.get("visual_config") or {}).get("options") or {}).get("structure")
+        opt = (s.get("visual_config") or {}).get("options") or {}
+        underlying = opt.get("underlying") or "NIFTY"
+        structure = opt.get("structure")
         _rg = regimes.get(underlying) or {}
         reg = _rg.get("regime_fine") or _rg.get("regime") or "UNKNOWN"
         conf = float(_rg.get("confidence") or 0.5)
-        specialist = "range_seller" if structure in ("credit_spread", "debit_spread") else None
+        # explicit RAE tag wins; fall back to the structure heuristic for legacy rows
+        specialist = opt.get("specialist_role") or (
+            "range_seller" if structure in ("credit_spread", "debit_spread") else None)
         d = route(str(reg), conf, specialist=specialist)
         strat_routing.append({"strategy": s.get("name"), "underlying": underlying,
                               "regime": reg, "specialist": specialist,
