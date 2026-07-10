@@ -16673,6 +16673,20 @@ def _get_live_index_capture():
     return _LIVE_INDEX_CAPTURE
 
 
+_LIVE_OPTION_CAPTURE = None
+
+
+def _get_live_option_capture():
+    """IMD-04: process-wide OPTION 1-minute capture (lazy). Read-only w.r.t. trading.
+    Refs are registered from open positions / spread legs; only registered contracts
+    are captured. Mirrors _get_live_index_capture."""
+    global _LIVE_OPTION_CAPTURE
+    if _LIVE_OPTION_CAPTURE is None:
+        from core.live_option_capture import LiveOptionCapture
+        _LIVE_OPTION_CAPTURE = LiveOptionCapture()
+    return _LIVE_OPTION_CAPTURE
+
+
 async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     """FIX 5 + FIX 7: Runs every 60 seconds and fires timed tasks at the right IST times.
 
@@ -16692,12 +16706,41 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _schedule_pause_done_date: Optional[str] = None
     _index_flush_done_date: Optional[str] = None
     _hist_validate_done_week: Optional[str] = None
+    _opt_capture_reg_minute: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
             ist = _ist_now()
             today = ist.date().isoformat()
             hour, minute = ist.hour, ist.minute
+
+            # IMD-04: register today's tradeable option contracts with the option
+            # 1-minute capture, once/minute during market hours, so spreads OPENED
+            # INTRADAY (after the 8s startup subscription) also get captured. Reads
+            # open positions, registers new refs, and WS-subscribes any newly-seen
+            # leg keys so their ticks actually flow. Read-only, best-effort.
+            _opt_reg_bucket = f"{today}:{hour}:{minute}"
+            if (
+                ist.weekday() < 5
+                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and _opt_capture_reg_minute != _opt_reg_bucket
+            ):
+                _opt_capture_reg_minute = _opt_reg_bucket
+                try:
+                    _open_pos = await db.strategy_positions.find(
+                        {"status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
+                        {"instrument_key": 1, "legs": 1, "underlying": 1, "option_type": 1,
+                         "strike": 1, "expiry": 1, "user_id": 1, "_id": 0},
+                    ).to_list(200)
+                    _new_keys = _get_live_option_capture().register_from_positions(_open_pos)
+                    if _new_keys:
+                        _uids = {p.get("user_id") for p in _open_pos if p.get("user_id")}
+                        for _uid in _uids:
+                            _gw = await get_user_upstox_gateway(_uid)
+                            if _gw and _gw.connected:
+                                await asyncio.to_thread(_gw.start_market_data_ws, _new_keys, "full")
+                except Exception as _oreg_err:
+                    logger.debug("option capture ref registration failed: %s", _oreg_err)
 
             # India VIX snapshot every 5 min during market hours → db.vix_history.
             # One doc per day; "value" converges to the daily close at 15:30. This
@@ -16815,6 +16858,13 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     logger.info("Index minute capture flush: %s", _ic_res)
                 except Exception as _ic_err:
                     logger.debug("Index capture flush failed: %s", _ic_err)
+                # IMD-04: flush the day's captured OPTION 1-minute bars for the
+                # contracts the book traded today. Read-only, best-effort.
+                try:
+                    _oc_res = await asyncio.to_thread(_get_live_option_capture().flush_day, today)
+                    logger.info("Option minute capture flush: %s", _oc_res)
+                except Exception as _oc_err:
+                    logger.debug("Option capture flush failed: %s", _oc_err)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
@@ -17748,11 +17798,23 @@ async def startup():
                     gateway._feed_v3.add_tick_listener(_get_live_index_capture().on_tick)
                 except Exception:
                     pass
+                # IMD-04: attach the read-only OPTION 1-minute capture to this feed.
+                try:
+                    gateway._feed_v3.add_tick_listener(_get_live_option_capture().on_tick)
+                except Exception:
+                    pass
                 # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
-                    {"instrument_key": 1, "legs": 1, "_id": 0},
+                    {"instrument_key": 1, "legs": 1, "underlying": 1, "option_type": 1,
+                     "strike": 1, "expiry": 1, "_id": 0},
                 ).to_list(200)
+                # Register the tradeable option contracts on these positions so the
+                # option capture records their forward 1-minute bars (idempotent).
+                try:
+                    _get_live_option_capture().register_from_positions(open_positions)
+                except Exception:
+                    pass
                 tokens = []
                 for p in open_positions:
                     ik = p.get("instrument_key")
