@@ -876,3 +876,41 @@ EM-2..9 are wired. `signal_manager._edge_math_spread_size` combines cached strat
 
 ## 17. Edge Lab Research Ledger (ERL, completed 2026-07-09)
 `core/edge_research_ledger.py` upgrades Edge Lab snapshots into a reproducible research ledger. Each strategy/config/data-window/cost combination receives a deterministic hash in `strategy_trials`; reruns increment `run_count` instead of flooding Mongo. Snapshot rows carry robustness, multiple-testing penalty, parameter-plateau score, explicit reject reasons and a promotion stage. `core/historical_regimes.py` adds no-lookahead trend/vol/gap/large-move tags and per-regime expectancy. Evidence allocation is paper-only (`auto_apply=false`). Analytics Edge Lab v2 displays the promotion ladder, parameter heatmaps and recommended paper capital. Routes: `GET /api/ops/edge-lab/trials` plus the existing snapshot/refresh routes. Hermes and ERL share the existing HIRB evidence/math philosophy; ERL does not trade or mutate strategies.
+
+---
+
+## 18. Regime-Aware Ensemble (RAE) — the whole-system plan (added 2026-07-10)
+
+**This is the umbrella program the platform is now building toward. It does NOT discard RES (§15) or EM (§16) — it consumes them.** Founder-directed after the 2026-07-10 trend-up day: every strategy in the book is a premium seller, so on the ~1% of days that trend, the whole book bleeds and the best case is "everyone wisely does nothing." A book whose best case on a trend day is inaction is a single strategy with extra steps.
+
+### 18.1 The finding that forces the design (real 498-day NIFTY 1-min study, `scratch/regime_directional_oos.py`)
+The market is a **regime machine**, and each regime has a different winner:
+
+| Regime | % of days | Winner | Covered today? |
+|---|---|---|---|
+| RANGE (choppy, small net move) | **60%** | premium sellers | ✅ the whole book |
+| INSIDE_QUIET (tight range) | **26%** | sellers **+ VWAP mean-revert (+₹164/day, 51% WR — unexploited)** | ⚠️ half |
+| HIGH_VOL_CHOP (big range, no net direction) | **13%** | *nothing clean wins* → stand down | ❌ we trade & bleed |
+| TREND_UP/DOWN (like 2026-07-10) | **~1%** | delta-1 directional (+₹1,383–3,132/day on trend days) | ❌ uncovered |
+
+Two hard truths from the study: (1) a delta-1 trend module (deep-ITM/future, ~zero theta — the fix for why every OTM-option buyer died 5×) **IS profitable on trend days** (+₹3,132/day, 80% WR with the strict gate); (2) but a loose intraday gate fires on ~90 days/yr and is **net-negative** because ~130 RANGE days fake a breakout and revert — **the entire edge is in gate PRECISION, not in the strategy.** That is the RES-2 lesson generalized: QG-O1's "IV-rich + RANGE" gate works because it is slow and reliable; "this is a trend day" is fast and easily faked, so the trend module needs an equally-precise gate (the IV-**cheap** mirror of QG-O1 + higher-timeframe alignment).
+
+### 18.2 The system = 7 blocks (what all we must build; ✅ = already exists)
+1. **Data & Truth** — index 1-min (498d)✅, option 1-min (204d + live capture wired 2026-07-10)✅, bhavcopy EOD✅, realistic cost model (RES-1)✅, IV/VIX✅. Gap: keep option-minute capture accumulating; freshness watchdog.
+2. **Regime Classifier — THE new organ.** No-lookahead, live+historical parity, outputs `(label, confidence)` over the §18.1 taxonomy. Substrate exists: `market_context.py` (RES-2, ~5 signals) + `core/historical_regimes.py` (ERL, no-lookahead trend/vol/gap tags). Missing: the discrete regime output + confidence + wiring as a router input.
+3. **Specialist Library — one per regime, each stands down outside its regime** (RES-2 discipline everywhere): RANGE/INSIDE → sellers (have) + INSIDE mean-revert (NEW); TREND → delta-1 directional (NEW, needs the precise gate); HIGH_VOL_CHOP → **stand-down as a first-class strategy** (NEW); EVENT → stand down / defined-risk only (NEW).
+4. **Router / Capital Allocator — NEW, but EdgeMath is the substrate.** Regime+confidence → activate the owning specialist(s) → size via EdgeMath (§16). Stand-down is a legal output (chop → ~0 size). EM L1–L3 exist✅; new part is *gating activation by regime* instead of running every strategy every day.
+5. **Dynamic Exits & Portfolio Risk — mostly built** (RES-3 dynamic exit✅, RES-6 portfolio risk✅, profit-lock✅, exposure caps✅); NEW: exits keyed to regime (trend trails wide, range books fast).
+6. **The Judge, reformed — regime-conditional OOS.** Current OOS grades a **blended all-days** number that averages a specialist's good regime with its bad one — the reason it looks like it "kills good strategies." Reform: grade each specialist **only on its regime's days**, walk-forward within regime, and treat small-sample as *needs-forward-paper*, **not** an auto-veto. This is the fix for the founder's (justified) OOS distrust on small samples.
+7. **Hermes + Telemetry — built**✅; extend to show the live "regime of the day + who is active + who is standing down" + per-regime P&L. Narrates only; never trades.
+
+### 18.3 The plan (dependency-ordered; each phase ships independently) — tracked as RAE-0..RAE-7 in TASKS.md
+`0 taxonomy locked → 1 classifier → 2 REFORM THE JUDGE (before any specialist, so it can be graded honestly) → 3 specialists one at a time (3a chop stand-down = pure risk cut, ship first; 3b inside mean-revert = easy win; 3c trend delta-1 + IV-cheap gate = the hard one; 3d sellers = RANGE specialist) → 4 router (EdgeMath activation by regime) → 5 regime-aware exits → 6 forward-paper the ensemble + Hermes telemetry → 7 founder-gated live pilot.` `CORE_ENGINE_LIVE_ENABLED=false` until Phase 7 founder gate.
+
+### 18.4 The governing law (so this does not become the old tune-on-noise treadmill)
+- **Every specialist owns ONE regime and MUST stand down outside it.** Coverage, not omnipotence — no strategy is expected to win every day; the *ensemble* covers the day-types.
+- **Judge on the regime, not on all days** (the OOS-distrust fix). Blended numbers lie about specialists.
+- **Stand-down is a strategy.** On HIGH_VOL_CHOP, not-trading is the edge.
+- **Precision > payoff for the trend gate.** Trend winners are huge; the failure mode is range fakeouts, so the gate must be selective (IV-cheap + daily-trend alignment), validated by whether it flips the *all-days* number positive.
+- **No specialist scales on backtest** — regime-conditional OOS → forward-paper-on-regime → founder-gated live. Hermes narrates the "why"; code computes the numbers.
+- **What already exists is the foundation, not the gap:** EdgeMath sizing, dynamic exits, portfolio risk, the data layer, and one proven regime-gated strategy (QG-O1). The gap is the classifier, the router, the non-seller specialists, and the regime-aware judge.
