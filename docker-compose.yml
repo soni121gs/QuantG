@@ -40,6 +40,10 @@ services:
       CORE_ENGINE_ENABLED: "true"
       CORE_ENGINE_PAPER_ENABLED: "true"
       CORE_ENGINE_LIVE_ENABLED: "${CORE_ENGINE_LIVE_ENABLED:-false}"
+      # RAE-6 forward-paper: router ENFORCED (paper only) — sellers stand down when
+      # the regime isn't RANGE/INSIDE (no selling into trends/chop) + regime-aware
+      # exits. Founder-enabled 2026-07-10. CORE_ENGINE_LIVE_ENABLED stays false.
+      RAE_ROUTER_ENABLED: "${RAE_ROUTER_ENABLED:-true}"
       LEGACY_EXECUTION_WRITES_ENABLED: "false"
       # ── Phase 2 options-alpha features (all overridable; defaults match code) ──
       # #4 theta-aware exits (ON): early-exit long option buyers that stall.
