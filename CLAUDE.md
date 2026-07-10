@@ -769,7 +769,7 @@ No pirated/scraped/mystery datasets. Only broker/API data under the account's te
 | Resolver | `core/expired_option_resolver.py` | `(underlying,date,expiry,strike,type)` → Upstox `expired_instrument_key` or typed reason; NIFTY/BANKNIFTY only (SENSEX/BANKEX blocked) |
 | Store | `core/options_minute_store.py` | gzipped-CSV per contract-day under `data/options_1m/…`, write + reader (`get_option_minutes`/`get_chain_at_time`/`missing_minutes`/`coverage`) |
 | Importer | `scripts/options_1m_ingest_upstox.py` | bounded fetch (NIFTY/BANKNIFTY, ATM±N, CE+PE), idempotent, `--dry-run` |
-| Capture | `core/options_minute_capture.py` | forward live tick→1-min bar aggregator + store flush (feed wiring NOT attached yet) |
+| Capture | `core/options_minute_capture.py` + `core/live_option_capture.py` | forward live tick→1-min bar aggregator + store flush. **Feed WIRED 2026-07-10** (`74fd75d`): `live_option_capture.LiveOptionCapture` is a read-only V3 tick listener (attached next to the index capture at server startup ~17748); refs registered from open-position/spread legs (NIFTY/BANKNIFTY only) at startup + once/min during market hours for intraday-opened spreads (also WS-subscribes new leg keys); EOD flush 15:35 IST next to the index flush. Only registered contracts captured; unknown ticks ignored; listener errors swallowed by the feed wrapper (never touches trading) |
 | Selector | `core/intraday_option_selector.py` | no-lookahead single_leg/debit_spread pick from a chain snapshot |
 | Backtester | `core/intraday_options_backtest.py` | deterministic minute event loop, exits STOP→TARGET→TRAILING→TIME/SQUAREOFF, fail-closed on missing price |
 | OOS | `core/intraday_options_oos.py` + `scripts/run_intraday_options_validation.py` | walk-forward verdict + `GATE`; persists `db.intraday_options_oos_runs` |
@@ -790,7 +790,7 @@ hypothesis → IMD 1-min OOS (run_intraday_options_validation) → forward-paper
 - Paper P&L alone NEVER proves an edge — only a passing OOS verdict + forward-paper does.
 - Live promotion stays **founder-gated**; `CORE_ENGINE_LIVE_ENABLED=false` by default. No UI control seeds or tunes a strategy.
 
-### 14.5 Daily forward-capture health checklist (once IMD-04 is wired)
+### 14.5 Daily forward-capture health checklist (IMD-04 index + option capture now wired)
 - subscribed option contracts > 0 and matches the tradeable set,
 - `bars_written` climbing during 09:15–15:30 IST,
 - `stale_feed_seconds` low (feed alive),
