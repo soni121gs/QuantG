@@ -19,10 +19,15 @@ from core.options_minute_capture import MinuteBarAggregator
 
 logger = logging.getLogger("quantg.live_index_capture")
 
-# feed instrument key -> canonical underlying
+# feed instrument key -> canonical underlying. SENSEX (BSE) is already subscribed
+# as a baseline token, so mapping it here starts aggregating its 1-minute bars too
+# — used by the RAE-1 fine-regime classifier for SENSEX (QG-O4) and stored for
+# future SENSEX studies. Percentage-based classifier thresholds transfer across
+# indices, so no per-index tuning is needed.
 INDEX_KEYS = {
     "NSE_INDEX|Nifty 50": "NIFTY",
     "NSE_INDEX|Nifty Bank": "BANKNIFTY",
+    "BSE_INDEX|SENSEX": "SENSEX",
 }
 
 

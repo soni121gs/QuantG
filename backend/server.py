@@ -16751,7 +16751,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 try:
                     from core.regime_classifier import classify_intraday as _rae_classify
                     _cap = _get_live_index_capture()
-                    for _u in ("NIFTY", "BANKNIFTY"):
+                    for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
                         _bars = _cap.snapshot_minutes(_u, include_open=True) or []
                         if len(_bars) < 3:
                             continue
