@@ -15,6 +15,15 @@ from core import db, get_current_user
 router = APIRouter(prefix="/ops", tags=["Operations"])
 
 
+def _pymongo_db():
+    """Synchronous pymongo handle for CPU-bound research jobs run in a thread
+    (the app `db` is motor/async and cannot be used off the event loop)."""
+    import pymongo
+    url = os.environ.get("MONGO_URL", "mongodb://mongo:27017")
+    return pymongo.MongoClient(url, serverSelectionTimeoutMS=4000)[
+        os.environ.get("DB_NAME", "quantg")]
+
+
 def _json_safe(obj):
     """Recursively replace NaN/inf floats with None so FastAPI's JSON encoder
     (which rejects non-finite floats) can serialize research payloads. OOS/coverage
@@ -697,6 +706,59 @@ async def ops_intraday_oos_refresh(start: str = "2025-01-01", end: str = "2025-1
         return {"status": "running", "already_running": True}
     _intraday_oos_running = True
     asyncio.create_task(_run_intraday_oos(start, end))
+    return {"status": "running", "already_running": False}
+
+
+# ---- RAE re-judge: regime-conditional OOS for the whole option book ---------
+_regime_oos_running = False
+
+
+async def _run_regime_oos(start, end, status) -> None:
+    global _regime_oos_running
+    try:
+        from scripts.run_regime_oos_validation import compute
+        pdb = _pymongo_db()
+        result = await asyncio.to_thread(
+            compute, pdb, start=start, end=end, status=status)
+        result["status"] = "error" if result.get("error") else "ok"
+        result["generated_at"] = datetime.now(timezone.utc).isoformat()
+        await db.regime_oos_runs.insert_one(_json_safe(result))
+    except Exception as exc:  # noqa: BLE001
+        await db.regime_oos_runs.insert_one({
+            "status": "error", "error": str(exc),
+            "generated_at": datetime.now(timezone.utc).isoformat()})
+    finally:
+        _regime_oos_running = False
+
+
+@router.get("/regime-oos")
+async def ops_regime_oos(user=Depends(get_current_user)):
+    """RAE re-judge: every option strategy (new/old/live/archived) graded through the
+    REFORMED regime-conditional judge (core/regime_conditional_oos) — on the regime it
+    owns (credit/condor->RANGE sellers, debit/long->TREND_UP buyers), walk-forward,
+    with off-regime give-back reported separately. Distinct from the blended EOD theta
+    OOS (Edge Lab) and the intraday 1m OOS. Read-only; returns the latest stored run."""
+    latest = await db.regime_oos_runs.find_one(
+        {"rows": {"$exists": True}}, {"_id": 0}, sort=[("generated_at", -1)])
+    return _json_safe({
+        "kind": "regime_conditional_oos",
+        "latest_run": latest,
+        "running": _regime_oos_running,
+        "note": "Graded on each strategy's OWNED regime, not blended all-days. "
+                "SENSEX/BANKNIFTY need 1-min data before they can be regime-judged.",
+    })
+
+
+@router.post("/regime-oos/refresh")
+async def ops_regime_oos_refresh(status: str = "all", start: Optional[str] = None,
+                                 end: Optional[str] = None, user=Depends(get_current_user)):
+    """Kick a background regime-conditional re-judge over ALL strategy statuses.
+    Returns immediately; poll GET /ops/regime-oos for the fresh scorecard."""
+    global _regime_oos_running
+    if _regime_oos_running:
+        return {"status": "running", "already_running": True}
+    _regime_oos_running = True
+    asyncio.create_task(_run_regime_oos(start, end, status))
     return {"status": "running", "already_running": False}
 
 

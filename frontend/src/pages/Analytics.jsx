@@ -500,7 +500,100 @@ const VERDICT_CLS = {
   NO_EDGE_NEGATIVE: "text-[var(--qd-loss)]",
   INSUFFICIENT_DATA: "text-[var(--qd-text-3)]",
   DATA_QUALITY_FAIL: "text-[var(--qd-loss)]",
+  POSITIVE_OOS: "text-[var(--qd-profit)]",
+  NEEDS_FORWARD_PAPER: "text-[var(--qd-warn,#d9a441)]",
+  NO_EDGE: "text-[var(--qd-loss)]",
 };
+
+// RAE: regime-conditional re-judge of the whole option book — grades each strategy
+// on the regime it OWNS (not blended), with off-regime give-back shown separately.
+function RegimeOOS({ data, onRefresh }) {
+  if (!data) return null;
+  const latest = data.latest_run || null;
+  const rows = latest?.rows || [];
+  const sum = latest?.summary || {};
+  const win = latest?.window || {};
+  const dist = latest?.regime_distribution || {};
+  const graded = rows.filter((r) => r.verdict);
+  const errs = rows.filter((r) => r.error);
+  const fmt = (o, k, d = 0) => (o && o[k] != null ? Number(o[k]).toFixed(d) : "-");
+  return (
+    <section className="qd-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="qd-section-title flex items-center gap-2"><Layers size={14} /> Regime-Conditional OOS — whole book re-judged</div>
+          <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+            Every strategy (new / old / live / archived) graded on the regime it OWNS
+            (credit/condor → RANGE sellers, debit/long → TREND buyers), walk-forward.
+            Off-regime days are reported as give-back, not blended in.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={data.running}
+          className="inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-accent)]/40 bg-[var(--qd-surface-2)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-surface-3)] disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={data.running ? "animate-spin" : ""} /> {data.running ? "Running…" : "Re-judge"}
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Positive OOS" value={sum.positive_oos ?? 0} />
+        <Stat label="Needs fwd-paper" value={sum.needs_forward_paper ?? 0} />
+        <Stat label="No edge / thin" value={sum.no_edge_or_thin ?? 0} />
+        <Stat label="Not backtestable" value={sum.not_backtestable ?? 0} />
+      </div>
+      {win.start && (
+        <div className="mt-2 font-mono text-[10px] text-[var(--qd-text-3)]">
+          window {win.start} → {win.end} · {win.trading_days} days ·{" "}
+          {Object.entries(dist).map(([u, d]) => `${u} ${d.days}d`).join(" · ")}
+        </div>
+      )}
+
+      {!latest && (
+        <div className="mt-4 font-mono text-xs text-[var(--qd-text-3)]">
+          No regime re-judge yet. Click Re-judge to grade every strategy on its owned regime.
+        </div>
+      )}
+      {graded.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left font-mono text-xs">
+            <thead className="text-[var(--qd-text-3)]">
+              <tr>
+                <th className="py-1 pr-3">Strategy</th><th className="pr-3">Status</th>
+                <th className="pr-3">Owns</th><th className="pr-3 text-right">N</th>
+                <th className="pr-3 text-right">Avg ₹</th><th className="pr-3 text-right">WR%</th>
+                <th className="pr-3 text-right">IS→OOS</th><th className="pr-3 text-right">Off-reg</th>
+                <th className="pr-3">Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {graded.map((r) => (
+                <tr key={r.name} className="border-t border-[var(--qd-border)]" title={(r.reasons || []).join(" · ")}>
+                  <td className="py-1 pr-3 text-[var(--qd-text)]">{r.name}</td>
+                  <td className="pr-3 text-[var(--qd-text-3)]">{r.status}</td>
+                  <td className="pr-3 text-[var(--qd-text-2)]">{r.owns}</td>
+                  <td className="pr-3 text-right">{fmt(r.on_regime, "n")}</td>
+                  <td className={`pr-3 text-right ${(r.on_regime?.avg ?? 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{fmt(r.on_regime, "avg", 0)}</td>
+                  <td className="pr-3 text-right">{fmt(r.on_regime, "wr", 0)}</td>
+                  <td className="pr-3 text-right text-[var(--qd-text-2)]">{fmt(r.in_sample, "avg", 0)}→{fmt(r.out_sample, "avg", 0)}</td>
+                  <td className={`pr-3 text-right ${(r.off_regime?.avg ?? 0) >= 0 ? "text-[var(--qd-text-3)]" : "text-[var(--qd-loss)]"}`}>{r.off_regime?.n ? fmt(r.off_regime, "avg", 0) : "-"}</td>
+                  <td className={`pr-3 ${VERDICT_CLS[r.verdict] || ""}`}>{r.verdict}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {errs.length > 0 && (
+        <div className="mt-3 font-mono text-[10px] text-[var(--qd-text-3)]">
+          Not regime-judged ({errs.length}): {errs.map((r) => r.name).join(", ")} — need 1-min index / bhavcopy history.
+        </div>
+      )}
+    </section>
+  );
+}
 
 // IMD-09: intraday 1-minute OOS for QG-O5..QG-O10 — clearly labelled
 // separate from the EOD theta OOS above so users never mix the two judges.
@@ -579,6 +672,7 @@ export default function Analytics() {
   const [oos, setOos] = useState(null);
   const [edgeLab, setEdgeLab] = useState(null);
   const [intradayOos, setIntradayOos] = useState(null);
+  const [regimeOos, setRegimeOos] = useState(null);
   const [edgeMath, setEdgeMath] = useState(null);
   const [loading, setLoading] = useState(false);
   const [elLoading, setElLoading] = useState(false);
@@ -638,6 +732,31 @@ export default function Analytics() {
       toast.error(e?.response?.data?.detail || "Could not start intraday OOS run");
     }
   }, [loadIntradayOos]);
+
+  const loadRegimeOos = useCallback(async () => {
+    try {
+      const r = await api.get("/ops/regime-oos");
+      setRegimeOos(r.data);
+    } catch (e) {
+      // non-fatal
+    }
+  }, []);
+
+  const refreshRegimeOos = useCallback(async () => {
+    try {
+      await api.post("/ops/regime-oos/refresh");
+      setRegimeOos((d) => ({ ...(d || {}), running: true }));
+      toast.info("Re-judging the whole book on its owned regimes…");
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        const r = await api.get("/ops/regime-oos").catch(() => null);
+        setRegimeOos(r?.data || null);
+        if (r?.data && !r.data.running) { clearInterval(pollRef.current); pollRef.current = null; }
+      }, 5000);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not start regime re-judge");
+    }
+  }, []);
 
   // Kick off a background rebuild, then poll the cached snapshot until it lands.
   const refreshEdgeLab = useCallback(async () => {
@@ -723,7 +842,7 @@ export default function Analytics() {
           <button
             key={t.id}
             type="button"
-            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); } }}
+            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); if (!regimeOos) loadRegimeOos(); } }}
             className={`px-4 py-2.5 font-head text-xs font-semibold uppercase tracking-widest border-b-2 transition-colors ${
               tab === t.id ? "border-[var(--qd-accent)] text-[var(--qd-text)]" : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
@@ -878,6 +997,7 @@ export default function Analytics() {
       {tab === "edgelab" && (
         <div className="space-y-5">
           <EdgeLab data={edgeLab} loading={elLoading} onRefresh={refreshEdgeLab} />
+          <RegimeOOS data={regimeOos} onRefresh={refreshRegimeOos} />
           <IntradayOOS data={intradayOos} onRefresh={refreshIntradayOos} />
         </div>
       )}
