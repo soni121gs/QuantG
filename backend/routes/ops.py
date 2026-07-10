@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import asyncio
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -12,6 +13,19 @@ from pydantic import BaseModel
 from core import db, get_current_user
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
+
+
+def _json_safe(obj):
+    """Recursively replace NaN/inf floats with None so FastAPI's JSON encoder
+    (which rejects non-finite floats) can serialize research payloads. OOS/coverage
+    docs can carry inf (division-by-zero profit factor) or NaN (empty-sample mean)."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 class OpsActionReq(BaseModel):
     note: Optional[str] = None
@@ -551,13 +565,13 @@ async def ops_intraday_oos(user=Depends(get_current_user)):
     coverage = await asyncio.to_thread(OptionsMinuteStore().coverage)
     latest = await db.intraday_options_oos_runs.find_one(
         {"verdict_counts": {"$exists": True}}, {"_id": 0}, sort=[("generated_at", -1)])
-    return {
+    return _json_safe({
         "kind": "intraday_1m_oos",
         "coverage": coverage,
         "latest_run": latest,
         "running": _intraday_oos_running,
         "note": "Intraday 1m OOS judges option buyers; separate from the EOD theta OOS in Edge Lab.",
-    }
+    })
 
 
 @router.post("/intraday-oos/refresh")
