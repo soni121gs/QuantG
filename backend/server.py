@@ -1633,7 +1633,14 @@ DEAD_STRATEGY_NAMES = frozenset({
     "RELIANCE Trend Rider", "SBIN Short Seller", "HDFCBANK Range Rebound",
     "ICICIBANK Volatility Breakout", "TCS Swing Accumulator", "INFY VWAP Pullback",
     "AXISBANK Trend Follower", "LT Momentum Rider", "BHARTIARTL Intraday Trend",
-    "KOTAKBANK RSI Rebound", "NIFTY Theta Credit Spread", "NIFTY Range Credit Spread",
+    "KOTAKBANK RSI Rebound",
+    # 2026-07-10 (founder-directed): "NIFTY Theta Credit Spread" + "NIFTY Range Credit
+    # Spread" removed from the dead set so the startup allowlist enforcement (server.py
+    # ~17212) no longer force-archives them each boot. They are NOT added to the
+    # paper-forward ACTIVE allowlist, so startup will not auto-set them live either —
+    # they keep whatever status the founder set manually. They are DB-only rows (no
+    # code template), so their exit geometry (TP 50% / SL 2x / 120m recycle) is set
+    # directly in the DB, not via template sync. OOS-negative old-book: evidence-only.
     "BANKNIFTY Theta Credit Spread", "SENSEX Theta Credit Spread",
 })
 
@@ -6699,6 +6706,9 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # cut so the strategy can take its next scalp instead of holding one all day.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
         _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 45})
+    # NOTE: "NIFTY Theta Credit Spread" / "NIFTY Range Credit Spread" are DB-only rows
+    # (not code templates), so their exit geometry is set directly in the DB — see the
+    # 2026-07-10 note on DEAD_STRATEGY_NAMES above. They are not normalized here.
     if _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
         _template["initial_status"] = "live"
         if _template.get("required_capital") is not None:
