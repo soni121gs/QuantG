@@ -50,6 +50,10 @@ REGIME_SIZE = {
 TREND_MIN_CONF = _f("RAE_ROUTER_TREND_CONF", 0.90)   # trend needs high confidence (precision)
 # sellers co-own the quiet regimes with the mean-revert specialist
 SELLER_OK_REGIMES = {tax.RANGE, tax.INSIDE_QUIET}
+# a single delta-1 trend specialist owns BOTH trend directions (its code picks CE vs
+# PE by the day's direction); accept the generic role name for either trend owner.
+TREND_OK_REGIMES = {tax.TREND_UP, tax.TREND_DOWN}
+TREND_ROLES = {"trend_delta1", "trend_delta1_long", "trend_delta1_short"}
 
 
 @dataclass
@@ -92,7 +96,11 @@ def route(
 
     # 2) specialist ownership — a strategy only trades the regime(s) it owns
     if specialist is not None:
-        owns = (specialist == owner) or (specialist == "range_seller" and regime in SELLER_OK_REGIMES)
+        owns = (
+            (specialist == owner)
+            or (specialist == "range_seller" and regime in SELLER_OK_REGIMES)
+            or (specialist in TREND_ROLES and regime in TREND_OK_REGIMES)
+        )
         if not owns:
             return _stand_down(regime, confidence,
                                f"{specialist} does not own {regime} (owner={owner}) — stand down")

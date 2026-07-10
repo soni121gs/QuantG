@@ -128,16 +128,27 @@ def compute(db, *, start=None, end=None, name=None, status="all",
             base["error"] = f"no index_1m regime data for {u}"
             rows.append(base)
             continue
-        target = _target_regime(structure)
+        opt = (s.get("visual_config") or {}).get("options") or {}
+        owned = opt.get("owned_regimes")
+        if owned:
+            # multi-regime ownership (e.g. trend_delta1 owns TREND_UP+TREND_DOWN):
+            # collapse any owned label to "OWNED" so the judge grades their union.
+            owned_set = set(owned)
+            target, owns_label = "OWNED", "+".join(owned)
+        else:
+            owned_set, target = None, _target_regime(structure)
+            owns_label = target
         records = []
         for t in res.get("trades", []):
             d = str(t.get("entry_date"))[:10]
             lbl = rmap.get(d)
             if lbl is None:
                 continue
+            if owned_set is not None:
+                lbl = "OWNED" if lbl in owned_set else lbl
             records.append({"date": d, "regime": lbl, "pnl": t.get("pnl")})
         v = evaluate_regime_conditional(records, target)
-        base.update({"owns": target, "verdict": v.verdict, "on_regime": v.on_regime,
+        base.update({"owns": owns_label, "verdict": v.verdict, "on_regime": v.on_regime,
                      "in_sample": v.in_sample, "out_sample": v.out_sample,
                      "off_regime": v.off_regime, "stood_down_days": v.stood_down_days,
                      "reasons": v.reasons})

@@ -54,54 +54,109 @@ RANGE_SELLER_CODE = '''def run(data):
     }]
 '''
 
-# per-underlying geometry (short_otm_pct/width proven on NIFTY; capital scaled to
-# each underlying's real per-lot spread margin — killswitch-geometry memory).
-SPECIALISTS = [
+TREND_DELTA1_CODE = '''def run(data):
+    if len(data) < 55:
+        return []
+    closes = [float(d.get('close') or 0) for d in data]
+    highs = [float(d.get('high') or d.get('close') or 0) for d in data]
+    lows = [float(d.get('low') or d.get('close') or 0) for d in data]
+    d = data[-1]
+    clock = str(d.get('date', ''))[11:16]
+    if clock and (clock < '09:45' or clock > '14:45'):
+        return []
+    ma20 = sum(closes[-20:]) / 20
+    ma50 = sum(closes[-50:]) / 50
+    c = closes[-1]
+    path = sum(abs(closes[-i] - closes[-i - 1]) for i in range(1, 11)) or 1e-9
+    eff = abs(closes[-1] - closes[-11]) / path       # trending, not chopping
+    up = c > ma20 > ma50 and c >= max(highs[-21:-1]) and eff >= 0.45
+    dn = c < ma20 < ma50 and c <= min(lows[-21:-1]) and eff >= 0.45
+    if not (up or dn):
+        return []
+    direction = 'CE' if up else 'PE'
+    return [{
+        'date': d['date'], 'action': 'BUY', 'direction': direction,
+        'setup_type': 'regime_trend_delta1',
+        'confidence': 72.0,
+        'entry_reason': '%(UL)s strong trend breakout + MA alignment; buy deep-ITM ' + direction,
+        'target_R': 2.5, 'initial_stop_R': 1.0, 'trail_after_R': 1.0,
+        'max_hold_minutes': 0, 'invalidation_rule': 'trend_break',
+        'regime_required': 'trend', 'option_selection_preference': 'ITM',
+        'signal_version': 'rae-v1', 'strategy_logic_version': 'rae-trend-delta1-2026-07'
+    }]
+'''
+
+# Specialist templates. Each row is instantiated per underlying; the router
+# activates it only on the regime(s) it owns and stands it down elsewhere.
+TEMPLATES = {
+    "range_seller": {
+        "code": RANGE_SELLER_CODE, "role": "range_seller",
+        "owned": ["RANGE", "INSIDE_QUIET"], "structure": "credit_spread",
+        "name": "Range Seller (RANGE/INSIDE)",
+        "desc": ("sells a defined-risk OTM put credit spread only on RANGE/INSIDE days "
+                 "(router-gated). Reuses the QG-O2 geometry that passed the "
+                 "regime-conditional judge."),
+        "options": {"strike_mode": "OTM_SELL", "structure": "credit_spread",
+                    "spread_width": 6, "short_otm_pct": 0.03, "wing_width": 6,
+                    "exit_mode": "expiry", "short_delta": 0.12},
+        "risk": {},
+    },
+    "trend_delta1": {
+        "code": TREND_DELTA1_CODE, "role": "trend_delta1",
+        "owned": ["TREND_UP", "TREND_DOWN"], "structure": "single_leg",
+        "name": "Trend Delta-1 (TREND)",
+        "desc": ("buys a DEEP-ITM (delta ~0.7) single leg — CE on a confirmed up-trend, "
+                 "PE on a down-trend — only on TREND days at router confidence >=0.90. "
+                 "Low-theta directional; the fix for why every OTM buyer died. "
+                 "Forward-paper (trend days are rare); needs an IV-cheap gate refinement."),
+        "options": {"strike_mode": "ITM_BUY", "structure": "single_leg",
+                    "itm_offset_pct": 0.02, "option_selection_preference": "ITM1",
+                    "exit_mode": ""},
+        "risk": {"target_pct": 60.0, "stoploss_pct": 25.0, "max_hold_days": 2},
+    },
+}
+
+# per-underlying capital (real per-lot margin — killswitch-geometry memory).
+UNDERLYINGS = [
     {"underlying": "NIFTY", "symbol": "NIFTY", "exchange": "NFO",
-     "otm_points": 720, "required_capital": 25000.0},
+     "cap": {"range_seller": 25000.0, "trend_delta1": 35000.0}},
     {"underlying": "BANKNIFTY", "symbol": "BANKNIFTY", "exchange": "NFO",
-     "otm_points": 1500, "required_capital": 40000.0},
+     "cap": {"range_seller": 40000.0, "trend_delta1": 55000.0}},
     {"underlying": "SENSEX", "symbol": "SENSEX", "exchange": "BFO",
-     "otm_points": 2400, "required_capital": 60000.0},
+     "cap": {"range_seller": 60000.0, "trend_delta1": 90000.0}},
 ]
 
-OWNED_REGIMES = ["RANGE", "INSIDE_QUIET"]
-SPECIALIST_ROLE = "range_seller"
 
-
-def build_doc(template: dict, cfg: dict, activate: bool) -> dict:
+def build_doc(template: dict, tpl: dict, cfg: dict, activate: bool) -> dict:
     doc = copy.deepcopy(template)
     doc.pop("_id", None)
     ul = cfg["underlying"]
-    name = f"RAE {ul} Range Seller (RANGE/INSIDE)"
-    doc["id"] = f"rae-range-seller-{ul.lower()}"
+    role = tpl["role"]
+    cap = cfg["cap"][role]
+    name = f"RAE {ul} {tpl['name']}"
+    doc["id"] = f"rae-{role.replace('_', '-')}-{ul.lower()}"
     doc["name"] = name
-    doc["description"] = (f"RAE regime specialist — sells a defined-risk OTM put credit "
-                          f"spread on {ul} only when the day's regime is RANGE/INSIDE "
-                          f"(router-gated). Reuses the QG-O2 geometry that passed the "
-                          f"regime-conditional judge. Forward-paper; router decides firing.")
+    doc["description"] = f"RAE regime specialist — {ul} {tpl['desc']} Router decides firing."
     doc["status"] = "live" if activate else "paused"
     doc["manual_paused"] = not activate
     doc["schedule_paused"] = False
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     doc["archived_at"] = None
-    doc["python_code"] = RANGE_SELLER_CODE % {"UL": ul}
-    doc["required_capital"] = cfg["required_capital"]
+    doc["python_code"] = tpl["code"] % {"UL": ul}
+    doc["required_capital"] = cap
 
     vc = doc.setdefault("visual_config", {})
     vc["symbol"] = cfg["symbol"]
     vc["exchange"] = cfg["exchange"]
     opt = vc.setdefault("options", {})
     opt.update({
-        "enabled": True, "underlying": ul, "strike_mode": "OTM_SELL",
-        "otm_points": cfg["otm_points"], "expiry_offset": 0, "lots": 1,
-        "required_capital": cfg["required_capital"], "product": "NRML",
-        "structure": "credit_spread", "spread_width": 6, "short_otm_pct": 0.03,
-        "wing_width": 6, "exit_mode": "expiry", "short_delta": 0.12,
-        "candle_interval": "5minute",
-        # ---- RAE regime tags (read by the router / regime-status route) ----
-        "owned_regimes": OWNED_REGIMES, "specialist_role": SPECIALIST_ROLE,
+        "enabled": True, "underlying": ul, "expiry_offset": 0, "lots": 1,
+        "required_capital": cap, "product": "NRML", "candle_interval": "5minute",
+        "owned_regimes": tpl["owned"], "specialist_role": role,
     })
+    opt.update(tpl["options"])
+    risk = vc.setdefault("risk", {})
+    risk.update(tpl["risk"])
     return doc
 
 
@@ -120,23 +175,25 @@ def main():
         return
 
     uid = template.get("user_id")
-    for cfg in SPECIALISTS:
-        doc = build_doc(template, cfg, args.activate)
-        doc["user_id"] = uid
-        existing = db.strategies.find_one({"name": doc["name"]})
-        if existing:
-            # preserve runtime counters; refresh definition + tags + status
-            db.strategies.update_one({"_id": existing["_id"]}, {"$set": {
-                "python_code": doc["python_code"], "visual_config": doc["visual_config"],
-                "required_capital": doc["required_capital"], "status": doc["status"],
-                "manual_paused": doc["manual_paused"], "description": doc["description"],
-                "archived_at": None,
-            }})
-            print(f"UPDATED  {doc['name']}  [{doc['status']}]  owns={OWNED_REGIMES}")
-        else:
-            doc.setdefault("_id", str(uuid.uuid4()))
-            db.strategies.insert_one(doc)
-            print(f"SEEDED   {doc['name']}  [{doc['status']}]  owns={OWNED_REGIMES}")
+    for cfg in UNDERLYINGS:
+        for role, tpl in TEMPLATES.items():
+            doc = build_doc(template, tpl, cfg, args.activate)
+            doc["user_id"] = uid
+            existing = db.strategies.find_one({"name": doc["name"]})
+            if existing:
+                # preserve runtime counters; refresh definition + tags + status
+                db.strategies.update_one({"_id": existing["_id"]}, {"$set": {
+                    "python_code": doc["python_code"], "visual_config": doc["visual_config"],
+                    "required_capital": doc["required_capital"], "status": doc["status"],
+                    "manual_paused": doc["manual_paused"], "description": doc["description"],
+                    "archived_at": None,
+                }})
+                verb = "UPDATED"
+            else:
+                doc.setdefault("_id", str(uuid.uuid4()))
+                db.strategies.insert_one(doc)
+                verb = "SEEDED "
+            print(f"{verb}  {doc['name']}  [{doc['status']}]  owns={tpl['owned']}")
 
     print("\nDone. Router gates firing by regime; flip RAE_ROUTER_ENABLED=true (paper) "
           "to activate. CORE_ENGINE_LIVE_ENABLED stays false.")

@@ -103,6 +103,12 @@ class EODOptionsBacktest:
         # credit-multiples, so any credit-based stop is meaningless and the illiquid
         # far wings make daily marks unreliable. Exits only on EXPIRY / TIME.
         self._exit_mode = (p.get("exit_mode") or opt.get("exit_mode") or "").lower()
+        # delta-1 trend specialist: buy a DEEP-ITM single leg (low theta, ~delta 0.7+)
+        # `itm_offset_pct` in the money so the option tracks the index move, not decay.
+        _itm = p.get("itm_offset_pct")
+        if _itm is None:
+            _itm = opt.get("itm_offset_pct")
+        self._itm_offset = float(_itm) if _itm is not None else 0.0
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
         max_hold_days = int(p.get("max_hold_days") or risk.get("max_hold_days") or MAX_DTE_DAYS)
@@ -239,14 +245,21 @@ class EODOptionsBacktest:
 
         if structure == "single_leg":
             typ = direction if direction in ("CE", "PE") else ("CE" if bullish else "PE")
-            px = settle(atm, typ)
+            # deep-ITM (delta-1) selection when itm_offset_pct set: CE strike below
+            # spot / PE strike above spot by that %, snapped to a listed strike.
+            k = atm
+            if self._itm_offset > 0:
+                dist = max(1, round(spot * self._itm_offset / interval))
+                target = atm - dist * interval if typ == "CE" else atm + dist * interval
+                k = min(strikes, key=lambda s: abs(s - target))
+            px = settle(k, typ)
             if not px:
                 return None
             entry = _fill(px, "BUY")
             return {"kind": "long", "structure": structure, "u": u, "expiry": expiry,
-                    "legs": [("BUY", atm, typ)], "entry_basis": entry, "entry_ref": entry,
+                    "legs": [("BUY", k, typ)], "entry_basis": entry, "entry_ref": entry,
                     "tp": tp_pct, "sl": sl_pct, "entry_idx": idx, "entry_day": day,
-                    "desc": f"BUY {atm:.0f}{typ} @{entry:.1f}"}
+                    "desc": f"BUY {k:.0f}{typ} @{entry:.1f}"}
 
         if structure == "credit_spread":
             typ = "PE" if bullish else "CE"
