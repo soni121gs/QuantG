@@ -58,6 +58,7 @@ class InstrumentResolver:
         upstox_gateway: Optional[Any] = None,
         mode: str = "paper",
         allow_simulated: bool = True,
+        itm_offset_pct: float = 0.0,
         **_ignored: Any,
     ) -> Optional[Instrument]:
         """Resolve a tradable Upstox instrument with source tracking.
@@ -75,7 +76,8 @@ class InstrumentResolver:
 
         domain = resolve_domain_by_underlying(und)
         if inst_type == "INDEX_OPTION":
-            return await self._resolve_index_option(und, side, strike, expiry_rule, spot_price_hint, mode, allow_simulated)
+            return await self._resolve_index_option(und, side, strike, expiry_rule, spot_price_hint,
+                                                    mode, allow_simulated, float(itm_offset_pct or 0.0))
 
         self._diag(stage="unsupported_domain", reason=f"{domain.name}/{inst_type} is unsupported")
         return None
@@ -89,6 +91,7 @@ class InstrumentResolver:
         spot_price_hint: Optional[float],
         mode: str,
         allow_simulated: bool,
+        itm_offset_pct: float = 0.0,
     ) -> Optional[Instrument]:
         gw = self.upstox_gateway
         domain = resolve_domain_by_underlying(underlying)
@@ -111,7 +114,12 @@ class InstrumentResolver:
         # PE/bearish trade got the inverted strike — an ITM1_BUY put was actually bought
         # OTM (the WR-22 "config=ITM1_BUY but trades OTM" bug, fixed 2026-06-23).
         is_pe = str(option_side or "").upper() == "PE"
-        if strike_rule == "OTM1":
+        if itm_offset_pct and itm_offset_pct > 0 and strike_rule in ("ITM1", "ITM"):
+            # deep-ITM (delta-1) selection: move `itm_offset_pct` into the money,
+            # side-aware (CE lower strike / PE higher strike), snapped to the grid.
+            steps = max(1, round((spot * itm_offset_pct) / interval))
+            target_strike += (steps * interval) if is_pe else (-steps * interval)
+        elif strike_rule == "OTM1":
             target_strike += (-interval if is_pe else interval)
         elif strike_rule == "ITM1":
             target_strike += (interval if is_pe else -interval)

@@ -17407,6 +17407,13 @@ async def startup():
             strike_rule = "ITM1"
         else:
             strike_rule = "ATM"
+        # deep-ITM (delta-1) trend specialist: visual_config.options.itm_offset_pct
+        # selects a strike that many % in the money (low theta), not just 1 strike ITM.
+        _opt_cfg = (strategy.get("visual_config") or {}).get("options") or {}
+        try:
+            itm_offset_pct = float(_opt_cfg.get("itm_offset_pct") or 0.0)
+        except (TypeError, ValueError):
+            itm_offset_pct = 0.0
         instrument_type = "INDEX_OPTION"
         diagnostics: Dict[str, Any] = {
             "resolver_stage": "start",
@@ -17434,6 +17441,7 @@ async def startup():
             strike_rule=strike_rule,
             expiry_rule=int(expiry_offset or 0),
             spot_price_hint=float(spot_hint or 0) if spot_hint else None,
+            itm_offset_pct=itm_offset_pct,
             mode=mode,
         )
         diagnostics.update({
