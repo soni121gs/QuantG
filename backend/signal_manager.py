@@ -633,6 +633,20 @@ async def _edge_math_spread_size(
     contract_mult = max(0.10, min(1.0, float(spread.get("contract_size_mult") or 1.0)))
     profit_mult = max(0.10, min(1.0, float(strategy.get("day_profit_size_mult") or 1.0)))
     lots = min(max(1, capital_cap), max(1, int(round(decision.lots * contract_mult * profit_mult))))
+
+    # RAE-4 router: gate/scale by regime OWNERSHIP. A credit spread is the RANGE
+    # seller (RAE-3d); the router stands it down (size_mult 0) when the regime is
+    # not RANGE/INSIDE — i.e. it refuses to sell premium into a TREND (the
+    # 2026-07-10 loss) or a CHOP day. OBSERVE-ONLY by default: it always annotates
+    # telemetry, but only changes lots when RAE_ROUTER_ENABLED=true (founder gate).
+    from core.regime_router import route as _rae_route, enabled as _rae_enabled
+    _router_on = _rae_enabled()
+    _routing = _rae_route(str(regime or "UNKNOWN"),
+                          float(spread.get("regime_confidence") or 0.5),
+                          specialist="range_seller")
+    if _router_on:
+        lots = int(round(lots * _routing.size_mult))
+
     telemetry = {
         **decision.__dict__,
         "rolling_n": stats.n,
@@ -645,6 +659,7 @@ async def _edge_math_spread_size(
         "final_lots": lots,
         "regime": regime,
         "vol_state": vol_state,
+        "router": {**_routing.as_dict(), "enforced": _router_on},
     }
     return lots, telemetry
 
@@ -895,6 +910,14 @@ async def _dispatch_signal_via_unified_engine(
             lot_size=lot_size, risk_budget=_risk_budget, regime=_regime_at_entry,
         )
         _spread["edge_math"] = _edge_telemetry
+        # RAE-4: when the router is ENFORCED (founder-gated) and stands this seller
+        # down for the current regime (e.g. selling into a TREND/CHOP day), skip the
+        # entry. Observe-only by default → this never fires until RAE_ROUTER_ENABLED.
+        _rae = _edge_telemetry.get("router") or {}
+        if _rae.get("enforced") and _rae.get("stand_down"):
+            return {"ok": False, "status": "SKIPPED",
+                    "reason": f"RAE router stand-down: {(_rae.get('reasons') or ['off-regime'])[0]}",
+                    "reason_code": "RAE_ROUTER_STAND_DOWN"}
         # Per-strategy TP/SL geometry (visual_config.options.credit_tp_frac /
         # credit_sl_mult) — lets a credit scalp book 35% of credit with a 1.5x
         # stop while the theta book keeps the global env defaults.
