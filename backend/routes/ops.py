@@ -564,10 +564,16 @@ async def ops_regime_status(user=Depends(get_current_user)):
     from core.regime_router import route, enabled as _rae_enabled
     uid = user["id"]
 
-    # current regime per index (from the live regime engine's state)
+    # current regime per index (from the live regime engine's state). RAE-1 fine
+    # label + confidence when available (written each minute by the server loop),
+    # else the coarse regime.
     regimes = {}
-    async for r in db.market_regime_state.find({}, {"_id": 0, "index": 1, "regime": 1, "bias": 1}):
-        regimes[r.get("index")] = {"regime": r.get("regime"), "bias": r.get("bias")}
+    async for r in db.market_regime_state.find(
+        {}, {"_id": 0, "index": 1, "regime": 1, "bias": 1,
+             "regime_fine": 1, "regime_fine_confidence": 1}):
+        regimes[r.get("index")] = {"regime": r.get("regime"), "bias": r.get("bias"),
+                                   "regime_fine": r.get("regime_fine"),
+                                   "confidence": r.get("regime_fine_confidence")}
 
     # per live strategy: would the router activate or stand it down right now?
     strat_routing = []
@@ -577,9 +583,11 @@ async def ops_regime_status(user=Depends(get_current_user)):
     ):
         underlying = ((s.get("visual_config") or {}).get("options") or {}).get("underlying") or "NIFTY"
         structure = ((s.get("visual_config") or {}).get("options") or {}).get("structure")
-        reg = (regimes.get(underlying) or {}).get("regime") or "UNKNOWN"
+        _rg = regimes.get(underlying) or {}
+        reg = _rg.get("regime_fine") or _rg.get("regime") or "UNKNOWN"
+        conf = float(_rg.get("confidence") or 0.5)
         specialist = "range_seller" if structure in ("credit_spread", "debit_spread") else None
-        d = route(str(reg), 0.5, specialist=specialist)
+        d = route(str(reg), conf, specialist=specialist)
         strat_routing.append({"strategy": s.get("name"), "underlying": underlying,
                               "regime": reg, "specialist": specialist,
                               "action": "STAND_DOWN" if d.stand_down else "ACTIVE",

@@ -16742,6 +16742,30 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 except Exception as _oreg_err:
                     logger.debug("option capture ref registration failed: %s", _oreg_err)
 
+                # RAE-1 live wiring: compute the FINE intraday regime (label +
+                # confidence, no-lookahead) from the live index-capture buffer and
+                # persist it on market_regime_state, so the router (signal_manager +
+                # /ops/regime-status) can gate on HIGH_VOL_CHOP/INSIDE_QUIET and real
+                # confidence instead of only the coarse RANGE/TREND regime. Read-only,
+                # best-effort; the coarse `regime` field is left untouched.
+                try:
+                    from core.regime_classifier import classify_intraday as _rae_classify
+                    _cap = _get_live_index_capture()
+                    for _u in ("NIFTY", "BANKNIFTY"):
+                        _bars = _cap.snapshot_minutes(_u, include_open=True) or []
+                        if len(_bars) < 3:
+                            continue
+                        _snap = _rae_classify(_bars)
+                        await db.market_regime_state.update_one(
+                            {"index": _u},
+                            {"$set": {"regime_fine": _snap.label,
+                                      "regime_fine_confidence": round(float(_snap.confidence), 3),
+                                      "regime_fine_at": ist.isoformat()}},
+                            upsert=True,
+                        )
+                except Exception as _fine_err:
+                    logger.debug("RAE fine-regime write failed: %s", _fine_err)
+
             # India VIX snapshot every 5 min during market hours → db.vix_history.
             # One doc per day; "value" converges to the daily close at 15:30. This
             # series feeds the IV-rank regime gate (Phase 2).

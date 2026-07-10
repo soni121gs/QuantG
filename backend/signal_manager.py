@@ -641,7 +641,10 @@ async def _edge_math_spread_size(
     # telemetry, but only changes lots when RAE_ROUTER_ENABLED=true (founder gate).
     from core.regime_router import route as _rae_route, enabled as _rae_enabled
     _router_on = _rae_enabled()
-    _routing = _rae_route(str(regime or "UNKNOWN"),
+    # RAE-1 live: prefer the FINE intraday regime (HIGH_VOL_CHOP/INSIDE_QUIET + real
+    # confidence, written to spread.router_regime by the caller) over the coarse
+    # RANGE/TREND regime; fall back to coarse when the fine label isn't available yet.
+    _routing = _rae_route(str(spread.get("router_regime") or regime or "UNKNOWN"),
                           float(spread.get("regime_confidence") or 0.5),
                           specialist="range_seller")
     if _router_on:
@@ -905,6 +908,18 @@ async def _dispatch_signal_via_unified_engine(
             or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
             or 15000.0
         )
+        # RAE-1 live: pull the fine intraday regime (label + confidence) for this
+        # underlying so the router gates on it. Best-effort; falls back to coarse.
+        try:
+            _fine = await db.market_regime_state.find_one(
+                {"index": str(symbol).upper()},
+                {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1},
+            )
+            if _fine and _fine.get("regime_fine"):
+                _spread["router_regime"] = _fine["regime_fine"]
+                _spread["regime_confidence"] = _fine.get("regime_fine_confidence") or 0.5
+        except Exception:
+            pass
         _spread_lots, _edge_telemetry = await _edge_math_spread_size(
             db, user_id=user_id, strategy=strategy, spread=_spread,
             lot_size=lot_size, risk_budget=_risk_budget, regime=_regime_at_entry,
