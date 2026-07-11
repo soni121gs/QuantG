@@ -1,0 +1,117 @@
+"""IA-7 (2026-07-11): Contextual retrieval (RAG) for Hermes — index our OWN validated
+history (wiki notes + Hermes lessons + OOS verdicts) into the existing embedding
+store (`db.hermes_memory`) so `recall_memory` (and the future IA-6 miner) can reason
+from what we've already PROVEN, not just the LLM's priors.
+
+This is the AlphaAgent "inherit validated rationales" anti-drift fix: the #1 failure
+of LLM alpha miners is drifting/re-proposing dead ideas; grounding retrieval in our
+own OOS verdicts (e.g. "OI/GEX is dead on NIFTY", "buyers die 5×") stops that.
+
+Reuses the existing path: `core.embeddings.generate_gemini_embedding` (768-dim) +
+`db.hermes_memory` (the collection `recall_memory` already searches). Read-only w.r.t.
+trading; idempotent via a stable `rag_key` + `content_hash` so re-runs don't re-embed
+unchanged docs or duplicate rows. Skips zero-vectors (embedding API down) for retry.
+"""
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from core.embeddings import generate_gemini_embedding
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_zero(vec: Optional[List[float]]) -> bool:
+    return not vec or all(v == 0 for v in vec)
+
+
+async def _index_one(db, user_id: str, rag_key: str, text: str, mtype: str,
+                     source_refs: Optional[List[str]] = None,
+                     date: Optional[str] = None) -> str:
+    """Upsert one RAG doc into hermes_memory. Returns skip|indexed|embed_fail."""
+    text = (text or "").strip()
+    if not text:
+        return "skip"
+    ch = _hash(text)
+    existing = await db.hermes_memory.find_one({"user_id": user_id, "rag_key": rag_key})
+    if existing and existing.get("content_hash") == ch and not _is_zero(existing.get("embedding")):
+        return "skip"
+    emb = await generate_gemini_embedding(text[:8000])
+    if _is_zero(emb):
+        return "embed_fail"       # API down/quota — leave for next run
+    now = datetime.now(timezone.utc)
+    await db.hermes_memory.update_one(
+        {"user_id": user_id, "rag_key": rag_key},
+        {"$set": {"user_id": user_id, "rag_key": rag_key, "content_hash": ch,
+                  "text": text, "type": mtype, "source_refs": source_refs or [],
+                  "embedding": emb, "date": date or now.date().isoformat(),
+                  "created_at": now.isoformat(), "_rag": True}},
+        upsert=True)
+    return "indexed"
+
+
+async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, Any]:
+    """Index wiki + Hermes lessons + latest OOS verdicts into hermes_memory.
+    Idempotent; safe to run nightly. Returns per-source counts."""
+    stats: Dict[str, int] = {"indexed": 0, "skip": 0, "embed_fail": 0}
+    by_source: Dict[str, int] = {}
+
+    def _bump(result: str, src: str) -> None:
+        stats[result] = stats.get(result, 0) + 1
+        if result == "indexed":
+            by_source[src] = by_source.get(src, 0) + 1
+
+    # 1) Wiki notes (user-written domain knowledge / decisions / rules)
+    async for w in db.wiki_docs.find(
+            {"user_id": user_id},
+            {"title": 1, "topic": 1, "content": 1, "tags": 1}).limit(wiki_limit):
+        title = w.get("title") or str(w.get("_id"))
+        text = (f"[WIKI] {title} (topic: {w.get('topic', 'General')})\n"
+                f"{(w.get('content') or '')[:4000]}")
+        _bump(await _index_one(db, user_id, f"wiki:{w['_id']}", text, "wiki",
+                               source_refs=[title]), "wiki")
+
+    # 2) Hermes lessons (self-scored, validated/decayed rules)
+    async for l in db.hermes_lessons.find({}):
+        text = (f"[LESSON] dimension={l.get('dimension')} bucket={l.get('bucket')} "
+                f"status={l.get('status')} hit_rate={l.get('hit_rate')} "
+                f"confidence={l.get('confidence')} :: {l.get('claim') or l.get('text') or ''}")
+        _bump(await _index_one(db, user_id,
+                               f"lesson:{l.get('dimension')}:{l.get('bucket')}",
+                               text, "lesson"), "lesson")
+
+    # 3) Regime-conditional OOS verdicts (the reformed judge — our validated truth)
+    run = await db.regime_oos_runs.find_one(
+        {"rows": {"$exists": True}}, sort=[("generated_at", -1)])
+    if run:
+        for row in run.get("rows", []):
+            if not row.get("verdict"):
+                continue
+            on = row.get("on_regime") or {}
+            text = (f"[OOS regime-conditional] {row.get('name')} "
+                    f"[{row.get('underlying')} {row.get('structure')}] owns={row.get('owns')} "
+                    f"VERDICT={row.get('verdict')} on-regime n={on.get('n')} avg=₹{on.get('avg')} "
+                    f"wr={on.get('wr')}%; IS={row.get('in_sample', {}).get('avg')} "
+                    f"OOS={row.get('out_sample', {}).get('avg')}")
+            _bump(await _index_one(db, user_id, f"oos-regime:{row.get('name')}",
+                                   text, "oos", source_refs=[row.get("name")]), "oos_regime")
+
+    # 4) Edge Lab (EOD theta OOS) latest verdicts, if present
+    snap = await db.edge_lab_snapshots.find_one({"_id": "latest"})
+    if snap:
+        for row in (snap.get("scorecard") or snap.get("rows") or [])[:60]:
+            nm = row.get("name") or row.get("strategy")
+            v = row.get("verdict")
+            if not nm or not v:
+                continue
+            text = (f"[OOS edge-lab EOD] {nm} verdict={v} "
+                    f"expectancy=₹{row.get('expectancy')} n={row.get('n') or row.get('trades')}")
+            _bump(await _index_one(db, user_id, f"oos-edgelab:{nm}", text, "oos",
+                                   source_refs=[nm]), "oos_edgelab")
+
+    return {"stats": stats, "by_source": by_source,
+            "generated_at": datetime.now(timezone.utc).isoformat()}

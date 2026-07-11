@@ -766,6 +766,34 @@ async def ops_regime_oos_refresh(status: str = "all", start: Optional[str] = Non
     return {"status": "running", "already_running": False}
 
 
+# ---- IA-7: research RAG — index our validated history for Hermes recall ------
+@router.get("/research-rag")
+async def ops_research_rag(user=Depends(get_current_user)):
+    """IA-7: status of the research RAG index (wiki + Hermes lessons + OOS verdicts
+    embedded into db.hermes_memory so `recall_memory` retrieves our OWN validated
+    history). Read-only. POST /research-rag/reindex to (re)build."""
+    uid = user["id"]
+    total = await db.hermes_memory.count_documents({"user_id": uid})
+    rag = await db.hermes_memory.count_documents({"user_id": uid, "_rag": True})
+    by_type: Dict[str, int] = {}
+    async for m in db.hermes_memory.find({"user_id": uid, "_rag": True}, {"type": 1}):
+        t = m.get("type") or "?"
+        by_type[t] = by_type.get(t, 0) + 1
+    return _json_safe({"kind": "research_rag", "hermes_memory_total": total,
+                       "rag_indexed": rag, "by_type": by_type,
+                       "note": "Semantic recall over our own wiki/lessons/OOS verdicts; "
+                               "the AlphaAgent anti-drift grounding for the IA-6 miner."})
+
+
+@router.post("/research-rag/reindex")
+async def ops_research_rag_reindex(user=Depends(get_current_user)):
+    """Rebuild the research RAG index (idempotent; embeds only new/changed docs).
+    Safe to run nightly via cron."""
+    from core.research_rag import reindex_all
+    result = await reindex_all(db, user["id"])
+    return _json_safe({"kind": "research_rag_reindex", **result})
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,
