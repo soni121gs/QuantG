@@ -505,6 +505,104 @@ const VERDICT_CLS = {
   NO_EDGE: "text-[var(--qd-loss)]",
 };
 
+// IA-8: live RAE ensemble watch — current regime per index, which specialist is
+// ACTIVE vs STANDING DOWN right now, and realized P&L bucketed by entry regime.
+function RegimeStatus({ data }) {
+  if (!data) return null;
+  const regimes = data.index_regimes || {};
+  const routing = data.strategy_routing || [];
+  const byReg = data.pnl_by_entry_regime || {};
+  return (
+    <section className="qd-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="qd-section-title flex items-center gap-2"><Activity size={14} /> RAE Ensemble — live regime status</div>
+          <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+            Which specialist the router activates vs stands down right now, per regime. {data.note}
+          </p>
+        </div>
+        <span className={`rounded-md border px-2 py-1 font-mono text-[10px] font-bold ${data.enforced ? "border-[var(--qd-profit)]/40 text-[var(--qd-profit)]" : "border-[var(--qd-warn,#d9a441)]/40 text-[var(--qd-warn,#d9a441)]"}`}>
+          {data.enforced ? "ROUTER ENFORCED" : "OBSERVE-ONLY"}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {Object.entries(regimes).map(([idx, r]) => (
+          <div key={idx} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2">
+            <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">{idx}</div>
+            <div className="mt-0.5 text-sm text-[var(--qd-text)]">{r.regime_fine || r.regime || "?"}
+              {r.confidence != null && <span className="ml-1 text-[var(--qd-text-3)]">({Math.round(r.confidence * 100)}%)</span>}</div>
+          </div>
+        ))}
+        {Object.keys(regimes).length === 0 && <div className="font-mono text-xs text-[var(--qd-text-3)]">No live regime state yet (populates in market hours).</div>}
+      </div>
+
+      {routing.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left font-mono text-xs">
+            <thead className="text-[var(--qd-text-3)]"><tr>
+              <th className="py-1 pr-4">Strategy</th><th className="pr-4">Regime</th>
+              <th className="pr-4">Action</th><th className="pr-4 text-right">Size×</th><th className="pr-4">Why</th>
+            </tr></thead>
+            <tbody>
+              {routing.map((r) => (
+                <tr key={r.strategy} className="border-t border-[var(--qd-border)]">
+                  <td className="py-1 pr-4 text-[var(--qd-text)]">{r.strategy}</td>
+                  <td className="pr-4 text-[var(--qd-text-2)]">{r.regime}</td>
+                  <td className={`pr-4 ${r.action === "ACTIVE" ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"}`}>{r.action}</td>
+                  <td className="pr-4 text-right">{r.size_mult}</td>
+                  <td className="pr-4 text-[var(--qd-text-3)]">{r.why}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {Object.keys(byReg).length > 0 && (
+        <div className="mt-4">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">P&amp;L by entry regime</div>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {Object.entries(byReg).map(([reg, v]) => (
+              <span key={reg} className="rounded-md border border-[var(--qd-border)] px-2 py-1 text-xs">
+                {reg}: <span className={v.pnl >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{money(v.pnl)}</span>
+                <span className="text-[var(--qd-text-3)]"> ({v.trades})</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// IA-8: honest research-data strip — FII/DII flow, RAG index, and which signals tested DEAD.
+function ResearchSignals({ data }) {
+  if (!data) return null;
+  const f = data.fii_dii_latest;
+  const tone = (v) => v === "DEAD" ? "text-[var(--qd-loss)]" : v === "MARGINAL" ? "text-[var(--qd-warn,#d9a441)]" : "text-[var(--qd-text-2)]";
+  return (
+    <section className="qd-card p-5">
+      <div className="qd-section-title flex items-center gap-2"><Database size={14} /> Research signals (honest status)</div>
+      <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">{data.note}</p>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Stat label="FII net (latest)" value={f ? `₹${Math.round(f.fii_net || 0).toLocaleString()}cr` : "-"} />
+        <Stat label="DII net (latest)" value={f ? `₹${Math.round(f.dii_net || 0).toLocaleString()}cr` : "-"} />
+        <Stat label="RAG indexed docs" value={data.rag_indexed_docs ?? 0} />
+      </div>
+      <div className="mt-3 space-y-1">
+        {(data.signal_status || []).map((s) => (
+          <div key={s.signal} className="flex items-baseline gap-2 font-mono text-xs">
+            <span className={`font-bold ${tone(s.verdict)}`}>{s.verdict}</span>
+            <span className="text-[var(--qd-text)]">{s.signal}</span>
+            <span className="text-[var(--qd-text-3)]">— {s.note}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // RAE: regime-conditional re-judge of the whole option book — grades each strategy
 // on the regime it OWNS (not blended), with off-regime give-back shown separately.
 function RegimeOOS({ data, onRefresh }) {
@@ -673,6 +771,8 @@ export default function Analytics() {
   const [edgeLab, setEdgeLab] = useState(null);
   const [intradayOos, setIntradayOos] = useState(null);
   const [regimeOos, setRegimeOos] = useState(null);
+  const [regimeStatus, setRegimeStatus] = useState(null);
+  const [researchSignals, setResearchSignals] = useState(null);
   const [edgeMath, setEdgeMath] = useState(null);
   const [loading, setLoading] = useState(false);
   const [elLoading, setElLoading] = useState(false);
@@ -732,6 +832,17 @@ export default function Analytics() {
       toast.error(e?.response?.data?.detail || "Could not start intraday OOS run");
     }
   }, [loadIntradayOos]);
+
+  const loadRegimeLive = useCallback(async () => {
+    try {
+      const [rs, sig] = await Promise.all([
+        api.get("/ops/regime-status").catch(() => ({ data: null })),
+        api.get("/ops/research-signals").catch(() => ({ data: null })),
+      ]);
+      setRegimeStatus(rs.data);
+      setResearchSignals(sig.data);
+    } catch (e) { /* non-fatal */ }
+  }, []);
 
   const loadRegimeOos = useCallback(async () => {
     try {
@@ -842,7 +953,7 @@ export default function Analytics() {
           <button
             key={t.id}
             type="button"
-            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); if (!regimeOos) loadRegimeOos(); } }}
+            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); if (!regimeOos) loadRegimeOos(); if (!regimeStatus) loadRegimeLive(); } }}
             className={`px-4 py-2.5 font-head text-xs font-semibold uppercase tracking-widest border-b-2 transition-colors ${
               tab === t.id ? "border-[var(--qd-accent)] text-[var(--qd-text)]" : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
@@ -997,6 +1108,8 @@ export default function Analytics() {
       {tab === "edgelab" && (
         <div className="space-y-5">
           <EdgeLab data={edgeLab} loading={elLoading} onRefresh={refreshEdgeLab} />
+          <RegimeStatus data={regimeStatus} />
+          <ResearchSignals data={researchSignals} />
           <RegimeOOS data={regimeOos} onRefresh={refreshRegimeOos} />
           <IntradayOOS data={intradayOos} onRefresh={refreshIntradayOos} />
         </div>

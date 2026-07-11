@@ -794,6 +794,40 @@ async def ops_research_rag_reindex(user=Depends(get_current_user)):
     return _json_safe({"kind": "research_rag_reindex", **result})
 
 
+# ---- IA-8: research signals telemetry (honest — includes tested-dead status) ----
+@router.get("/research-signals")
+async def ops_research_signals(user=Depends(get_current_user)):
+    """IA-8: compact research-data surface — latest FII/DII flow, RAG index size, and
+    the HONEST validated status of each IA data signal (so the UI never implies a dead
+    signal is live). Read-only."""
+    uid = user["id"]
+    # latest FII/DII from the store
+    fii = None
+    try:
+        from core import india_flows as _if
+        days = _if.available_days()
+        if days:
+            fii = _if.get_flows(days[-1])
+    except Exception:  # noqa: BLE001
+        fii = None
+    rag = await db.hermes_memory.count_documents({"user_id": uid, "_rag": True})
+    return _json_safe({
+        "kind": "research_signals",
+        "fii_dii_latest": fii,
+        "rag_indexed_docs": rag,
+        "signal_status": [
+            {"signal": "OI / Gamma Exposure (GEX)", "verdict": "DEAD",
+             "note": "near-random on NIFTY (retail sells options → OI = seller positioning)"},
+            {"signal": "IV skew", "verdict": "MARGINAL",
+             "note": "weak contrarian feature, not a standalone edge"},
+            {"signal": "FII/DII flow", "verdict": "DEAD",
+             "note": "9-yr test: corr≈0, per-year sign-flips, contrarian strat −44%"},
+        ],
+        "note": "IA data-signal sweep: no readily-available signal beat base rate on NIFTY. "
+                "Edge lives in the RAE regime ensemble, not a single indicator.",
+    })
+
+
 @router.post("/backfill-candles")
 async def ops_backfill_candles(
     days: int = 30,
