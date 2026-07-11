@@ -14,11 +14,16 @@ unchanged docs or duplicate rows. Skips zero-vectors (embedding API down) for re
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from core.embeddings import generate_gemini_embedding
+
+# free-tier gemini-embedding-001 rate-limits bursts (429); pace calls to stay under.
+_EMBED_DELAY = float(os.environ.get("RAG_EMBED_DELAY", "1.2"))
 
 
 def _hash(text: str) -> str:
@@ -41,6 +46,8 @@ async def _index_one(db, user_id: str, rag_key: str, text: str, mtype: str,
     if existing and existing.get("content_hash") == ch and not _is_zero(existing.get("embedding")):
         return "skip"
     emb = await generate_gemini_embedding(text[:8000])
+    if _EMBED_DELAY > 0:
+        await asyncio.sleep(_EMBED_DELAY)   # pace to respect the embedding rate limit
     if _is_zero(emb):
         return "embed_fail"       # API down/quota — leave for next run
     now = datetime.now(timezone.utc)
