@@ -85,6 +85,8 @@ READ_ONLY_AGENT_TOOLS = [
     "get_research_desk",
     "get_edge_lab_snapshot",
     "get_intraday_oos",
+    "get_regime_status",
+    "get_edge_math_advice",
 ]
 
 
@@ -844,6 +846,73 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 }
                 warnings.append("Intraday 1-min OOS judges option BUYERS (QG-O5..O10); GATE = 30+ trades, 3+ months, <=20% missing minutes, positive OOS, 50%+ green months. Distinct from the EOD theta OOS.")
             source = "db.intraday_options_oos_runs"
+        elif name == "get_regime_status":
+            # RAE-6 (CLAUDE.md §18): the ensemble watch view — current regime per
+            # index, which live strategy the router would ACTIVATE vs STAND DOWN
+            # right now, whether enforcement is on, and realized P&L bucketed by the
+            # regime each trade was entered in. Router is observe-only until the
+            # founder sets RAE_ROUTER_ENABLED=true.
+            from core.regime_router import route as _rae_route, enabled as _rae_enabled
+            regimes: Dict[str, Any] = {}
+            async for r in db.market_regime_state.find(
+                {}, {"_id": 0, "index": 1, "regime": 1, "bias": 1,
+                     "regime_fine": 1, "regime_fine_confidence": 1}):
+                regimes[r.get("index")] = {
+                    "regime": r.get("regime"), "bias": r.get("bias"),
+                    "regime_fine": r.get("regime_fine"),
+                    "confidence": r.get("regime_fine_confidence")}
+            strat_routing = []
+            async for s in db.strategies.find(
+                {"user_id": user["id"], "status": {"$in": ["live", "paused"]}},
+                {"_id": 0, "name": 1, "visual_config.options.underlying": 1,
+                 "visual_config.options.structure": 1,
+                 "visual_config.options.specialist_role": 1}):
+                opt = (s.get("visual_config") or {}).get("options") or {}
+                underlying = opt.get("underlying") or "NIFTY"
+                structure = opt.get("structure")
+                _rg = regimes.get(underlying) or {}
+                reg = _rg.get("regime_fine") or _rg.get("regime") or "UNKNOWN"
+                conf = float(_rg.get("confidence") or 0.5)
+                specialist = opt.get("specialist_role") or (
+                    "range_seller" if structure in ("credit_spread", "debit_spread") else None)
+                d = _rae_route(str(reg), conf, specialist=specialist)
+                strat_routing.append({
+                    "strategy": s.get("name"), "underlying": underlying, "regime": reg,
+                    "specialist": specialist,
+                    "action": "STAND_DOWN" if d.stand_down else "ACTIVE",
+                    "size_mult": round(d.size_mult, 2), "why": (d.reasons or [""])[0]})
+            by_regime: Dict[str, Any] = {}
+            async for p in db.strategy_positions.find(
+                {"user_id": user["id"], "status": {"$in": ["CLOSED", "EXITED"]}},
+                {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1}):
+                reg = str(p.get("regime_at_entry") or "UNKNOWN")
+                pnl = float(p.get("realized_pnl") or p.get("pnl") or 0.0)
+                b = by_regime.setdefault(reg, {"trades": 0, "pnl": 0.0})
+                b["trades"] += 1
+                b["pnl"] = round(b["pnl"] + pnl, 2)
+            enforced = _rae_enabled()
+            data = {
+                "enforced": enforced,
+                "index_regimes": regimes,
+                "strategy_routing": strat_routing,
+                "pnl_by_entry_regime": by_regime,
+            }
+            if not enforced:
+                warnings.append("RAE router is OBSERVE-ONLY (RAE_ROUTER_ENABLED=false) — routing shows what it WOULD do, not what is enforced.")
+            source = "db.market_regime_state / core.regime_router"
+        elif name == "get_edge_math_advice":
+            # EdgeMath EOD ratchet advice (CLAUDE.md §16.5) — observe-only per-strategy
+            # rolling expectancy + suggested risk multiplier. Never mutates config.
+            advice = await db.edge_math_advice.find_one(
+                {"user_id": user["id"]}, {"_id": 0})
+            if not advice:
+                data = {"error": "No EdgeMath advice compiled yet — it is written EOD by core.edge_runtime.compile_edge_advice."}
+                warnings.append("No edge_math_advice document yet.")
+                confidence = 0.5
+            else:
+                data = advice
+                warnings.append("EdgeMath advice is OBSERVE-ONLY (enabled=false); suggested_risk_mult is a sizing suggestion, not applied to the live book.")
+            source = "db.edge_math_advice"
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -958,24 +1027,23 @@ def _local_agent_reply(message: str, tool_results: List[Dict[str, Any]], gemini_
     if failed:
         missing = ", ".join(f"{t['name']}: {t.get('error', 'unavailable')}" for t in failed[:4])
         return (
-            "I am unsure because some app data is unavailable.\n\n"
-            f"Available read-only tools: {', '.join(ok_tools) or 'none'}.\n"
-            f"Missing or failed data: {missing}."
+            "I can't give you a straight answer on this one — some of the app data didn't come back.\n\n"
+            f"What I did get: {', '.join(ok_tools) or 'nothing'}.\n"
+            f"What's missing: {missing}.\n\n"
+            "Try again in a moment, or check that the feed/token is connected."
         )
     if not os.environ.get("GEMINI_API_KEY"):
         return (
-            "Gemini is not configured yet, so I cannot do the deeper AI interpretation.\n\n"
+            "I pulled your data, but the AI layer isn't switched on so I can only give you the raw readout, not the full read.\n\n"
             f"{_local_agent_summary(tool_results)}\n\n"
-            "Fix: set `GEMINI_API_KEY` in the backend environment and restart the API. "
-            f"If you do not set `GEMINI_MODEL`, QuantG will use `{DEFAULT_GEMINI_MODEL}`."
+            "To turn on the conversational answers, set `GEMINI_API_KEY` in the backend env and restart "
+            f"(defaults to `{DEFAULT_GEMINI_MODEL}` if you don't set `GEMINI_MODEL`)."
         )
-    detail = f"\n\nGemini error: {gemini_error[:240]}" if gemini_error else ""
+    detail = f" (Gemini said: {gemini_error[:200]})" if gemini_error else ""
     return (
-        "I collected the read-only QuantG data, but Gemini did not return a usable interpretation.\n\n"
-        f"{_local_agent_summary(tool_results)}\n\n"
-        "Fix: check that `GEMINI_API_KEY` is valid, the backend can reach Google AI Studio, "
-        f"and `GEMINI_MODEL` is a supported model such as `{DEFAULT_GEMINI_MODEL}`."
-        f"{detail}"
+        "I've got your data below, but the AI layer hiccuped just now — probably a rate-limit or a blip reaching "
+        f"Gemini{detail}. Here's the straight readout in the meantime; ask me again in a few seconds and I'll give you the full interpretation.\n\n"
+        f"{_local_agent_summary(tool_results)}"
     )
 
 
@@ -1099,6 +1167,8 @@ TOOL_SPECS: Dict[str, str] = {
     "get_research_desk": "HIRB multi-agent research desk: regime, volatility, flow, risk, execution-cost, skeptic, and founder-briefing reviews.",
     "get_edge_lab_snapshot": "EOD held-to-theta walk-forward OOS: per-strategy edge verdicts, short-vol base rates, config sweeps, data coverage. Answers 'does strategy X have an out-of-sample edge?'.",
     "get_intraday_oos": "Intraday 1-minute OOS verdicts for option BUYERS/scalps (QG-O5..O10).",
+    "get_regime_status": "RAE ensemble watch: current market regime per index, which live strategy the router would ACTIVATE vs STAND DOWN now, and realized P&L by entry-regime.",
+    "get_edge_math_advice": "EdgeMath observe-only sizing advice: per-strategy rolling expectancy and suggested risk multiplier (never applied automatically).",
 }
 
 
@@ -1134,7 +1204,7 @@ def _plan_tools_via_gemini_sync(message: str, recent_messages: List[Dict[str, An
         # gemini-2.5-flash is a thinking model (~200 hidden "thought" tokens);
         # too small a budget truncates before the functionCall parts are emitted
         # (intermittent empty selection). Give ample headroom for thoughts + calls.
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 768},
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024},
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     res = requests.post(
@@ -1186,6 +1256,14 @@ def _gemini_agent_reply_sync(message: str, tool_results: List[Dict[str, Any]], r
     )
     prompt = f"""
 You are Hermes, a trading operator and research assistant inside QuantG.
+
+VOICE & TONE (how you talk — this is as important as being correct):
+- Talk like a sharp trading desk buddy sitting next to the founder, not a compliance bot. Natural, direct, conversational. Contractions, plain English, a bit of personality.
+- Lead with the actual answer in the first sentence, like a human would. Give the takeaway, THEN the supporting numbers — don't open with "Based on get_risk_snapshot...".
+- Weave the evidence into the sentence instead of stapling citations on ("you're down ₹3.2k today, about a third of your ₹10k limit") rather than ("get_risk_snapshot: realized_pnl=-3200, max_daily_loss=10000").
+- Keep it tight and skimmable. Short paragraphs, or a couple of bullets when listing. No walls of text, no restating the question back.
+- Have an opinion when the data supports one. If something looks bad, say so plainly and say what you'd do about it.
+- These are STYLE rules only. They NEVER loosen the truth rules below: every number is still from the tools, you still never fabricate, and you're still honest when data is missing — just say it like a person ("I can't tell you — the feed's disconnected and nothing came back for BANKNIFTY") instead of a canned disclaimer.
 
 HERMES SPECIALIZED OPERATOR SKILLS:
 You are equipped with a skill pack of standard playbooks. When the user asks questions in these areas, follow the playbook strictly, combining wiki context and database tool truth:
@@ -1268,21 +1346,20 @@ EXTERNAL CONTEXT GROUNDING (HSB-06):
 - A `get_external_context` tool result (tagged EXTERNAL/UNVERIFIED, from Google Search) may be present for macro/event questions. You MAY use it ONLY for event/news/macro context (e.g. "RBI policy today", "expiry day", "global risk-off").
 - NEVER use external context to state any number that belongs to QuantG (P&L, scores, win-rates, prices) — those come only from internal tools. When you cite external context, explicitly label it as external/unverified and include the source where possible.
 
-STRICT READ-ONLY DEFAULT RULES:
+STRICT READ-ONLY DEFAULT RULES (truth rules — always on, but say them like a human per VOICE & TONE):
 - You must never place, cancel, modify, or exit trades directly.
-- Base your answers strictly on the provided read-only tool results. If the data is missing, stale, failed, or insufficient, begin with "I am unsure" and explain exactly what data is missing.
-- Cite the specific tool outputs, sources, and confidence scores in your response when explaining details so the user can verify them.
-- Keep the answer practical, concise, and grounded only in the tool data.
-- Mention which read-only tools you used when it helps the user trust the answer.
+- Every number and fact comes strictly from the provided read-only tool results — never invent or estimate figures. If the data is missing, stale, failed, or insufficient, be upfront about it in plain language and say exactly what's missing and what would fix it (you don't have to open with the literal words "I am unsure", just be honest).
+- Make claims verifiable: name the source naturally when it matters ("per the scorecard...", "the feed status says...") so the founder can check you — but woven into the sentence, not as a clinical citation dump.
+- Practical and grounded, but conversational — see VOICE & TONE. Concise does not mean robotic.
 
-EXAMPLES (match this grounding, tone, and the exact action format — do not copy verbatim):
-Example 1 — data missing, stay honest
+EXAMPLES (match this natural tone, the honesty, and the exact action format — do not copy verbatim):
+Example 1 — data missing, honest but human
 User: How is my BANKNIFTY position doing?
-Agent: I am unsure. `get_positions` returned no BANKNIFTY position and `get_market_data_status` shows the Upstox feed disconnected, so I cannot value an open contract right now. Reconnect Upstox and ask again, or check the Positions page directly.
+Agent: Can't tell you right now, and here's why: there's no BANKNIFTY position showing, and the Upstox feed is disconnected anyway, so even if there were one I couldn't price it. Reconnect the token and ask me again — or peek at the Positions page directly.
 
 Example 2 — grounded answer plus a governed action proposal
 User: Lower my daily loss limit to 6000 for protection.
-Agent: From `get_risk_snapshot`, your daily loss limit is currently 10,000 INR with 3,200 INR realized loss today. Tightening it to 6,000 INR leaves ~2,800 INR of buffer before the kill switch trips. I can't change settings directly, so here is a proposal for you to approve.
+Agent: Sure — you're at a 10k daily loss limit and already 3.2k in the red today, so dropping to 6k leaves you about 2.8k of room before the kill switch trips. Reasonable if you want a tighter leash today. I can't flip the setting myself, but here's the change for you to approve:
 PROPOSED_ACTION: {{"action": "update_profile", "params": {{"max_daily_loss": 6000.0}}}}
 
 Recent conversation:
@@ -1297,7 +1374,7 @@ Read-only tool results JSON:
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": 0.5,
             "maxOutputTokens": 1200,
         },
     }
@@ -1481,6 +1558,20 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_intraday_oos")
         has_matches = True
         
+    # RAE regime ensemble (CLAUDE.md §18): what regime we're in, who's active vs
+    # standing down, per-regime P&L, router enforcement state.
+    if any(w in q for w in ["regime", "ensemble", "rae", "stand down", "stand-down",
+                            "standing down", "trend day", "range day", "chop", "router",
+                            "which strategy is active", "specialist"]):
+        matched_tools.add("get_regime_status")
+        has_matches = True
+
+    # EdgeMath sizing advice (CLAUDE.md §16): edge-based size, risk multiplier, ratchet.
+    if any(w in q for w in ["edgemath", "edge math", "sizing", "size up", "size down",
+                            "risk multiplier", "kelly", "position size", "ratchet"]):
+        matched_tools.add("get_edge_math_advice")
+        has_matches = True
+
     if any(w in q for w in ["vps", "deploy", "deployment", "container", "docker", "health", "restart"]):
         matched_tools.update(playbook_tools["vps-deploy-check"])
         has_matches = True
@@ -1598,7 +1689,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     keyword_tools = classify_playbook_by_query(content)
     planned_tools = await _plan_tools_via_gemini(content, recent_messages)
     _merged = set(keyword_tools) | set(planned_tools)
-    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "14"))
+    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "18"))
     active_tools = [t for t in READ_ONLY_AGENT_TOOLS if t in _merged][:max_tools]
     tool_selection = {
         "keyword": keyword_tools,
