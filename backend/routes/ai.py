@@ -1712,19 +1712,45 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     # matcher missed for off-script phrasings. Union, dedup in READ_ONLY order,
     # cap for cost. Fails open to keyword-only when the planner returns [].
     keyword_tools = classify_playbook_by_query(content)
-    planned_tools = await _plan_tools_via_gemini(content, recent_messages)
-    _merged = set(keyword_tools) | set(planned_tools)
-    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "12"))
-    active_tools = [t for t in READ_ONLY_AGENT_TOOLS if t in _merged][:max_tools]
+
+    # Whole-turn deadline. This endpoint runs two serial Gemini calls (planner +
+    # reply) around a parallel tool fan-out; a Gemini latency spike could push the
+    # turn past the reverse-proxy timeout and surface a raw 504 to the user (seen
+    # 2026-07-11). Bound the slow section and, on timeout, serve a graceful
+    # grounded fallback from the keyword tools instead of erroring.
+    async def _produce_turn():
+        planned = await _plan_tools_via_gemini(content, recent_messages)
+        merged = set(keyword_tools) | set(planned)
+        cap = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "12"))
+        active = [t for t in READ_ONLY_AGENT_TOOLS if t in merged][:cap]
+        results = await asyncio.gather(*[_run_agent_tool(n, user, query=content) for n in active])
+        text = await _gemini_agent_reply(content, list(results), recent_messages)
+        return active, list(results), text, bool(planned)
+
+    turn_budget = float(os.environ.get("HERMES_TURN_BUDGET_SEC", "45"))
+    try:
+        active_tools, tool_results, reply, planner_used = await asyncio.wait_for(
+            _produce_turn(), timeout=turn_budget)
+    except (asyncio.TimeoutError, Exception) as turn_exc:
+        logger.warning("Hermes turn fell back (%s): %s", type(turn_exc).__name__, turn_exc)
+        # best-effort grounding: run only the fast keyword tools, hard-bounded
+        active_tools = [t for t in READ_ONLY_AGENT_TOOLS if t in set(keyword_tools)][:8]
+        try:
+            tool_results = list(await asyncio.wait_for(
+                asyncio.gather(*[_run_agent_tool(n, user, query=content) for n in active_tools]),
+                timeout=10))
+        except Exception:
+            tool_results = []
+        reply = _local_agent_reply(content, tool_results, "turn exceeded time budget")
+        planner_used = False
+
     tool_selection = {
         "keyword": keyword_tools,
-        "planned": planned_tools,
+        "planned": [t for t in active_tools if t not in set(keyword_tools)],
         "active": active_tools,
-        "planner_used": bool(planned_tools),
+        "planner_used": planner_used,
     }
-    tool_results = await asyncio.gather(*[_run_agent_tool(name, user, query=content) for name in active_tools])
-    reply = await _gemini_agent_reply(content, list(tool_results), recent_messages)
-    
+
     # Parse and store proposed action
     reply, pending_action_doc = _parse_and_store_pending_action(reply, user["id"])
     if pending_action_doc:
