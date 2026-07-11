@@ -935,7 +935,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 "warnings": warnings,
                 "created_at": _utc_now()
             }
-            asyncio.create_task(db.agent_tool_audit.insert_one(audit_entry))
+            asyncio.ensure_future(db.agent_tool_audit.insert_one(audit_entry))
         except Exception as audit_exc:
             logger.warning("Failed to write to agent_tool_audit: %s", audit_exc)
 
@@ -973,7 +973,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 "warnings": [f"Execution failed: {exc}"],
                 "created_at": _utc_now()
             }
-            asyncio.create_task(db.agent_tool_audit.insert_one(audit_entry))
+            asyncio.ensure_future(db.agent_tool_audit.insert_one(audit_entry))
         except Exception as audit_exc:
             logger.warning("Failed to write to agent_tool_audit on error: %s", audit_exc)
 
@@ -1541,11 +1541,9 @@ def classify_playbook_by_query(query: str) -> List[str]:
                             "work on", "work to", "optimize", "optimise", "fix",
                             "enhance", "strengthen", "which strategy", "what strategy",
                             "best strategy", "worst strategy", "underperform"]):
-        matched_tools.update(playbook_tools["strategy-loss-review"])
-        matched_tools.update(playbook_tools["edge-lab"])
+        matched_tools.add("get_strategy_scorecard")
+        matched_tools.add("get_edge_lab_snapshot")
         matched_tools.add("get_active_strategies")
-        matched_tools.add("get_trade_attribution")
-        matched_tools.add("get_research_hypotheses")
         has_matches = True
 
     if any(w in q for w in ["readiness", "ready", "pre-flight", "live readiness", "live ready", "oauth"]):
@@ -1716,7 +1714,7 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     keyword_tools = classify_playbook_by_query(content)
     planned_tools = await _plan_tools_via_gemini(content, recent_messages)
     _merged = set(keyword_tools) | set(planned_tools)
-    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "18"))
+    max_tools = int(os.environ.get("HERMES_MAX_TOOLS_PER_TURN", "12"))
     active_tools = [t for t in READ_ONLY_AGENT_TOOLS if t in _merged][:max_tools]
     tool_selection = {
         "keyword": keyword_tools,
