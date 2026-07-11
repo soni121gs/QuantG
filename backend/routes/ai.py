@@ -1352,6 +1352,12 @@ STRICT READ-ONLY DEFAULT RULES (truth rules — always on, but say them like a h
 - Make claims verifiable: name the source naturally when it matters ("per the scorecard...", "the feed status says...") so the founder can check you — but woven into the sentence, not as a clinical citation dump.
 - Practical and grounded, but conversational — see VOICE & TONE. Concise does not mean robotic.
 
+BE SPECIFIC — NEVER a vague non-answer:
+- A useless answer like "you have a few strategies still in a cold-start" is FORBIDDEN. If the tools returned strategy data, NAME the specific strategy and cite its real numbers (grade, expectancy, trade count, OOS verdict).
+- For "which strategy should I improve / work on / make better" questions: rank the strategies from the scorecard, name the weakest one(s), and give the DISCIPLINED answer from the Edge Lab (get_edge_lab_snapshot). The governing law (CLAUDE.md §13): an edge needs 30+ trades AND positive out-of-sample. Do NOT tell the user to "tune" or "keep working on" a strategy the Edge Lab marks NO_EDGE_NEGATIVE — that is the treadmill; the honest advice is to archive the dead ones and point them at the strategy that actually has a CANDIDATE_EDGE (or say plainly none do yet).
+- Always end an improvement/diagnostic answer with a concrete next step (a specific strategy to pause/archive, a specific config, or a specific test to run) — never a generic "monitor it".
+- If the sample really is too thin to name a winner (low trade counts, market closed), say that directly AND still name which strategies exist and what each would need to prove itself — don't hide behind "cold-start".
+
 EXAMPLES (match this natural tone, the honesty, and the exact action format — do not copy verbatim):
 Example 1 — data missing, honest but human
 User: How is my BANKNIFTY position doing?
@@ -1375,7 +1381,13 @@ Read-only tool results JSON:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.5,
-            "maxOutputTokens": 1200,
+            # gemini-2.5-flash is a THINKING model: hidden thought tokens are
+            # charged against maxOutputTokens. At 1200 with 8 tool results the
+            # thoughts ate the budget and the visible answer got cut off
+            # mid-sentence (MAX_TOKENS). Give the answer real headroom AND cap
+            # thinking so it can't starve the reply.
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {"thinkingBudget": 384},
         },
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -1520,7 +1532,22 @@ def classify_playbook_by_query(query: str) -> List[str]:
     if any(w in q for w in strategy_words):
         matched_tools.update(playbook_tools["strategy-loss-review"])
         has_matches = True
-        
+
+    # "which strategy should I improve / work on / make better / optimize / fix"
+    # — an improvement question. The DISCIPLINED answer (CLAUDE.md §13) comes from
+    # OOS/Edge-Lab verdicts + scorecard, not vibes: name the strategy, cite its
+    # grade/expectancy/OOS verdict, and don't advise tuning a NO_EDGE strategy.
+    if any(w in q for w in ["improve", "make it better", "make them better", "better",
+                            "work on", "work to", "optimize", "optimise", "fix",
+                            "enhance", "strengthen", "which strategy", "what strategy",
+                            "best strategy", "worst strategy", "underperform"]):
+        matched_tools.update(playbook_tools["strategy-loss-review"])
+        matched_tools.update(playbook_tools["edge-lab"])
+        matched_tools.add("get_active_strategies")
+        matched_tools.add("get_trade_attribution")
+        matched_tools.add("get_research_hypotheses")
+        has_matches = True
+
     if any(w in q for w in ["readiness", "ready", "pre-flight", "live readiness", "live ready", "oauth"]):
         matched_tools.update(playbook_tools["live-readiness"])
         has_matches = True
