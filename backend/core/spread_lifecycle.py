@@ -120,6 +120,8 @@ async def open_credit_spread(
     idempotency_key: str,
     signal_id: Optional[str] = None,
     regime_at_entry: str = "UNKNOWN",
+    regime_fine_at_entry: str = "UNKNOWN",
+    regime_fine_confidence_at_entry: Optional[float] = None,
     tp_frac: Optional[float] = None,
     sl_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -262,6 +264,9 @@ async def open_credit_spread(
         "entry_time": now,
         # HSI-13: exact attribution inputs stamped at creation.
         "regime_at_entry": str(regime_at_entry or "UNKNOWN").upper(),
+        # RAE telemetry: fine regime label + confidence at entry (attribution only).
+        "regime_fine_at_entry": str(regime_fine_at_entry or "UNKNOWN").upper(),
+        "regime_fine_confidence_at_entry": regime_fine_confidence_at_entry,
         "planned_risk": round(max_loss * qty, 2),
     }
     if is_live:
@@ -614,6 +619,8 @@ async def open_debit_spread(
     idempotency_key: str,
     signal_id: Optional[str] = None,
     regime_at_entry: str = "UNKNOWN",
+    regime_fine_at_entry: str = "UNKNOWN",
+    regime_fine_confidence_at_entry: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Open a debit spread as one position with embedded legs (paper only)."""
     if mode != "paper":
@@ -705,6 +712,9 @@ async def open_debit_spread(
         "entry_time": now,
         # HSI-13: exact attribution inputs stamped at creation.
         "regime_at_entry": str(regime_at_entry or "UNKNOWN").upper(),
+        # RAE telemetry: fine regime label + confidence at entry (attribution only).
+        "regime_fine_at_entry": str(regime_fine_at_entry or "UNKNOWN").upper(),
+        "regime_fine_confidence_at_entry": regime_fine_confidence_at_entry,
         "planned_risk": round(max_loss * qty, 2),
     }
     await db.strategy_positions.insert_one(position_doc)

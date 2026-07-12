@@ -866,6 +866,26 @@ async def _dispatch_signal_via_unified_engine(
     )
     if option_contract is not None:
         option_contract["regime_at_entry"] = _regime_at_entry
+    # RAE telemetry: also stamp the FINE regime (label + confidence) at entry from
+    # the live regime engine, so the ensemble scorecard buckets by the RAE taxonomy
+    # (INSIDE_QUIET / HIGH_VOL_CHOP / TREND_*) rather than only the coarse regime.
+    # Best-effort + additive — this field NEVER gates or sizes anything; it is read
+    # only by attribution/telemetry. Falls back to UNKNOWN on any miss.
+    _regime_fine_at_entry = "UNKNOWN"
+    _regime_fine_conf = None
+    try:
+        _fine_re = await db.market_regime_state.find_one(
+            {"index": str(symbol).upper()},
+            {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1},
+        )
+        if _fine_re and _fine_re.get("regime_fine"):
+            _regime_fine_at_entry = str(_fine_re["regime_fine"]).upper()
+            _regime_fine_conf = _fine_re.get("regime_fine_confidence")
+    except Exception:
+        pass
+    if option_contract is not None:
+        option_contract["regime_fine_at_entry"] = _regime_fine_at_entry
+        option_contract["regime_fine_confidence_at_entry"] = _regime_fine_conf
     # Anti-pyramiding guard for spreads. A hold-to-theta / hold-to-expiry spread
     # strategy must hold ONE position per underlying, not open a fresh spread on
     # every runner cycle. The single-leg BUY dedup guard above keys on the exact
@@ -961,6 +981,8 @@ async def _dispatch_signal_via_unified_engine(
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
             idempotency_key=idem_key, signal_id=sig["id"],
             regime_at_entry=_regime_at_entry,
+            regime_fine_at_entry=_regime_fine_at_entry,
+            regime_fine_confidence_at_entry=_regime_fine_conf,
             tp_frac=float(_tp_frac) if _tp_frac is not None else None,
             sl_mult=float(_sl_mult) if _sl_mult is not None else None,
         )
@@ -983,6 +1005,8 @@ async def _dispatch_signal_via_unified_engine(
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
             idempotency_key=idem_key, signal_id=sig["id"],
             regime_at_entry=_regime_at_entry,
+            regime_fine_at_entry=_regime_fine_at_entry,
+            regime_fine_confidence_at_entry=_regime_fine_conf,
         )
 
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"

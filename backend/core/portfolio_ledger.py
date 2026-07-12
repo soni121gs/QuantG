@@ -363,6 +363,12 @@ class PortfolioLedger:
                 "regime_at_entry": str(
                     opt.get("regime_at_entry") or fill.get("regime_at_entry") or "UNKNOWN"
                 ).upper(),
+                # RAE telemetry: fine regime label + confidence at entry (attribution only).
+                "regime_fine_at_entry": str(
+                    opt.get("regime_fine_at_entry") or fill.get("regime_fine_at_entry") or "UNKNOWN"
+                ).upper(),
+                "regime_fine_confidence_at_entry": opt.get("regime_fine_confidence_at_entry")
+                or fill.get("regime_fine_confidence_at_entry"),
                 # Snapshot of greeks/IV/OI/order-flow captured at signal time
                 # (carried on the option_contract). Analytics only — not read
                 # by any trade decision path.

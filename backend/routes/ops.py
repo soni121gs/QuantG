@@ -631,9 +631,13 @@ async def ops_regime_status(user=Depends(get_current_user)):
     }
     async for p in db.strategy_positions.find(
         {"user_id": uid, "status": {"$in": ["CLOSED", "EXITED"]}},
-        {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1, "strategy_id": 1},
+        {"_id": 0, "regime_at_entry": 1, "regime_fine_at_entry": 1,
+         "realized_pnl": 1, "pnl": 1, "strategy_id": 1},
     ):
-        reg = str(p.get("regime_at_entry") or "UNKNOWN")
+        # prefer the FINE regime (RAE taxonomy) when it was stamped at entry;
+        # fall back to the coarse label for pre-upgrade / untagged trades.
+        _fine = str(p.get("regime_fine_at_entry") or "").upper()
+        reg = _fine if _fine and _fine != "UNKNOWN" else str(p.get("regime_at_entry") or "UNKNOWN")
         pnl = float(p.get("realized_pnl") or p.get("pnl") or 0.0)
         b = by_regime.setdefault(reg, {"trades": 0, "pnl": 0.0})
         b["trades"] += 1
@@ -668,8 +672,9 @@ async def ops_regime_status(user=Depends(get_current_user)):
         "ensemble_scorecard": scorecard,
         "scorecard_note": "on_regime = P&L where the specialist owned the entry regime; "
                           "off_regime = trades the router would STAND DOWN (leakage the ensemble prevents); "
-                          "unknown_regime = pre-tag / untagged trades. Entry regime is the COARSE label "
-                          "(fine-regime capture at entry is a follow-up).",
+                          "unknown_regime = pre-tag / untagged trades. Buckets by the FINE RAE regime "
+                          "stamped at entry when present (INSIDE_QUIET/HIGH_VOL_CHOP/TREND_*), else the "
+                          "coarse label for older trades.",
     })
 
 
