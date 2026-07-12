@@ -1661,7 +1661,10 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
 })
 
 PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
-    "QG-O1 NIFTY Put Spread Theta Core",
+    # 2026-07-13 (founder-directed max-harvest book): QG-O1 dropped — its validated
+    # form was the RES2-gated HELD-TO-EXPIRY spread; the current row is the
+    # unvalidated intraday variant, superseded by the RAE NIFTY Range Seller
+    # (same QG-O2 geometry, router-gated). Keeping it would double the same bet.
     # 2026-07-08: QG-O5 archived by founder direction ("only the best in the book").
     # It never had OOS support (n=22, below every gate); its bull-day credit-scalp
     # role is subsumed by QG-O11's OOS-validated bull gate.
