@@ -69,8 +69,12 @@ TREND_DELTA1_CODE = '''def run(data):
     c = closes[-1]
     path = sum(abs(closes[-i] - closes[-i - 1]) for i in range(1, 11)) or 1e-9
     eff = abs(closes[-1] - closes[-11]) / path       # trending, not chopping
-    up = c > ma20 > ma50 and c >= max(highs[-21:-1]) and eff >= 0.45
-    dn = c < ma20 < ma50 and c <= min(lows[-21:-1]) and eff >= 0.45
+    # TIGHTENED (RAE-3c): higher efficiency floor (0.45->0.55), a 30-bar breakout
+    # (was 20), AND a 3-step monotonic momentum confirm — cuts range-fakeout fires.
+    mom_up = closes[-1] > closes[-3] > closes[-5]
+    mom_dn = closes[-1] < closes[-3] < closes[-5]
+    up = c > ma20 > ma50 and c >= max(highs[-31:-1]) and eff >= 0.55 and mom_up
+    dn = c < ma20 < ma50 and c <= min(lows[-31:-1]) and eff >= 0.55 and mom_dn
     if not (up or dn):
         return []
     direction = 'CE' if up else 'PE'
@@ -106,12 +110,13 @@ TEMPLATES = {
         "owned": ["TREND_UP", "TREND_DOWN"], "structure": "single_leg",
         "name": "Trend Delta-1 (TREND)",
         "desc": ("buys a DEEP-ITM (delta ~0.7) single leg — CE on a confirmed up-trend, "
-                 "PE on a down-trend — only on TREND days at router confidence >=0.90. "
-                 "Low-theta directional; the fix for why every OTM buyer died. "
-                 "Forward-paper (trend days are rare); needs an IV-cheap gate refinement."),
+                 "PE on a down-trend — only on TREND days at router confidence >=0.90, "
+                 "gated by IV-cheap (RAE-3c) + a tightened breakout/efficiency/momentum "
+                 "filter. Low-theta directional; the fix for why every OTM buyer died. "
+                 "Forward-paper (trend days are rare; gate not OOS-provable on this sample)."),
         "options": {"strike_mode": "ITM_BUY", "structure": "single_leg",
                     "itm_offset_pct": 0.02, "option_selection_preference": "ITM1",
-                    "exit_mode": ""},
+                    "exit_mode": "", "trend_iv_gate": True, "trend_iv_gate_min_cheap": 0.0},
         "risk": {"target_pct": 60.0, "stoploss_pct": 25.0, "max_hold_days": 2},
     },
 }

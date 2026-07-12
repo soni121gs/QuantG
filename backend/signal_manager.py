@@ -1009,6 +1009,29 @@ async def _dispatch_signal_via_unified_engine(
             regime_fine_confidence_at_entry=_regime_fine_conf,
         )
 
+    # RAE-3c: IV-cheap entry gate for directional delta-1 BUYERS (single leg).
+    # Opt-in via visual_config.options.trend_iv_gate. Only fire the trend buyer when
+    # the regime is a genuine TREND *and* options are cheap vs realized vol (the
+    # mirror of the RES-2 seller gate) — the range-fakeout + vega filter that killed
+    # every prior buyer. Regime is ALSO enforced by the RAE router; this is a second,
+    # source-level line so the strategy's own entries stop firing off-regime. Sellers
+    # /spreads already returned above, so this only touches single-leg buyers.
+    _so = (sig.get("visual_config") or {}).get("options", {}) or {}
+    _sto = (strategy.get("visual_config") or {}).get("options", {}) or {}
+    if _so.get("trend_iv_gate") or _sto.get("trend_iv_gate"):
+        from core.entry_gate import evaluate_buyer_gate_live
+        _iv = _oc.get("iv") or (_oc.get("greeks") or {}).get("iv") or sig.get("iv")
+        _min_cheap = _so.get("trend_iv_gate_min_cheap", _sto.get("trend_iv_gate_min_cheap"))
+        _breg = _regime_fine_at_entry if _regime_fine_at_entry not in ("", "UNKNOWN") else _regime_at_entry
+        _bgate = await evaluate_buyer_gate_live(
+            underlying=symbol, regime=_breg, iv=_iv,
+            min_cheap=float(_min_cheap) if _min_cheap is not None else 0.0,
+        )
+        if not _bgate.get("allow"):
+            return {"ok": False, "status": "SKIPPED",
+                    "reason": _bgate.get("reason") or "TREND_IV_GATE blocked",
+                    "reason_code": "TREND_IV_GATE_BLOCKED"}
+
     risk_style = visual_risk.get("risk_style") or (strategy.get("visual_config") or {}).get("risk", {}).get("risk_style") or "balanced"
     product = (
         sig.get("product")

@@ -33,6 +33,40 @@ NON_RANGE_REGIMES = {"TREND_UP", "TREND_DOWN", "CRASH", "MELTUP", "VOLATILE"}
 _rv_cache: Dict[str, Any] = {}
 
 
+TREND_IV_GATE_MIN_CHEAP = float(os.environ.get("TREND_IV_GATE_MIN_CHEAP", "0.0"))
+# Regimes a directional delta-1 BUYER is allowed to fire in. Anything else
+# (RANGE / INSIDE / CHOP / EVENT / UNKNOWN) is a range-fakeout risk → block.
+TREND_REGIMES = {"TREND_UP", "TREND_DOWN"}
+
+
+def buyer_entry_gate(
+    *,
+    regime: Optional[str],
+    iv: Optional[float],
+    daily_closes: Sequence[float],
+    min_cheap: float = TREND_IV_GATE_MIN_CHEAP,
+    require_trend: bool = True,
+) -> Dict[str, Any]:
+    """RAE-3c: the MIRROR of `seller_entry_gate` for a directional (delta-1) BUYER.
+
+    A trend buyer only has an edge when (a) the regime is a genuine TREND — the
+    range-fakeout filter that killed every prior OTM buyer — AND (b) options are
+    CHEAP relative to realized vol (edge = IV−RV is at or below −min_cheap), so we
+    are not overpaying vol into the move. FAIL-OPEN on missing vol data. Pure — no
+    I/O. Can only REMOVE clearly-bad entries, never add risk."""
+    reg = str(regime or "").upper()
+    if require_trend and reg not in TREND_REGIMES:
+        return {"allow": False, "reason": f"TREND_IV_GATE: regime {reg} not a trend (range-fakeout risk)"}
+    ve = vol_edge(iv, daily_closes, min_points=0.0)
+    if ve.get("edge") is None:
+        return {"allow": True, "reason": "TREND_IV_GATE: vol edge unknown — fail-open", "vol_edge": ve}
+    # cheap = IV is at least `min_cheap` vol points BELOW realized (edge <= -min_cheap)
+    if float(ve["edge"]) > -float(min_cheap):
+        return {"allow": False,
+                "reason": f"TREND_IV_GATE: IV not cheap enough ({ve.get('reason')})", "vol_edge": ve}
+    return {"allow": True, "reason": "TREND_IV_GATE: passed (trend + IV cheap)", "vol_edge": ve}
+
+
 def seller_entry_gate(
     *,
     regime: Optional[str],
@@ -115,3 +149,21 @@ async def evaluate_entry_gate_live(
     except Exception as exc:  # noqa: BLE001
         logger.warning("entry_gate: evaluation failed for %s — fail-open: %s", underlying, exc)
         return {"allow": True, "reason": f"RES2_GATE: error {exc} — fail-open"}
+
+
+async def evaluate_buyer_gate_live(
+    *,
+    underlying: str,
+    regime: Optional[str],
+    iv: Optional[float],
+    min_cheap: float = TREND_IV_GATE_MIN_CHEAP,
+) -> Dict[str, Any]:
+    """Live wrapper for the RAE-3c trend-buyer IV-cheap gate. FAIL-OPEN on any
+    error — a data problem must never block a strategy that would otherwise trade.
+    The regime check still applies even when vol data is missing (it needs no I/O)."""
+    try:
+        closes = _recent_daily_closes(underlying)
+        return buyer_entry_gate(regime=regime, iv=iv, daily_closes=closes or [], min_cheap=min_cheap)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("entry_gate: buyer gate failed for %s — fail-open: %s", underlying, exc)
+        return {"allow": True, "reason": f"TREND_IV_GATE: error {exc} — fail-open"}
