@@ -606,17 +606,56 @@ async def ops_regime_status(user=Depends(get_current_user)):
                               "action": "STAND_DOWN" if d.stand_down else "ACTIVE",
                               "size_mult": round(d.size_mult, 2), "why": (d.reasons or [""])[0]})
 
-    # realized P&L bucketed by the regime each closed trade was entered in
+    # specialist role per strategy id (explicit RAE tag, else structure heuristic)
+    # — needed to judge whether each closed trade was taken ON its owned regime.
+    spec_by_sid = {}
+    async for s in db.strategies.find(
+        {"user_id": uid},
+        {"_id": 0, "id": 1, "visual_config.options.specialist_role": 1,
+         "visual_config.options.structure": 1},
+    ):
+        opt = (s.get("visual_config") or {}).get("options") or {}
+        spec_by_sid[s.get("id")] = opt.get("specialist_role") or (
+            "range_seller" if opt.get("structure") in ("credit_spread", "debit_spread") else None)
+
+    # realized P&L bucketed by the regime each closed trade was entered in, PLUS
+    # the RAE ensemble scorecard: was P&L earned ON the specialist's owned regime,
+    # or LEAKED from off-regime trades the router would have stood down? This is
+    # the core forward-paper judge — the ensemble adds value only if on-regime P&L
+    # is positive and off-regime P&L is what standing down would have avoided.
     by_regime = {}
+    scorecard = {
+        "on_regime": {"trades": 0, "pnl": 0.0, "wins": 0},
+        "off_regime": {"trades": 0, "pnl": 0.0, "wins": 0},
+        "unknown_regime": {"trades": 0, "pnl": 0.0, "wins": 0},
+    }
     async for p in db.strategy_positions.find(
         {"user_id": uid, "status": {"$in": ["CLOSED", "EXITED"]}},
-        {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1},
+        {"_id": 0, "regime_at_entry": 1, "realized_pnl": 1, "pnl": 1, "strategy_id": 1},
     ):
         reg = str(p.get("regime_at_entry") or "UNKNOWN")
         pnl = float(p.get("realized_pnl") or p.get("pnl") or 0.0)
         b = by_regime.setdefault(reg, {"trades": 0, "pnl": 0.0})
         b["trades"] += 1
         b["pnl"] = round(b["pnl"] + pnl, 2)
+
+        specialist = spec_by_sid.get(p.get("strategy_id"))
+        if reg in ("UNKNOWN", "") or specialist is None:
+            bucket = scorecard["unknown_regime"]
+        else:
+            # router decision at full confidence: stand_down => the trade was
+            # off the specialist's owned regime (leakage the router would stop).
+            d = route(reg, 1.0, specialist=specialist)
+            bucket = scorecard["off_regime"] if d.stand_down else scorecard["on_regime"]
+        bucket["trades"] += 1
+        bucket["pnl"] = round(bucket["pnl"] + pnl, 2)
+        if pnl > 0:
+            bucket["wins"] += 1
+
+    for k in scorecard:
+        t = scorecard[k]["trades"]
+        scorecard[k]["win_rate"] = round(scorecard[k]["wins"] / t, 3) if t else 0.0
+        scorecard[k]["avg_pnl"] = round(scorecard[k]["pnl"] / t, 2) if t else 0.0
 
     return _json_safe({
         "kind": "rae_regime_status",
@@ -626,6 +665,11 @@ async def ops_regime_status(user=Depends(get_current_user)):
         "index_regimes": regimes,
         "strategy_routing": strat_routing,
         "pnl_by_entry_regime": by_regime,
+        "ensemble_scorecard": scorecard,
+        "scorecard_note": "on_regime = P&L where the specialist owned the entry regime; "
+                          "off_regime = trades the router would STAND DOWN (leakage the ensemble prevents); "
+                          "unknown_regime = pre-tag / untagged trades. Entry regime is the COARSE label "
+                          "(fine-regime capture at entry is a follow-up).",
     })
 
 

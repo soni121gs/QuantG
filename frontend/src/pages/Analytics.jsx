@@ -512,6 +512,14 @@ function RegimeStatus({ data }) {
   const regimes = data.index_regimes || {};
   const routing = data.strategy_routing || [];
   const byReg = data.pnl_by_entry_regime || {};
+  const score = data.ensemble_scorecard || null;
+  const scoreCells = score
+    ? [
+        { key: "on_regime", label: "On-regime", hint: "specialist owned the regime", tone: "profit" },
+        { key: "off_regime", label: "Off-regime (router would stand down)", hint: "leakage the ensemble prevents", tone: "loss" },
+        { key: "unknown_regime", label: "Untagged", hint: "pre-tag / no specialist", tone: "muted" },
+      ].filter((c) => (score[c.key]?.trades || 0) > 0)
+    : [];
   return (
     <section className="qd-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -569,6 +577,33 @@ function RegimeStatus({ data }) {
                 <span className="text-[var(--qd-text-3)]"> ({v.trades})</span>
               </span>
             ))}
+          </div>
+        </div>
+      )}
+
+      {scoreCells.length > 0 && (
+        <div className="mt-4">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+            Ensemble scorecard — on-regime vs off-regime P&amp;L
+          </div>
+          <p className="mt-0.5 text-[11px] text-[var(--qd-text-3)]">
+            The forward-paper judge: the ensemble adds value only if on-regime P&amp;L is positive and off-regime P&amp;L is what standing down would have avoided.
+          </p>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {scoreCells.map((c) => {
+              const v = score[c.key];
+              const col = c.tone === "profit" ? "var(--qd-profit)" : c.tone === "loss" ? "var(--qd-loss)" : "var(--qd-text-3)";
+              return (
+                <div key={c.key} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-3 py-2">
+                  <div className="text-[11px] text-[var(--qd-text-2)]">{c.label}</div>
+                  <div className="mt-0.5 font-mono text-sm" style={{ color: v.pnl >= 0 ? "var(--qd-profit)" : "var(--qd-loss)" }}>{money(v.pnl)}</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-[var(--qd-text-3)]">
+                    {v.trades} trades · {Math.round((v.win_rate || 0) * 100)}% win · {money(v.avg_pnl)}/trade
+                  </div>
+                  <div className="mt-0.5 text-[10px]" style={{ color: col }}>{c.hint}</div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
