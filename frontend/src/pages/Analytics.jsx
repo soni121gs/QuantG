@@ -520,6 +520,8 @@ function RegimeStatus({ data }) {
         { key: "unknown_regime", label: "Untagged", hint: "pre-tag / no specialist", tone: "muted" },
       ].filter((c) => (score[c.key]?.trades || 0) > 0)
     : [];
+  const series = data.daily_series || [];
+  const maxAbs = series.reduce((m, d) => Math.max(m, Math.abs(d.pnl || 0)), 0) || 1;
   return (
     <section className="qd-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -599,11 +601,37 @@ function RegimeStatus({ data }) {
                   <div className="mt-0.5 font-mono text-sm" style={{ color: v.pnl >= 0 ? "var(--qd-profit)" : "var(--qd-loss)" }}>{money(v.pnl)}</div>
                   <div className="mt-0.5 font-mono text-[10px] text-[var(--qd-text-3)]">
                     {v.trades} trades · {Math.round((v.win_rate || 0) * 100)}% win · {money(v.avg_pnl)}/trade
+                    {v.avg_confidence != null && <> · {Math.round(v.avg_confidence * 100)}% conf</>}
                   </div>
                   <div className="mt-0.5 text-[10px]" style={{ color: col }}>{c.hint}</div>
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {series.length > 0 && (
+        <div className="mt-4">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+            Daily P&amp;L accumulation (last {series.length} closing days)
+          </div>
+          <div className="mt-2 flex items-end gap-[3px]" style={{ height: 56 }}>
+            {series.map((d) => {
+              const h = Math.max(2, Math.round((Math.abs(d.pnl || 0) / maxAbs) * 52));
+              const up = (d.pnl || 0) >= 0;
+              return (
+                <div
+                  key={d.date}
+                  title={`${d.date}: ${money(d.pnl)} (${d.trades} tr · on ${money(d.on)} / off ${money(d.off)})`}
+                  className="flex-1 rounded-sm"
+                  style={{ height: h, minWidth: 4, background: up ? "var(--qd-profit)" : "var(--qd-loss)", opacity: 0.85 }}
+                />
+              );
+            })}
+          </div>
+          <div className="mt-1 flex justify-between font-mono text-[9px] text-[var(--qd-text-3)]">
+            <span>{series[0]?.date}</span><span>{series[series.length - 1]?.date}</span>
           </div>
         </div>
       )}

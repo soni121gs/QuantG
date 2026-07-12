@@ -629,9 +629,14 @@ async def ops_regime_status(user=Depends(get_current_user)):
         "off_regime": {"trades": 0, "pnl": 0.0, "wins": 0},
         "unknown_regime": {"trades": 0, "pnl": 0.0, "wins": 0},
     }
+    for k in scorecard:
+        scorecard[k]["conf_sum"] = 0.0
+        scorecard[k]["conf_n"] = 0
+    daily = {}  # date -> {pnl,on,off,trades} : the forward-paper accumulation series
     async for p in db.strategy_positions.find(
         {"user_id": uid, "status": {"$in": ["CLOSED", "EXITED"]}},
         {"_id": 0, "regime_at_entry": 1, "regime_fine_at_entry": 1,
+         "regime_fine_confidence_at_entry": 1, "closed_at": 1,
          "realized_pnl": 1, "pnl": 1, "strategy_id": 1},
     ):
         # prefer the FINE regime (RAE taxonomy) when it was stamped at entry;
@@ -645,21 +650,41 @@ async def ops_regime_status(user=Depends(get_current_user)):
 
         specialist = spec_by_sid.get(p.get("strategy_id"))
         if reg in ("UNKNOWN", "") or specialist is None:
-            bucket = scorecard["unknown_regime"]
+            key = "unknown_regime"
         else:
             # router decision at full confidence: stand_down => the trade was
             # off the specialist's owned regime (leakage the router would stop).
-            d = route(reg, 1.0, specialist=specialist)
-            bucket = scorecard["off_regime"] if d.stand_down else scorecard["on_regime"]
+            key = "off_regime" if route(reg, 1.0, specialist=specialist).stand_down else "on_regime"
+        bucket = scorecard[key]
         bucket["trades"] += 1
         bucket["pnl"] = round(bucket["pnl"] + pnl, 2)
         if pnl > 0:
             bucket["wins"] += 1
+        _conf = p.get("regime_fine_confidence_at_entry")
+        if _conf is not None:
+            bucket["conf_sum"] += float(_conf)
+            bucket["conf_n"] += 1
+
+        # daily on/off series keyed by close date (forward-paper accumulation)
+        _d = str(p.get("closed_at") or "")[:10]
+        if _d:
+            dd = daily.setdefault(_d, {"pnl": 0.0, "on": 0.0, "off": 0.0, "trades": 0})
+            dd["pnl"] = round(dd["pnl"] + pnl, 2)
+            dd["trades"] += 1
+            if key == "on_regime":
+                dd["on"] = round(dd["on"] + pnl, 2)
+            elif key == "off_regime":
+                dd["off"] = round(dd["off"] + pnl, 2)
 
     for k in scorecard:
         t = scorecard[k]["trades"]
         scorecard[k]["win_rate"] = round(scorecard[k]["wins"] / t, 3) if t else 0.0
         scorecard[k]["avg_pnl"] = round(scorecard[k]["pnl"] / t, 2) if t else 0.0
+        scorecard[k]["avg_confidence"] = round(
+            scorecard[k]["conf_sum"] / scorecard[k]["conf_n"], 3) if scorecard[k]["conf_n"] else None
+        del scorecard[k]["conf_sum"], scorecard[k]["conf_n"]
+
+    daily_series = [{"date": d, **v} for d, v in sorted(daily.items())][-20:]
 
     return _json_safe({
         "kind": "rae_regime_status",
@@ -670,6 +695,7 @@ async def ops_regime_status(user=Depends(get_current_user)):
         "strategy_routing": strat_routing,
         "pnl_by_entry_regime": by_regime,
         "ensemble_scorecard": scorecard,
+        "daily_series": daily_series,
         "scorecard_note": "on_regime = P&L where the specialist owned the entry regime; "
                           "off_regime = trades the router would STAND DOWN (leakage the ensemble prevents); "
                           "unknown_regime = pre-tag / untagged trades. Buckets by the FINE RAE regime "
