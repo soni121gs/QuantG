@@ -23,7 +23,13 @@ from core.index_minute_store import IndexMinuteStore
 
 logger = logging.getLogger("quantg.index_1m_ingest")
 
-INDEX_KEY = {"NIFTY": "NSE_INDEX|Nifty 50", "BANKNIFTY": "NSE_INDEX|Nifty Bank"}
+INDEX_KEY = {
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    # BSE index key (Upstox v3 historical supports BSE indices) — added 2026-07-13 so
+    # the regime judge can grade the SENSEX specialists instead of ERRing on no data.
+    "SENSEX": "BSE_INDEX|SENSEX",
+}
 DEFAULT_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
 
 
