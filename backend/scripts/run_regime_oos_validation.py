@@ -45,7 +45,7 @@ VERDICT_TAG = {
 }
 
 # underlyings we can classify intraday (index_1m store); others -> no regime bucket
-CLASSIFIABLE = {"NIFTY", "BANKNIFTY"}
+CLASSIFIABLE = {"NIFTY", "BANKNIFTY", "SENSEX"}  # SENSEX index_1m backfilled 2026-07-13
 
 
 def _target_regime(structure: str) -> str:
