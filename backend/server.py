@@ -1668,11 +1668,11 @@ PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
     # 2026-07-08: QG-O5 archived by founder direction ("only the best in the book").
     # It never had OOS support (n=22, below every gate); its bull-day credit-scalp
     # role is subsumed by QG-O11's OOS-validated bull gate.
-    # 2026-07-06: un-archived by founder direction. Sole archived strategy with a
-    # real OOS edge — EOD bhavcopy walk-forward: +₹74/tr (2024) and +₹19/tr (2025 OOS),
-    # 87% WR, 82% green months, all_years_positive. Paper-forward per the ladder;
-    # thin OOS margin + SENSEX (BFO) execution cost keep it paper-only until proven.
-    "QG-O4 SENSEX Call Spread Range Pilot",
+    # 2026-07-13: QG-O4 REMOVED from the active book. The regime-conditional judge
+    # on the newly-backfilled 626-day SENSEX index_1m window graded its REAL trade
+    # history NO_EDGE: on-regime avg −₹14,394/tr over 121 trades (IS −5.8k, OOS
+    # −19.9k) — the thin EOD bhavcopy edge (+₹74/tr) is decisively contradicted by
+    # its live record. The RAE SENSEX Range Seller covers SENSEX RANGE days.
     # 2026-07-07: regime-gated width-1 credit scalp — first design where every
     # variant AND every gate passed the IMD 1-min walk-forward (CANDIDATE_EDGE,
     # OOS +Rs194/tr, 100% green months at production geometry). Paper-forward
