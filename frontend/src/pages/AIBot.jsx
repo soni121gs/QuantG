@@ -167,6 +167,7 @@ export default function AIBot() {
       if (data?.outcome === "founder_directed_applied") bits.push("(founder-directed)");
       if (data?.outcome === "edit_in_template_task") bits.push("queued as an edit-in-template task");
       if (data?.resync_warning) bits.push(`⚠️ ${data.resync_warning}`);
+      if (data?.coherence_warning) bits.push(data.coherence_warning);
       setMessages((m) => [...m, { id: `ok-${Date.now()}`, role: "assistant", content: `✅ Approved${bits.length ? ": " + bits.join(" ") : "."}` }]);
     } catch (e) {
       const detail = e.response?.data?.detail || "Action approval failed";

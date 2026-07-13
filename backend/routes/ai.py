@@ -2174,6 +2174,20 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
         await db.strategies.update_one(
             {"id": strategy_id, "user_id": user["id"]},
             {"$set": {field: new_value, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        # QGX/INFRA-16: validate the POST-image against the strategy registry so a
+        # config edit can't silently create a geometry trap (e.g. the hold-to-expiry
+        # regression). Best-effort — surfaces a coherence warning, never blocks the
+        # founder's own approved edit.
+        _coherence_warn = None
+        try:
+            from core.strategy_registry import validate_strategy_doc
+            _post = await db.strategies.find_one({"id": strategy_id, "user_id": user["id"]})
+            _cv = validate_strategy_doc(_post or {})
+            if not _cv.ok:
+                _coherence_warn = "; ".join(_cv.errors)
+                logger.warning("Config change on %s produced a coherence error: %s", strategy_id, _coherence_warn)
+        except Exception as _cv_exc:
+            logger.warning("strategy_registry coherence check failed post-apply: %s", _cv_exc)
         await _adv.record_applied_change(db, user["id"], {
             "strategy_id": strategy_id, "strategy_name": strat.get("name"), "field": field,
             "prior_value": prior, "proposed_value": new_value, "lesson_id": lesson_id,
@@ -2210,6 +2224,8 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
             "resync_warning": ("Applied to DB. If this strategy has an in-code template, "
                                "this non-durable field resets on the next backend restart "
                                "(DB-only rows like RAE/custom seeds persist).") if _resync_warn else None,
+            "coherence_warning": (f"⚠️ This edit leaves the strategy geometry incoherent: {_coherence_warn}. "
+                                  "Review before the next session.") if _coherence_warn else None,
         }
 
     await db.pending_actions.update_one(
