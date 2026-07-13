@@ -1074,6 +1074,42 @@ def _parse_and_store_pending_action(reply_text: str, user_id: str) -> tuple[str,
     return reply_text, None
 
 
+async def _validate_pending_action(db, doc: dict, user_id: str) -> tuple[Optional[dict], str]:
+    """Gate a parsed pending action at CREATION time so an un-approvable proposal is
+    never stored (the ghost-proposal + raw-alert bug: a hallucinated lesson_id or a
+    bad field only failed at approve-time). Returns (doc_or_None, note). A dropped
+    doc returns None + a human note appended to the reply explaining why.
+
+    Only draft_config_change is validated here — the other action types are self-
+    contained. lesson_id is OPTIONAL (founder-directed override lane): if present it
+    must be real + oos_passed; if the model invented one it is stripped, not fatal."""
+    if not doc or doc.get("action_type") != "draft_config_change":
+        return doc, ""
+    from core import hermes_advisor as _adv
+    p = doc.get("params") or {}
+    strategy_id = p.get("strategy_id")
+    field = p.get("field")
+    if not strategy_id or not field or p.get("proposed") is None:
+        return None, "_(Hermes drafted a config change but omitted strategy_id / field / value — not saved.)_"
+    if not _adv.is_founder_editable_field(field):
+        return None, (f"_(Hermes proposed changing `{field}`, which is not an approvable field. "
+                      f"Editable: {', '.join(_adv.FOUNDER_EDITABLE_FIELDS)}.)_")
+    strat = await db.strategies.find_one({"id": strategy_id, "user_id": user_id}, {"_id": 0, "id": 1, "name": 1})
+    if not strat:
+        return None, f"_(Hermes referenced strategy `{strategy_id}`, which doesn't exist on your account — proposal not saved.)_"
+    lesson_id = p.get("lesson_id")
+    note = ""
+    if lesson_id:
+        lesson = await db.hermes_lessons.find_one({"lesson_id": lesson_id, "user_id": user_id})
+        if not lesson or not lesson.get("oos_passed"):
+            # Model cited a non-existent / unvalidated lesson. Don't reject — strip it
+            # and let it flow through the founder-directed lane so the owner can still act.
+            p.pop("lesson_id", None)
+            note = "_(Note: the cited OOS lesson wasn't found, so this is queued as a founder-directed change, not lesson-backed.)_"
+    doc["params"] = p
+    return doc, note
+
+
 def _parse_and_store_recommendation(reply_text: str, user_id: str) -> tuple[str, Optional[dict]]:
     """HSB-08: extract an optional RECOMMENDATION:{...} block and turn it into a
     testable ledger record. Each recommendation is a prediction the HSB-09 outcome
@@ -1323,14 +1359,14 @@ STRICT HUMAN-IN-THE-LOOP ACTION RULES (PHASE 2 & STAGE 7):
      * `reason`: One-line justification grounded in the tool data.
      Example: PROPOSED_ACTION: {{"action": "draft_strategy_pause", "params": {{"strategy_id": "abc123", "reason": "4 consecutive losing exits today, grade F, expectancy -640"}}}}
 
-  7. Propose Config Change (action: "draft_config_change") — HSI-51, OOS-GATED
-     Propose changing ONE durable strategy field, justified by an OOS-VALIDATED lesson (`get_hermes_brain_health`). This is a non-trade config edit; it never places/closes trades. You may ONLY propose this if the lesson has `oos_passed=true`. Only `required_capital` and `visual_config.options.structure` can be applied directly (others get re-synced away and will surface an edit-in-template task). Params:
-     * `strategy_id`: target strategy id.
-     * `field`: one of `required_capital`, `visual_config.options.structure`.
-     * `proposed`: the new value.
-     * `lesson_id`: the OOS-passed lesson backing this (from the brain-health tool).
-     * `reason`: one-line justification citing the lesson's metric + OOS evidence.
-     Example: PROPOSED_ACTION: {{"action": "draft_config_change", "params": {{"strategy_id": "abc123", "field": "required_capital", "proposed": 16000, "lesson_id": "lsn_...", "reason": "credit_spread active lesson oos_passed +₹214/tr — scale sizing"}}}}
+  7. Propose Config Change (action: "draft_config_change") — non-trade config edit, TWO lanes
+     Propose changing ONE per-strategy field. Never places/closes trades. The owner approves every change. Two lanes:
+     - LESSON-BACKED (preferred when evidence exists): include `lesson_id` from `get_hermes_brain_health` — it MUST be a real id (starts `lsn_`) with `oos_passed=true`. NEVER invent a lesson_id or use a descriptive string; if you have no real oos_passed lesson, OMIT `lesson_id` entirely.
+     - FOUNDER-DIRECTED (diagnostic/risk tweaks with no lesson): OMIT `lesson_id`. The owner is the gate. Use this for things like reducing a cooldown to diagnose a starved strategy.
+     `field` MUST be one of: `required_capital`, `visual_config.options.required_capital`, `visual_config.options.credit_tp_frac`, `visual_config.options.credit_sl_mult`, `visual_config.risk.cooldown_minutes`, `visual_config.risk.max_trades_day`, `visual_config.risk.daily_loss_limit`, `visual_config.risk.time_exit_minutes`, `visual_config.risk.stop_loss_pct`, `visual_config.risk.take_profit_pct`, `max_trades_day`. Anything else is rejected.
+     Params: `strategy_id` (must exist — get it from a read tool, never guess), `field` (from the list), `proposed` (new value), `lesson_id` (OPTIONAL — omit unless real+oos_passed), `reason` (one line).
+     Example (founder-directed): PROPOSED_ACTION: {{"action": "draft_config_change", "params": {{"strategy_id": "rae-range-seller-sensex", "field": "visual_config.risk.cooldown_minutes", "proposed": 5, "reason": "signals but no orders — shorten cooldown to diagnose pre-trade filter"}}}}
+     Example (lesson-backed): PROPOSED_ACTION: {{"action": "draft_config_change", "params": {{"strategy_id": "abc123", "field": "required_capital", "proposed": 16000, "lesson_id": "lsn_b51d7c4d0a264433", "reason": "single_leg lesson oos_passed — scale sizing"}}}}
 
 - To propose any of these actions, you MUST append a single block matching exactly the format at the absolute end of your response text (replacing with actual action name and params keys/values in the JSON).
 - You may only propose one action per turn.
@@ -1754,7 +1790,13 @@ async def agent_chat(req: ChatReq, user=Depends(get_current_user)):
     # Parse and store proposed action
     reply, pending_action_doc = _parse_and_store_pending_action(reply, user["id"])
     if pending_action_doc:
-        await db.pending_actions.insert_one(pending_action_doc)
+        # Validate at creation so an un-approvable proposal (bad field / missing
+        # strategy / hallucinated lesson_id) is never stored as a dead pending action.
+        pending_action_doc, _pa_note = await _validate_pending_action(db, pending_action_doc, user["id"])
+        if _pa_note:
+            reply = f"{reply}\n\n{_pa_note}".strip()
+        if pending_action_doc:
+            await db.pending_actions.insert_one(pending_action_doc)
 
     # HSB-08: parse and store a testable recommendation (self-improvement loop input)
     reply, recommendation_doc = _parse_and_store_recommendation(reply, user["id"])
@@ -2063,22 +2105,33 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
             logger.warning("Failed to mark recommendation acted_on for pause: %s", rec_exc)
 
     elif action_type == "draft_config_change":
-        # HSI-51: OOS-gated, approval-gated config edit. Non-trade. Only a lesson with
-        # oos_passed=true can drive it; only DB-durable fields are applied (others get
-        # re-synced away → surfaced as an edit-in-template task); rate-limited + reversible.
+        # Approval-gated per-strategy config edit. Non-trade. TWO lanes:
+        #   • lesson-backed (HSI-51, judge-first): a real oos_passed lesson drives it;
+        #     non-DB-durable fields become an edit-in-template task (re-sync mechanic).
+        #   • founder-directed (owner override): NO lesson required — the owner IS the
+        #     gate. Confined to the FOUNDER_EDITABLE_FIELDS whitelist, applied to the DB
+        #     directly (persists for DB-only rows; a non-durable field on a template-backed
+        #     strategy carries a re-sync warning). Both lanes: rate-limited + reversible +
+        #     audit-logged + paper-only.
         from core import hermes_advisor as _adv
         strategy_id = params.get("strategy_id")
         field = params.get("field")
         proposed = params.get("proposed")
         lesson_id = params.get("lesson_id")
-        if not (strategy_id and field and lesson_id) or proposed is None:
-            raise HTTPException(status_code=400, detail="strategy_id, field, proposed, lesson_id are required")
+        if not (strategy_id and field) or proposed is None:
+            raise HTTPException(status_code=400, detail="strategy_id, field, proposed are required")
+        if not _adv.is_founder_editable_field(field):
+            raise HTTPException(status_code=400,
+                detail=f"Field '{field}' is not approvable. Editable: {', '.join(_adv.FOUNDER_EDITABLE_FIELDS)}")
 
-        lesson = await db.hermes_lessons.find_one({"lesson_id": lesson_id, "user_id": user["id"]})
-        if not lesson:
-            raise HTTPException(status_code=404, detail=f"Lesson {lesson_id} not found")
-        if not lesson.get("oos_passed"):
-            raise HTTPException(status_code=400, detail="Lesson has not passed OOS validation — cannot apply (judge-first).")
+        lesson = None
+        if lesson_id:
+            lesson = await db.hermes_lessons.find_one({"lesson_id": lesson_id, "user_id": user["id"]})
+            if not lesson:
+                raise HTTPException(status_code=404, detail=f"Lesson {lesson_id} not found")
+            if not lesson.get("oos_passed"):
+                raise HTTPException(status_code=400, detail="Lesson has not passed OOS validation — cannot apply (judge-first).")
+        founder_directed = lesson is None
 
         recent = await _adv.count_recent_changes(db, user["id"])
         if not _adv.within_rate_limit(recent):
@@ -2088,9 +2141,13 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
         if not strat:
             raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
-        if not _adv.is_db_durable_field(field):
-            # Non-durable field: a DB edit is re-synced away on restart → don't fake it.
-            # Surface an edit-in-template task instead (CLAUDE.md KEY MECHANIC).
+        # Live safety: config edits are a paper-mode capability. Refuse on a live strategy.
+        if str(strat.get("mode") or "paper").lower() == "live":
+            raise HTTPException(status_code=403, detail="Config edits via the agent are paper-only; a live strategy must be changed manually.")
+
+        # Lesson-backed lane keeps the strict edit-in-template mechanic for non-durable
+        # fields. The founder-directed lane applies the whitelisted field to the DB.
+        if lesson is not None and not _adv.is_db_durable_field(field):
             root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             try:
                 with open(os.path.join(root_dir, "TASKS.md"), "a", encoding="utf-8") as f:
@@ -2105,27 +2162,55 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
                           "executed_at": datetime.now(timezone.utc).isoformat()}})
             return {"status": "approved", "action_id": req.action_id, "outcome": "edit_in_template_task"}
 
-        # DB-durable field: read prior value, apply, record for reversibility + HSI-53 tag.
+        # Apply to the DB: read prior value (reversibility), coerce, write, record.
         prior = strat
         for part in field.split("."):
             prior = (prior or {}).get(part) if isinstance(prior, dict) else None
+        new_value = _adv.coerce_config_value(field, proposed)
         pre_rows = await db.trade_attribution.find(
             {"user_id": user["id"], "strategy_id": strategy_id}).to_list(500)
         pre_exp = round(sum(float(r.get("realized_pnl") or 0) for r in pre_rows) / len(pre_rows), 2) if pre_rows else 0.0
 
         await db.strategies.update_one(
             {"id": strategy_id, "user_id": user["id"]},
-            {"$set": {field: proposed, "updated_at": datetime.now(timezone.utc).isoformat()}})
+            {"$set": {field: new_value, "updated_at": datetime.now(timezone.utc).isoformat()}})
         await _adv.record_applied_change(db, user["id"], {
             "strategy_id": strategy_id, "strategy_name": strat.get("name"), "field": field,
-            "prior_value": prior, "proposed_value": proposed, "lesson_id": lesson_id,
+            "prior_value": prior, "proposed_value": new_value, "lesson_id": lesson_id,
+            "founder_directed": founder_directed,
             "pre_expectancy": pre_exp, "reason": params.get("reason", ""),
-            "oos_evidence": lesson.get("last_oos_result"),
+            "oos_evidence": (lesson or {}).get("last_oos_result"),
         })
         try:
             await _adv.compile_hermes_advice(db, user["id"])
         except Exception as adv_exc:
             logger.warning("compile_hermes_advice failed post-apply: %s", adv_exc)
+
+        _resync_warn = founder_directed and not _adv.is_db_durable_field(field)
+        await db.pending_actions.update_one(
+            {"action_id": req.action_id},
+            {"$set": {"status": "approved", "executed_at": datetime.now(timezone.utc).isoformat()}})
+        try:
+            await db.agent_tool_audit.insert_one({
+                "id": str(uuid.uuid4()),
+                "name": f"approve_{action_type}",
+                "user_id": user["id"], "status": "ok",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "args": {"action_id": req.action_id, "action_type": action_type,
+                         "field": field, "new_value": new_value,
+                         "founder_directed": founder_directed, "lesson_id": lesson_id},
+                "stale": False, "confidence": 1.0, "warnings": [], "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as audit_exc:
+            logger.error("Failed to audit draft_config_change approve: %s", audit_exc)
+        return {
+            "status": "approved", "action_id": req.action_id,
+            "outcome": "founder_directed_applied" if founder_directed else "lesson_backed_applied",
+            "field": field, "new_value": new_value,
+            "resync_warning": ("Applied to DB. If this strategy has an in-code template, "
+                               "this non-durable field resets on the next backend restart "
+                               "(DB-only rows like RAE/custom seeds persist).") if _resync_warn else None,
+        }
 
     await db.pending_actions.update_one(
         {"action_id": req.action_id},

@@ -157,13 +157,26 @@ export default function AIBot() {
 
   const handleApproveAction = async (actionId) => {
     try {
-      await api.post("/agent/action/approve", { action_id: actionId });
+      const { data } = await api.post("/agent/action/approve", { action_id: actionId });
       setMessages((m) => m.map((msg) => msg.pending_action?.id === actionId ? { ...msg, pending_action: { ...msg.pending_action, status: "approved" } } : msg));
       setPendingActions((prev) => prev.filter((a) => a.action_id !== actionId));
       window.dispatchEvent(new Event("quantg-pending-actions-updated"));
       fetchProfile();
+      const bits = [];
+      if (data?.field) bits.push(`\`${data.field}\` → \`${data.new_value}\``);
+      if (data?.outcome === "founder_directed_applied") bits.push("(founder-directed)");
+      if (data?.outcome === "edit_in_template_task") bits.push("queued as an edit-in-template task");
+      if (data?.resync_warning) bits.push(`⚠️ ${data.resync_warning}`);
+      setMessages((m) => [...m, { id: `ok-${Date.now()}`, role: "assistant", content: `✅ Approved${bits.length ? ": " + bits.join(" ") : "."}` }]);
     } catch (e) {
-      alert(e.response?.data?.detail || "Action approval failed");
+      const detail = e.response?.data?.detail || "Action approval failed";
+      const stale = e.response?.status === 404;
+      // A stale/invalid proposal can never be approved — drop it so it stops nagging.
+      if (stale) {
+        setPendingActions((prev) => prev.filter((a) => a.action_id !== actionId));
+        window.dispatchEvent(new Event("quantg-pending-actions-updated"));
+      }
+      setMessages((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: `⚠️ Could not apply this change: ${detail}${stale ? " — the proposal was stale and has been cleared." : ""}` }]);
     }
   };
 

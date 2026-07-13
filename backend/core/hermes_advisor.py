@@ -40,6 +40,46 @@ HERMES_ADVICE_MAX_TILT = float(os.environ.get("HERMES_ADVICE_MAX_TILT", "0.4"))
 # to "apply" it and instead surface an edit-in-template task.
 DB_DURABLE_FIELDS = ("required_capital", "visual_config.options.structure")
 
+# Founder-directed override lane: fields the OWNER may change via the Ask Agent
+# WITHOUT an OOS lesson (diagnostic / risk knobs). The human owner IS the gate, so
+# these skip the judge-first lesson requirement — but stay reversible, rate-limited,
+# audit-logged, paper-only, and confined to this whitelist so the agent can never
+# inject an arbitrary field. DB-only strategy rows (all RAE/custom seeds) persist
+# these directly; a template-backed strategy re-syncs any non-DB_DURABLE_FIELDS
+# field on restart, which the approve path flags.
+FOUNDER_EDITABLE_FIELDS = (
+    "required_capital",
+    "visual_config.options.required_capital",
+    "visual_config.options.credit_tp_frac",
+    "visual_config.options.credit_sl_mult",
+    "visual_config.risk.cooldown_minutes",
+    "visual_config.risk.max_trades_day",
+    "visual_config.risk.daily_loss_limit",
+    "visual_config.risk.time_exit_minutes",
+    "visual_config.risk.stop_loss_pct",
+    "visual_config.risk.take_profit_pct",
+    "max_trades_day",
+)
+
+
+def is_founder_editable_field(field: str) -> bool:
+    return field in FOUNDER_EDITABLE_FIELDS or field in DB_DURABLE_FIELDS
+
+
+def coerce_config_value(field: str, value):
+    """Light type-coercion so a JSON string/number lands as the right scalar.
+    Count-like fields → int; everything else editable → float; fall back to raw."""
+    _int_fields = ("cooldown_minutes", "max_trades_day", "time_exit_minutes")
+    try:
+        leaf = field.split(".")[-1]
+        if leaf in _int_fields:
+            return int(float(value))
+        if leaf == "structure":
+            return str(value)
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
 # lesson dimension -> the attribution field a strategy carries, for advice lookup.
 LESSON_DIMENSION_FIELD = {
     "structure": "structure",
