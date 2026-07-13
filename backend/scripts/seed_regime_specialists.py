@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 import pymongo  # noqa: E402
 
 RANGE_SELLER_CODE = '''def run(data):
-    if len(data) < 60:
+    if len(data) < 52:
         return []
     closes = [float(d.get('close') or 0) for d in data]
     d = data[-1]

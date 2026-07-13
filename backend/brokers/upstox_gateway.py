@@ -592,7 +592,14 @@ class UpstoxGateway:
             v3_hist_interval = {"5minute": 5, "1minute": 1, "minute": 1,
                                 "15minute": 15, "30minute": 30}.get(interval, 5)
             try:
-                hist_days = max(days, 10)
+                # Upstox V3 minute-history rejects ranges beyond ~1 month
+                # (UDAPI1148 "Invalid date range"). Callers pass days=60, so the
+                # unclamped request silently failed and fell through to the sparse
+                # daily-synth path below (~1 bar/day) — starving 5-min index
+                # strategies of history. Clamp to 25 days like the equity path;
+                # 25 days of 5-min bars is ~1875 bars, far more than any indicator
+                # needs, while staying under the cap.
+                hist_days = min(max(days, 10), 25)
                 hist_from = (datetime.now() - timedelta(days=hist_days)).strftime("%Y-%m-%d")
                 hist_to = datetime.now().strftime("%Y-%m-%d")
                 v3_hist_bars = self.get_historical_candles_v3(
