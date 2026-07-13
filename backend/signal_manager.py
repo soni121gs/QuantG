@@ -780,8 +780,18 @@ async def _dispatch_signal_via_unified_engine(
             or (option_contract or {}).get("instrument_token")
             or ""
         ).upper()
+        # Scope this dedup to the SAME strategy + mode, not the whole book. The
+        # ledger nets fills by (strategy_id, target_symbol), so two DIFFERENT
+        # strategies on the same contract land in disjoint buckets with their own
+        # sizing/exits/attribution — there is no netting collision to protect
+        # against. Without strategy_id this guard was cross-strategy: one strategy
+        # holding a contract blocked every OTHER strategy's BUY on it, starving
+        # them (idle). It should only stop ONE strategy from double-entering its
+        # own contract. Correlation is capped separately by EXPOSURE_CAP.
         duplicate_match = {
             "user_id": user_id,
+            "strategy_id": sig.get("strategy_id") or strategy.get("id"),
+            "mode": mode,
             "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
             "$or": [
                 {"target_symbol": target_key},
@@ -799,7 +809,7 @@ async def _dispatch_signal_via_unified_engine(
             return {
                 "ok": False,
                 "status": "SKIPPED",
-                "reason": f"Active position already exists for {target_symbol}.",
+                "reason": f"Active position already exists for {target_symbol} on this strategy.",
                 "reason_code": "SYMBOL_GROUP_ACTIVE_POSITION_EXISTS",
             }
 
