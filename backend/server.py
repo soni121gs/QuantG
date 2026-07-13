@@ -1678,6 +1678,18 @@ PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
     # OOS +Rs194/tr, 100% green months at production geometry). Paper-forward
     # per the ladder; slippage-fragile (avg credit ~Rs18) so live stays gated.
     "QG-O11 NIFTY Regime Seller Credit Scalp",
+    # 2026-07-13: RAE regime specialists added to the auto-woken book. Previously
+    # only QG-O11 was in the allowlist, so startup never woke the 6 RAE rows —
+    # they only fired if manually toggled (which left the book half-active: on
+    # 2026-07-13 only the BANKNIFTY seller was live and took a single held-to-EOD
+    # loss). With RAE_ROUTER_ENABLED=true the router stands down whoever is
+    # off-regime, so waking all specialists is coverage, not over-trading.
+    "RAE NIFTY Range Seller (RANGE/INSIDE)",
+    "RAE BANKNIFTY Range Seller (RANGE/INSIDE)",
+    "RAE SENSEX Range Seller (RANGE/INSIDE)",
+    "RAE NIFTY Trend Delta-1 (TREND)",
+    "RAE BANKNIFTY Trend Delta-1 (TREND)",
+    "RAE SENSEX Trend Delta-1 (TREND)",
 })
 PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
 

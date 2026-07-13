@@ -100,10 +100,14 @@ TEMPLATES = {
         "desc": ("sells a defined-risk OTM put credit spread only on RANGE/INSIDE days "
                  "(router-gated). Reuses the QG-O2 geometry that passed the "
                  "regime-conditional judge."),
+        # Intraday booking, NOT hold-to-expiry: mirrors the QG-O1/O4 07-09 fix
+        # (8d46076). Book at 50% of credit / 2x credit stop, recycle after 120m,
+        # so a drifting spread never sits held-to-EOD and round-trips green->red.
         "options": {"strike_mode": "OTM_SELL", "structure": "credit_spread",
                     "spread_width": 6, "short_otm_pct": 0.03, "wing_width": 6,
-                    "exit_mode": "expiry", "short_delta": 0.12},
-        "risk": {},
+                    "exit_mode": "", "short_delta": 0.12,
+                    "credit_tp_frac": 0.5, "credit_sl_mult": 2.0},
+        "risk": {"exit_mode": "signal_or_tp_sl_trailing", "time_exit_minutes": 120},
     },
     "trend_delta1": {
         "code": TREND_DELTA1_CODE, "role": "trend_delta1",
