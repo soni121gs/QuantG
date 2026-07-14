@@ -823,3 +823,48 @@ async def test_dispatch_place_order_boundary_uses_risk_capped_lots(monkeypatch):
     assert result["status"] == "FILLED"
     assert captured["risk"]["requested_qty"] == 650
     assert captured["order"]["qty"] == 1
+
+
+@pytest.mark.asyncio
+async def test_edge_math_spread_size_reads_declared_specialist_role(monkeypatch):
+    """RAE-4: the router specialist is read from visual_config.options.specialist_role,
+    not hardcoded to 'range_seller'. A trend_delta1-tagged spread must STAND DOWN on a
+    RANGE regime (the old hardcode would have kept it active as a range seller)."""
+    import signal_manager as sm
+
+    monkeypatch.setenv("RAE_ROUTER_ENABLED", "true")
+
+    from types import SimpleNamespace
+
+    async def fake_stats(*a, **k):
+        return SimpleNamespace(n=0, win_rate=0.0, avg_win=0.0, avg_loss=0.0)
+    monkeypatch.setattr("core.edge_runtime.cached_rolling_edge_stats", fake_stats)
+    monkeypatch.setattr("core.edge_sizer.edge_size",
+                        lambda **k: SimpleNamespace(lots=2))
+    monkeypatch.setattr("core.edge_sizer.payoff_ratio", lambda *a, **k: 1.0)
+    monkeypatch.setattr("core.spread_builder.lots_for_risk", lambda *a, **k: 5)
+
+    db = MagicMock()
+    db.paper_wallets.find_one = AsyncMock(return_value={"balance": 500000})
+    db.profit_lock_state.find_one = AsyncMock(return_value={})
+
+    spread = {"max_loss": 3000, "vol_state": "NORMAL",
+              "router_regime": "RANGE", "regime_confidence": 0.8}
+
+    # trend specialist on a RANGE day → does not own the regime → stand down
+    trend_strat = {"id": "s-trend", "mode": "paper",
+                   "visual_config": {"options": {"specialist_role": "trend_delta1"}}}
+    lots_t, tele_t = await sm._edge_math_spread_size(
+        db, user_id="u1", strategy=trend_strat, spread=spread,
+        lot_size=65, risk_budget=25000, regime="RANGE")
+    assert tele_t["router"]["stand_down"] is True
+    assert lots_t == 0
+
+    # untagged credit spread defaults to range_seller → active on RANGE
+    range_strat = {"id": "s-range", "mode": "paper",
+                   "visual_config": {"options": {}}}
+    lots_r, tele_r = await sm._edge_math_spread_size(
+        db, user_id="u1", strategy=range_strat, spread=spread,
+        lot_size=65, risk_budget=25000, regime="RANGE")
+    assert tele_r["router"]["stand_down"] is False
+    assert lots_r >= 1

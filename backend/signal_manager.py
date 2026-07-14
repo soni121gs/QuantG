@@ -641,12 +641,18 @@ async def _edge_math_spread_size(
     # telemetry, but only changes lots when RAE_ROUTER_ENABLED=true (founder gate).
     from core.regime_router import route as _rae_route, enabled as _rae_enabled
     _router_on = _rae_enabled()
+    # RAE-4: read the specialist ROLE the strategy declares (seed_regime_specialists
+    # tags it under visual_config.options.specialist_role) instead of assuming every
+    # credit spread is a range seller. An untagged spread is a legacy range-selling
+    # credit spread (QG-O1/O4/O11) → default to 'range_seller' to preserve behavior.
+    _opts = (strategy.get("visual_config") or {}).get("options") or {}
+    _specialist = str(_opts.get("specialist_role") or "range_seller")
     # RAE-1 live: prefer the FINE intraday regime (HIGH_VOL_CHOP/INSIDE_QUIET + real
     # confidence, written to spread.router_regime by the caller) over the coarse
     # RANGE/TREND regime; fall back to coarse when the fine label isn't available yet.
     _routing = _rae_route(str(spread.get("router_regime") or regime or "UNKNOWN"),
                           float(spread.get("regime_confidence") or 0.5),
-                          specialist="range_seller")
+                          specialist=_specialist)
     if _router_on:
         lots = int(round(lots * _routing.size_mult))
 
