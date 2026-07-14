@@ -1032,6 +1032,34 @@ async def _dispatch_signal_via_unified_engine(
     # every prior buyer. Regime is ALSO enforced by the RAE router; this is a second,
     # source-level line so the strategy's own entries stop firing off-regime. Sellers
     # /spreads already returned above, so this only touches single-leg buyers.
+
+    # RAE-4 router for SINGLE-LEG specialists (trend delta-1). The spread path is
+    # gated inside _edge_math_spread_size; single-leg buyers never went through it,
+    # so the router had no effect on them and relied on the trend_iv_gate alone.
+    # Gate here on the strategy's DECLARED specialist_role: stand the trend buyer
+    # down on a regime it does not own (RANGE/CHOP), and scale size by the router
+    # multiplier (trend precision → size). Only tagged specialists are affected;
+    # untagged legacy single-leg buyers/equity have no specialist_role → skipped.
+    # Observe-only until RAE_ROUTER_ENABLED=true (founder gate) — annotates only.
+    from core.regime_router import route as _rae_route_sl, enabled as _rae_enabled_sl
+    _sl_opts = (strategy.get("visual_config") or {}).get("options", {}) or {}
+    _sl_specialist = str(_sl_opts.get("specialist_role") or "") or None
+    if _sl_specialist:
+        _sl_regime = _regime_fine_at_entry if _regime_fine_at_entry not in ("", "UNKNOWN") else _regime_at_entry
+        _sl_routing = _rae_route_sl(str(_sl_regime or "UNKNOWN"),
+                                    float(_regime_fine_conf or 0.5),
+                                    specialist=_sl_specialist)
+        _sl_router_on = _rae_enabled_sl()
+        if option_contract is not None:
+            option_contract["rae_router"] = {**_sl_routing.as_dict(), "enforced": _sl_router_on}
+        if _sl_router_on and _sl_routing.stand_down:
+            return {"ok": False, "status": "SKIPPED",
+                    "reason": f"RAE router stand-down: {(_sl_routing.reasons or ['off-regime'])[0]}",
+                    "reason_code": "RAE_ROUTER_STAND_DOWN"}
+        if _sl_router_on and _sl_routing.size_mult != 1.0:
+            lots = max(1, int(round(lots * _sl_routing.size_mult)))
+            requested_qty = max(1, lots) * max(1, lot_size)
+
     _so = (sig.get("visual_config") or {}).get("options", {}) or {}
     _sto = (strategy.get("visual_config") or {}).get("options", {}) or {}
     if _so.get("trend_iv_gate") or _sto.get("trend_iv_gate"):

@@ -868,3 +868,48 @@ async def test_edge_math_spread_size_reads_declared_specialist_role(monkeypatch)
         lot_size=65, risk_budget=25000, regime="RANGE")
     assert tele_r["router"]["stand_down"] is False
     assert lots_r >= 1
+
+
+@pytest.mark.asyncio
+async def test_single_leg_trend_specialist_stands_down_off_regime(monkeypatch):
+    """RAE-4: a single-leg trend_delta1 specialist is now router-gated. On a RANGE
+    regime (which it does not own) with the router enforced, it STANDS DOWN before
+    any order — previously single-leg buyers ignored the router entirely."""
+    monkeypatch.setenv("RAE_ROUTER_ENABLED", "true")
+    captured = {}
+
+    db = MagicMock()
+    db.strategy_positions.find_one = AsyncMock(return_value=None)
+    db.orders.find_one = AsyncMock(return_value=None)
+    db.market_regime_state.find_one = AsyncMock(return_value=None)  # fall back to coarse
+
+    async def fake_place_order(**kwargs):
+        captured["order"] = kwargs
+        return {"id": "order-x", "status": "PENDING_BROKER"}
+
+    async def fake_evaluate_order(self, **kwargs):
+        captured["risk"] = kwargs
+        return {"ok": True, "quantity": kwargs["requested_qty"]}
+    monkeypatch.setattr("core.risk_manager.RiskManager.evaluate_order", fake_evaluate_order)
+
+    sig = {
+        "id": "sig-trend", "user_id": "user-1", "strategy_id": "rae-trend-delta1-nifty",
+        "symbol": "NIFTY", "target_symbol": "NIFTY26JUN25000CE", "action": "BUY",
+        "confidence": 80, "mode": "paper", "price": 120.0, "regime": "RANGE",
+        "option_contract": {
+            "tradingsymbol": "NIFTY26JUN25000CE", "instrument_key": "NSE_FO|12345",
+            "exchange": "NFO", "segment": "NSE_FO", "lot_size": 65, "ltp": 120.0,
+            "source": "UPSTOX_LIVE", "structure": "single_leg",
+        },
+        "visual_config": {"options": {"enabled": True, "lots": 1}},
+    }
+    strategy = {"id": "rae-trend-delta1-nifty", "user_id": "user-1", "mode": "paper",
+                "status": "live",
+                "visual_config": {"options": {"specialist_role": "trend_delta1",
+                                              "owned_regimes": ["TREND_UP", "TREND_DOWN"]}}}
+
+    result = await _dispatch_signal_via_unified_engine(db, "user-1", sig, strategy, fake_place_order)
+
+    assert result["status"] == "SKIPPED"
+    assert result["reason_code"] == "RAE_ROUTER_STAND_DOWN"
+    assert "order" not in captured  # never reached the order boundary
