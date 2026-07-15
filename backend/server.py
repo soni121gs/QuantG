@@ -3950,7 +3950,7 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "Regime-gated intraday NIFTY credit-spread scalp. One brain, three gates: trend-up day sells a bull-put spread on a VWAP-pullback hold; trend-down day sells a bear-call spread on a failed bounce at VWAP; choppy day fades RSI stretch. Width-1, 1-strike-OTM, books 35% of credit, stop at 1.5x credit. Paper-forward only.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "structure": "credit_spread", "spread_width": 1, "short_offset_strikes": 1,
-        "credit_tp_frac": 0.35, "credit_sl_mult": 1.5,
+        "credit_tp_frac": 0.20, "credit_sl_mult": 1.5,
         "candle_interval": "1minute",
         "strategy_type": "Option Selling", "required_capital": 3000.0, "instrument_group": "NFO",
         "initial_status": "live",
@@ -6717,10 +6717,12 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         _risk["time_exit_minutes"] = 120  # same 2h recycle as QG-O1
     # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
-    # time_exit_minutes 45: a scalp that hasn't hit TP(35%)/SL(1.5x) in 45 min is
-    # cut so the strategy can take its next scalp instead of holding one all day.
+    # time_exit_minutes 90 (was 45): live evidence 2026-07-15 showed the 45-min cut
+    # was closing spreads underwater on MTM noise BEFORE theta worked — 10 time-exits
+    # at −₹585 avg vs 1 spread-tp. Paired with a faster TP (credit_tp_frac 0.35→0.20)
+    # so the small credit is banked before it drifts. Forward-paper judges; reversible.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
-        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 45})
+        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 90})
     # NOTE: "NIFTY Theta Credit Spread" / "NIFTY Range Credit Spread" are DB-only rows
     # (not code templates), so their exit geometry is set directly in the DB — see the
     # 2026-07-10 note on DEAD_STRATEGY_NAMES above. They are not normalized here.
