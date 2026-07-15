@@ -50,11 +50,11 @@ _STRATEGY_CLASSES: Dict[str, str] = {
 # BANKNIFTY 3/3) early in the day, starving us of trades to analyze. Higher caps =
 # more trades = more data; still env-overridable for later tuning.
 _CLASS_CAPS: Dict[str, Dict[str, Any]] = {
-    "scalper":      {"daily_cap": int(os.environ.get("FREQ_CAP_SCALPER",      "30")), "cooldown_bars": 2},
-    "momentum":     {"daily_cap": int(os.environ.get("FREQ_CAP_MOMENTUM",     "16")), "cooldown_bars": 4},
-    "trend_retest": {"daily_cap": int(os.environ.get("FREQ_CAP_TREND",        "12")), "cooldown_bars": 8},
-    "swing":        {"daily_cap": int(os.environ.get("FREQ_CAP_SWING",        "10")), "cooldown_bars": 0},
-    "default":      {"daily_cap": int(os.environ.get("FREQ_CAP_DEFAULT",      "8")), "cooldown_bars": 4},
+    "scalper":      {"daily_cap": int(os.environ.get("FREQ_CAP_SCALPER",      "30")), "cooldown_bars": int(os.environ.get("FREQ_COOLDOWN_BARS_SCALPER", "2"))},
+    "momentum":     {"daily_cap": int(os.environ.get("FREQ_CAP_MOMENTUM",     "16")), "cooldown_bars": int(os.environ.get("FREQ_COOLDOWN_BARS_MOMENTUM", "4"))},
+    "trend_retest": {"daily_cap": int(os.environ.get("FREQ_CAP_TREND",        "12")), "cooldown_bars": int(os.environ.get("FREQ_COOLDOWN_BARS_TREND", "8"))},
+    "swing":        {"daily_cap": int(os.environ.get("FREQ_CAP_SWING",        "10")), "cooldown_bars": int(os.environ.get("FREQ_COOLDOWN_BARS_SWING", "0"))},
+    "default":      {"daily_cap": int(os.environ.get("FREQ_CAP_DEFAULT",      "8")), "cooldown_bars": int(os.environ.get("FREQ_COOLDOWN_BARS_DEFAULT", "4"))},
 }
 
 # 2026-07-09 (founder-directed): loss-streak pause + half-cap disabled by default.
