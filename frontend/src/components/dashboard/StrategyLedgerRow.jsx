@@ -65,7 +65,17 @@ export const StrategyLedgerRow = ({ row, onToggle, onExit }) => {
   const slMissing = positionOpen && position?.stop_loss == null;
   const tpMissing = positionOpen && position?.take_profit == null;
   const live = row.status === "live";
-  const idleLabel = live ? (row.state === "SCANNING" ? "Scanning" : row.state || "Live") : "Flat";
+  // A live strategy that the ledger marks DISABLED (kill-switch) or that the RAE
+  // router is standing down is NOT broken — surface it as a clear "Stand-down",
+  // not an alarming "DISABLED", so an idle-by-design strategy doesn't read as a fault.
+  const rawState = asStatus(row.state);
+  const idleLabel = live
+    ? rawState === "SCANNING"
+      ? "Scanning"
+      : rawState === "DISABLED" || rawState === "STAND_DOWN" || rawState === "COOLDOWN"
+        ? "Stand-down"
+        : row.state || "Live"
+    : "Flat";
   const telemetry = row.telemetry || {};
   const detail = problem
     ? failedOrder?.status_message || telemetry.last_error

@@ -145,6 +145,29 @@ export default function Orders() {
     }
   };
 
+  // Spreads have no top-level symbol to square off via the single-leg path; close
+  // by strategy_id through the canonical _close_strategy_positions route (both legs,
+  // ledger-safe). Never use a generic opposite order — that creates phantom shorts.
+  const exitSpread = async (position) => {
+    const sid = position.strategy_id;
+    const label = position.symbol || position.strategy_name || "spread";
+    if (!sid) {
+      toast.error("No strategy_id on this spread — cannot exit safely.");
+      return;
+    }
+    if (!window.confirm(`Close both legs of the ${label} spread now at market?`)) return;
+    setExiting(label);
+    try {
+      await api.post(`/strategies/${sid}/exit-all`);
+      toast.success(`Exit sent for ${label}`);
+      await refresh();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Spread exit failed");
+    } finally {
+      setExiting(null);
+    }
+  };
+
   return (
     <div className="space-y-4" data-testid="orders-page">
       <PageHeader
@@ -259,9 +282,16 @@ export default function Orders() {
                           </td>
                           <td className="px-4 py-2.5 text-right">
                             {isSpread ? (
-                              <span className="text-[11px] uppercase tracking-widest px-2 py-1 rounded-sm bg-[var(--qd-surface-2)] text-[var(--qd-text-3)] ml-auto inline-block" title="Both legs auto-managed by TP / SL / EOD square-off">
-                                Auto TP/SL
-                              </span>
+                              <button
+                                onClick={() => exitSpread(p)}
+                                disabled={exiting === (p.symbol || p.strategy_name || "spread")}
+                                className="text-[11px] uppercase tracking-wider px-3 py-1 rounded-sm disabled:opacity-50 flex items-center gap-1 ml-auto bg-[var(--qd-loss)] text-white"
+                                title="Close both legs now at market (auto TP/SL/time-exit still apply until you do)"
+                                data-testid={`exit-spread-${p.symbol}`}
+                              >
+                                {exiting === (p.symbol || p.strategy_name || "spread") ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />}
+                                Exit
+                              </button>
                             ) : (
                               <button
                                 onClick={() => exit(p.symbol)}
