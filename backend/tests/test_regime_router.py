@@ -20,6 +20,20 @@ def test_seller_stands_down_off_regime():
     assert d.stand_down and d.size_mult == 0.0
 
 
+def test_chop_veto_off_lets_seller_trade(monkeypatch):
+    # founder-directed 2026-07-16: RAE_CHOP_STANDDOWN=false routes a HIGH_VOL_CHOP
+    # day as RANGE so the range seller trades instead of standing down. EVENT still
+    # stands down (macro fat-tail is not overridden).
+    monkeypatch.setenv("RAE_CHOP_STANDDOWN", "false")
+    seller = route(tax.HIGH_VOL_CHOP, 0.9, specialist="range_seller")
+    assert not seller.stand_down and seller.size_mult > 0.0 and seller.regime == tax.RANGE
+    event = route(tax.EVENT, 0.9, specialist="range_seller")
+    assert event.stand_down and event.size_mult == 0.0
+    # a trend specialist on chop-routed-as-range still stands down (does not own RANGE)
+    trend = route(tax.HIGH_VOL_CHOP, 0.95, specialist="trend_delta1")
+    assert trend.stand_down
+
+
 def test_seller_active_on_range_and_inside():
     assert not route(tax.RANGE, 0.4, specialist="range_seller").stand_down
     # sellers co-own the quiet regime

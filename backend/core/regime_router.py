@@ -38,6 +38,15 @@ def enabled() -> bool:
     return os.environ.get("RAE_ROUTER_ENABLED", "false").lower() == "true"
 
 
+def chop_standdown_enabled() -> bool:
+    """HIGH_VOL_CHOP veto. ON by default (sellers stand down on chop — the RAE
+    design). Founder-directed 2026-07-16: set RAE_CHOP_STANDDOWN=false to turn the
+    chop veto OFF — a chop day is then treated as a wide RANGE and each specialist's
+    OWN regime gate decides, so range sellers trade on chop instead of standing down.
+    EVENT stays a hard stand-down regardless (macro fat-tail). Reversible via env."""
+    return os.environ.get("RAE_CHOP_STANDDOWN", "true").lower() == "true"
+
+
 # Per-regime base size multiplier (before EdgeMath). CHOP/EVENT = 0 (stand down).
 REGIME_SIZE = {
     tax.TREND_UP: _f("RAE_SIZE_TREND", 1.0),
@@ -90,6 +99,16 @@ def route(
         regime = tax.RANGE
     owner = tax.REGIME_OWNER.get(regime, "range_seller")
 
+    # 0) chop-veto override (founder-directed 2026-07-16): when RAE_CHOP_STANDDOWN is
+    # off, treat a HIGH_VOL_CHOP day as a wide RANGE so the specialist's own gate
+    # decides (range sellers trade on chop). EVENT is NOT overridden — it stays a
+    # hard stand-down (macro fat-tail).
+    chop_note: Optional[str] = None
+    if regime == tax.HIGH_VOL_CHOP and not chop_standdown_enabled():
+        chop_note = "HIGH_VOL_CHOP veto OFF (RAE_CHOP_STANDDOWN=false) → routed as RANGE"
+        regime = tax.RANGE
+        owner = tax.REGIME_OWNER.get(regime, "range_seller")
+
     # 1) hard stand-down regimes (nothing wins / fat tails)
     if regime in (tax.HIGH_VOL_CHOP, tax.EVENT):
         return _stand_down(regime, confidence, f"{regime}: stand down (no edge / fat-tail)")
@@ -116,5 +135,7 @@ def route(
         scale = (confidence - TREND_MIN_CONF) / (1.0 - TREND_MIN_CONF)
         base *= max(0.0, min(1.0, 0.5 + 0.5 * scale))   # 0.5..1.0 across the confident band
     active = [specialist] if specialist else [owner]
-    return RoutingDecision(regime, confidence, False, base, active,
-                           [f"{regime}: activate {active[0]} at size×{base:.2f}"])
+    reasons = [f"{regime}: activate {active[0]} at size×{base:.2f}"]
+    if chop_note:
+        reasons.insert(0, chop_note)
+    return RoutingDecision(regime, confidence, False, base, active, reasons)

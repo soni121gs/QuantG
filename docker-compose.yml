@@ -44,6 +44,11 @@ services:
       # the regime isn't RANGE/INSIDE (no selling into trends/chop) + regime-aware
       # exits. Founder-enabled 2026-07-10. CORE_ENGINE_LIVE_ENABLED stays false.
       RAE_ROUTER_ENABLED: "${RAE_ROUTER_ENABLED:-true}"
+      # Chop veto OFF (founder-directed 2026-07-16): a HIGH_VOL_CHOP day is routed as
+      # a wide RANGE so range sellers trade on chop instead of standing down (the
+      # NIFTY/BANKNIFTY-idle-while-SENSEX-trades case). EVENT stays a hard stand-down.
+      # Set back to "true" to restore the RAE chop-protection design.
+      RAE_CHOP_STANDDOWN: "${RAE_CHOP_STANDDOWN:-false}"
       # ── Founder-directed frequency easing 2026-07-15 (paper): more trades ──
       # Reversible via env; remove/override to restore code defaults.
       PAPER_MEASUREMENT_COOLDOWN_MINUTES: "${PAPER_MEASUREMENT_COOLDOWN_MINUTES:-0}"
