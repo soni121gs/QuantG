@@ -966,8 +966,19 @@ async def _dispatch_signal_via_unified_engine(
         # entry. Observe-only by default → this never fires until RAE_ROUTER_ENABLED.
         _rae = _edge_telemetry.get("router") or {}
         if _rae.get("enforced") and _rae.get("stand_down"):
+            _rae_reason = f"RAE router stand-down: {(_rae.get('reasons') or ['off-regime'])[0]}"
+            # Stamp the REAL reason on the strategy row so the dashboard shows why the
+            # order was skipped (e.g. selling into TREND_UP) instead of the runner's
+            # generic "Duplicate signal" dedup text (strategy_runner keeps last_filter_
+            # reason but no longer clobbers this).
+            try:
+                await db.strategies.update_one(
+                    {"id": strategy.get("id"), "user_id": user_id},
+                    {"$set": {"last_filter_reason": _rae_reason}})
+            except Exception:
+                pass
             return {"ok": False, "status": "SKIPPED",
-                    "reason": f"RAE router stand-down: {(_rae.get('reasons') or ['off-regime'])[0]}",
+                    "reason": _rae_reason,
                     "reason_code": "RAE_ROUTER_STAND_DOWN"}
         # Per-strategy TP/SL geometry (visual_config.options.credit_tp_frac /
         # credit_sl_mult) — lets a credit scalp book 35% of credit with a 1.5x
@@ -1053,8 +1064,15 @@ async def _dispatch_signal_via_unified_engine(
         if option_contract is not None:
             option_contract["rae_router"] = {**_sl_routing.as_dict(), "enforced": _sl_router_on}
         if _sl_router_on and _sl_routing.stand_down:
+            _sl_reason = f"RAE router stand-down: {(_sl_routing.reasons or ['off-regime'])[0]}"
+            try:
+                await db.strategies.update_one(
+                    {"id": strategy.get("id"), "user_id": user_id},
+                    {"$set": {"last_filter_reason": _sl_reason}})
+            except Exception:
+                pass
             return {"ok": False, "status": "SKIPPED",
-                    "reason": f"RAE router stand-down: {(_sl_routing.reasons or ['off-regime'])[0]}",
+                    "reason": _sl_reason,
                     "reason_code": "RAE_ROUTER_STAND_DOWN"}
         if _sl_router_on and _sl_routing.size_mult != 1.0:
             lots = max(1, int(round(lots * _sl_routing.size_mult)))

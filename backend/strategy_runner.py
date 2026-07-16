@@ -762,12 +762,15 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                 last_sig_date = last_sig.get("date", "")
                 last_fired_date = s.get("last_fired_signal_date", "")
 
-                # Don't re-fire the same signal we already acted on
+                # Don't re-fire the same signal we already acted on. NOTE: do NOT
+                # overwrite last_filter_reason here — this dedup fires every runner
+                # tick after the candle's signal was handed off, and the generic
+                # "Duplicate signal" text masked the REAL outcome (e.g. an RAE router
+                # stand-down on TREND_UP, which signal_manager stamps). Preserve that.
                 if last_sig_date and last_sig_date == last_fired_date:
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
-                                                             "last_signals_count": signals_count,
-                                                             "last_filter_reason": "Duplicate signal (already fired for this candle)"},
+                                                             "last_signals_count": signals_count},
                                                     "$inc": inc_set})
                     continue
 
