@@ -28,6 +28,10 @@ class _Coll:
             if _match(d, q): return d
         return None
     async def update_one(self, q, update, upsert=False):
+        # Mirror Mongo: the same field path may not appear in $setOnInsert and $push.
+        clash = set((update.get("$setOnInsert") or {})) & set((update.get("$push") or {}))
+        if clash:
+            raise RuntimeError(f"conflict at {clash} ($setOnInsert + $push)")
         target = next((d for d in self.docs if _match(d, q)), None)
         if target is None:
             if not upsert: return

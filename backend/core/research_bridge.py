@@ -85,12 +85,14 @@ async def upsert_strategy_edge(
         "created_at": now, "status": "ready_for_test",
         "verdict": {"status": "UNTESTED", "confidence": 0.0,
                     "summary": "No test evidence attached yet."},
-        "evidence_links": [], "tags": ["auto", "edge", source],
+        "tags": ["auto", "edge", source],
         "research_context": {"strategy_id": strategy_id},
     }
     update: Dict[str, Any] = {"$set": set_doc, "$setOnInsert": on_insert}
 
     if evidence:
+        # `evidence_links` is created by $push; it must NOT also appear in
+        # $setOnInsert (Mongo rejects the same path in both operators).
         ev = {"evidence_id": "ev_" + hashlib.sha256(
                   (str(evidence.get("source")) + now).encode()).hexdigest()[:14],
               "source": evidence.get("source") or source,
@@ -100,6 +102,10 @@ async def upsert_strategy_edge(
               "confidence": float(evidence.get("confidence") or 0.0),
               "created_at": now}
         update["$push"] = {"evidence_links": ev}
+    else:
+        # No evidence this call → seed the empty array on insert so the field
+        # always exists for readers.
+        on_insert["evidence_links"] = []
 
     if verdict and str(verdict.get("status")) in _VALID_VERDICTS:
         vstatus = str(verdict["status"])
