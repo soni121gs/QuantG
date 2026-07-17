@@ -182,6 +182,44 @@ async def ops_diagnostics_route(user=Depends(get_current_user)):
     return await ops_diagnostics(user=user)
 
 
+@router.get("/hermes-diagnostics")
+async def hermes_diagnostics_list(status: str = "open", user=Depends(get_current_user)):
+    """§19 Hermes Diagnostician read surface: open findings (severe-first) + the
+    latest run's narrated briefing. Read-only. status=open|resolved|all."""
+    uid = user["id"]
+    q: Dict[str, Any] = {"user_id": uid}
+    if status in ("open", "resolved"):
+        q["status"] = status
+    sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    findings = await db.hermes_findings.find(q, {"_id": 0}).to_list(500)
+    findings.sort(key=lambda f: (sev_rank.get(f.get("severity"), 9),
+                                 str(f.get("last_seen_date") or "")))
+    latest_run = await db.hermes_diagnostic_runs.find_one(
+        {"user_id": uid}, {"_id": 0}, sort=[("date", -1)])
+    return {
+        "findings": findings,
+        "counts": {
+            "open": await db.hermes_findings.count_documents({"user_id": uid, "status": "open"}),
+            "critical": await db.hermes_findings.count_documents(
+                {"user_id": uid, "status": "open", "severity": "critical"}),
+            "high": await db.hermes_findings.count_documents(
+                {"user_id": uid, "status": "open", "severity": "high"}),
+        },
+        "latest_run": latest_run,
+    }
+
+
+@router.post("/hermes-diagnostics/run")
+async def hermes_diagnostics_run(date: Optional[str] = None, user=Depends(get_current_user)):
+    """Manually trigger a diagnostic audit for the caller (defaults to today IST).
+    Runs all probes, persists findings, and narrates. Read-only w.r.t. trading."""
+    from core.hermes_diagnostics import run_diagnostics
+    from core.hermes_diagnostics.narrator import narrate_findings
+    res = await run_diagnostics(db, user["id"], date)
+    narrative = await narrate_findings(db, user["id"], res["date"], res.get("findings", []))
+    return {**res, "narrative": narrative}
+
+
 @router.get("/scorecard")
 async def ops_scorecard(days: int = 7, scope: str = "me", user=Depends(get_current_user)):
     """Phase 0 eval harness: per-strategy signal funnel + realised P&L, with a

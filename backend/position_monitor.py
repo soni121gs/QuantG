@@ -368,6 +368,22 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     await _score_open_recommendations(db, user_id, today_str, doc)
                 except Exception as score_exc:
                     logger.error("Recommendation scoring failed for user=%s: %s", user_id, score_exc)
+                # §19 Hermes Diagnostician: deterministic system audit (trading logic,
+                # strategy edge, infra, data) → db.hermes_findings + a narrated
+                # briefing. Read-only; finds and files, never fixes. Runs last so it
+                # can read the day's attribution/report. Best-effort — never blocks EOD.
+                try:
+                    from core.hermes_diagnostics import run_diagnostics
+                    from core.hermes_diagnostics.narrator import narrate_findings
+                    _diag = await run_diagnostics(db, user_id, today_str)
+                    await narrate_findings(db, user_id, today_str, _diag.get("findings", []))
+                    _sev = _diag.get("summary", {}).get("by_severity", {})
+                    if _sev.get("critical") or _sev.get("high"):
+                        logger.warning("Hermes diagnostics user=%s: %s", user_id, _diag.get("summary"))
+                    else:
+                        logger.info("Hermes diagnostics user=%s: %s", user_id, _diag.get("summary"))
+                except Exception as diag_exc:
+                    logger.error("Hermes diagnostics failed for user=%s: %s", user_id, diag_exc)
             except Exception as user_exc:
                 logger.error("EOD aggregation failed for user=%s: %s", user_id, user_exc)
 
