@@ -134,17 +134,27 @@ async def run_diagnostics(db, user_id: str, date_str: Optional[str] = None,
 
     findings.sort(key=lambda f: (Severity.rank(f.severity), f.domain))
 
+    finding_docs = [f.to_doc() for f in findings]
     persist_stats: Dict[str, Any] = {}
+    task_stats: Dict[str, Any] = {}
     if persist:
         persist_stats = await _persist(db, user_id, date_str, findings, ran_ids)
+        # Handoff: auto-file high-severity findings as fix-tasks (findings persisted
+        # first so auto-close can read their resolved status). Best-effort.
+        try:
+            from core.hermes_diagnostics.fix_tasks import sync_fix_tasks
+            task_stats = await sync_fix_tasks(db, user_id, date_str, finding_docs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fix-task sync failed: %s", exc)
         await db.hermes_diagnostic_runs.update_one(
             {"user_id": user_id, "date": date_str},
             {"$set": {"user_id": user_id, "date": date_str,
                       "ran_at": now.isoformat(), "ran_probes": len(ran_ids),
                       "summary": _summarize(findings),
-                      "persist": persist_stats}},
+                      "persist": persist_stats, "fix_tasks": task_stats}},
             upsert=True,
         )
 
     return {"date": date_str, "summary": _summarize(findings),
-            "findings": [f.to_doc() for f in findings], "persist": persist_stats}
+            "findings": finding_docs, "persist": persist_stats,
+            "fix_tasks": task_stats}

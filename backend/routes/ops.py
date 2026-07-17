@@ -220,6 +220,52 @@ async def hermes_diagnostics_run(date: Optional[str] = None, user=Depends(get_cu
     return {**res, "narrative": narrative}
 
 
+@router.get("/hermes-fix-tasks")
+async def hermes_fix_tasks_list(status: str = "active", user=Depends(get_current_user)):
+    """Auto-filed fix-tasks queue (high-severity findings promoted to actionable
+    tickets). status=active (open+in_progress) | done | all. Read-only surface."""
+    uid = user["id"]
+    q: Dict[str, Any] = {"user_id": uid}
+    if status == "active":
+        q["status"] = {"$in": ["open", "in_progress"]}
+    elif status in ("open", "in_progress", "done", "auto_closed", "dismissed"):
+        q["status"] = status
+    sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    tasks = await db.hermes_fix_tasks.find(q, {"_id": 0}).to_list(500)
+    tasks.sort(key=lambda t: (sev_rank.get(t.get("severity"), 9),
+                              str(t.get("created_at") or "")))
+    return {
+        "tasks": tasks,
+        "counts": {
+            "active": await db.hermes_fix_tasks.count_documents(
+                {"user_id": uid, "status": {"$in": ["open", "in_progress"]}}),
+        },
+    }
+
+
+class _FixTaskStatus(BaseModel):
+    status: str  # open | in_progress | done | dismissed
+
+
+@router.post("/hermes-fix-tasks/{key}/status")
+async def hermes_fix_task_set_status(key: str, body: _FixTaskStatus,
+                                     user=Depends(get_current_user)):
+    """Founder moves a fix-task through its lifecycle (open→in_progress→done, or
+    dismissed). Auto_closed is system-only and not settable here."""
+    allowed = {"open", "in_progress", "done", "dismissed"}
+    if body.status not in allowed:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed)}")
+    from datetime import datetime as _dt, timezone as _tz
+    res = await db.hermes_fix_tasks.update_one(
+        {"user_id": user["id"], "key": key},
+        {"$set": {"status": body.status,
+                  "status_changed_at": _dt.now(_tz.utc).isoformat()}},
+    )
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="fix-task not found")
+    return {"ok": True, "key": key, "status": body.status}
+
+
 @router.get("/scorecard")
 async def ops_scorecard(days: int = 7, scope: str = "me", user=Depends(get_current_user)):
     """Phase 0 eval harness: per-strategy signal funnel + realised P&L, with a

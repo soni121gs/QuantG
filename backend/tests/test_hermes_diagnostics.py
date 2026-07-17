@@ -205,8 +205,14 @@ async def test_runner_persists_and_auto_resolves():
     stored = [d for d in db.hermes_findings.docs if d["status"] == "open"]
     assert len(stored) >= 1
 
-    # "Fix" the geometry → re-run → the finding auto-resolves.
+    # A high-severity finding was auto-filed as a fix-task.
+    tasks = [t for t in db.hermes_fix_tasks.docs if "reward_risk_geometry" in t["key"]]
+    assert len(tasks) == 1 and tasks[0]["status"] == "open"
+
+    # "Fix" the geometry → re-run → the finding auto-resolves AND the task auto-closes.
     bad["visual_config"]["options"]["credit_sl_mult"] = 0.8
     await runner.run_diagnostics(db, "u1", "2026-07-18", kinds=["static"], now=now)
     geo = [d for d in db.hermes_findings.docs if "reward_risk_geometry" in d["key"]][0]
     assert geo["status"] == "resolved"
+    task = [t for t in db.hermes_fix_tasks.docs if "reward_risk_geometry" in t["key"]][0]
+    assert task["status"] == "auto_closed"

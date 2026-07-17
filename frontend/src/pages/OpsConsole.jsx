@@ -13,6 +13,7 @@ import MarginMeterPanel from "../components/ops/MarginMeterPanel";
 import UserReconciler from "../components/ops/UserReconciler";
 import BrokerStatusPanel from "../components/ops/BrokerStatusPanel";
 import IncidentRecoveryPanel from "../components/ops/IncidentRecoveryPanel";
+import DiagnosticsPanel from "../components/ops/DiagnosticsPanel";
 import OpsActionCard from "../components/ops/OpsActionCard";
 
 const fmt = (value) => {
@@ -556,6 +557,9 @@ export default function OpsConsole() {
         busy={busy}
         run={run}
       />
+
+      {/* HERMES DIAGNOSTICIAN — daily system audit findings + fix-task queue */}
+      <DiagnosticsPanel />
 
       {/* BLOCKED/ERRORED STRATEGIES */}
       <div className="border border-[var(--qd-border)] bg-[var(--qd-surface)] backdrop-blur-md rounded-lg shadow-xl overflow-hidden">
