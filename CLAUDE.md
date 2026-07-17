@@ -927,3 +927,17 @@ All pure modules, all validated on the 498-day NIFTY index store; live hooks are
 - **RAE-7** `GET /api/ops/rae-live-readiness` — read-only pilot gate (READY/NOT_READY + blockers). NEVER enables anything; live is the founder flipping `RAE_ROUTER_ENABLED`→paper-evidence→`CORE_ENGINE_LIVE_ENABLED`+`LIVE_SPREADS_ENABLED`+arm.
 
 **To activate the ensemble (founder):** set `RAE_ROUTER_ENABLED=true` (paper) → watch `GET /api/ops/regime-status` accumulate regime-bucketed P&L → when `GET /api/ops/rae-live-readiness` reads READY, decide on the live flags. `CORE_ENGINE_LIVE_ENABLED=false` until then.
+
+---
+
+## 19. Hermes Diagnostician — daily deterministic system auditor (added 2026-07-17)
+
+Founder-directed after the −₹6,821 day: the bugs that caused it (side inversion, no-op stop, unpriced-leg exit skip) were **deterministic facts sitting in the data** — nobody was checking the right invariants daily. The Diagnostician (HSI Stage 6) is the fix: it **finds problems across trading-logic, strategy-edge, infra and data every day, files them with evidence, and NEVER fixes** (finds-and-files, like all of Hermes; agents/founder fix).
+
+**Governing law (same as HSI): code computes every finding, the LLM only narrates.** A `Finding` is a deterministic probe output carrying raw `evidence` + a `reproduction` query. The narrator (`narrator.py`, Gemini, fail-open to a deterministic briefing) may explain/rank CONFIRMED findings but can **never invent one** — a suspected new issue must become a *probe*, never a raw claim. Anti-hallucination spine: an LLM can be confidently wrong; a probe counting `exits where reason in (TP,SL)` cannot.
+
+**Location:** `backend/core/hermes_diagnostics/` — `contract.py` (Finding/Severity/Confidence/Domain), `probe_sdk.py` (`@register`, ProbeContext preload, safe-exec so a probe crash becomes a finding not an abort), `runner.py` (`run_diagnostics(db,user,date,kinds=)` → build ctx → run probes → verify → dedup+persist → auto-resolve), `narrator.py`, `probes_{static,execution,infra,strategy}.py`. **5 layers:** Probes → Runner → Verifier (thin evidence = SILENCE, never a guess) → Narrator → Loop (a finding whose probe ran but didn't re-emit auto-resolves = verify-on-fix).
+
+**12 probes / 4 domains** (permanent regression guards for §-above RCs): `exec.intent_vs_execution_side` (RC-1), `exec.exit_reason_mix` (RC-2/3: 0 price-exits across ≥4 spreads = dead stop engine), `exec.no_op_stop` (sl_value≥width), `exec.spread_mark_staleness` (RC-3 intraday), `exec.specialist_regime_fit` (off owned_regimes); `static.reward_risk_geometry` (breakeven WR ≥0.75), `static.specialist_tag_consistency`, `static.spread_capital_sanity`; `infra.feed_regime_artifact` (|intraday_return|>20% bad tick — catches the −58% NIFTY CRASH), `infra.overgated_book`; `strategy.persistent_live_loss`, `strategy.thin_sample_grading` (<30-trade honesty).
+
+**Persistence + surface:** `db.hermes_findings` (one doc per `key`=probe::entity; dedup bumps occurrences; auto status=resolved when a fix stops the probe emitting), `db.hermes_diagnostic_runs` (per-run summary + narrative). Wired into the EOD pipeline (`position_monitor.py`, after lessons/advisor, best-effort). Read: `GET /api/ops/hermes-diagnostics?status=open|resolved|all`; manual run: `POST /api/ops/hermes-diagnostics/run?date=`. Handoff is **review-first** (founder reads findings, then triggers fixes — no auto-task-filing yet). Adding a permanent probe for each newly-confirmed bug is the standing practice: a bug caught once is caught forever.
