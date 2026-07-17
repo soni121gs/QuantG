@@ -118,6 +118,13 @@ async def upsert_strategy_edge(
         # A real verdict advances lifecycle; setOnInsert.status only applies on insert.
         set_doc["status"] = _VERDICT_TO_STATUS[vstatus]
 
+    # Mongo forbids the same field path in $set and $setOnInsert. When a verdict
+    # is present it drives status+verdict via $set, so drop those from the
+    # insert-only defaults (they only exist to seed a brand-new row).
+    for k in list(on_insert.keys()):
+        if k in set_doc:
+            on_insert.pop(k)
+
     await db.research_hypotheses.update_one(
         {"user_id": user_id, "hypothesis_id": hid}, update, upsert=True)
     return hid

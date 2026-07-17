@@ -28,10 +28,12 @@ class _Coll:
             if _match(d, q): return d
         return None
     async def update_one(self, q, update, upsert=False):
-        # Mirror Mongo: the same field path may not appear in $setOnInsert and $push.
-        clash = set((update.get("$setOnInsert") or {})) & set((update.get("$push") or {}))
+        # Mirror Mongo: a field path may not appear in $setOnInsert alongside
+        # $push OR $set (error 40, "would create a conflict").
+        soi = set(update.get("$setOnInsert") or {})
+        clash = soi & (set(update.get("$push") or {}) | set(update.get("$set") or {}))
         if clash:
-            raise RuntimeError(f"conflict at {clash} ($setOnInsert + $push)")
+            raise RuntimeError(f"conflict at {clash} ($setOnInsert overlaps $set/$push)")
         target = next((d for d in self.docs if _match(d, q)), None)
         if target is None:
             if not upsert: return
