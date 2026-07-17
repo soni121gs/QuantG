@@ -153,9 +153,13 @@ def test_exit_levels():
     assert lv["spread_sl_value"] == 75.0      # min(25*3, 100)
 
 
-def test_exit_levels_capped_by_width():
+def test_exit_levels_capped_below_width():
+    # RC-2 fix (2026-07-17): the stop must sit STRICTLY BELOW max loss (=width),
+    # else it can never fire before expiry-max — a no-op stop. 40*3=120 is capped
+    # to 0.9*width=90 (the SPREAD_SL_MAX_FRAC_OF_WIDTH default), not to 100.
     lv = compute_exit_levels(net_credit=40.0, width=100.0)
-    assert lv["spread_sl_value"] == 100.0     # 40*3=120 capped to width 100
+    assert lv["spread_sl_value"] == 90.0
+    assert lv["spread_sl_value"] < 100.0      # a protective stop always exists
 
 
 def test_exit_levels_scale_continuously_with_contract_edge_and_vol():

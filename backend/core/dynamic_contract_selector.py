@@ -65,9 +65,26 @@ def select_dynamic_credit_spread(
     previous_signature: Optional[str] = None,
     minutes_to_close: int = 120,
 ) -> Dict[str, Any]:
-    """Rank both sides and several deltas; always return the best valid candidate."""
-    candidates = []
-    for direction in ("bullish", "bearish"):
+    """Rank several deltas on the requested side and return the best candidate.
+
+    RC-1 fix (2026-07-17): `preferred_direction` is a HARD side gate, not a 10%
+    scoring nudge. The strategy's brain decides CE-vs-PE from market context
+    (e.g. "uptrend → sell OTM put spread"); the chain ranker only optimizes the
+    strike/delta *within* that side. Ranking both sides and picking max edge-score
+    let a fatter-credit bear-call outrank the intended bull-put and silently sell
+    the OPPOSITE side the strategy chose (sold CE into a meltup, −₹3,810 on
+    2026-07-17). We only fall back to the other side when the requested side has
+    no buildable candidate at all (so we never return nothing), and we tag the
+    fallback so it is visible/auditable rather than silent.
+    """
+    _pref = str(preferred_direction).lower()
+    _valid = _pref in ("bullish", "bearish")
+    # Requested side first; the opposite side is a last-resort fallback only.
+    side_order = ([_pref, ("bearish" if _pref == "bullish" else "bullish")]
+                  if _valid else ["bullish", "bearish"])
+
+    def _build_side(direction: str) -> List[Dict[str, Any]]:
+        out = []
         for target_delta in (0.12, 0.18, 0.24, 0.30, 0.38):
             spread = build_credit_spread(
                 chain_nodes=chain_nodes,
@@ -76,14 +93,26 @@ def select_dynamic_credit_spread(
                 short_delta=target_delta,
             )
             if spread.get("ok"):
-                candidates.append(_score(
+                out.append(_score(
                     spread,
                     preferred_direction=preferred_direction,
                     previous_signature=previous_signature,
                     minutes_to_close=minutes_to_close,
                 ))
+        return out
+
+    used_fallback_side = False
+    candidates = _build_side(side_order[0])
+    if not candidates and len(side_order) > 1:
+        # Requested side unbuildable on this chain — fall back to the other side
+        # rather than skip the trade, but mark it so it is never mistaken for a
+        # freely-chosen side.
+        candidates = _build_side(side_order[1])
+        used_fallback_side = bool(candidates)
     if not candidates:
         return {"ok": False, "reason": "no valid dynamic spread candidates"}
     best = max(candidates, key=lambda row: row["contract_edge_score"])
     best["candidate_count"] = len(candidates)
+    best["side_gated"] = True
+    best["used_fallback_side"] = used_fallback_side
     return best

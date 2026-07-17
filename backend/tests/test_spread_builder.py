@@ -126,6 +126,38 @@ def test_dynamic_selector_scores_both_sides_and_penalizes_repeat():
         assert repeated["selection_factors"]["reuse_mult"] == 0.55
 
 
+def test_dynamic_selector_honors_preferred_direction_hard_gate():
+    # RC-1 fix (2026-07-17): preferred_direction is a HARD side gate. Even if the
+    # opposite side has a fatter credit, the selector must NOT flip the side the
+    # strategy chose (that sold CE into a rally, −₹3,810 on 2026-07-17).
+    chain = _pe_chain() + _ce_chain()
+    bull = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=120,
+    )
+    assert bull["ok"] and bull["direction"] == "bullish"
+    assert bull["option_type"] == "PE"
+    assert bull.get("side_gated") is True and bull.get("used_fallback_side") is False
+    bear = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bearish", width_points=100,
+        minutes_to_close=120,
+    )
+    assert bear["ok"] and bear["direction"] == "bearish" and bear["option_type"] == "CE"
+
+
+def test_dynamic_selector_falls_back_when_requested_side_unbuildable():
+    # Only CE strikes on the chain; a bullish (PE) request has nothing to build,
+    # so we fall back to the buildable side but flag it rather than fail silently.
+    chain = _ce_chain()
+    out = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=120,
+    )
+    if out["ok"]:
+        assert out["direction"] == "bearish"
+        assert out["used_fallback_side"] is True
+
+
 def test_dynamic_selector_fades_contract_score_near_close():
     chain = _pe_chain() + _ce_chain()
     early = select_dynamic_credit_spread(

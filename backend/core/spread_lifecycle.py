@@ -103,7 +103,16 @@ def compute_exit_levels(
         scaled = vol_scaled_exit_frac(_tp, _sl, float(vol_ratio))
         _tp, _sl = scaled["tp_frac"], scaled["sl_mult"]
     tp_value = round(net_credit * (1.0 - _tp), 2)
-    sl_value = round(min(net_credit * (1.0 + _sl), float(width)), 2)
+    # RC-2 fix (2026-07-17): the stop must fire BEFORE the spread reaches its own
+    # max loss. Previously sl_value = min(credit*(1+sl_mult), width); at/near
+    # `width` the "stop" equals the max-loss value and can never trigger before
+    # expiry-max — a cosmetic stop. Cap it strictly below max loss (a spread's
+    # value ranges 0..width) so a protective exit always exists. This does NOT
+    # retune the founder's sl_mult (that is an OOS-gated decision) — it only
+    # closes the no-op-stop loophole for narrow/high-credit spreads. Env-tunable.
+    _sl_cap_frac = float(os.environ.get("SPREAD_SL_MAX_FRAC_OF_WIDTH", "0.9"))
+    _sl_cap_frac = max(0.5, min(0.98, _sl_cap_frac))
+    sl_value = round(min(net_credit * (1.0 + _sl), _sl_cap_frac * float(width)), 2)
     return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
 
 

@@ -829,8 +829,38 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
                                       short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
-    # No exit on entry-premium fallback (value≈credit/debit → no false trigger).
-    if not in_hours or not have_live:
+    if not in_hours:
+        return
+
+    # RC-3 fix (2026-07-17): the time-based recycle needs only the clock, not a
+    # live price, so evaluate it INDEPENDENTLY of `have_live`. Previously it sat
+    # below a `not have_live: return` gate, so a spread whose legs briefly went
+    # unpriced skipped even the time-exit and rode all the way to the 15:25 bell
+    # at whatever loss accrued. Price-based SL/TP/trailing stay gated on live
+    # marks (below) so they never false-trigger on the entry-premium fallback.
+    # Hold-to-expiry strategies are exempt (they hold to weekly expiry).
+    _time_reason: Optional[str] = None
+    if not hold_to_expiry:
+        _max_hold = await _strategy_time_exit_minutes(db, pos.get("strategy_id"))
+        if _max_hold:
+            _entry = parse_iso_dt(pos.get("entry_time") or pos.get("created_at"))
+            if _entry is not None:
+                _held_min = (datetime.now(timezone.utc) - _entry).total_seconds() / 60.0
+                if _held_min >= _max_hold:
+                    _time_reason = "spread-time-exit"
+
+    # No PRICE exit on entry-premium fallback (value≈credit/debit → no false
+    # trigger). But a due time-exit must still fire even without live marks.
+    if not have_live:
+        if _time_reason:
+            logger.info("spread monitor exit pos=%s reason=%s (no live marks) value=%.2f",
+                        pos.get("id"), _time_reason, v["value"])
+            if structure == "debit_spread":
+                await close_debit_spread(db, pos, reason=_time_reason,
+                                         short_ltp=short_ltp, long_ltp=long_ltp)
+            else:
+                await close_credit_spread(db, pos, reason=_time_reason,
+                                          short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
     # Hold-to-expiry: no intraday tp/sl — the defined risk (wing width) is the stop and
@@ -855,14 +885,8 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # Time-based recycle: if no price trigger fired and the spread has been held past
     # the strategy's time_exit_minutes, close it so the slot frees for re-entry. This
     # is what makes a scalper actually turn over instead of holding one drift all day.
-    if reason is None:
-        _max_hold = await _strategy_time_exit_minutes(db, pos.get("strategy_id"))
-        if _max_hold:
-            _entry = parse_iso_dt(pos.get("entry_time") or pos.get("created_at"))
-            if _entry is not None:
-                _held_min = (datetime.now(timezone.utc) - _entry).total_seconds() / 60.0
-                if _held_min >= _max_hold:
-                    reason = "spread-time-exit"
+    if reason is None and _time_reason:
+        reason = _time_reason
 
     if reason:
         logger.info("spread monitor exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",
