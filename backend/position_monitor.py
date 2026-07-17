@@ -375,7 +375,9 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                 try:
                     from core.hermes_diagnostics import run_diagnostics
                     from core.hermes_diagnostics.narrator import narrate_findings
-                    _diag = await run_diagnostics(db, user_id, today_str)
+                    # auto_oos=True: EOD-only — replay edge-doubt strategies over the
+                    # real stored data and attach OOS verdicts to their hypotheses.
+                    _diag = await run_diagnostics(db, user_id, today_str, auto_oos=True)
                     await narrate_findings(db, user_id, today_str, _diag.get("findings", []))
                     _sev = _diag.get("summary", {}).get("by_severity", {})
                     if _sev.get("critical") or _sev.get("high"):

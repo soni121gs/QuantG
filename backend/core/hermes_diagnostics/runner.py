@@ -21,7 +21,7 @@ from core.hermes_diagnostics.probe_sdk import ProbeContext, run_probe_safe
 
 # Import probe modules for their @register side effects.
 from core.hermes_diagnostics import (  # noqa: F401
-    probes_static, probes_execution, probes_infra, probes_strategy,
+    probes_static, probes_execution, probes_infra, probes_strategy, probes_data,
 )
 
 logger = logging.getLogger("quantg.hermes_diagnostics")
@@ -105,7 +105,8 @@ def _summarize(findings: List[Finding]) -> Dict[str, Any]:
 async def run_diagnostics(db, user_id: str, date_str: Optional[str] = None,
                           kinds: Optional[List[str]] = None,
                           now: Optional[datetime] = None,
-                          persist: bool = True) -> Dict[str, Any]:
+                          persist: bool = True,
+                          auto_oos: bool = False) -> Dict[str, Any]:
     """Run the diagnostician for one user/day.
 
     kinds: subset of {"static","dynamic"} to run (default both). The intraday pass
@@ -154,6 +155,17 @@ async def run_diagnostics(db, user_id: str, date_str: Optional[str] = None,
                 db, user_id, finding_docs)
         except Exception as exc:  # noqa: BLE001
             logger.warning("research bridge finding sync failed: %s", exc)
+        # Auto-OOS: for edge-doubt findings, replay the strategy over real stored
+        # data and attach the walk-forward verdict to its hypothesis — no manual
+        # backtest trigger. Bounded + threaded; EOD-only (auto_oos=True) so the
+        # manual audit button stays fast.
+        if auto_oos:
+            try:
+                from core.hermes_diagnostics.auto_oos import run_auto_oos_for_findings
+                task_stats["auto_oos"] = await run_auto_oos_for_findings(
+                    db, user_id, finding_docs)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auto-OOS pass failed: %s", exc)
         await db.hermes_diagnostic_runs.update_one(
             {"user_id": user_id, "date": date_str},
             {"$set": {"user_id": user_id, "date": date_str,
