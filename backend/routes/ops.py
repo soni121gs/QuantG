@@ -480,12 +480,14 @@ async def ops_eod_options_backtest(
     if strategy_id:
         query["id"] = strategy_id
     results: List[Dict[str, Any]] = []
+    _oos_pairs: List[Any] = []   # (strat, wf) → research-ledger auto-write
     async for strat in db.strategies.find(query):
         res = await asyncio.to_thread(engine.run, strat, start, end)
         if res.get("error"):
             results.append({"name": strat.get("name"), "error": res["error"]})
             continue
         wf = walk_forward(res)
+        _oos_pairs.append((strat, wf))
         row = {"name": res.get("name"), "underlying": res.get("underlying"),
                "structure": res.get("structure"), "verdict": wf["verdict"],
                "overall": wf["overall"], "oos_year": wf.get("oos_year"),
@@ -499,8 +501,18 @@ async def ops_eod_options_backtest(
 
     order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
     results.sort(key=lambda r: order.get(r.get("verdict", ""), 9))
-    return {"data_available": True, "window": {"start": days[0], "end": days[-1], "n_days": len(days)},
-            "count": len(results), "results": results}
+    _window = {"start": days[0], "end": days[-1], "n_days": len(days)}
+    # Research bridge: auto-write each OOS verdict onto the strategy's edge
+    # hypothesis so the Research Ledger fills from real evidence. Best-effort.
+    ledger_written = 0
+    try:
+        from core.research_bridge import record_oos_backtest_batch
+        ledger_written = await record_oos_backtest_batch(db, user["id"], _oos_pairs, _window)
+    except Exception as _rb_exc:  # noqa: BLE001
+        pass
+    return {"data_available": True, "window": _window,
+            "count": len(results), "results": results,
+            "research_hypotheses_written": ledger_written}
 
 
 # ---- Edge Lab: cached OOS research surface (coverage + base-rate + OOS + sweep) ----

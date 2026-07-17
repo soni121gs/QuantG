@@ -146,6 +146,14 @@ async def run_diagnostics(db, user_id: str, date_str: Optional[str] = None,
             task_stats = await sync_fix_tasks(db, user_id, date_str, finding_docs)
         except Exception as exc:  # noqa: BLE001
             logger.warning("fix-task sync failed: %s", exc)
+        # Research bridge: edge-doubt findings (persistent loss / bad geometry)
+        # become research hypotheses so they get tested, not just noticed.
+        try:
+            from core.research_bridge import sync_findings_to_research
+            task_stats["research_hypotheses"] = await sync_findings_to_research(
+                db, user_id, finding_docs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("research bridge finding sync failed: %s", exc)
         await db.hermes_diagnostic_runs.update_one(
             {"user_id": user_id, "date": date_str},
             {"$set": {"user_id": user_id, "date": date_str,
