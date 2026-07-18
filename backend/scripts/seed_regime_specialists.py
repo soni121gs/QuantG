@@ -101,15 +101,16 @@ TEMPLATES = {
                  "(router-gated). Reuses the QG-O2 geometry that passed the "
                  "regime-conditional judge."),
         # Intraday booking, NOT hold-to-expiry: mirrors the QG-O1/O4 07-09 fix
-        # (8d46076). 2026-07-16 (founder-directed): book SMALLER + faster so the
-        # scalp banks the credit on quiet range days before MTM drift round-trips
-        # it green->red — TP 50%->35% of credit, stop 2x->1.5x credit, and lock
-        # the trail sooner (trigger 5.5%->4%, step 3%->2%). time_exit/cooldown
-        # unchanged (120m / 15m). Forward-paper judges; all reversible.
+        # (8d46076). 2026-07-18 (Hermes Diagnostician static.reward_risk_geometry,
+        # HIGH): TP 0.35 / SL 1.5 needed an 81% breakeven WR — live ran BANKNIFTY
+        # 0/5 (-Rs7,305), SENSEX 2/4, well short of that. Re-derived to TP 0.50 /
+        # SL 0.90 -> breakeven ~64%, an achievable seller WR. Stays router-gated +
+        # paused pending an OOS re-run on the new shape. time_exit/cooldown unchanged
+        # (120m / 15m). Forward-paper judges; all reversible.
         "options": {"strike_mode": "OTM_SELL", "structure": "credit_spread",
                     "spread_width": 6, "short_otm_pct": 0.03, "wing_width": 6,
                     "exit_mode": "", "short_delta": 0.12,
-                    "credit_tp_frac": 0.35, "credit_sl_mult": 1.5},
+                    "credit_tp_frac": 0.50, "credit_sl_mult": 0.90},
         "risk": {"exit_mode": "signal_or_tp_sl_trailing", "time_exit_minutes": 120,
                  "trail_trigger_pct": 4.0, "trail_step_pct": 2.0},
     },

@@ -140,8 +140,8 @@ def test_only_qgo1_and_qgo5_are_paper_forward_active():
     assert o11["structure"] == "credit_spread"
     assert o11["spread_width"] == 1
     assert o11["short_offset_strikes"] == 1
-    assert o11["credit_tp_frac"] == 0.35
-    assert o11["credit_sl_mult"] == 1.5
+    assert o11["credit_tp_frac"] == 0.50
+    assert o11["credit_sl_mult"] == 0.90
     assert o11["candle_interval"] == "1minute"
     # scalp pacing must survive the blanket CREDIT_SPREAD_THETA_RISK update
     assert o11["risk"]["max_trades_day"] == 3

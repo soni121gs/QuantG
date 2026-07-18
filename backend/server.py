@@ -3950,7 +3950,12 @@ DEFAULT_OPTION_STRATEGIES = [
         "description": "Regime-gated intraday NIFTY credit-spread scalp. One brain, three gates: trend-up day sells a bull-put spread on a VWAP-pullback hold; trend-down day sells a bear-call spread on a failed bounce at VWAP; choppy day fades RSI stretch. Width-1, 1-strike-OTM, books 35% of credit, stop at 1.5x credit. Paper-forward only.",
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
         "structure": "credit_spread", "spread_width": 1, "short_offset_strikes": 1,
-        "credit_tp_frac": 0.20, "credit_sl_mult": 1.5,
+        # 2026-07-18 (Hermes Diagnostician static.reward_risk_geometry, HIGH):
+        # TP 0.20 / SL 1.5 required an 88% win rate just to break even — live ran
+        # 2/14 (14%) for -Rs7,558. Re-derived to TP 0.50 / SL 0.90 -> breakeven
+        # ~64%, an achievable seller WR. Geometry now sane; strategy stays paused
+        # pending an OOS re-run on the new shape before any redeploy (CLAUDE.md §13.4).
+        "credit_tp_frac": 0.50, "credit_sl_mult": 0.90,
         "candle_interval": "1minute",
         "strategy_type": "Option Selling", "required_capital": 3000.0, "instrument_group": "NFO",
         "initial_status": "live",
@@ -6719,8 +6724,9 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
     # time_exit_minutes 90 (was 45): live evidence 2026-07-15 showed the 45-min cut
     # was closing spreads underwater on MTM noise BEFORE theta worked — 10 time-exits
-    # at −₹585 avg vs 1 spread-tp. Paired with a faster TP (credit_tp_frac 0.35→0.20)
-    # so the small credit is banked before it drifts. Forward-paper judges; reversible.
+    # at −₹585 avg vs 1 spread-tp. Exit geometry re-derived 2026-07-18 to TP 0.50 /
+    # SL 0.90 (see template comment) after the Diagnostician flagged the old
+    # 0.20/1.5 as needing an 88% breakeven WR. Forward-paper judges; reversible.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
         _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 90})
     # NOTE: "NIFTY Theta Credit Spread" / "NIFTY Range Credit Spread" are DB-only rows
