@@ -57,6 +57,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_open_positions",
     "get_active_strategies",
     "get_upstox_status",
+    "get_upstox_data_health",
     "get_token_status",
     "get_market_data_status",
     "get_feed_status",
@@ -274,6 +275,14 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 stale = True
                 confidence = 0.0
                 warnings.append("Upstox API token is missing, invalid, or expired.")
+        elif name == "get_upstox_data_health":
+            from routes.broker import upstox_data_health
+            data = await upstox_data_health(user=user)
+            source = "routes.broker.upstox_data_health"
+            coverage = data.get("data_coverage") or {}
+            if not (coverage.get("options_1m") or {}).get("available"):
+                stale = True
+                warnings.append("Options 1-minute store has no proven Upstox Plus coverage yet.")
         elif name in ("get_market_data_status", "get_feed_status"):
             from server import _UPSTOX_GATEWAYS, _is_nse_market_open, option_ledger
             gateway = _UPSTOX_GATEWAYS.get(user["id"])
@@ -1175,6 +1184,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_open_positions": "Current open and recently-closed positions (single-leg, spreads, equity).",
     "get_active_strategies": "All strategies with status, mode and today's P&L (no source code).",
     "get_upstox_status": "Upstox broker connection / REST API health.",
+    "get_upstox_data_health": "Upstox Plus capability and stored data coverage: EOD F&O, options 1m, earnings, participant OI.",
     "get_token_status": "Upstox access-token validity and expiry time.",
     "get_market_data_status": "Market-data quote availability and any simulated-feed fallback.",
     "get_feed_status": "WebSocket tick-feed health: connected state and last-tick age.",
@@ -1628,6 +1638,16 @@ def classify_playbook_by_query(query: str) -> List[str]:
         has_matches = True
 
     # EdgeMath sizing advice (CLAUDE.md §16): edge-based size, risk multiplier, ratchet.
+    if any(w in q for w in [
+        "upstox plus", "expired instruments", "expired instrument", "backfill",
+        "data coverage", "data health", "options 1m", "option 1m", "1-minute option",
+        "bhavcopy", "participant oi", "f&o oi", "earnings calendar", "data store",
+    ]):
+        matched_tools.add("get_upstox_data_health")
+        matched_tools.add("get_intraday_oos")
+        matched_tools.add("search_wiki")
+        has_matches = True
+
     if any(w in q for w in ["edgemath", "edge math", "sizing", "size up", "size down",
                             "risk multiplier", "kelly", "position size", "ratchet"]):
         matched_tools.add("get_edge_math_advice")

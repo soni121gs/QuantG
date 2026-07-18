@@ -33,6 +33,7 @@ export default function AIBot() {
   const [pendingActions, setPendingActions] = useState([]);
   const [researchRows, setResearchRows] = useState([]);
   const [researchLoading, setResearchLoading] = useState(false);
+  const [dataHealth, setDataHealth] = useState(null);
 
   // Collapsible sidebar states for desktop
   const [showHistory, setShowHistory] = useState(true);
@@ -58,8 +59,12 @@ export default function AIBot() {
   const fetchResearchLedger = async () => {
     setResearchLoading(true);
     try {
-      const r = await api.get("/ops/research/hypotheses?limit=50");
+      const [r, dh] = await Promise.all([
+        api.get("/ops/research/hypotheses?limit=50"),
+        api.get("/upstox/data-health").catch(() => ({ data: null })),
+      ]);
       setResearchRows(r.data || []);
+      if (dh.data) setDataHealth(dh.data);
     } catch {
       setResearchRows([]);
     } finally {
@@ -488,6 +493,7 @@ export default function AIBot() {
             <ResearchLabPanel
               rows={researchRows}
               loading={researchLoading}
+              dataHealth={dataHealth}
               onRefresh={fetchResearchLedger}
               onAsk={send}
             />
@@ -539,7 +545,13 @@ const statusIcon = (status) => {
   return <FlaskConical size={13} />;
 };
 
-const ResearchLabPanel = ({ rows, loading, onRefresh, onAsk }) => {
+const coverageValue = (data) => {
+  const days = data?.days ?? 0;
+  if (!data?.first_day || !data?.last_day) return `${days} days`;
+  return `${days} days`;
+};
+
+const ResearchLabPanel = ({ rows, loading, dataHealth, onRefresh, onAsk }) => {
   const total = rows.length;
   const validated = rows.filter((r) => r.verdict?.status === "CANDIDATE_EDGE").length;
   const watch = rows.filter((r) => ["FRAGILE", "INSUFFICIENT_DATA"].includes(r.verdict?.status)).length;
@@ -569,6 +581,13 @@ const ResearchLabPanel = ({ rows, loading, onRefresh, onAsk }) => {
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
           Refresh
         </button>
+      </div>
+
+      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <MetricTile label="F&O EOD" value={coverageValue(dataHealth?.data_coverage?.bhavcopy_fo)} />
+        <MetricTile label="Options 1m" value={coverageValue(dataHealth?.data_coverage?.options_1m)} />
+        <MetricTile label="Earnings" value={coverageValue(dataHealth?.data_coverage?.earnings_dates)} />
+        <MetricTile label="Participant OI" value={coverageValue(dataHealth?.data_coverage?.participant_oi)} />
       </div>
 
       {loading && rows.length === 0 ? (

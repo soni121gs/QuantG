@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail } from "../lib/api";
-import { KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy, Loader2 } from "lucide-react";
+import { Activity, Database, KeyRound, Trash2, Save, ShieldCheck, ExternalLink, CheckCircle2, XCircle, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 
@@ -18,6 +18,7 @@ export default function ApiKeys() {
   const [upstoxRedirectUri, setUpstoxRedirectUri] = useState("");
   const [saving, setSaving] = useState(false);
   const [upstoxStatus, setUpstoxStatus] = useState({ connected: false });
+  const [dataHealth, setDataHealth] = useState(null);
   const [params] = useSearchParams();
   const navigate = useNavigate();
 
@@ -27,6 +28,7 @@ export default function ApiKeys() {
     Promise.all([
       api.get("/broker/keys").then((r) => setKeys(r.data)),
       api.get("/upstox/status").then((r) => setUpstoxStatus(r.data)).catch(() => {}),
+      api.get("/upstox/data-health").then((r) => setDataHealth(r.data)).catch(() => {}),
       api.get("/broker/upstox/config").then((r) => {
         const uri = r.data.redirect_uri || defaultUpstoxRedirect();
         setUpstoxRedirectUri(uri);
@@ -157,6 +159,25 @@ export default function ApiKeys() {
         </div>
       </div>
 
+      <div className="qd-card p-5" data-testid="upstox-plus-card">
+        <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3">
+          <Database size={16} className="text-[var(--qd-cyan)]" /> Upstox Plus Data
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <Coverage label="F&O EOD" data={dataHealth?.data_coverage?.bhavcopy_fo} />
+          <Coverage label="Options 1m" data={dataHealth?.data_coverage?.options_1m} />
+          <Coverage label="Earnings" data={dataHealth?.data_coverage?.earnings_dates} />
+          <Coverage label="Participant OI" data={dataHealth?.data_coverage?.participant_oi} />
+        </div>
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono text-[var(--qd-text-3)]">
+          {(dataHealth?.upstox_plus?.features || []).map((feature) => (
+            <div key={feature} className="flex items-center gap-2">
+              <Activity size={12} className="text-[var(--qd-profit)]" /> {feature}
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="qd-card" data-testid="keys-list">
         <div className="border-b border-[var(--qd-border)] px-4 py-3"><h2 className="font-head text-base text-white">Linked Upstox Keys</h2></div>
         {keys.length === 0 ? (
@@ -200,3 +221,18 @@ const Input = ({ label, value, onChange, type = "text", testid }) => (
     />
   </div>
 );
+
+const Coverage = ({ label, data }) => {
+  const ok = data?.available;
+  return (
+    <div className="border border-[var(--qd-border)] bg-[var(--qd-bg)] p-3 rounded-sm min-h-[90px]">
+      <div className="text-[10px] uppercase tracking-widest font-mono text-[var(--qd-text-3)]">{label}</div>
+      <div className={ok ? "mt-1 text-lg font-head text-[var(--qd-profit)]" : "mt-1 text-lg font-head text-[var(--qd-warn)]"}>
+        {data?.days ?? 0} days
+      </div>
+      <div className="mt-1 text-[11px] font-mono text-[var(--qd-text-3)] break-words">
+        {data?.first_day && data?.last_day ? `${data.first_day} to ${data.last_day}` : data?.reason || "No stored coverage"}
+      </div>
+    </div>
+  );
+};

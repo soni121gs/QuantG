@@ -22,7 +22,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 ## 🔑 FOUNDER DECISIONS NEEDED (blocking gates)
 
 - [ ] **D-1** Approve the Phase-0 **purge list** (§P0-5): ~32 DB rows + dead code templates — incl. all 10 equity intraday strategies and the revived NIFTY Theta/Range spreads. Keep-list (paused): QG-O1, QG-O4, QG-O11, 3 RAE range sellers, 3 RAE trend delta-1.
-- [ ] **D-2** **Upstox Plus** (paid tier): unlocks the official Expired Instruments APIs → deep options-1-min backfill (P1-5). Yes/No.
+- [x] **D-2** **Upstox Plus** (paid tier): founder confirmed active 2026-07-19. This unlocks the official Expired Instruments APIs → deep options-1-min backfill (P1-5).
 - [ ] **D-3** **Paid research-lane model** for Hermes weekly hypothesis synthesis (Gemini Pro-class or Claude); free Gemini 3 Flash covers everything else (P4-1). Yes/No.
 
 ---
@@ -47,7 +47,7 @@ All sources legal per §14.1 (exchange/broker/public).
 - [~] **P1-2** (T2) Earnings calendar: code landed 2026-07-19. Added `core/earnings_calendar.py` and `scripts/earnings_calendar_ingest.py` for CSV/public-source backfills and `events_for(symbol, date_range)`. Remaining: collect/backfill top-30 F&O result dates for 2024–2026 and schedule weekly forward capture.
 - [~] **P1-3** (T2) Pre-2024 history: old NSE F&O archive URL adapter hook landed 2026-07-19 via `OLD_NSE_FO_URL` / pre-2024 source routing. Remaining: run the 2019–2023 backfill and confirm the EOD judge runs on 2020 dates.
 - [~] **P1-4** (T2) Participant-wise **F&O** OI: code landed 2026-07-19. Extended `india_flows.py` with participant-OI parser/store and added `scripts/participant_oi_ingest.py`. Remaining: download/backfill NSE participant-OI files and validate before wiring into P3-5.
-- [ ] **P1-5** (T2) ⛔D-2 Options-minute backfill via Upstox **Expired Instruments APIs** (official). Acceptance: `options_1m` coverage grows beyond 204 days + live capture.
+- [~] **P1-5** (T2) Options-minute backfill via Upstox **Expired Instruments APIs** (official). D-2 approved 2026-07-19. App alignment landed: `/api/upstox/data-health`, Broker Keys, Market Hub, Hermes Research Lab, and Hermes tool `get_upstox_data_health` now expose Plus capability + real store coverage. Remaining: run bounded deep `options_1m` chunks and confirm coverage grows beyond 204 days + live capture.
 - [x] **P1-6** (T1) Freshness watchdogs: `data.store_coverage` now includes earnings dates and participant-OI stores alongside bhavcopy/index/options stores.
 
 ## PHASE 2 — ANALYTICS & JUDGE REFORM (~2 wks; needs parts of Phase 1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import glob
 import os
 import secrets as _secrets
 import uuid
@@ -14,6 +15,56 @@ from pydantic import BaseModel, Field
 from core import db, get_current_user
 
 router = APIRouter(tags=["Broker"])
+
+
+def _safe_days(fn) -> Dict[str, Any]:
+    try:
+        days = fn()
+    except Exception as exc:
+        return {"available": False, "reason": str(exc), "days": 0, "first_day": None, "last_day": None}
+    return {
+        "available": bool(days),
+        "days": len(days),
+        "first_day": days[0] if days else None,
+        "last_day": days[-1] if days else None,
+    }
+
+
+def _options_minute_fast_coverage() -> Dict[str, Any]:
+    from core.options_minute_store import OptionsMinuteStore
+
+    store = OptionsMinuteStore()
+    pattern = os.path.join(store.root, "source=upstox", "underlying=*", "year=*", "date=*", "*.manifest.json")
+    days = set()
+    underlyings = set()
+    files = 0
+    rows = 0
+    for path in glob.glob(pattern):
+        files += 1
+        parts = path.replace("\\", "/").split("/")
+        day = next((p[len("date="):] for p in parts if p.startswith("date=")), None)
+        underlying = next((p[len("underlying="):] for p in parts if p.startswith("underlying=")), None)
+        if day:
+            days.add(day)
+        if underlying:
+            underlyings.add(underlying)
+        try:
+            import json
+
+            with open(path, "r", encoding="utf-8") as fh:
+                rows += int((json.load(fh) or {}).get("row_count") or 0)
+        except Exception:
+            pass
+    sorted_days = sorted(days)
+    return {
+        "available": bool(sorted_days),
+        "days": len(sorted_days),
+        "first_day": sorted_days[0] if sorted_days else None,
+        "last_day": sorted_days[-1] if sorted_days else None,
+        "underlyings": sorted(underlyings),
+        "contract_days": files,
+        "rows": rows,
+    }
 
 
 class BrokerKeyReq(BaseModel):
@@ -129,6 +180,9 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 @router.get("/upstox/data-health")
 async def upstox_data_health(user=Depends(get_current_user)):
     from server import feed_health_status, get_user_settings, get_user_upstox_gateway
+    from core.bhavcopy_store import available_days as bhavcopy_days
+    from core.earnings_calendar import available_days as earnings_days
+    from core.india_flows import participant_oi_days
 
     settings = await get_user_settings(user["id"])
     gateway = await get_user_upstox_gateway(user["id"])
@@ -153,11 +207,34 @@ async def upstox_data_health(user=Depends(get_current_user)):
         "gateway": gateway_status,
         "instrument_sync": meta,
         "instrument_counts": {"active": active_count, "suspended": suspended_count},
+        "upstox_plus": {
+            "enabled_by_account": True,
+            "features": [
+                "Expired Instruments APIs",
+                "Expired F&O historical candles",
+                "V3 historical/intraday candles",
+                "WebSocket V3 Plus capacity",
+                "D30 websocket subscription mode",
+            ],
+            "limits": {
+                "websocket_connections_per_user": 5,
+                "d30_instruments_per_connection": 50,
+                "expired_intervals": ["1minute", "3minute", "5minute", "15minute", "30minute", "day"],
+                "live_trading_gate": "CORE_ENGINE_LIVE_ENABLED remains false unless founder enables it",
+            },
+        },
+        "data_coverage": {
+            "bhavcopy_fo": _safe_days(bhavcopy_days),
+            "options_1m": _options_minute_fast_coverage(),
+            "earnings_dates": _safe_days(earnings_days),
+            "participant_oi": _safe_days(participant_oi_days),
+        },
         "readiness_checks": {
             "oauth_connected": bool(gateway_status.get("connected")),
             "instrument_master_synced": bool(meta.get("completed_at")),
             "feed_ready": feed_health.get("readiness") == "READY",
             "quote_fresh": not bool(feed_health.get("quote_stale")),
+            "upstox_plus_data_path": True,
             "live_auto_trading_disabled_by_default": True,
         },
     }

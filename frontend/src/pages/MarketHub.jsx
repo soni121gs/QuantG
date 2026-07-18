@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { usePolling } from "../hooks/usePolling";
-import { Activity, AlertTriangle, BookOpen, HeartPulse, RefreshCw, ShieldCheck, Sparkles, SquareArrowOutUpRight } from "lucide-react";
+import { Activity, AlertTriangle, BookOpen, Database, HeartPulse, RefreshCw, ShieldCheck, Sparkles, SquareArrowOutUpRight } from "lucide-react";
 import { api, formatINR } from "../lib/api";
 import { APP_VERSION_LABEL } from "../lib/version";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ export default function MarketHub() {
   const [risk, setRisk] = useState(null);
   const [journal, setJournal] = useState(null);
   const [feed, setFeed] = useState(null);
+  const [dataHealth, setDataHealth] = useState(null);
   const [indicators, setIndicators] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
   const [ivRank, setIvRank] = useState(null);
@@ -25,11 +26,12 @@ export default function MarketHub() {
   const [analysisBusy, setAnalysisBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [h, r, j, f, ind, s, iv] = await Promise.all([
+    const [h, r, j, f, dh, ind, s, iv] = await Promise.all([
       api.get("/broker/health").catch(() => ({ data: null })),
       api.get("/risk/dashboard").catch(() => ({ data: null })),
       api.get("/trade-journal").catch(() => ({ data: null })),
       api.get("/market/feed-comparison").catch(() => ({ data: null })),
+      api.get("/upstox/data-health").catch(() => ({ data: null })),
       api.get(`/market/indicators/${underlying}`).catch(() => ({ data: null })),
       api.get("/market/session-status").catch(() => ({ data: null })),
       api.get("/market/iv-rank").catch(() => ({ data: null })),
@@ -38,6 +40,7 @@ export default function MarketHub() {
     if (r.data) setRisk(r.data);
     if (j.data) setJournal(j.data);
     if (f.data) setFeed(f.data);
+    if (dh.data) setDataHealth(dh.data);
     if (ind.data) setIndicators(ind.data);
     if (s.data) setMarketSession(s.data);
     if (iv.data) setIvRank(iv.data);
@@ -161,6 +164,19 @@ export default function MarketHub() {
           <div className="mt-3 text-xs font-mono text-[var(--qd-text-2)]">
             Recommended: <span className="text-[var(--qd-text)]">{BROKER_LABELS[feed?.recommended_data_broker] || feed?.recommended_data_broker || "-"}</span>
             <span className="text-[var(--qd-text-3)]"> · {feed?.reason || "Waiting for live ticks."}</span>
+          </div>
+        </section>
+
+        <section className="qd-card p-4 xl:col-span-3">
+          <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><Database size={16} /> Upstox Plus Data Coverage</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <Small label="F&O EOD" value={coverageLabel(dataHealth?.data_coverage?.bhavcopy_fo)} />
+            <Small label="Options 1m" value={coverageLabel(dataHealth?.data_coverage?.options_1m)} />
+            <Small label="Earnings" value={coverageLabel(dataHealth?.data_coverage?.earnings_dates)} />
+            <Small label="Participant OI" value={coverageLabel(dataHealth?.data_coverage?.participant_oi)} />
+          </div>
+          <div className="mt-3 text-[11px] font-mono text-[var(--qd-text-3)]">
+            Plus path: expired instruments candles, V3 historical/intraday candles, and websocket D30 capacity. Live auto-trading remains backend-gated off.
           </div>
         </section>
 
@@ -333,6 +349,13 @@ const Small = ({ label, value }) => (
     <div className="text-sm text-white mt-1 break-all">{value}</div>
   </div>
 );
+
+const coverageLabel = (data) => {
+  if (!data) return "-";
+  const days = data.days ?? 0;
+  if (!data.first_day || !data.last_day) return `${days} days`;
+  return `${days} days (${data.first_day} to ${data.last_day})`;
+};
 
 const Row = ({ k, v }) => (
   <div className="flex justify-between gap-4 border-b border-[var(--qd-border)] pb-2">
