@@ -43,7 +43,7 @@ Goal: a small honest book, config-as-data, design-time tripwires. Absorbs QGX IN
 ## PHASE 1 — DATA FOUNDATION (~1–2 wks; parallelizable with Phase 0)
 All sources legal per §14.1 (exchange/broker/public).
 
-- [~] **P1-1** (T2) Stock derivatives ingest: code landed 2026-07-19. `bhavcopy_ingest.py` now accepts `STO`/`STF`, includes stock F&O underlyings, and exposes `--instr-types`; `BhavcopyStore` serves `STF` futures via `underlying_daily()` and `STO` option chains. Remaining: run the full 2024–2026 re-ingest on VPS and verify a RELIANCE 2025 chain from real files.
+- [~] **P1-1** (T2) Stock derivatives ingest: code landed 2026-07-19. `bhavcopy_ingest.py` now accepts `STO`/`STF`, includes stock F&O underlyings, and exposes `--instr-types`; `BhavcopyStore` serves `STF` futures via `underlying_daily()` and `STO` option chains. VPS smoke verified real RELIANCE data for 2025-01-09 (216 rows; 3 expiries). Remaining: run the full 2024–2026 re-ingest on VPS.
 - [~] **P1-2** (T2) Earnings calendar: code landed 2026-07-19. Added `core/earnings_calendar.py` and `scripts/earnings_calendar_ingest.py` for CSV/public-source backfills and `events_for(symbol, date_range)`. Remaining: collect/backfill top-30 F&O result dates for 2024–2026 and schedule weekly forward capture.
 - [~] **P1-3** (T2) Pre-2024 history: old NSE F&O archive URL adapter hook landed 2026-07-19 via `OLD_NSE_FO_URL` / pre-2024 source routing. Remaining: run the 2019–2023 backfill and confirm the EOD judge runs on 2020 dates.
 - [~] **P1-4** (T2) Participant-wise **F&O** OI: code landed 2026-07-19. Extended `india_flows.py` with participant-OI parser/store and added `scripts/participant_oi_ingest.py`. Remaining: download/backfill NSE participant-OI files and validate before wiring into P3-5.
