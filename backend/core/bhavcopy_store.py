@@ -88,7 +88,7 @@ class BhavcopyStore:
         out: List[Dict[str, Any]] = []
         for day in self.trading_days(start, end):
             futs = [r for r in self.load_day(day)
-                    if r.get("underlying") == u and r.get("instr_type") == "IDF"]
+                    if r.get("underlying") == u and r.get("instr_type") in ("IDF", "STF")]
             if not futs:
                 continue
             # near-month = nearest expiry >= day (fallback: earliest available)
@@ -113,7 +113,7 @@ class BhavcopyStore:
         u = underlying.upper()
         chain: Dict[str, Dict[float, Dict[str, Any]]] = {}
         for r in self.load_day(day):
-            if r.get("underlying") != u or r.get("instr_type") != "IDO":
+            if r.get("underlying") != u or r.get("instr_type") not in ("IDO", "STO"):
                 continue
             typ = r.get("option_type")
             if typ not in ("CE", "PE"):

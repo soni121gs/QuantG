@@ -60,6 +60,22 @@ async def store_coverage(ctx: ProbeContext) -> List[Finding]:
                        "judge": "IMD intraday OOS", "critical": True})
     except Exception as exc:  # noqa: BLE001
         out.append(_probe_note("options_1m", exc))
+    # Earnings dates (event-conditional stock-option judge).
+    try:
+        from core.earnings_calendar import available_days
+        d = available_days()
+        stores.append({"name": "earnings_dates (event calendar)", "days": d,
+                       "judge": "event-conditional OOS", "critical": True})
+    except Exception as exc:  # noqa: BLE001
+        out.append(_probe_note("earnings_dates", exc))
+    # Participant-wise F&O OI (derivatives positioning overlay).
+    try:
+        from core.india_flows import participant_oi_days
+        d = participant_oi_days()
+        stores.append({"name": "participant_oi (F&O positioning)", "days": d,
+                       "judge": "participant-OI overlay", "critical": False})
+    except Exception as exc:  # noqa: BLE001
+        out.append(_probe_note("participant_oi", exc))
 
     for s in stores:
         days = s["days"] or []

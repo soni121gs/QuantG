@@ -88,9 +88,13 @@ async def test_store_coverage_flags_empty_and_stale(monkeypatch):
     import core.bhavcopy_store as bs
     import core.index_minute_store as ims
     import core.options_minute_store as oms
+    import core.earnings_calendar as ec
+    import core.india_flows as flows
     monkeypatch.setattr(bs, "BhavcopyStore", _fake_store([]))                       # empty
     monkeypatch.setattr(ims, "IndexMinuteStore", _fake_store(["2026-07-01", "2026-07-17"]))  # fresh
     monkeypatch.setattr(oms, "OptionsMinuteStore", _fake_store(["2025-06-01", "2025-06-25"]))  # stale
+    monkeypatch.setattr(ec, "available_days", lambda: ["2026-07-17"])  # fresh
+    monkeypatch.setattr(flows, "participant_oi_days", lambda: ["2026-07-17"])  # fresh
 
     out = await probes_data.store_coverage(_ctx())
     titles = {f.title.split(":")[0]: f for f in out}

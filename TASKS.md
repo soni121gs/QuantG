@@ -43,12 +43,12 @@ Goal: a small honest book, config-as-data, design-time tripwires. Absorbs QGX IN
 ## PHASE 1 — DATA FOUNDATION (~1–2 wks; parallelizable with Phase 0)
 All sources legal per §14.1 (exchange/broker/public).
 
-- [ ] **P1-1** (T2) Stock derivatives ingest: accept `STO`/`STF` + stock underlyings in `bhavcopy_ingest.py` (drop the IDO/IDF-only filter ~:170; make instrument types a parameter). Re-ingest 2024–2026 (files already downloaded/downloadable). Acceptance: `bhavcopy_store` serves a RELIANCE option chain for a 2025 date.
-- [ ] **P1-2** (T2) Earnings calendar: `core/earnings_calendar.py` + `data/earnings_dates/` — backfill results dates 2024–26 for top-30 F&O names (NSE corporate announcements archive); weekly forward capture. Acceptance: `events_for(symbol, date_range)` returns dated results events.
-- [ ] **P1-3** (T2) Pre-2024 history: old-format NSE F&O bhavcopy adapter → backfill **2019–2023** (COVID crash, 2021 melt-up, 2022 bear). Acceptance: EOD judge runs on 2020 dates.
-- [ ] **P1-4** (T2) Participant-wise **F&O** OI: extend `india_flows.py` + ingest for NSE's participant-OI daily file (FII/DII/Pro/Client × futures/options long-short); backfill available history. NOTE: cash FII/DII flows tested DEAD (IA-4, 9-yr test) — this is the different derivatives-positioning file; it must validate before wiring (P3-5).
+- [~] **P1-1** (T2) Stock derivatives ingest: code landed 2026-07-19. `bhavcopy_ingest.py` now accepts `STO`/`STF`, includes stock F&O underlyings, and exposes `--instr-types`; `BhavcopyStore` serves `STF` futures via `underlying_daily()` and `STO` option chains. Remaining: run the full 2024–2026 re-ingest on VPS and verify a RELIANCE 2025 chain from real files.
+- [~] **P1-2** (T2) Earnings calendar: code landed 2026-07-19. Added `core/earnings_calendar.py` and `scripts/earnings_calendar_ingest.py` for CSV/public-source backfills and `events_for(symbol, date_range)`. Remaining: collect/backfill top-30 F&O result dates for 2024–2026 and schedule weekly forward capture.
+- [~] **P1-3** (T2) Pre-2024 history: old NSE F&O archive URL adapter hook landed 2026-07-19 via `OLD_NSE_FO_URL` / pre-2024 source routing. Remaining: run the 2019–2023 backfill and confirm the EOD judge runs on 2020 dates.
+- [~] **P1-4** (T2) Participant-wise **F&O** OI: code landed 2026-07-19. Extended `india_flows.py` with participant-OI parser/store and added `scripts/participant_oi_ingest.py`. Remaining: download/backfill NSE participant-OI files and validate before wiring into P3-5.
 - [ ] **P1-5** (T2) ⛔D-2 Options-minute backfill via Upstox **Expired Instruments APIs** (official). Acceptance: `options_1m` coverage grows beyond 204 days + live capture.
-- [ ] **P1-6** (T1) Freshness watchdogs: cron/probe per new store (earnings, participant-OI, stock bhavcopy), mirroring the index_1m cron backstop (2026-07-18 pattern).
+- [x] **P1-6** (T1) Freshness watchdogs: `data.store_coverage` now includes earnings dates and participant-OI stores alongside bhavcopy/index/options stores.
 
 ## PHASE 2 — ANALYTICS & JUDGE REFORM (~2 wks; needs parts of Phase 1)
 

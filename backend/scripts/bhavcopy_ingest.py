@@ -44,14 +44,16 @@ from datetime import date, timedelta
 
 # EDR-05: the 10 equity-strategy stocks — the NSE cash (CM) bhavcopy carries their
 # EOD OHLC so equity strategies can finally be backtested (index-only until now).
-CM_UNDERLYINGS = {"RELIANCE", "SBIN", "HDFCBANK", "ICICIBANK", "TCS", "INFY",
-                  "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"}
+STOCK_FO_UNDERLYINGS = {"RELIANCE", "SBIN", "HDFCBANK", "ICICIBANK", "TCS", "INFY",
+                        "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"}
+CM_UNDERLYINGS = set(STOCK_FO_UNDERLYINGS)
+FO_INSTR_TYPES = {"IDO", "IDF", "STO", "STF"}
 
 # --- source registry ----------------------------------------------------------
 SOURCES = {
     "nse": {
         "url": "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{d}_F_0000.csv.zip",
-        "underlyings": {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"},
+        "underlyings": {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"} | STOCK_FO_UNDERLYINGS,
         "prefix": "BhavCopy_FO_",           # keep legacy NSE filename (494 files already stored)
         "referer": "https://www.nseindia.com/",
         "kind": "fo", "store": "bhavcopy_fo",
@@ -75,6 +77,12 @@ SOURCES = {
         "kind": "fo", "store": "bhavcopy_fo",
     },
 }
+
+OLD_NSE_FO_URL = os.environ.get(
+    "OLD_NSE_FO_URL",
+    "https://archives.nseindia.com/content/historical/DERIVATIVES/{yyyy}/{mon}/fo{dd}{mon}{yyyy}bhav.csv.zip",
+)
+OLD_NSE_CUTOFF = date(2024, 1, 1)
 
 STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
@@ -132,6 +140,12 @@ def out_path(d: date, prefix: str, store_dir: str = STORE_ROOT) -> str:
 def download(d: date, src: dict, retries: int = 3) -> bytes | None:
     """Return raw zip bytes, or None on 404 / non-zip (holiday or gated host)."""
     url = src["url"].format(d=d.strftime("%Y%m%d"))
+    if src.get("kind") == "fo" and src.get("prefix") == "BhavCopy_FO_" and d < OLD_NSE_CUTOFF:
+        mon = d.strftime("%b").upper()
+        url = OLD_NSE_FO_URL.format(
+            d=d.strftime("%Y%m%d"), yyyy=d.strftime("%Y"), mon=mon,
+            dd=d.strftime("%d"), mm=d.strftime("%m"),
+        )
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={
@@ -155,20 +169,28 @@ def download(d: date, src: dict, retries: int = 3) -> bytes | None:
     return None
 
 
-def parse_and_filter(zip_bytes: bytes, underlyings: set[str], kind: str = "fo") -> list[dict]:
+def _instr_types(raw: str) -> set[str]:
+    return {x.strip().upper() for x in raw.split(",") if x.strip()}
+
+
+def parse_and_filter(zip_bytes: bytes, underlyings: set[str], kind: str = "fo",
+                     instr_types: set[str] | None = None) -> list[dict]:
     z = zipfile.ZipFile(io.BytesIO(zip_bytes))
     raw = z.read(z.namelist()[0]).decode("utf-8", "replace")
-    return (parse_cm_csv if kind == "cm" else parse_udiff_csv)(raw, underlyings)
+    if kind == "cm":
+        return parse_cm_csv(raw, underlyings)
+    return parse_udiff_csv(raw, underlyings, instr_types or FO_INSTR_TYPES)
 
 
-def parse_udiff_csv(raw: str, underlyings: set[str]) -> list[dict]:
+def parse_udiff_csv(raw: str, underlyings: set[str], instr_types: set[str] | None = None) -> list[dict]:
     """Parse a raw UDiFF bhavcopy CSV (NSE or BSE — same common format). BSE now
     serves the F&O bhavcopy as a plain .CSV (not zipped)."""
+    allowed = instr_types or {"IDO", "IDF"}
     reader = csv.DictReader(io.StringIO(raw))
     out = []
     for row in reader:
         itp = row.get("FinInstrmTp")
-        if itp not in ("IDO", "IDF"):  # index options + index futures only
+        if itp not in allowed:
             continue
         sym = row.get("TckrSymb", "")
         if sym not in underlyings:
@@ -214,7 +236,8 @@ def daterange(start: date, end: date):
 
 def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwrite: bool,
                        kind: str = "fo", cols: list[str] = OUT_COLS,
-                       store_dir: str = STORE_ROOT) -> None:
+                       store_dir: str = STORE_ROOT,
+                       instr_types: set[str] | None = None) -> None:
     """Parse pre-downloaded bhavcopy .zip files (any source) into the gz store.
     Filenames must contain the 8-digit trading date (YYYYMMDD). Robust to
     non-zip files (skips them). Use this for BSE SENSEX/BANKEX, which the
@@ -244,9 +267,11 @@ def _ingest_local_zips(zip_dir: str, prefix: str, underlyings: set[str], overwri
         try:
             with open(path, "rb") as f:
                 blob = f.read()
-            _csv_parse = parse_cm_csv if kind == "cm" else parse_udiff_csv
+            _csv_parse = parse_cm_csv if kind == "cm" else (
+                lambda text, names: parse_udiff_csv(text, names, instr_types or FO_INSTR_TYPES)
+            )
             if blob[:2] == b"PK":                       # zipped bhavcopy
-                rows = parse_and_filter(blob, underlyings, kind)
+                rows = parse_and_filter(blob, underlyings, kind, instr_types)
             elif blob[:4] in (b"Trad", b"\xef\xbb\xbfT"):  # plain UDiFF CSV (BSE now serves this)
                 rows = _csv_parse(blob.decode("utf-8", "replace"), underlyings)
             else:
@@ -273,6 +298,8 @@ def main():
     ap.add_argument("end", nargs="?", help="YYYY-MM-DD (omit with --from-zips)")
     ap.add_argument("--source", choices=list(SOURCES), default="nse")
     ap.add_argument("--underlyings", default="", help="override (comma-sep); default = source's set")
+    ap.add_argument("--instr-types", default="",
+                    help="F&O instrument types, comma-separated; default includes IDO,IDF,STO,STF")
     ap.add_argument("--overwrite", action="store_true", help="re-download days already stored")
     ap.add_argument("--from-zips", default=None, metavar="DIR",
                     help="ingest pre-downloaded bhavcopy .zip files from DIR instead of downloading "
@@ -287,9 +314,10 @@ def main():
     cols = CM_OUT_COLS if kind == "cm" else OUT_COLS
     underlyings = ({u.strip().upper() for u in args.underlyings.split(",") if u.strip()}
                    or set(src["underlyings"]))
+    instr_types = _instr_types(args.instr_types) or (FO_INSTR_TYPES if kind == "fo" else set())
 
     if args.from_zips:
-        _ingest_local_zips(args.from_zips, prefix, underlyings, args.overwrite, kind, cols, store_dir)
+        _ingest_local_zips(args.from_zips, prefix, underlyings, args.overwrite, kind, cols, store_dir, instr_types)
         return
 
     if not args.start or not args.end:
@@ -299,6 +327,8 @@ def main():
 
     print(f"source: {args.source}  store: {STORE_ROOT}")
     print(f"underlyings: {sorted(underlyings)}")
+    if kind == "fo":
+        print(f"instr_types: {sorted(instr_types)}")
     print(f"range: {start} -> {end}\n")
 
     days = trading = holidays = skipped = total_rows = 0
@@ -313,7 +343,7 @@ def main():
         if blob is None:
             holidays += 1
             continue
-        rows = parse_and_filter(blob, underlyings, kind)
+        rows = parse_and_filter(blob, underlyings, kind, instr_types)
         if not rows:
             holidays += 1
             continue

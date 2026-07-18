@@ -13,7 +13,9 @@ Store mirrors the bhavcopy pattern: gzipped JSONL under data/india_flows/.
 """
 from __future__ import annotations
 
+import csv
 import gzip
+import io
 import json
 import os
 import urllib.request
@@ -23,6 +25,10 @@ from typing import Any, Dict, List, Optional
 STORE_ROOT = os.environ.get(
     "INDIA_FLOWS_ROOT",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "india_flows"),
+)
+PARTICIPANT_OI_ROOT = os.environ.get(
+    "PARTICIPANT_OI_ROOT",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "participant_oi"),
 )
 _NSE_HOME = "https://www.nseindia.com"
 _FIIDII_URL = "https://www.nseindia.com/api/fiidiiTradeReact"
@@ -123,4 +129,72 @@ def available_days() -> List[str]:
     for p in glob.glob(os.path.join(STORE_ROOT, "*", "fiidii_*.json.gz")):
         base = os.path.basename(p)
         out.append(base[len("fiidii_"):-len(".json.gz")])
+    return sorted(out)
+
+
+def parse_participant_oi_csv(raw: str) -> List[Dict[str, Any]]:
+    """Parse NSE participant-wise F&O OI CSV into normalized rows.
+
+    The source has changed headers over time, so matching is deliberately
+    tolerant while the output names stay stable for probes/judges.
+    """
+    reader = csv.DictReader(io.StringIO(raw))
+    out: List[Dict[str, Any]] = []
+    for row in reader:
+        lowered = {str(k).strip().lower(): v for k, v in row.items()}
+        client_type = (
+            lowered.get("client type") or lowered.get("participant") or lowered.get("category") or ""
+        ).strip()
+        if not client_type or client_type.lower() in {"total", "grand total"}:
+            continue
+        rec = {"participant": client_type.upper()}
+        for key, value in lowered.items():
+            name = (
+                key.replace(" ", "_").replace("-", "_").replace("/", "_")
+                .replace("(", "").replace(")", "").replace("__", "_")
+            )
+            if name in {"client_type", "participant", "category"}:
+                continue
+            try:
+                rec[name] = float(str(value).replace(",", "")) if str(value).strip() else 0.0
+            except ValueError:
+                rec[name] = value
+        out.append(rec)
+    return out
+
+
+def _participant_path(date: str) -> str:
+    return os.path.join(PARTICIPANT_OI_ROOT, date[:4], f"participant_oi_{date}.json.gz")
+
+
+def store_participant_oi(date: str, rows: List[Dict[str, Any]], source: str = "nse") -> int:
+    if not date or len(date) != 10:
+        return 0
+    path = _participant_path(date)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "date": date,
+        "source": source,
+        "rows": rows,
+        "ingested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, sort_keys=True))
+    return len(rows)
+
+
+def get_participant_oi(date: str) -> Optional[Dict[str, Any]]:
+    path = _participant_path(date)
+    if not os.path.exists(path):
+        return None
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def participant_oi_days() -> List[str]:
+    import glob
+    out = []
+    for p in glob.glob(os.path.join(PARTICIPANT_OI_ROOT, "*", "participant_oi_*.json.gz")):
+        base = os.path.basename(p)
+        out.append(base[len("participant_oi_"):-len(".json.gz")])
     return sorted(out)
