@@ -84,6 +84,12 @@ from order_lifecycle import (
 )
 from risk_controls import SizeInputs, compute_position_size, evaluate_market_data_quality, parse_market_timestamp
 from core.strategy_leaderboard import build_strategy_leaderboard
+from core.strategy_registry import (
+    ERP_KEEP_STRATEGY_NAMES,
+    ERP_PURGE_STRATEGY_NAMES,
+    registry_active_default,
+    registry_purge_default,
+)
 from core.instrument_resolver import InstrumentResolver
 from core.models import InstrumentSource
 from core.quote_service import QuoteService
@@ -1626,7 +1632,7 @@ CREDIT_SPREAD_THETA_NAMES = {
 # (OOS validator: 0 CANDIDATE_EDGE across 23 strategies). Archived on startup and
 # replaced by the OOS-validated "NIFTY Put Spread Theta (OOS)" (EDR-09/EDR-10).
 # Archiving (not deleting) preserves P&L history; the runner skips status=archived.
-DEAD_STRATEGY_NAMES = frozenset({
+DEAD_STRATEGY_NAMES = set(ERP_PURGE_STRATEGY_NAMES) | {
     "SENSEX Swing RSI Pullback", "NIFTY Micro-Lot Trend Follower", "NIFTY HFT Quick Scalper",
     "BANKNIFTY HFT Momentum Scalper", "NIFTY Quick EMA Scalper", "BANKNIFTY Volatility Breakout",
     "NIFTY Momentum Buyer", "BANKNIFTY Breakout Buyer", "NIFTY VWAP Trend Breakout",
@@ -1642,9 +1648,9 @@ DEAD_STRATEGY_NAMES = frozenset({
     # code template), so their exit geometry (TP 50% / SL 2x / 120m recycle) is set
     # directly in the DB, not via template sync. OOS-negative old-book: evidence-only.
     "BANKNIFTY Theta Credit Spread", "SENSEX Theta Credit Spread",
-})
+}
 
-OPTION_ALPHA_REBUILD_NAMES = frozenset({
+OPTION_ALPHA_REBUILD_NAMES = {
     "QG-O1 NIFTY Put Spread Theta Core",
     "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
     "QG-O3 SENSEX Put Spread Theta Pilot",
@@ -1658,9 +1664,13 @@ OPTION_ALPHA_REBUILD_NAMES = frozenset({
     # QG-O11 belongs to the pack so the generic credit-spread required_capital
     # override (8000) does not inflate its validated 1-lot sizing (3000).
     "QG-O11 NIFTY Regime Seller Credit Scalp",
-})
+}
 
-PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
+PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = set()
+
+PAPER_FORWARD_KEEP_STRATEGY_NAMES = set(ERP_KEEP_STRATEGY_NAMES)
+
+_LEGACY_PAPER_FORWARD_ACTIVE_NOTES = {
     # 2026-07-13 (founder-directed max-harvest book): QG-O1 dropped — its validated
     # form was the RES2-gated HELD-TO-EXPIRY spread; the current row is the
     # unvalidated intraday variant, superseded by the RAE NIFTY Range Seller
@@ -1690,8 +1700,8 @@ PAPER_FORWARD_ACTIVE_STRATEGY_NAMES = frozenset({
     "RAE NIFTY Trend Delta-1 (TREND)",
     "RAE BANKNIFTY Trend Delta-1 (TREND)",
     "RAE SENSEX Trend Delta-1 (TREND)",
-})
-PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
+}
+PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES = OPTION_ALPHA_REBUILD_NAMES & ERP_PURGE_STRATEGY_NAMES
 
 CREDIT_SPREAD_THETA_RISK = {
     "cooldown_minutes": 15,
@@ -6684,6 +6694,7 @@ _seed_templates_by_name = {
     and str(template.get("underlying") or "").upper() not in REMOVED_COMMODITY_UNDERLYINGS
     and "CRUDE" not in str(template.get("name") or "").upper()
     and "NATURAL GAS" not in str(template.get("name") or "").upper()
+    and registry_active_default(str(template.get("name") or ""))
 }
 DEFAULT_OPTION_STRATEGIES = list(_seed_templates_by_name.values())
 
@@ -6732,7 +6743,13 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # NOTE: "NIFTY Theta Credit Spread" / "NIFTY Range Credit Spread" are DB-only rows
     # (not code templates), so their exit geometry is set directly in the DB — see the
     # 2026-07-10 note on DEAD_STRATEGY_NAMES above. They are not normalized here.
-    if _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
+    if _template.get("name") in PAPER_FORWARD_KEEP_STRATEGY_NAMES:
+        _template["initial_status"] = "paused"
+        _template["mode"] = "paper"
+        if _template.get("required_capital") is not None:
+            _template["required_capital"] = float(_template.get("required_capital") or 0)
+        _risk.update(dict(_template.get("risk") or {}))
+    elif _template.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
         _template["initial_status"] = "live"
         if _template.get("required_capital") is not None:
             _template["required_capital"] = float(_template.get("required_capital") or 0)
@@ -7036,7 +7053,14 @@ async def seed_default_strategies_for_user(user_id: str) -> int:
     except Exception:
         market_hours_active = False
     for doc in docs:
-        if doc.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
+        if doc.get("name") in PAPER_FORWARD_KEEP_STRATEGY_NAMES:
+            doc["status"] = "paused"
+            doc["mode"] = "paper"
+            doc["manual_paused"] = True
+            doc["schedule_paused"] = False
+            doc["registry"] = {"active": False, "phase": "ERP-P0", "source": "core.strategy_registry"}
+            doc["last_filter_reason"] = "Paused keeper: ERP Phase 0 registry book awaits re-judge/forward-paper."
+        elif doc.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
             doc["status"] = "live" if market_hours_active else "paused"
             doc["mode"] = "paper"
             doc["manual_paused"] = False
@@ -7120,44 +7144,6 @@ async def migrate_user_to_v12_upstox(user_id: str) -> Dict[str, int]:
         )
         personalised_risk_count += int(res.modified_count or 0)
     template_sync_count = 0
-    for template in DEFAULT_OPTION_STRATEGIES:
-        risk_profile = _strategy_risk_profile(template)
-        risk_profile["required_capital"] = float(template.get("required_capital") or 0)
-        is_eq_temp = template.get("instrument_group") in ("NSE", "BSE")
-        res = await db.strategies.update_one(
-            {"user_id": user_id, "name": template["name"]},
-            {"$set": {
-                "description": template["description"],
-                "python_code": template["python_code"],
-                "strategy_type": template.get("strategy_type", "Option Buying"),
-                "required_capital": float(template.get("required_capital") or 0),
-                "instrument_group": template.get("instrument_group"),
-                "market_suitability": template.get("market_suitability", "Retail live momentum"),
-                "visual_config.options.enabled": not is_eq_temp,
-                "visual_config.options.underlying": str(template.get("underlying") or "NIFTY").upper(),
-                "visual_config.options.strike_mode": template.get("strike_mode"),
-                "visual_config.options.otm_points": int(template.get("otm_points") or 0),
-                "visual_config.options.lots": int(template.get("lots") or 1),
-                "visual_config.options.product": template.get("product") or ("MIS" if is_eq_temp else "NRML"),
-                "visual_config.options.structure": template.get("structure") or ("single_leg" if not is_eq_temp else None),
-                "visual_config.options.spread_width": template.get("spread_width"),
-                "visual_config.options.short_otm_pct": template.get("short_otm_pct"),
-                "visual_config.options.wing_width": template.get("wing_width"),
-                "visual_config.options.exit_mode": template.get("exit_mode"),
-                "visual_config.options.short_delta": template.get("short_delta"),
-                "visual_config.options.short_offset_strikes": template.get("short_offset_strikes"),
-                "visual_config.options.credit_tp_frac": template.get("credit_tp_frac"),
-                "visual_config.options.credit_sl_mult": template.get("credit_sl_mult"),
-                "visual_config.options.candle_interval": template.get("candle_interval") or "5minute",
-                **_risk_update_fields(risk_profile),
-                "default_strategy_version": "v13-live-brain-r1",
-                "strategy_logic_version": "1.0",
-            }, "$unset": {
-                "last_filter_reason": "",
-                "last_error": "",
-            }},
-        )
-        template_sync_count += int(res.modified_count or 0)
     return {
         "users": int(user_res.modified_count or 0),
         "strategies": int(strat_res.modified_count or 0),
@@ -17305,7 +17291,7 @@ async def startup():
 
                     # EDR-03/15: archive no-edge rows and every QG experiment
                     # outside the explicit paper-forward allowlist.
-                    if (s.get("name") in DEAD_STRATEGY_NAMES or s.get("name") in PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES) and s.get("status") != "archived":
+                    if registry_purge_default(s.get("name")) and s.get("status") != "archived":
                         s_updates["status"] = "archived"
                         s_updates["mode"] = "paper"
                         s_updates["manual_paused"] = True
@@ -17317,16 +17303,13 @@ async def startup():
                         )
                         logger.warning("Archived strategy %s during startup allowlist enforcement", s.get("name"))
 
-                    if s.get("name") in PAPER_FORWARD_ACTIVE_STRATEGY_NAMES:
-                        s_updates["status"] = "live" if market_hours_active else "paused"
+                    if registry_active_default(s.get("name")):
+                        s_updates["status"] = "paused"
                         s_updates["mode"] = "paper"
-                        s_updates["manual_paused"] = False
-                        s_updates["schedule_paused"] = not market_hours_active
-                        s_updates["last_filter_reason"] = (
-                            "Paper-forward active during market hours: Options Alpha Rebuild pack seeded 2026-07-05."
-                            if market_hours_active
-                            else "Market closed: queued for paper-forward activation at the next 09:15 IST open."
-                        )
+                        s_updates["manual_paused"] = True
+                        s_updates["schedule_paused"] = False
+                        s_updates["registry"] = {"active": False, "phase": "ERP-P0", "source": "core.strategy_registry"}
+                        s_updates["last_filter_reason"] = "Paused keeper: ERP Phase 0 registry book awaits re-judge/forward-paper."
 
                     if s_updates:
                         await db.strategies.update_one({"id": s["id"], "user_id": user_id}, {"$set": s_updates})
@@ -17895,186 +17878,8 @@ async def startup():
 
     asyncio.create_task(_subscribe_open_position_tokens_on_startup())
 
-    # Phase 2 DB migration: update existing strategy python_code when
-    # strategy_logic_version is stale.
-    async def _migrate_strategy_code_versions():
-        """Silently update python_code for any user who still has stale strategy code.
+    logger.info("ERP Phase 0: startup template code/structure re-sync migrations disabled; registry rows own strategy config.")
 
-        Bumped to 2.3 to re-push live-market participation tuning:
-        (1) option buyers accept valid current continuation setups instead of
-            only exact cross/retest candles, and
-        (2) equity templates are included in the versioned migration so live
-            stored python_code receives strategy-specific threshold tuning.
-        Re-pushing from the in-code catalog (the single source of truth) is
-        idempotent, so version-gating only avoids redundant writes.
-        """
-        await asyncio.sleep(5)
-        try:
-            updated = 0
-            for name, (code, _cat, _desc) in UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME.items():
-                result = await db.strategies.update_many(
-                    {
-                        "name": name,
-                        "$or": [
-                            {"strategy_logic_version": {"$exists": False}},
-                            {"strategy_logic_version": {"$lt": "2.3"}},
-                            {"strategy_logic_version": "1.0"},
-                        ],
-                    },
-                    {"$set": {
-                        "python_code": code,
-                        "risk_style": _cat,
-                        "visual_config.risk.risk_style": _cat,
-                        "strategy_logic_version": "2.3",
-                        "code_migrated_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-                updated += result.modified_count
-            if updated:
-                logger.info("DB migration: updated python_code for %d strategy documents to v2.3", updated)
-        except Exception as _mig_err:
-            logger.warning("Strategy code migration failed: %s", _mig_err)
-
-    asyncio.create_task(_migrate_strategy_code_versions())
-
-    # Debit-spread enablement: the engine (builder/lifecycle/monitor) already
-    # supports debit spreads; it only activates when a strategy's
-    # visual_config.options.structure == "debit_spread". Convert the report's
-    # three naked-ATM directional buyers to defined-risk debit spreads so their
-    # max loss is capped at net debit instead of full premium. Idempotent.
-    async def _migrate_debit_spread_structure():
-        await asyncio.sleep(6)
-        # NOTE (2026-06-30): "BANKNIFTY Breakout Buyer" was removed from this list —
-        # it is now force-converted to a credit_spread by
-        # _migrate_credit_spread_structure below (it lost every directional trade in
-        # chop). Leaving it here would fight that migration on every restart.
-        # NOTE (2026-07-01): "BANKNIFTY Volatility Breakout" removed too — it was the
-        # worst remaining debit spread (-2337, 0/2, lost in TREND_UP *and* chop) and
-        # is now force-converted to credit_spread below.
-        _debit_names = [
-        ]
-        try:
-            res = await db.strategies.update_many(
-                {"name": {"$in": _debit_names},
-                 "visual_config.options.structure": {"$ne": "debit_spread"}},
-                {"$set": {
-                    "visual_config.options.structure": "debit_spread",
-                    "visual_config.options.spread_width": 2,
-                    "structure": "debit_spread",
-                }},
-            )
-            if res.modified_count:
-                logger.info("DB migration: set debit_spread structure on %d strategy documents", res.modified_count)
-        except Exception as _ds_err:
-            logger.warning("Debit-spread structure migration failed: %s", _ds_err)
-
-    asyncio.create_task(_migrate_debit_spread_structure())
-
-    # Credit-spread conversion (2026-06-30): the worst directional debit spreads
-    # lost EVERY trade over 06-29/30 in a choppy market (NIFTY Quick EMA Scalper
-    # -3.7k, BANKNIFTY HFT Momentum Scalper -2.2k, BANKNIFTY Breakout Buyer -1.8k).
-    # A debit spread still needs a directional move; a credit spread earns theta if
-    # price merely holds — the only structure that was green these two days. Convert
-    # the three to credit_spread (sells a put spread on BUY, a call spread on SELL)
-    # and size them at the proven ₹8k budget (≈1-2 lots). Idempotent: only writes
-    # when not already credit_spread. This is the durable owner of these three —
-    # they are excluded from _migrate_debit_spread_structure above.
-    async def _migrate_credit_spread_structure():
-        await asyncio.sleep(7)
-        # 2026-07-01: added the two worst remaining directional debit spreads. Both
-        # lost every trade over 06-30/07-01 and — with regime now instrumented —
-        # BANKNIFTY Volatility Breakout lost even in TREND_UP, so this is a structural
-        # failure, not a regime one (a regime gate would be curve-fitting: the debit
-        # winners that day were in RANGE). Converting to theta-earning credit spreads.
-        _credit_names = [
-            "NIFTY Quick EMA Scalper",
-            "BANKNIFTY HFT Momentum Scalper",
-            "BANKNIFTY Breakout Buyer",
-            "BANKNIFTY Volatility Breakout",
-            "SENSEX Swing RSI Pullback",
-            "NIFTY Micro-Lot Trend Follower",
-            "NIFTY Momentum Buyer",
-        ]
-        try:
-            res = await db.strategies.update_many(
-                {"name": {"$in": _credit_names},
-                 "visual_config.options.structure": {"$ne": "credit_spread"}},
-                {"$set": {
-                    "visual_config.options.structure": "credit_spread",
-                    "visual_config.options.spread_width": 2,
-                    "visual_config.options.required_capital": 8000.0,
-                    "structure": "credit_spread",
-                    "strategy_type": "Option Selling",
-                    "visual_config.risk.cooldown_minutes": 15,
-                    "visual_config.risk.max_trades_day": 8,
-                    "visual_config.risk.daily_loss_limit": 4000.0,
-                    "visual_config.risk.time_exit_minutes": 0,
-                    "visual_config.risk.strategy_category": "intraday",
-                }},
-            )
-            if res.modified_count:
-                logger.info("DB migration: set credit_spread structure on %d strategy documents", res.modified_count)
-        except Exception as _cs_err:
-            logger.warning("Credit-spread structure migration failed: %s", _cs_err)
-
-    asyncio.create_task(_migrate_credit_spread_structure())
-
-    async def _migrate_alpha_repair_followups():
-        await asyncio.sleep(8)
-        now = datetime.now(timezone.utc).isoformat()
-        try:
-            equity_rows = await db.strategies.find(
-                {
-                    "$or": [
-                        {"asset_class": "equity"},
-                        {"instrument_group": {"$in": ["NSE", "BSE"]}},
-                        {"visual_config.options.enabled": False},
-                    ]
-                },
-                {"_id": 0, "id": 1, "name": 1, "required_capital": 1, "visual_config.risk": 1},
-            ).to_list(200)
-            equity_updated = 0
-            for row in equity_rows:
-                visual_capital = float(((row.get("visual_config") or {}).get("risk") or {}).get("required_capital") or 0)
-                top_level_capital = float(row.get("required_capital") or 0)
-                current_capital = max(top_level_capital, visual_capital)
-                tier_capital = EQUITY_CAPITAL_TIERS.get(str(row.get("name") or ""), EQUITY_MIN_REQUIRED_CAPITAL)
-                capital = max(current_capital, tier_capital)
-                risk = ((row.get("visual_config") or {}).get("risk") or {})
-                daily_loss = max(float(risk.get("daily_loss_limit") or 0), 2500.0)
-                res = await db.strategies.update_one(
-                    {"id": row["id"]},
-                    {"$set": {
-                        "required_capital": capital,
-                        "visual_config.risk.required_capital": capital,
-                        "visual_config.risk.daily_loss_limit": daily_loss,
-                        "visual_config.risk.entry_cutoff_ist": EQUITY_ENTRY_CUTOFF,
-                        "alpha_repair_followup_migrated_at": now,
-                    }},
-                )
-                equity_updated += int(res.modified_count or 0)
-
-            bn_res = await db.strategies.update_many(
-                {
-                    "name": {"$regex": "BANKNIFTY.*Theta", "$options": "i"},
-                    "visual_config.options.structure": "credit_spread",
-                },
-                {"$set": {
-                    "visual_config.options.expiry_week_only": bool(BANKNIFTY_THETA_EXPIRY_WEEK_ONLY),
-                    "visual_config.options.expiry_policy": "expiry_week_only" if BANKNIFTY_THETA_EXPIRY_WEEK_ONLY else "nearest",
-                    "alpha_repair_followup_migrated_at": now,
-                }},
-            )
-            if equity_updated or bn_res.modified_count:
-                logger.info(
-                    "DB migration: alpha repair followups equity=%d banknifty_theta=%d",
-                    equity_updated,
-                    bn_res.modified_count,
-                )
-        except Exception as _ar_err:
-            logger.warning("Alpha repair followup migration failed: %s", _ar_err)
-
-    asyncio.create_task(_migrate_alpha_repair_followups())
 
     # Fix 3: Warn loudly at boot if running with the default JWT secret.
     # The secret is SHA-256'd so it won't crash, but forging tokens is trivial

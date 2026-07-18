@@ -4,7 +4,7 @@ Establishes strict domain boundaries between NSE and BSE segments.
 Ensures a strategy is bound to exactly one domain and cannot bleed logic.
 """
 from enum import Enum
-from typing import Set, Dict, Any
+from typing import Optional, Set, Dict, Any
 
 class DomainType(str, Enum):
     NSE_FO = "NSE_FO"
@@ -47,6 +47,16 @@ class MarketDomain:
             if und_upper.startswith(key):
                 return val
         return 100
+
+    def expected_weekly_expiry_day(self, underlying: str) -> Optional[str]:
+        und_upper = str(underlying).upper()
+        if und_upper.startswith("NIFTY"):
+            return "TUESDAY"
+        if und_upper.startswith("SENSEX"):
+            return "THURSDAY"
+        if und_upper.startswith("BANKNIFTY"):
+            return None
+        return None
 
 # Isolated Domain Definitions (SEBI 2026 standardized lot sizes)
 NSE_FO_DOMAIN = MarketDomain(
@@ -116,3 +126,16 @@ def resolve_domain_by_name(name: str) -> MarketDomain:
         return ALL_DOMAINS[domain_enum]
     except (ValueError, KeyError):
         raise ValueError(f"Domain name {name} is unsupported. Must be NSE_FO or BSE_FO.")
+
+
+def contract_spec_for_underlying(underlying: str) -> Dict[str, Any]:
+    domain = resolve_domain_by_underlying(underlying)
+    return {
+        "underlying": str(underlying).upper(),
+        "domain": domain.name.value,
+        "exchange": domain.exchange,
+        "segment": domain.segment,
+        "lot_size": domain.get_lot_size(underlying),
+        "strike_interval": domain.get_strike_interval(underlying),
+        "weekly_expiry_day": domain.expected_weekly_expiry_day(underlying),
+    }

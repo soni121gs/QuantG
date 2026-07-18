@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List
 
+from core.market_domains import contract_spec_for_underlying
 from core.hermes_diagnostics.contract import Finding, Domain, Severity
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
@@ -19,6 +20,8 @@ _DEF_SL = float(os.environ.get("CREDIT_SPREAD_SL_MULT", "2.0"))
 # geometry exceeds this. R:R (profit:loss units) = tp_frac : sl_mult →
 # break-even WR = sl_mult / (sl_mult + tp_frac).
 _BE_WR_WARN = float(os.environ.get("HERMES_GEOMETRY_BE_WR_WARN", "0.75"))
+_COST_FLOOR_MULT = float(os.environ.get("HERMES_COST_FLOOR_MULT", "3.0"))
+_DEFAULT_ROUND_TRIP_COST = float(os.environ.get("HERMES_DEFAULT_ROUND_TRIP_COST_PER_LOT", "85.0"))
 
 
 def _opts(strat: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,6 +30,24 @@ def _opts(strat: Dict[str, Any]) -> Dict[str, Any]:
 
 def _is_active(strat: Dict[str, Any]) -> bool:
     return str(strat.get("status")) in ("live", "active", "paused")  # paused RAE rows still fire via allowlist
+
+
+def _underlying(strat: Dict[str, Any]) -> str:
+    visual = strat.get("visual_config") or {}
+    opts = visual.get("options") or {}
+    return str(opts.get("underlying") or visual.get("symbol") or strat.get("underlying") or "").upper()
+
+
+def _round_trip_cost(strat: Dict[str, Any]) -> float:
+    o = _opts(strat)
+    for key in ("modeled_round_trip_cost", "round_trip_cost_per_lot", "friction_per_lot"):
+        try:
+            value = float(o.get(key))
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    return _DEFAULT_ROUND_TRIP_COST
 
 
 @register("static.reward_risk_geometry", kind="static")
@@ -122,5 +143,87 @@ async def spread_capital_sanity(ctx: ProbeContext) -> List[Finding]:
                           "required_capital": rc},
                 reproduction="visual_config.options.required_capital",
                 suggested_fix="Set required_capital ≥ one lot's max loss for the underlying.",
+            ))
+    return out
+
+
+@register("static.cost_floor", kind="static")
+async def cost_floor(ctx: ProbeContext) -> List[Finding]:
+    """Reject designs whose expected edge is too small versus modeled friction."""
+    out: List[Finding] = []
+    for strat in ctx.strategies:
+        o = _opts(strat)
+        if str(o.get("structure")) not in ("credit_spread", "debit_spread", "single_leg") or not _is_active(strat):
+            continue
+        edge = o.get("expected_edge_per_lot") or o.get("expected_credit_per_lot") or o.get("avg_credit_per_lot")
+        try:
+            edge = float(edge)
+        except (TypeError, ValueError):
+            credit = o.get("credit_tp_frac")
+            if credit is None:
+                continue
+            edge = 0.0
+        friction = _round_trip_cost(strat)
+        floor = _COST_FLOOR_MULT * friction
+        if edge < floor:
+            out.append(Finding(
+                probe_id="static.cost_floor", domain=Domain.STRATEGY,
+                severity=Severity.HIGH, entity=str(strat.get("id")),
+                title=f"Expected edge Rs{edge:.0f}/lot is below {floor:.0f} cost floor",
+                detail=("The design does not clear the ERP cost-floor law: expected edge "
+                        "must be at least 3x modeled round-trip friction before paper or "
+                        "promotion. This catches width-1 low-credit designs before they "
+                        "spend their edge on brokerage, taxes and slippage."),
+                evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
+                          "underlying": _underlying(strat), "expected_edge_per_lot": edge,
+                          "round_trip_cost_per_lot": friction, "required_floor": floor,
+                          "multiple": round(edge / friction, 2) if friction else None},
+                reproduction="compare strategy expected_edge_per_lot/expected_credit_per_lot to modeled round-trip friction",
+                suggested_fix="Reject or redesign the geometry until expected edge is at least 3x modeled friction.",
+            ))
+    return out
+
+
+@register("infra.contract_spec_drift", kind="static")
+async def contract_spec_drift(ctx: ProbeContext) -> List[Finding]:
+    """Flag lot/expiry metadata that disagrees with the central market-domain helper."""
+    out: List[Finding] = []
+    for strat in ctx.strategies:
+        underlying = _underlying(strat)
+        if underlying not in {"NIFTY", "BANKNIFTY", "SENSEX"}:
+            continue
+        spec = contract_spec_for_underlying(underlying)
+        o = _opts(strat)
+        evidence = {"strategy_id": strat.get("id"), "name": strat.get("name"), "underlying": underlying}
+        mismatches = []
+        configured_lot = o.get("lot_size") or strat.get("lot_size")
+        if configured_lot is not None:
+            try:
+                configured_lot = int(configured_lot)
+                if configured_lot != spec["lot_size"]:
+                    mismatches.append("lot_size")
+                    evidence["configured_lot_size"] = configured_lot
+                    evidence["expected_lot_size"] = spec["lot_size"]
+            except (TypeError, ValueError):
+                mismatches.append("lot_size_invalid")
+                evidence["configured_lot_size"] = configured_lot
+                evidence["expected_lot_size"] = spec["lot_size"]
+        configured_expiry = str(o.get("weekly_expiry_day") or strat.get("weekly_expiry_day") or "").upper()
+        expected_expiry = spec.get("weekly_expiry_day")
+        if configured_expiry and expected_expiry and configured_expiry != expected_expiry:
+            mismatches.append("weekly_expiry_day")
+            evidence["configured_weekly_expiry_day"] = configured_expiry
+            evidence["expected_weekly_expiry_day"] = expected_expiry
+        if mismatches:
+            out.append(Finding(
+                probe_id="infra.contract_spec_drift", domain=Domain.INFRA,
+                severity=Severity.HIGH, entity=str(strat.get("id")),
+                title=f"{underlying} contract spec drift: {', '.join(mismatches)}",
+                detail=("Strategy metadata disagrees with the central market-domain contract spec. "
+                        "Lot and expiry facts must come from the instrument master/domain resolver, "
+                        "not stale strategy config."),
+                evidence=evidence,
+                reproduction="compare strategy visual_config.options lot/expiry fields to core.market_domains.contract_spec_for_underlying",
+                suggested_fix="Refresh strategy contract metadata from the Upstox instrument master/domain resolver.",
             ))
     return out

@@ -9,6 +9,7 @@ from server import (
     DEFAULT_OPTION_STRATEGIES,
     OPTION_ALPHA_REBUILD_NAMES,
     PAPER_FORWARD_ACTIVE_STRATEGY_NAMES,
+    PAPER_FORWARD_KEEP_STRATEGY_NAMES,
     PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES,
     RETAIL_LIVE_STATE_CODE,
     UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME,
@@ -17,35 +18,8 @@ from server import (
 
 EXPECTED_DEFAULT_NAMES = {
     "QG-O1 NIFTY Put Spread Theta Core",
-    "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
-    "QG-O3 SENSEX Put Spread Theta Pilot",
     "QG-O4 SENSEX Call Spread Range Pilot",
-    "QG-O5 NIFTY Opening Range Call Buyer",
-    "QG-O6 NIFTY Opening Range Put Buyer",
-    "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
-    "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
-    "QG-O9 NIFTY Tail Event Put Buyer",
-    "QG-O10 NIFTY Premium-Safe Debit Buyer",
     "QG-O11 NIFTY Regime Seller Credit Scalp",
-    "NIFTY Momentum Buyer",
-    "BANKNIFTY Breakout Buyer",
-    "NIFTY VWAP Trend Breakout",
-    "SENSEX Swing RSI Pullback",
-    "NIFTY Micro-Lot Trend Follower",
-    "NIFTY HFT Quick Scalper",
-    "BANKNIFTY HFT Momentum Scalper",
-    "NIFTY Quick EMA Scalper",
-    "BANKNIFTY Volatility Breakout",
-    "RELIANCE Trend Rider",
-    "SBIN Short Seller",
-    "HDFCBANK Range Rebound",
-    "ICICIBANK Volatility Breakout",
-    "TCS Swing Accumulator",
-    "INFY VWAP Pullback",
-    "AXISBANK Trend Follower",
-    "LT Momentum Rider",
-    "BHARTIARTL Intraday Trend",
-    "KOTAKBANK RSI Rebound",
 }
 
 
@@ -70,17 +44,14 @@ def _sample_candles(count=90):
     return candles
 
 
-def test_default_strategy_catalog_is_the_reported_nine_supported_option_buyers():
+def test_default_strategy_catalog_is_the_phase0_code_backed_keeper_set():
     names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
 
     assert names == EXPECTED_DEFAULT_NAMES
-    assert len(DEFAULT_OPTION_STRATEGIES) == 30
-    assert all(strategy["instrument_group"] in {"NFO", "BFO", "NSE", "BSE"} for strategy in DEFAULT_OPTION_STRATEGIES)
+    assert len(DEFAULT_OPTION_STRATEGIES) == 3
+    assert all(strategy["instrument_group"] in {"NFO", "BFO"} for strategy in DEFAULT_OPTION_STRATEGIES)
     assert all(
-        strategy["underlying"] in {
-            "NIFTY", "BANKNIFTY", "SENSEX", "RELIANCE", "TCS", "HDFCBANK",
-            "ICICIBANK", "SBIN", "INFY", "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"
-        }
+        strategy["underlying"] in {"NIFTY", "SENSEX"}
         for strategy in DEFAULT_OPTION_STRATEGIES
     )
 
@@ -104,38 +75,34 @@ def test_default_strategy_templates_are_not_collapsed_to_generic_retail_code():
         assert strategy.get("risk_style") in {"momentum", "breakout", "pullback", "micro_scalp", "volatile_breakout"}
 
 
-def test_equity_templates_are_in_versioned_code_migration():
+def test_equity_templates_are_purged_from_phase0_seed_catalog():
     equity_names = {
         strategy["name"]
         for strategy in DEFAULT_OPTION_STRATEGIES
         if strategy.get("instrument_group") in ("NSE", "BSE")
     }
 
-    assert equity_names
-    assert equity_names.issubset(UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME)
+    assert not equity_names
+    assert "RELIANCE Trend Rider" in DEAD_STRATEGY_NAMES
+    assert "RELIANCE Trend Rider" in UPGRADED_DEFAULT_STRATEGY_CODE_BY_NAME
 
 
-def test_new_qg_pack_is_not_part_of_dead_strategy_archive_set():
+def test_phase0_keeps_only_rejudge_qg_rows_in_seed_catalog():
     names = {strategy["name"] for strategy in DEFAULT_OPTION_STRATEGIES}
 
-    assert OPTION_ALPHA_REBUILD_NAMES.issubset(names)
-    assert OPTION_ALPHA_REBUILD_NAMES.isdisjoint(DEAD_STRATEGY_NAMES)
+    assert names == (OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES)
+    assert names.isdisjoint(DEAD_STRATEGY_NAMES)
 
 
-def test_only_qgo1_and_qgo5_are_paper_forward_active():
-    # 2026-07-06: QG-O4 un-archived — sole archived strategy with a real OOS edge.
-    # 2026-07-07: QG-O11 regime-gated credit scalp added (IMD OOS CANDIDATE_EDGE).
-    # 2026-07-08: QG-O5 archived — no OOS support; subsumed by QG-O11's bull gate.
-    assert PAPER_FORWARD_ACTIVE_STRATEGY_NAMES == {
+def test_phase0_book_has_no_auto_active_qg_rows():
+    assert PAPER_FORWARD_ACTIVE_STRATEGY_NAMES == set()
+    assert {
         "QG-O1 NIFTY Put Spread Theta Core",
         "QG-O4 SENSEX Call Spread Range Pilot",
         "QG-O11 NIFTY Regime Seller Credit Scalp",
-    }
-    assert PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES == OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_ACTIVE_STRATEGY_NAMES
+    }.issubset(PAPER_FORWARD_KEEP_STRATEGY_NAMES)
+    assert PAPER_FORWARD_ARCHIVED_STRATEGY_NAMES == OPTION_ALPHA_REBUILD_NAMES - PAPER_FORWARD_KEEP_STRATEGY_NAMES
     by_name = {strategy["name"]: strategy for strategy in DEFAULT_OPTION_STRATEGIES}
-    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["structure"] == "credit_spread"
-    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["spread_width"] == 1
-    assert by_name["QG-O5 NIFTY Opening Range Call Buyer"]["short_offset_strikes"] == 2
     o11 = by_name["QG-O11 NIFTY Regime Seller Credit Scalp"]
     assert o11["structure"] == "credit_spread"
     assert o11["spread_width"] == 1
