@@ -239,7 +239,7 @@ def persist_hypothesis_cards(db, user_id: str, cards: Iterable[Dict[str, Any]]) 
         doc = _card_to_research_doc(card, user_id=user_id)
         db.research_hypotheses.update_one(
             {"user_id": user_id, "hypothesis_hash": doc["hypothesis_hash"]},
-            {"$setOnInsert": doc, "$set": {"updated_at": doc["updated_at"]}},
+            {"$setOnInsert": doc, "$set": {"phase4_last_seen_at": doc["updated_at"]}},
             upsert=True,
         )
         n += 1
