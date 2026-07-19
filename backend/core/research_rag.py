@@ -18,12 +18,14 @@ import asyncio
 import hashlib
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.embeddings import generate_gemini_embedding
 
 # free-tier gemini-embedding-001 rate-limits bursts (429); pace calls to stay under.
 _EMBED_DELAY = float(os.environ.get("RAG_EMBED_DELAY", "1.2"))
+RESEARCH_ROOT = Path(__file__).resolve().parents[2] / "wiki" / "Research"
 
 
 def _hash(text: str) -> str:
@@ -71,6 +73,14 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
         stats[result] = stats.get(result, 0) + 1
         if result == "indexed":
             by_source[src] = by_source.get(src, 0) + 1
+
+    # ERP Phase 4 curated research corpus (disk notes reviewed by founder/agents)
+    if RESEARCH_ROOT.exists():
+        for path in sorted(RESEARCH_ROOT.glob("*.md"))[:wiki_limit]:
+            text = path.read_text(encoding="utf-8")
+            body = f"[RESEARCH] {path.stem}\n{text[:6000]}"
+            _bump(await _index_one(db, user_id, f"research:{path.stem}", body, "research",
+                                   source_refs=[f"wiki/Research/{path.name}"]), "research")
 
     # 1) Wiki notes (user-written domain knowledge / decisions / rules)
     async for w in db.wiki_docs.find(

@@ -1034,10 +1034,14 @@ async def ops_research_signals(user=Depends(get_current_user)):
     except Exception:  # noqa: BLE001
         fii = None
     rag = await db.hermes_memory.count_documents({"user_id": uid, "_rag": True})
+    stored_signals = await db.research_signals.find(
+        {}, {"_id": 0}
+    ).sort("updated_at", -1).limit(50).to_list(50)
     return _json_safe({
         "kind": "research_signals",
         "fii_dii_latest": fii,
         "rag_indexed_docs": rag,
+        "stored_signals": stored_signals,
         "signal_status": [
             {"signal": "OI / Gamma Exposure (GEX)", "verdict": "DEAD",
              "note": "near-random on NIFTY (retail sells options → OI = seller positioning)"},
@@ -1049,6 +1053,27 @@ async def ops_research_signals(user=Depends(get_current_user)):
         "note": "IA data-signal sweep: no readily-available signal beat base rate on NIFTY. "
                 "Edge lives in the RAE regime ensemble, not a single indicator.",
     })
+
+
+@router.post("/research-signals/run")
+async def ops_research_signals_run(start: Optional[str] = None, end: Optional[str] = None,
+                                   user=Depends(get_current_user)):
+    """ERP P4-3: run deterministic opportunity probes and persist them to
+    db.research_signals. Read-only with respect to trading state."""
+    from core.phase4_research import run_opportunity_probes
+
+    result = await asyncio.to_thread(run_opportunity_probes, start=start, end=end)
+    persisted = 0
+    now = result.get("generated_at") or datetime.now(timezone.utc).isoformat()
+    for row in result.get("rows") or []:
+        key = f"{row.get('probe')}:{row.get('underlying') or row.get('symbol') or 'global'}"
+        await db.research_signals.update_one(
+            {"_id": key},
+            {"$set": {**row, "_id": key, "updated_at": now}},
+            upsert=True,
+        )
+        persisted += 1
+    return _json_safe({"kind": "research_signals_run", "persisted": persisted, **result})
 
 
 @router.post("/backfill-candles")

@@ -68,15 +68,14 @@ All sources legal per §14.1 (exchange/broker/public).
 - [x] **P3-6** (T2) Paused-seller re-judge: research-only paused-seller proxy re-judge landed 2026-07-19; QG-O11, three RAE sellers, and QG-O4 artifact proxy are priced on re-derived 0.50/0.90 geometry with 2/5/8% slippage stress. Founder wake/delete remains external and evidence-gated.
 - [x] **P3-7** (T3) Book assembly: non-mutating Phase 3 book assembly landed 2026-07-19; aggregates P3 sleeve gates, reports candidate count/heat/correlation cap, and keeps `paper_book_ready=false` when no sleeve passes.
 
-## PHASE 4 — HERMES v2: RESEARCH ANALYST (~2 wks staged)
+## PHASE 4 - HERMES v2: RESEARCH ANALYST (~2 wks staged)
 
-- [x] **P4-1** (T1) `GEMINI_MODEL` → `gemini-3-flash-preview` (free tier, 1,500 req/day): default chat/planner/narrator/wiki Gemini model updated 2026-07-19, `backend/.env.example` aligned, local + VPS runtime env overrides updated, and focused tests verify tool-planner declarations plus embeddings parity (`gemini-embedding-001`, 768 dimensions).
-- [ ] **P4-2** (T2) **H1 corpus:** `wiki/Research/` — ~25 curated notes (textbook summaries: Grinold-Kahn, Sinclair ×2, Carver, Natenberg, Aronson, López de Prado; SEBI FY25 study; India papers: VRP anatomy, day/night option returns, PEAD ×2, Momentum-30; Edge Report v3). Reindex via `research_rag.reindex_all` (IA-7 pipeline exists). Acceptance: RAG recall cites them.
-- [ ] **P4-3** (T2) **H3 opportunity probes** (deterministic): VRP-by-strike monitor, earnings IV-runup stats (post P1-2), overnight/intraday split, term-structure richness (post P2-1), participant-OI extremes (post P1-4) → `db.research_signals`.
-- [ ] **P4-4** (T3) **H2 hypothesis cards:** weekly job — falsifiable cards {hypothesis, who-pays rationale, universe, horizon, judge, data needed, kill criteria} → ERL PROPOSED. Cards without a corpus/probe citation are rejected at write time.
-- [ ] **P4-5** (T2) **H5 calibration:** card outcomes (validated/refuted/abandoned) via the lessons confirm/contradict machinery; hit-rate on Analytics + `get_hermes_brain_health`.
-- [ ] **P4-6** (T1) ⛔D-3 Paid research-lane model routing (weekly synthesis call only).
-
+- [x] **P4-1** (T1) `GEMINI_MODEL` -> `gemini-3-flash-preview` (free tier, 1,500 req/day): default chat/planner/narrator/wiki Gemini model updated 2026-07-19, `backend/.env.example` aligned, local + VPS runtime env overrides updated, and focused tests verify tool-planner declarations plus embeddings parity (`gemini-embedding-001`, 768 dimensions).
+- [x] **P4-2** (T2) **H1 corpus:** `wiki/Research/` now has 26 curated notes across Grinold-Kahn, Sinclair, Carver, Natenberg, Aronson, Lopez de Prado, SEBI FY25, India VRP/day-night/PEAD/Momentum-30, Edge Report v3, and QuantG laws. `research_rag.reindex_all` indexes these disk notes as `type=research` with source refs before wiki/lessons/OOS recall.
+- [x] **P4-3** (T2) **H3 opportunity probes:** deterministic Phase 4 runner added in `core/phase4_research.py` + `scripts/run_phase4_research.py`; probes cover VRP-by-strike, earnings IV-runup, overnight/intraday split, term-structure richness, and participant-OI extremes, with `/ops/research-signals/run` persisting to `db.research_signals`.
+- [x] **P4-4** (T3) **H2 hypothesis cards:** Phase 4 cards are falsifiable and require hypothesis, who-pays rationale, universe, horizon, judge, data needed, kill criteria, and at least one corpus/probe citation; citationless cards raise `ValueError`. CLI can persist PROPOSED cards into `db.research_hypotheses` as `phase4_hypothesis_card`.
+- [x] **P4-5** (T2) **H5 calibration:** card calibration summary is implemented and exposed through `get_hermes_brain_health` as `research_calibration` with total/tested/hit-rate counts. Outcomes remain tied to verdict/lesson evidence; untested cards do not masquerade as learning.
+- [x] **P4-6** (T1) D-3 paid research-lane routing status implemented but disabled by default. Weekly synthesis uses a paid lane only if `HERMES_PAID_RESEARCH_ENABLED=true` and `HERMES_RESEARCH_MODEL`/`PAID_RESEARCH_MODEL` is set; founder D-3 is still open, so current runtime stays free-model only.
 ## INFRA TRACK — QGX continuation (runs alongside; money-correctness order; full text in git history)
 Rung 1 absorbed into Phase 0 (P0-2..P0-6). Remaining rungs unchanged:
 

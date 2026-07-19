@@ -555,6 +555,19 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             # ask "is Hermes actually learning?" and watch it get smarter (or not).
             from core.hermes_lessons import get_brain_health
             data = await get_brain_health(db, user["id"])
+            cards = await db.research_hypotheses.find(
+                {"user_id": user["id"], "research_context.kind": "phase4_hypothesis_card"},
+                {"_id": 0, "status": 1, "verdict": 1, "research_context": 1},
+            ).to_list(500)
+            from core.phase4_research import calibration_summary
+            data["research_calibration"] = calibration_summary([
+                {
+                    "status": row.get("status"),
+                    "trial_status": (row.get("verdict") or {}).get("status"),
+                    "calibration": (row.get("research_context") or {}).get("calibration") or {},
+                }
+                for row in cards
+            ])
             if not data.get("total_lessons"):
                 warnings.append("No lessons yet — the lesson store accrues one scoring pass per EOD.")
                 confidence = 0.5
