@@ -40,7 +40,7 @@ import time
 import argparse
 import urllib.request
 import urllib.error
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 # EDR-05: the 10 equity-strategy stocks — the NSE cash (CM) bhavcopy carries their
 # EOD OHLC so equity strategies can finally be backtested (index-only until now).
@@ -80,7 +80,7 @@ SOURCES = {
 
 OLD_NSE_FO_URL = os.environ.get(
     "OLD_NSE_FO_URL",
-    "https://archives.nseindia.com/content/historical/DERIVATIVES/{yyyy}/{mon}/fo{dd}{mon}{yyyy}bhav.csv.zip",
+    "https://nsearchives.nseindia.com/content/historical/DERIVATIVES/{yyyy}/{mon}/fo{dd}{mon}{yyyy}bhav.csv.zip",
 )
 OLD_NSE_CUTOFF = date(2024, 1, 1)
 
@@ -179,6 +179,8 @@ def parse_and_filter(zip_bytes: bytes, underlyings: set[str], kind: str = "fo",
     raw = z.read(z.namelist()[0]).decode("utf-8", "replace")
     if kind == "cm":
         return parse_cm_csv(raw, underlyings)
+    if "INSTRUMENT,SYMBOL,EXPIRY_DT" in raw[:200]:
+        return parse_legacy_fo_csv(raw, underlyings, instr_types or FO_INSTR_TYPES)
     return parse_udiff_csv(raw, underlyings, instr_types or FO_INSTR_TYPES)
 
 
@@ -215,6 +217,65 @@ def parse_udiff_csv(raw: str, underlyings: set[str], instr_types: set[str] | Non
             "lot_size": row["NewBrdLotQty"],
         })
     return out
+
+
+def parse_legacy_fo_csv(raw: str, underlyings: set[str], instr_types: set[str] | None = None) -> list[dict]:
+    """Parse pre-2024 NSE F&O bhavcopy files into the normalized UDiFF-shaped rows."""
+    allowed = instr_types or FO_INSTR_TYPES
+    type_map = {"FUTIDX": "IDF", "OPTIDX": "IDO", "FUTSTK": "STF", "OPTSTK": "STO"}
+    reader = csv.DictReader(io.StringIO(raw))
+    out = []
+    for row in reader:
+        instr = (row.get("INSTRUMENT") or "").strip().upper()
+        itp = type_map.get(instr)
+        if not itp or itp not in allowed:
+            continue
+        sym = (row.get("SYMBOL") or "").strip().upper()
+        if sym not in underlyings:
+            continue
+        typ = (row.get("OPTION_TYP") or "").strip().upper()
+        if typ == "XX":
+            typ = ""
+        out.append({
+            "date": _legacy_date(row.get("TIMESTAMP")),
+            "instr_type": itp,
+            "underlying": sym,
+            "expiry": _legacy_date(row.get("EXPIRY_DT")),
+            "strike": "" if itp in {"IDF", "STF"} else row.get("STRIKE_PR", ""),
+            "option_type": typ,
+            "symbol": _legacy_symbol(row),
+            "open": row.get("OPEN", ""),
+            "high": row.get("HIGH", ""),
+            "low": row.get("LOW", ""),
+            "close": row.get("CLOSE", ""),
+            "settle": row.get("SETTLE_PR", ""),
+            "underlying_price": row.get("CLOSE", "") if itp in {"IDF", "STF"} else "",
+            "oi": row.get("OPEN_INT", ""),
+            "chg_in_oi": row.get("CHG_IN_OI", ""),
+            "volume": row.get("CONTRACTS", ""),
+            "lot_size": "",
+        })
+    return out
+
+
+def _legacy_date(raw: str | None) -> str:
+    s = str(raw or "").strip()
+    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s[:10]
+
+
+def _legacy_symbol(row: dict) -> str:
+    sym = (row.get("SYMBOL") or "").strip().upper()
+    exp = _legacy_date(row.get("EXPIRY_DT"))
+    strike = str(row.get("STRIKE_PR") or "").strip()
+    typ = (row.get("OPTION_TYP") or "").strip().upper()
+    if typ and typ != "XX":
+        return f"{sym} {strike} {typ} {exp}"
+    return f"{sym} FUT {exp}"
 
 
 def write_day(d: date, prefix: str, rows: list[dict],

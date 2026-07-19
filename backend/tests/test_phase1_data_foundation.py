@@ -5,7 +5,7 @@ from pathlib import Path
 from core.bhavcopy_store import BhavcopyStore
 from core.earnings_calendar import events_for, normalize_event, store_events
 from core.india_flows import parse_participant_oi_csv, store_participant_oi, get_participant_oi
-from scripts.bhavcopy_ingest import parse_udiff_csv, write_day
+from scripts.bhavcopy_ingest import parse_legacy_fo_csv, parse_udiff_csv, write_day
 from scripts.earnings_calendar_fetch_nse import normalize_rows
 
 
@@ -34,6 +34,18 @@ def test_bhavcopy_ingest_accepts_stock_fo_rows():
     chain = store.option_chain("RELIANCE", "2025-01-09")
     assert chain["2025-01-30"][2500.0]["CE"]["close"] == "110"
     shutil.rmtree(tmp_path)
+
+
+def test_bhavcopy_ingest_accepts_legacy_pre_2024_rows():
+    raw = """INSTRUMENT,SYMBOL,EXPIRY_DT,STRIKE_PR,OPTION_TYP,OPEN,HIGH,LOW,CLOSE,SETTLE_PR,CONTRACTS,VAL_INLAKH,OPEN_INT,CHG_IN_OI,TIMESTAMP,
+FUTIDX,NIFTY,25-Jan-2024,0,XX,21500,21600,21400,21550,21550,10,1,100,5,29-DEC-2023,
+OPTIDX,NIFTY,25-Jan-2024,21500,CE,100,120,90,110,110,20,2,200,10,29-DEC-2023,
+"""
+    rows = parse_legacy_fo_csv(raw, {"NIFTY"}, {"IDF", "IDO"})
+    assert [r["instr_type"] for r in rows] == ["IDF", "IDO"]
+    assert rows[0]["date"] == "2023-12-29"
+    assert rows[1]["expiry"] == "2024-01-25"
+    assert rows[1]["option_type"] == "CE"
 
 
 def test_earnings_calendar_store_and_lookup(monkeypatch):
@@ -95,3 +107,14 @@ Client,5,6,7,8
     payload = get_participant_oi("2026-07-17")
     assert payload["rows"][1]["participant"] == "CLIENT"
     shutil.rmtree(tmp_path)
+
+
+def test_participant_oi_parse_skips_nse_title_preamble():
+    raw = '''"Participant wise Open Interest (no. of contracts) in Equity Derivatives as on Jul 05,2024",,,,,,,,,,,,,,
+Client Type,Future Index Long,Future Index Short,Future Stock Long,Future Stock Short,Option Index Call Long
+FII,1,2,3,4,5
+'''
+    rows = parse_participant_oi_csv(raw)
+    assert len(rows) == 1
+    assert rows[0]["participant"] == "FII"
+    assert rows[0]["option_index_call_long"] == 5.0

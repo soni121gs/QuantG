@@ -138,10 +138,16 @@ def parse_participant_oi_csv(raw: str) -> List[Dict[str, Any]]:
     The source has changed headers over time, so matching is deliberately
     tolerant while the output names stay stable for probes/judges.
     """
-    reader = csv.DictReader(io.StringIO(raw))
+    lines = raw.splitlines()
+    header_idx = 0
+    for idx, line in enumerate(lines):
+        if "Client Type" in line:
+            header_idx = idx
+            break
+    reader = csv.DictReader(io.StringIO("\n".join(lines[header_idx:])))
     out: List[Dict[str, Any]] = []
     for row in reader:
-        lowered = {str(k).strip().lower(): v for k, v in row.items()}
+        lowered = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
         client_type = (
             lowered.get("client type") or lowered.get("participant") or lowered.get("category") or ""
         ).strip()
