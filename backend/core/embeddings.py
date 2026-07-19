@@ -8,7 +8,7 @@ from typing import List
 logger = logging.getLogger("quantg.embeddings")
 
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
-DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+DEFAULT_CHAT_MODEL = "gemini-3-flash-preview"
 
 def _generate_gemini_embedding_sync(text: str) -> List[float]:
     """Sends a synchronous HTTP POST request to Google Gemini's embedContent endpoint."""

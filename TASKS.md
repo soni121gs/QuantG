@@ -70,7 +70,7 @@ All sources legal per §14.1 (exchange/broker/public).
 
 ## PHASE 4 — HERMES v2: RESEARCH ANALYST (~2 wks staged)
 
-- [ ] **P4-1** (T1) `GEMINI_MODEL` → `gemini-3-flash-preview` (free tier, 1,500 req/day); verify planner/tool-calling + embeddings parity.
+- [x] **P4-1** (T1) `GEMINI_MODEL` → `gemini-3-flash-preview` (free tier, 1,500 req/day): default chat/planner/narrator/wiki Gemini model updated 2026-07-19, `backend/.env.example` aligned, local + VPS runtime env overrides updated, and focused tests verify tool-planner declarations plus embeddings parity (`gemini-embedding-001`, 768 dimensions).
 - [ ] **P4-2** (T2) **H1 corpus:** `wiki/Research/` — ~25 curated notes (textbook summaries: Grinold-Kahn, Sinclair ×2, Carver, Natenberg, Aronson, López de Prado; SEBI FY25 study; India papers: VRP anatomy, day/night option returns, PEAD ×2, Momentum-30; Edge Report v3). Reindex via `research_rag.reindex_all` (IA-7 pipeline exists). Acceptance: RAG recall cites them.
 - [ ] **P4-3** (T2) **H3 opportunity probes** (deterministic): VRP-by-strike monitor, earnings IV-runup stats (post P1-2), overnight/intraday split, term-structure richness (post P2-1), participant-OI extremes (post P1-4) → `db.research_signals`.
 - [ ] **P4-4** (T3) **H2 hypothesis cards:** weekly job — falsifiable cards {hypothesis, who-pays rationale, universe, horizon, judge, data needed, kill criteria} → ERL PROPOSED. Cards without a corpus/probe citation are rejected at write time.

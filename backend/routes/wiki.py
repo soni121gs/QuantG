@@ -790,7 +790,7 @@ async def summarize_url(req: WikiSummarizeReq, user=Depends(get_current_user)):
             "summary_markdown": f"# Scraped Note from URL\n\nReference: {url}\n\n*This content was imported directly because the Gemini API key is not configured in the environment.*\n\n## Scraped Text Preview\n\n{trimmed_text[:1000]}..."
         }
         
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
     prompt = f"""You are an expert trading operations and research assistant.
 Summarize the key trading rules, setups, decisions, or meeting transcripts from the following text scraped from a webpage, and format it as a clean, highly structured Markdown note.
 

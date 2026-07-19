@@ -20,7 +20,7 @@ import requests
 
 logger = logging.getLogger("quantg.hermes_diagnostics")
 
-_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 

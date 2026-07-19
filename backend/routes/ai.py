@@ -18,7 +18,7 @@ import time
 
 _STRATEGY_SCORES_CACHE: Dict[str, Dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 agent_router = APIRouter(prefix="/agent", tags=["AI Agent"])
@@ -1247,7 +1247,7 @@ def _plan_tools_via_gemini_sync(message: str, recent_messages: List[Dict[str, An
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"function_declarations": _tool_planner_declarations()}],
         "tool_config": {"function_calling_config": {"mode": "ANY"}},
-        # gemini-2.5-flash is a thinking model (~200 hidden "thought" tokens);
+        # Gemini Flash preview models can spend hidden budget before output;
         # too small a budget truncates before the functionCall parts are emitted
         # (intermittent empty selection). Give ample headroom for thoughts + calls.
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024},
@@ -1427,7 +1427,7 @@ Read-only tool results JSON:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.5,
-            # gemini-2.5-flash is a THINKING model: hidden thought tokens are
+            # Gemini Flash preview models may spend hidden thought budget before output;
             # charged against maxOutputTokens. At 1200 with 8 tool results the
             # thoughts ate the budget and the visible answer got cut off
             # mid-sentence (MAX_TOKENS). Give the answer real headroom AND cap
