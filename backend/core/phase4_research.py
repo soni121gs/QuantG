@@ -18,7 +18,18 @@ from core.earnings_calendar import events_for
 from core.india_flows import get_participant_oi, participant_oi_days
 
 
-RESEARCH_ROOT = Path(__file__).resolve().parents[2] / "wiki" / "Research"
+def _default_research_root() -> Path:
+    here = Path(__file__).resolve()
+    for root in (
+        here.parents[1] / "wiki" / "Research",
+        here.parents[2] / "wiki" / "Research",
+    ):
+        if root.exists():
+            return root
+    return here.parents[2] / "wiki" / "Research"
+
+
+RESEARCH_ROOT = _default_research_root()
 REQUIRED_CARD_FIELDS = ("hypothesis", "who_pays", "universe", "horizon", "judge", "data_needed", "kill_criteria")
 PROBES = ("vrp_by_strike", "earnings_iv_runup", "overnight_intraday_split", "term_structure_richness", "participant_oi_extremes")
 

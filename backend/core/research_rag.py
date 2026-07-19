@@ -25,7 +25,20 @@ from core.embeddings import generate_gemini_embedding
 
 # free-tier gemini-embedding-001 rate-limits bursts (429); pace calls to stay under.
 _EMBED_DELAY = float(os.environ.get("RAG_EMBED_DELAY", "1.2"))
-RESEARCH_ROOT = Path(__file__).resolve().parents[2] / "wiki" / "Research"
+
+
+def _default_research_root() -> Path:
+    here = Path(__file__).resolve()
+    for root in (
+        here.parents[1] / "wiki" / "Research",
+        here.parents[2] / "wiki" / "Research",
+    ):
+        if root.exists():
+            return root
+    return here.parents[2] / "wiki" / "Research"
+
+
+RESEARCH_ROOT = _default_research_root()
 
 
 def _hash(text: str) -> str:

@@ -24,7 +24,9 @@ services:
       start_period: 60s
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: quantg-backend
     logging:
       driver: json-file

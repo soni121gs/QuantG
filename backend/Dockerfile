@@ -3,11 +3,12 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app sources
-COPY . /app
+COPY backend/ /app
+COPY wiki/Research/ /app/wiki/Research/
 
 # Create a non-root user and give ownership of the app directory
 RUN mkdir -p /data \
