@@ -200,6 +200,8 @@ def grade_symbol(
 
 
 def grade_universe(symbols: Optional[List[str]] = None, **kwargs: Any) -> Dict[str, Any]:
+    if kwargs.get("store") is None:
+        kwargs["store"] = BhavcopyStore()
     rows = [grade_symbol(sym, **kwargs) for sym in (symbols or TOP30_FNO)]
     ready = [r for r in rows if (r.get("paper_gate") or {}).get("eligible_for_paper")]
     return {"count": len(rows), "eligible_for_paper": len(ready), "rows": rows}
