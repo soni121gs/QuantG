@@ -208,7 +208,11 @@ class EODOptionsBacktest:
                 reason = None
                 if val is not None:
                     basis, ref = active["entry_basis"], active["entry_ref"]
-                    if self._exit_mode != "expiry":
+                    held = i - active["entry_idx"]
+                    forced_hold = p.get("force_time_exit_days")
+                    if forced_hold is not None and held >= int(forced_hold):
+                        reason = "TIME_EXIT"
+                    elif self._exit_mode != "expiry":
                         if active["kind"] == "credit":
                             captured = (basis - val) / basis if basis else 0.0  # % of credit kept
                             if captured >= active["tp"]:
@@ -221,7 +225,6 @@ class EODOptionsBacktest:
                                 reason = "TAKE_PROFIT"
                             elif rel <= -active["sl"]:
                                 reason = "STOP_LOSS"
-                    held = i - active["entry_idx"]
                     if day >= active["expiry"]:
                         reason = reason or "EXPIRY"
                     elif held >= max_hold_days:
