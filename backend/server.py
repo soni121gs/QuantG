@@ -16715,6 +16715,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _schedule_pause_done_date: Optional[str] = None
     _index_flush_done_date: Optional[str] = None
     _hist_validate_done_week: Optional[str] = None
+    _earnings_forward_done_week: Optional[str] = None
     _opt_capture_reg_minute: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
@@ -16881,6 +16882,20 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Weekly Hermes historical validation user=%s: %s", _row["id"], _hv.get("validated"))
                 except Exception as _hv_err:
                     logger.error("Weekly historical validation failed: %s", _hv_err)
+
+            if ist.weekday() == 5 and hour == 5 and _earnings_forward_done_week != _iso_week:
+                _earnings_forward_done_week = _iso_week
+                try:
+                    from scripts.earnings_calendar_fetch_nse import DEFAULT_TOP30_FNO, collect_events
+                    _start = ist.date() - timedelta(days=45)
+                    _end = ist.date() + timedelta(days=45)
+                    _er = await asyncio.to_thread(
+                        collect_events, DEFAULT_TOP30_FNO, _start, _end,
+                        chunk_days=120, sleep_sec=0.25,
+                    )
+                    logger.info("Weekly earnings-calendar forward refresh: %s", _er)
+                except Exception as _ec_err:
+                    logger.error("Weekly earnings-calendar forward refresh failed: %s", _ec_err)
 
             # 15:35 IST — flush the day's captured index 1-minute bars (IMD-04) to
             # the index-minute store for the intraday backtester. Read-only, best-effort.

@@ -34,14 +34,33 @@ def _path(year: str) -> Path:
 
 
 def normalize_event(row: Dict[str, Any]) -> Dict[str, Any]:
-    symbol = str(row.get("symbol") or row.get("TckrSymb") or row.get("ticker") or "").upper().strip()
-    event_date = _norm_date(row.get("date") or row.get("event_date") or row.get("results_date"))
+    symbol = str(
+        row.get("symbol")
+        or row.get("SYMBOL")
+        or row.get("TckrSymb")
+        or row.get("ticker")
+        or ""
+    ).upper().strip()
+    event_date = _norm_date(
+        row.get("date")
+        or row.get("event_date")
+        or row.get("results_date")
+        or row.get("MEETING DATE")
+        or row.get("meeting_date")
+    )
     return {
         "symbol": symbol,
         "date": event_date,
         "event_type": str(row.get("event_type") or "earnings").lower(),
         "source": row.get("source") or "manual",
-        "headline": row.get("headline") or row.get("company_name") or symbol,
+        "headline": (
+            row.get("headline")
+            or row.get("company_name")
+            or row.get("COMPANY NAME")
+            or row.get("Purpose")
+            or row.get("PURPOSE")
+            or symbol
+        ),
         "ingested_at": datetime.now(timezone.utc).isoformat(),
     }
 

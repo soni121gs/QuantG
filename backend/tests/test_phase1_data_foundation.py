@@ -3,9 +3,10 @@ import shutil
 from pathlib import Path
 
 from core.bhavcopy_store import BhavcopyStore
-from core.earnings_calendar import events_for, store_events
+from core.earnings_calendar import events_for, normalize_event, store_events
 from core.india_flows import parse_participant_oi_csv, store_participant_oi, get_participant_oi
 from scripts.bhavcopy_ingest import parse_udiff_csv, write_day
+from scripts.earnings_calendar_fetch_nse import normalize_rows
 
 
 def _scratch(name: str) -> Path:
@@ -46,6 +47,38 @@ def test_earnings_calendar_store_and_lookup(monkeypatch):
     assert len(events) == 1
     assert events[0]["date"] == "2025-01-09"
     shutil.rmtree(tmp_path)
+
+
+def test_earnings_calendar_accepts_nse_board_meeting_fields():
+    event = normalize_event({
+        "SYMBOL": "RELIANCE",
+        "COMPANY NAME": "Reliance Industries Limited",
+        "MEETING DATE": "29-Jul-2025",
+        "Purpose": "Financial Results",
+    })
+    assert event["symbol"] == "RELIANCE"
+    assert event["date"] == "2025-07-29"
+    assert event["headline"] == "Reliance Industries Limited"
+
+
+def test_nse_earnings_fetch_filters_financial_results():
+    rows = normalize_rows([
+        {
+            "SYMBOL": "RELIANCE",
+            "Purpose": "Financial Results",
+            "Details": "To consider unaudited financial results",
+            "MEETING DATE": "29-Jul-2025",
+        },
+        {
+            "SYMBOL": "RELIANCE",
+            "Purpose": "Issue of Bonus Shares",
+            "Details": "Board meeting",
+            "MEETING DATE": "03-May-2024",
+        },
+    ])
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "RELIANCE"
+    assert rows[0]["date"] == "29-Jul-2025"
 
 
 def test_participant_oi_parse_and_store(monkeypatch):
