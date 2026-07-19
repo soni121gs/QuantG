@@ -17,7 +17,25 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.index_alpha_sleeves import grade_index_alpha  # noqa: E402
+from core.index_alpha_sleeves import grade_index_alpha, sweep_min_z  # noqa: E402
+
+
+def _print_sweep(start, end) -> None:
+    res = sweep_min_z(start=start, end=end)
+    grid = res["z_grid"]
+    print("Monotonic-gate sweep (the QG-O1 tell, §15.5): expectancy should RISE as z tightens.")
+    print("A flat/noisy curve = fluke, not edge. 'MONO' = monotonic-up confirmed.\n")
+    header = "".join(f"z>={z:<7}" for z in grid)
+    print(f"{'NAME':<46}{header}  MONO")
+    print("-" * (46 + 8 * len(grid) + 6))
+    for name, c in res["curves"].items():
+        cells = "".join(
+            (f"{e:>6.0f}(n{n:<3})"[:8] if e is not None else f"{'-':<8}")
+            for e, n in zip(c["expectancy"], c["n"])
+        )
+        mono = "MONO" if c["monotonic"].get("monotonic_up") else "-"
+        print(f"{name[:45]:<46}{cells}  {mono}")
+    print(f"\nConfirmed monotonic: {res['confirmed_monotonic'] or 'none'}")
 
 
 def main() -> None:
@@ -26,7 +44,13 @@ def main() -> None:
     ap.add_argument("--end", default=None)
     ap.add_argument("--min-z", type=float, default=0.75,
                     help="IV richness z-gate: sellers need z>=min_z (rich), trend needs z<=-min_z (cheap)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="run the min-z sweep (0.5..1.5) and print the expectancy-vs-gate curve")
     args = ap.parse_args()
+
+    if args.sweep:
+        _print_sweep(args.start, args.end)
+        return
 
     result = grade_index_alpha(start=args.start, end=args.end, min_z=args.min_z)
     print("ERP Index-Option Alpha Sleeves — NIFTY + SENSEX (research-only)")

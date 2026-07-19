@@ -47,30 +47,45 @@ def _richness(store: BhavcopyStore, underlying: str, day: str) -> Dict[str, Any]
 
 
 # ── gated signal builder ────────────────────────────────────────────────────
-# mode ∈ {put_sell, call_sell, condor_sell, trend_delta1}. Sellers require
-# regime=RANGE + IV rich (z ≥ min_z). Trend-coverage requires an aligned trend +
-# IV cheap (z ≤ -min_z). The gate IS the strategy — see §18.4 (precision > payoff).
+# Each mode is a DIFFERENT edge source with its OWN regime + IV gate — this is
+# the RAE ensemble (§18): one specialist per day-type, standing down elsewhere.
+#   put_sell/call_sell/condor_sell : VRP harvest       — RANGE + IV rich (z≥min_z)
+#   trend_delta1                   : trend continuation — TREND + IV cheap (z≤-min_z)
+#   reversal_long                  : mean-reversion     — RANGE + over-extended, fade the spike
+#   calendar_neutral               : IV TERM-STRUCTURE  — RANGE + low-vol, sell near/buy far
+#   longvol                        : LONG GAMMA         — HIGH_VOL + IV cheap, ride the expansion
+# The gate IS the strategy — see §18.4 (precision > payoff). NONE of these is
+# "sell premium renamed": reversal is contrarian, calendar harvests a different
+# (time) axis, longvol is long-vol (the mirror of VRP).
+
+_LARGE_MOVE = 0.012   # |daily return| that counts as an over-extension / expansion
+
 
 def build_gated_signals(candles: List[Dict[str, Any]], *, store: BhavcopyStore,
                         underlying: str, mode: str, min_z: float = 0.75,
                         require_low_vol: bool = True) -> Dict[str, Any]:
     regimes = {r["date"]: r for r in tag_regimes(candles)}
     signals: List[Dict[str, Any]] = []
-    rejected = {"wrong_regime": 0, "iv_not_rich": 0, "iv_not_cheap": 0,
-                "surface_unavailable": 0, "high_vol": 0}
+    rejected = {"wrong_regime": 0, "iv_not_rich": 0, "iv_not_cheap": 0, "iv_not_neutral": 0,
+                "surface_unavailable": 0, "high_vol": 0, "not_extended": 0, "not_expanding": 0}
+    prev_close: Optional[float] = None
 
     for c in candles:
         day = str(c.get("date"))[:10]
         reg = regimes.get(day) or {}
         trend = reg.get("trend")
+        vol = reg.get("vol")
+        close = float(c.get("close") or 0.0)
+        ret = (close / prev_close - 1.0) if prev_close else 0.0
+        prev_close = close or prev_close
         rich = _richness(store, underlying, day)
         if not rich.get("available"):
             rejected["surface_unavailable"] += 1
             continue
         z = float(rich.get("zscore") or 0.0)
 
+        # --- trend continuation (deep-ITM delta-1) : TREND + IV cheap ---------
         if mode == "trend_delta1":
-            # coverage leg: only on a real trend, and only when premium is CHEAP
             if trend not in ("UPTREND", "DOWNTREND"):
                 rejected["wrong_regime"] += 1
                 continue
@@ -83,11 +98,58 @@ def build_gated_signals(candles: List[Dict[str, Any]], *, store: BhavcopyStore,
                             "gate": "trend_aligned+iv_cheap"})
             continue
 
-        # sellers: RANGE + rich premium (+ optionally avoid high-vol tape)
+        # --- mean-reversion (contrarian debit spread) : RANGE + over-extended -
+        if mode == "reversal_long":
+            if trend != "RANGE":
+                rejected["wrong_regime"] += 1
+                continue
+            if abs(ret) < _LARGE_MOVE:
+                rejected["not_extended"] += 1
+                continue
+            # fade the spike: sharp DOWN -> buy CE bounce; sharp UP -> buy PE fade
+            direction = "CE" if ret < 0 else "PE"
+            signals.append({"date": c["date"], "action": "BUY" if direction == "CE" else "SELL",
+                            "direction": direction, "ret_pct": round(ret * 100, 2),
+                            "iv_z": round(z, 3), "gate": "range+overextended_fade"})
+            continue
+
+        # --- IV term-structure (calendar) : RANGE + low-vol, premium not-cheap -
+        if mode == "calendar_neutral":
+            if trend != "RANGE":
+                rejected["wrong_regime"] += 1
+                continue
+            if vol == "HIGH_VOL":
+                rejected["high_vol"] += 1
+                continue
+            if z < -min_z:   # skip only when premium is outright cheap (bad for a net-debit calendar)
+                rejected["iv_not_neutral"] += 1
+                continue
+            signals.append({"date": c["date"], "action": "BUY", "direction": "CE",
+                            "iv_z": round(z, 3), "gate": "range+lowvol_calendar"})
+            continue
+
+        # --- long gamma (debit spread) : HIGH_VOL + IV cheap, ride expansion ---
+        if mode == "longvol":
+            if vol != "HIGH_VOL":
+                rejected["wrong_regime"] += 1
+                continue
+            if z > -min_z:
+                rejected["iv_not_cheap"] += 1
+                continue
+            if abs(ret) < _LARGE_MOVE:
+                rejected["not_expanding"] += 1
+                continue
+            direction = "CE" if ret > 0 else "PE"   # ride the direction of the expansion
+            signals.append({"date": c["date"], "action": "BUY" if direction == "CE" else "SELL",
+                            "direction": direction, "ret_pct": round(ret * 100, 2),
+                            "iv_z": round(z, 3), "gate": "highvol+iv_cheap_longgamma"})
+            continue
+
+        # --- VRP sellers : RANGE + rich premium (+ optionally avoid high-vol) --
         if trend != "RANGE":
             rejected["wrong_regime"] += 1
             continue
-        if require_low_vol and reg.get("vol") == "HIGH_VOL":
+        if require_low_vol and vol == "HIGH_VOL":
             rejected["high_vol"] += 1
             continue
         if z < min_z:
@@ -180,7 +242,68 @@ SLEEVES: List[Dict[str, Any]] = [
      "mode": "trend_delta1",
      "params": {"itm_offset_pct": 0.02, "min_dte": 14, "max_dte": 45, "max_hold_days": 5,
                 "debit_tp": 0.6, "debit_sl": 0.25}},
+
+    # ── DIFFERENT LOGICS (not premium selling) — one per remaining regime ──────
+    # 8. NIFTY mean-reversion: fade an over-extended day back into the range (contrarian)
+    {"cfg": _cfg("IDX-NIFTY-REVERSAL", "IDX NIFTY Mean-Reversion Fade (RANGE overext)", "NIFTY",
+                 {"structure": "debit_spread", "spread_width": 4, "exit_mode": ""},
+                 {"target_pct": 50.0, "stoploss_pct": 50.0, "max_hold_days": 4}),
+     "mode": "reversal_long",
+     "params": {"width": 4, "min_dte": 2, "max_dte": 8, "max_hold_days": 4,
+                "debit_tp": 0.5, "debit_sl": 0.5}},
+
+    # 9. SENSEX mean-reversion fade
+    {"cfg": _cfg("IDX-SENSEX-REVERSAL", "IDX SENSEX Mean-Reversion Fade (RANGE overext)", "SENSEX",
+                 {"structure": "debit_spread", "spread_width": 4, "exit_mode": ""},
+                 {"target_pct": 50.0, "stoploss_pct": 50.0, "max_hold_days": 4}),
+     "mode": "reversal_long",
+     "params": {"width": 4, "min_dte": 2, "max_dte": 8, "max_hold_days": 4,
+                "debit_tp": 0.5, "debit_sl": 0.5}},
+
+    # 10. NIFTY IV term-structure calendar: sell rich near-expiry vs cheaper far (time axis)
+    {"cfg": _cfg("IDX-NIFTY-CALENDAR", "IDX NIFTY IV Term-Structure Calendar (RANGE lowvol)", "NIFTY",
+                 {"structure": "calendar_spread", "exit_mode": ""},
+                 {"max_hold_days": 6}),
+     "mode": "calendar_neutral",
+     "params": {"min_dte": 2, "max_dte": 8, "calendar_far_min_dte": 21, "calendar_far_max_dte": 60,
+                "max_hold_days": 6, "debit_tp": 0.5, "debit_sl": 0.5}},
+
+    # 11. SENSEX IV term-structure calendar
+    {"cfg": _cfg("IDX-SENSEX-CALENDAR", "IDX SENSEX IV Term-Structure Calendar (RANGE lowvol)", "SENSEX",
+                 {"structure": "calendar_spread", "exit_mode": ""},
+                 {"max_hold_days": 10}),
+     "mode": "calendar_neutral",
+     "params": {"min_dte": 3, "max_dte": 12, "calendar_far_min_dte": 25, "calendar_far_max_dte": 60,
+                "max_hold_days": 10, "debit_tp": 0.5, "debit_sl": 0.5}},
+
+    # 12. NIFTY long-gamma coverage: ride the expansion on a cheap-IV high-vol day
+    {"cfg": _cfg("IDX-NIFTY-LONGVOL", "IDX NIFTY Long-Gamma (HIGH_VOL + IV cheap)", "NIFTY",
+                 {"structure": "debit_spread", "spread_width": 5, "exit_mode": ""},
+                 {"target_pct": 70.0, "stoploss_pct": 40.0, "max_hold_days": 3}),
+     "mode": "longvol",
+     "params": {"width": 5, "min_dte": 2, "max_dte": 8, "max_hold_days": 3,
+                "debit_tp": 0.7, "debit_sl": 0.4}},
+
+    # 13. SENSEX long-gamma coverage
+    {"cfg": _cfg("IDX-SENSEX-LONGVOL", "IDX SENSEX Long-Gamma (HIGH_VOL + IV cheap)", "SENSEX",
+                 {"structure": "debit_spread", "spread_width": 5, "exit_mode": ""},
+                 {"target_pct": 70.0, "stoploss_pct": 40.0, "max_hold_days": 3}),
+     "mode": "longvol",
+     "params": {"width": 5, "min_dte": 2, "max_dte": 8, "max_hold_days": 3,
+                "debit_tp": 0.7, "debit_sl": 0.4}},
 ]
+
+# Regime coverage map — what each sleeve is FOR (the ensemble, not one bet):
+#   RANGE (60% of days)   : put_sell, call_sell, condor_sell, calendar_neutral, reversal_long
+#   TREND (~1%)           : trend_delta1
+#   HIGH_VOL_CHOP (13%)   : longvol   (else stand down — see §18.4)
+#   INSIDE_QUIET (26%)    : reversal_long + sellers (RANGE-adjacent)
+REGIME_COVERAGE = {
+    "RANGE": ["put_sell", "call_sell", "condor_sell", "calendar_neutral", "reversal_long"],
+    "TREND": ["trend_delta1"],
+    "HIGH_VOL": ["longvol"],
+    "INSIDE": ["reversal_long", "put_sell"],
+}
 
 
 def _cost_floor(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -240,3 +363,46 @@ def grade_index_alpha(*, store: Optional[BhavcopyStore] = None, start: Optional[
             "eligible_for_paper": sum(1 for r in rows
                                       if (r.get("paper_gate") or {}).get("eligible_for_paper")),
             "rows": rows}
+
+
+# ── monotonic-gate sweep ─────────────────────────────────────────────────────
+# The QG-O1 tell (§15.5): a REAL gated edge has expectancy that RISES MONOTONICALLY
+# as the gate tightens (stricter z → fatter per-trade edge, thinner sample). A
+# flat/noisy expectancy-vs-gate curve is a fluke, not a signal. This runs each
+# sleeve across a z-grid and reports the curve so the shape is visible.
+
+DEFAULT_Z_GRID = [0.5, 0.75, 1.0, 1.25, 1.5]
+
+
+def _monotonic(values: List[Optional[float]]) -> Dict[str, Any]:
+    seq = [v for v in values if v is not None]
+    if len(seq) < 3:
+        return {"monotonic_up": False, "reason": "insufficient points"}
+    rising = sum(1 for a, b in zip(seq, seq[1:]) if b >= a)
+    return {"monotonic_up": bool(rising >= len(seq) - 2 and seq[-1] > seq[0]),
+            "rising_steps": rising, "steps": len(seq) - 1,
+            "first": seq[0], "last": seq[-1]}
+
+
+def sweep_min_z(*, store: Optional[BhavcopyStore] = None, start: Optional[str] = None,
+                end: Optional[str] = None, z_grid: Optional[List[float]] = None) -> Dict[str, Any]:
+    store = store or BhavcopyStore()
+    grid = z_grid or DEFAULT_Z_GRID
+    curves: Dict[str, Dict[str, Any]] = {}
+    for entry in SLEEVES:
+        name = entry["cfg"]["name"]
+        exps: List[Optional[float]] = []
+        ns: List[int] = []
+        for z in grid:
+            row = _grade_sleeve(entry, store=store, start=start, end=end, min_z=z)
+            if row.get("status") == "error":
+                exps.append(None)
+                ns.append(0)
+            else:
+                overall = row.get("overall") or {}
+                exps.append(overall.get("expectancy"))
+                ns.append(int(overall.get("n") or 0))
+        curves[name] = {"grid": grid, "expectancy": exps, "n": ns,
+                        "monotonic": _monotonic(exps)}
+    return {"z_grid": grid, "curves": curves,
+            "confirmed_monotonic": [n for n, c in curves.items() if c["monotonic"].get("monotonic_up")]}
