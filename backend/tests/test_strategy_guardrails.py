@@ -69,6 +69,22 @@ class _FakeBhavcopyStore:
         return 65
 
 
+class _FakeCalendarStore(_FakeBhavcopyStore):
+    def expiries(self, underlying, day):
+        entry = date.fromisoformat(day)
+        return [(entry + timedelta(days=7)).isoformat(), (entry + timedelta(days=35)).isoformat()]
+
+    def option_chain(self, underlying, day):
+        expiries = self.expiries(underlying, day)
+        strikes = [24000.0]
+        return {exp: {strike: {"CE": {}, "PE": {}} for strike in strikes} for exp in expiries}
+
+    def leg_settle(self, underlying, day, expiry, strike, option_type):
+        dte = (date.fromisoformat(expiry) - date.fromisoformat(day)).days
+        intrinsic = 0.0
+        return max(1.0, intrinsic + dte * 2.0)
+
+
 def test_eod_backtester_replays_latest_window_strategy_across_history():
     from core.eod_options_backtest import EODOptionsBacktest
 
@@ -96,6 +112,39 @@ def test_eod_backtester_replays_latest_window_strategy_across_history():
     assert result["signal_evaluation"] == "rolling_latest_window"
     assert result["signals"] > 1
     assert result["total_trades"] > 0
+
+
+def test_eod_backtester_prices_calendar_spread_two_expiries():
+    from core.eod_options_backtest import EODOptionsBacktest
+
+    strategy = {
+        "id": "qg-calendar",
+        "name": "Calendar Spread Research",
+        "python_code": "def run(data):\n    return []",
+        "visual_config": {
+            "symbol": "NIFTY",
+            "options": {
+                "enabled": True,
+                "underlying": "NIFTY",
+                "structure": "calendar_spread",
+                "exit_mode": "expiry",
+            },
+            "risk": {"max_hold_days": 10},
+        },
+    }
+
+    result = EODOptionsBacktest(_FakeCalendarStore()).run(
+        strategy,
+        params={"calendar_far_min_dte": 21, "calendar_far_max_dte": 60},
+        signals=[{"date": "2026-01-21", "action": "BUY", "direction": "CE"}],
+    )
+
+    assert result.get("error") is None
+    assert result["structure"] == "calendar_spread"
+    assert result["total_trades"] == 1
+    trade = result["trades"][0]
+    assert "CAL" in trade["desc"]
+    assert trade["exit_reason"] == "EXPIRY"
 
 
 @pytest.mark.asyncio

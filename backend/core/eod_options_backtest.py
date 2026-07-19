@@ -56,6 +56,19 @@ def _pick_expiry(store: BhavcopyStore, u: str, day: str,
     return min(future, key=lambda e: _dte(day, e)) if future else None
 
 
+def _pick_calendar_expiries(store: BhavcopyStore, u: str, day: str,
+                            near_min: int = MIN_DTE_DAYS, near_max: int = MAX_DTE_DAYS,
+                            far_min: int = 21, far_max: int = 60) -> Optional[Tuple[str, str]]:
+    exps = sorted(store.expiries(u, day), key=lambda e: _dte(day, e))
+    near = next((e for e in exps if near_min <= _dte(day, e) <= near_max), None)
+    if not near:
+        return None
+    far = next((e for e in exps if e > near and far_min <= _dte(day, e) <= far_max), None)
+    if not far:
+        far = next((e for e in exps if e > near), None)
+    return (near, far) if far else None
+
+
 def _strike_interval(strikes: List[float]) -> float:
     vals = sorted(set(strikes))
     diffs = [b - a for a, b in zip(vals, vals[1:]) if b > a]
@@ -93,7 +106,9 @@ class EODOptionsBacktest:
             signals: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """`params` (optional) overrides config for edge-search sweeps:
         credit_tp / credit_sl (spread exit geometry), debit_tp / debit_sl,
-        width (strikes), min_dte / max_dte (expiry choice), max_hold_days."""
+        width (strikes), min_dte / max_dte (expiry choice), max_hold_days.
+        calendar_spread uses near expiry min/max plus calendar_far_min_dte /
+        calendar_far_max_dte for the long leg."""
         p = params or {}
         self._p = p
         vc = strategy.get("visual_config") or {}
@@ -249,9 +264,22 @@ class EODOptionsBacktest:
     # ---- structure open / value / close --------------------------------------
     def _open(self, sig, u, day, idx, spot, structure, width, tp_pct, sl_pct):
         p = getattr(self, "_p", {}) or {}
-        expiry = _pick_expiry(self.store, u, day,
-                              int(p.get("min_dte") or MIN_DTE_DAYS),
-                              int(p.get("max_dte") or MAX_DTE_DAYS))
+        if structure == "calendar_spread":
+            pair = _pick_calendar_expiries(
+                self.store, u, day,
+                int(p.get("min_dte") or MIN_DTE_DAYS),
+                int(p.get("max_dte") or MAX_DTE_DAYS),
+                int(p.get("calendar_far_min_dte") or 21),
+                int(p.get("calendar_far_max_dte") or 60),
+            )
+            if not pair:
+                return None
+            expiry, far_expiry = pair
+        else:
+            expiry = _pick_expiry(self.store, u, day,
+                                  int(p.get("min_dte") or MIN_DTE_DAYS),
+                                  int(p.get("max_dte") or MAX_DTE_DAYS))
+            far_expiry = None
         if not expiry:
             return None
         chain = self.store.option_chain(u, day).get(expiry, {})
@@ -325,6 +353,23 @@ class EODOptionsBacktest:
                     "entry_idx": idx, "entry_day": day,
                     "desc": f"BUY {long_k:.0f}/{short_k:.0f}{typ} debit={debit:.1f}"}
 
+        if structure == "calendar_spread":
+            typ = direction if direction in ("CE", "PE") else ("CE" if bullish else "PE")
+            k = atm
+            near_px = settle(k, typ)
+            far_px = self.store.leg_settle(u, day, far_expiry, k, typ) if far_expiry else None
+            if near_px is None or not far_px:
+                return None
+            debit = _fill(far_px, "BUY") - _fill(near_px, "SELL")
+            if debit <= 0:
+                return None
+            return {"kind": "long", "structure": structure, "u": u, "expiry": expiry,
+                    "far_expiry": far_expiry, "strike": k, "typ": typ,
+                    "legs": [("SELL", k, typ, expiry), ("BUY", k, typ, far_expiry)],
+                    "entry_basis": debit, "entry_ref": debit, "tp": float(p.get("debit_tp", 0.5)),
+                    "sl": float(p.get("debit_sl", 0.5)), "entry_idx": idx, "entry_day": day,
+                    "desc": f"CAL {k:.0f}{typ} short {expiry} long {far_expiry} debit={debit:.1f}"}
+
         if structure == "iron_condor":
             # Direction-agnostic, defined-risk short vol: sell an OTM strangle, buy
             # further-OTM wings to cap the tail. `short_otm_pct` sets the short legs;
@@ -374,10 +419,29 @@ class EODOptionsBacktest:
             cs, cl, ps, pl = pos["ce_short"], pos["ce_long"], pos["pe_short"], pos["pe_long"]
             return max(0.0, (max(0.0, s_exp - cs) - max(0.0, s_exp - cl)
                              + max(0.0, ps - s_exp) - max(0.0, pl - s_exp)))
+        if s == "calendar_spread":
+            k, typ = pos["strike"], pos["typ"]
+            return max(0.0, s_exp - k) if typ == "CE" else max(0.0, k - s_exp)
         return None
 
     def _value(self, pos, u, day):
         s = pos["structure"]
+        if s == "calendar_spread":
+            k, typ = pos["strike"], pos["typ"]
+            far_px = self.store.leg_settle(u, day, pos["far_expiry"], k, typ)
+            if far_px is None:
+                return None
+            if day >= pos["expiry"]:
+                s_exp = getattr(self, "_close_by", {}).get(pos["expiry"]) or getattr(self, "_close_by", {}).get(day)
+                if s_exp is None:
+                    return None
+                near_cost = max(0.0, s_exp - k) if typ == "CE" else max(0.0, k - s_exp)
+            else:
+                near_px = self.store.leg_settle(u, day, pos["expiry"], k, typ)
+                if near_px is None:
+                    return None
+                near_cost = _fill(near_px, "BUY")
+            return _fill(far_px, "SELL") - near_cost
         # Hold-to-expiry mode: settle at exact index intrinsic once at/after expiry.
         if getattr(self, "_exit_mode", "") == "expiry" and day >= pos["expiry"]:
             s_exp = getattr(self, "_close_by", {}).get(pos["expiry"]) or getattr(self, "_close_by", {}).get(day)

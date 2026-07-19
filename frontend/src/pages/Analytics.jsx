@@ -164,7 +164,7 @@ const VolCell = ({ s, highlight }) => {
 // walk-forward backtester → see the verdict BEFORE anything is seeded live.
 const F_UNDER = ["NIFTY", "BANKNIFTY", "SENSEX"];
 const F_STRUCT = [["credit_spread", "Credit spread (1-sided)"], ["iron_condor", "Iron condor"],
-  ["single_leg", "Single leg (buy)"], ["debit_spread", "Debit spread"]];
+  ["calendar_spread", "Calendar spread"], ["single_leg", "Single leg (buy)"], ["debit_spread", "Debit spread"]];
 const F_DIR = [["bullish", "Bullish / put side"], ["bearish", "Bearish / call side"]];
 
 const Field = ({ label, children }) => (

@@ -56,7 +56,7 @@ All sources legal per §14.1 (exchange/broker/public).
 - [x] **P2-2** (T2) ERL upgrade: **Deflated Sharpe + explicit trials-count** per family on every snapshot/verdict (extends the existing multiple-testing penalty). Done: Edge Lab ERL rows now carry `trials_count` and `deflated_sharpe` proxy payload; CANDIDATE_EDGE is downgraded to OVERFIT_RISK when the deflated score fails.
 - [x] **P2-3** (T3) EOD judge extensions: stock F&O support is available through the P1 store (`STF`/`STO`); event-conditional mode filters EOD signals around supplied earnings/event dates and reports the before/after signal audit. CLI supports `run_oos_validation.py --mode event`.
 - [x] **P2-4** (T3, =INFRA-62 start) Judge façade: added `core/judge_facade.grade(strategy_cfg, mode=eod|event|intraday|regime)` plus read-only `/ops/judge/grade`; EOD/event return normalized verdicts now, while intraday/regime point to their existing persisted runners until a later deletion pass.
-- [ ] **P2-5** (T3, deferred) Two-expiry (calendar) structures in the backtester — only if a calendar sleeve is ever promoted.
+- [x] **P2-5** (T3) Two-expiry calendar structures in the EOD backtester: added `calendar_spread` research pricing (short near expiry, long far expiry, same strike/type), Edge Lab proposal API/UI support, and focused fake-store regression coverage. Research-only; no live execution path added.
 
 ## PHASE 3 — STRATEGY SLEEVES (~3–4 wks staged; each rides the full ladder)
 

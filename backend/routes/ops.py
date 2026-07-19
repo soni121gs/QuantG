@@ -642,13 +642,15 @@ async def ops_edge_lab_trials(strategy: str = "", limit: int = 100, user=Depends
 
 class EdgeLabProposeReq(BaseModel):
     underlying: str = "NIFTY"
-    structure: str = "credit_spread"        # single_leg / credit_spread / debit_spread / iron_condor
+    structure: str = "credit_spread"        # single_leg / credit_spread / debit_spread / iron_condor / calendar_spread
     direction: str = "bullish"              # bullish → BUY (put spread); bearish → SELL (call spread)
     short_otm_pct: float = 0.03
     wing_width: int = 6
     spread_width: int = 6
     min_dte: int = 2
     max_dte: int = 8
+    calendar_far_min_dte: int = 21
+    calendar_far_max_dte: int = 60
     exit_mode: str = "expiry"               # expiry (hold to expiry) | "" (intraday tp/sl)
     credit_tp: float = 0.5
     credit_sl: float = 1.0
@@ -677,6 +679,8 @@ async def ops_edge_lab_propose(req: EdgeLabProposeReq, user=Depends(get_current_
                  "spread_width": req.spread_width, "exit_mode": req.exit_mode}}}
     params = {"short_otm_pct": req.short_otm_pct, "wing_width": req.wing_width,
               "width": req.spread_width, "min_dte": req.min_dte, "max_dte": req.max_dte,
+              "calendar_far_min_dte": req.calendar_far_min_dte,
+              "calendar_far_max_dte": req.calendar_far_max_dte,
               "max_hold_days": req.max_dte, "exit_mode": req.exit_mode,
               "credit_tp": req.credit_tp, "credit_sl": req.credit_sl}
     res = await asyncio.to_thread(
