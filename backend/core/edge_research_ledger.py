@@ -63,6 +63,32 @@ def robustness(row: Dict[str, Any], *, trials_tested: int = 1, plateau: float = 
             "plateau_score": round(plateau, 3), "warning": warning}
 
 
+def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str, Any]:
+    """Conservative Deflated-Sharpe proxy for Edge Lab rows.
+
+    Edge Lab snapshots do not persist per-trade returns yet, so this is not a
+    Bailey/Lopez de Prado full DSR. It is an explicit, auditable penalty that
+    deflates the observed OOS signal by sample size, month breadth, and number
+    of tried configs. When trade-return vectors are stored, this function is the
+    single replacement point for the exact DSR formula.
+    """
+    n = int(row.get("n") or 0)
+    exp = float(row.get("oos_expectancy") or row.get("expectancy") or 0.0)
+    green = max(0.0, min(1.0, float(row.get("pct_green_months") or 0.0) / 100.0))
+    sample_scale = math.sqrt(min(n, 250) / 30.0) if n > 0 else 0.0
+    observed = (exp / 500.0) * sample_scale * (0.5 + 0.5 * green)
+    penalty = min(1.5, math.sqrt(math.log(max(2, trials_tested))) / 2.0)
+    dsr = observed - penalty
+    return {
+        "trials_count": int(max(1, trials_tested)),
+        "observed_sharpe_proxy": round(observed, 3),
+        "deflated_sharpe": round(dsr, 3),
+        "multiple_testing_penalty": round(penalty, 3),
+        "method": "edge_lab_proxy_v1",
+        "passed": bool(dsr > 0 and n >= 30 and exp > 0),
+    }
+
+
 def enrich_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     sweeps = {s.get("name"): s for s in (snapshot.get("sweep") or [])}
     rows = snapshot.get("oos", {}).get("rows") or []
@@ -70,10 +96,15 @@ def enrich_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         sweep = sweeps.get(row.get("name")) or {}
         configs = max(1, int(sweep.get("configs") or 1))
         plateau = float(sweep.get("positive_oos") or 0) / configs
+        row["trials_count"] = configs
+        row["deflated_sharpe"] = deflated_sharpe(row, trials_tested=configs)
         row["robustness"] = robustness(row, trials_tested=configs, plateau=plateau)
         row["reject_reasons"] = reject_reasons(row)
         row["primary_reject_reason"] = row["reject_reasons"][0] if row["reject_reasons"] else None
-        if row["robustness"].get("warning") and row.get("verdict") == "CANDIDATE_EDGE":
+        if (
+            row.get("verdict") == "CANDIDATE_EDGE"
+            and (row["robustness"].get("warning") or not row["deflated_sharpe"].get("passed"))
+        ):
             row["verdict"] = "OVERFIT_RISK"
         row["promotion_stage"] = (
             "paper-forward" if row.get("verdict") == "CANDIDATE_EDGE"

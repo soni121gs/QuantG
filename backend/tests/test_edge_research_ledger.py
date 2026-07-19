@@ -1,5 +1,5 @@
 from core.edge_research_ledger import (
-    enrich_snapshot, evidence_allocation, reject_reasons, stable_hash,
+    deflated_sharpe, enrich_snapshot, evidence_allocation, reject_reasons, stable_hash,
 )
 
 
@@ -23,6 +23,17 @@ def test_enrichment_builds_heatmap_and_allocation():
     out = enrich_snapshot(snap)
     assert out["erl"]["heatmaps"][0]["plateau_score"] > 0.5
     assert out["erl"]["allocation"][0]["auto_apply"] is False
+    row = out["oos"]["rows"][0]
+    assert row["trials_count"] == 3
+    assert row["deflated_sharpe"]["method"] == "edge_lab_proxy_v1"
+
+
+def test_deflated_sharpe_penalizes_many_trials():
+    row = {"n": 60, "oos_expectancy": 150, "pct_green_months": 70}
+    one = deflated_sharpe(row, trials_tested=1)
+    many = deflated_sharpe(row, trials_tested=100)
+    assert many["trials_count"] == 100
+    assert many["deflated_sharpe"] < one["deflated_sharpe"]
 
 
 def test_allocation_never_auto_applies():

@@ -9,7 +9,7 @@ import pytest  # noqa: E402
 
 from core.expired_option_resolver import ExpiredOptionResolver  # noqa: E402
 from core.options_minute_store import OptionsMinuteStore  # noqa: E402
-from scripts.options_1m_ingest_upstox import ingest, plan_contract_days  # noqa: E402
+from scripts.options_1m_ingest_upstox import ingest, main, plan_contract_days  # noqa: E402
 
 
 def _contract(strike, opt, expiry="2025-01-09"):
@@ -110,3 +110,19 @@ def test_ingest_empty_candles_counted(store):
     plan = _plan(strikes_around_atm=0)
     s = ingest(plan["plans"], _Empty(), store, fetched_at="x")
     assert s["fetched"] == 0 and s["empty"] == 2
+
+
+def test_cli_accepts_sleep_arg_in_dry_run(monkeypatch):
+    class _Deps:
+        def trading_days(self, start, end):
+            return ["2025-01-09"]
+
+    monkeypatch.setattr(
+        "scripts.options_1m_ingest_upstox._build_real_deps",
+        lambda source: (_Deps(), _FakeGateway(), _resolver(), lambda u, d: 24215.0, lambda u, d: "2025-01-09"),
+    )
+    assert main([
+        "--from", "2025-01-09", "--to", "2025-01-09",
+        "--underlyings", "NIFTY", "--strikes-around-atm", "0",
+        "--sleep-sec", "0.25", "--dry-run",
+    ]) == 0

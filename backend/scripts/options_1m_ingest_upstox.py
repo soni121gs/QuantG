@@ -20,6 +20,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -88,6 +89,7 @@ def ingest(
     *,
     source: str = "upstox",
     force: bool = False,
+    sleep_sec: float = 0.0,
     fetched_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch, normalize and persist each planned contract-day. Idempotent."""
@@ -105,6 +107,8 @@ def ingest(
         except Exception as err:
             logger.warning("fetch failed %s %s: %s", p["underlying"], p["date"], err)
             summary["errors"] += 1
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
             continue
         if not raw:
             summary["empty"] += 1
@@ -124,6 +128,8 @@ def ingest(
         store.write_contract_day(res.candles, manifest)
         summary["fetched"] += 1
         summary["rows"] += len(res.candles)
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
     return summary
 
 
@@ -174,6 +180,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI glu
     ap.add_argument("--source", default="upstox")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--sleep-sec", type=float, default=0.0,
+                    help="polite delay after each broker fetch/write attempt to reduce Upstox 429s")
     args = ap.parse_args(argv)
 
     underlyings = [u.strip().upper() for u in args.underlyings.split(",") if u.strip()]
@@ -188,7 +196,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI glu
         return 0
 
     store = OptionsMinuteStore()
-    summary = ingest(plan["plans"], gateway, store, source=args.source, force=args.force)
+    summary = ingest(plan["plans"], gateway, store, source=args.source, force=args.force,
+                     sleep_sec=max(0.0, args.sleep_sec))
     print(f"Ingest: {summary}")
     return 0
 
