@@ -16716,6 +16716,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _index_flush_done_date: Optional[str] = None
     _hist_validate_done_week: Optional[str] = None
     _earnings_forward_done_week: Optional[str] = None
+    _phase4_research_done_week: Optional[str] = None
     _opt_capture_reg_minute: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
@@ -16896,6 +16897,38 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     logger.info("Weekly earnings-calendar forward refresh: %s", _er)
                 except Exception as _ec_err:
                     logger.error("Weekly earnings-calendar forward refresh failed: %s", _ec_err)
+
+            if ist.weekday() == 6 and hour == 5 and minute >= 30 and _phase4_research_done_week != _iso_week:
+                _phase4_research_done_week = _iso_week
+                try:
+                    def _run_phase4_weekly(uid: str) -> Dict[str, Any]:
+                        import pymongo
+                        from core.phase4_research import (
+                            corpus_status,
+                            default_weekly_cards,
+                            persist_hypothesis_cards,
+                            persist_research_signals,
+                            run_opportunity_probes,
+                        )
+                        _client = pymongo.MongoClient(os.environ.get("MONGO_URL", "mongodb://mongo:27017"))
+                        _db = _client[os.environ.get("DB_NAME", "quantg")]
+                        _corpus = corpus_status()
+                        _probes = run_opportunity_probes()
+                        _cards = default_weekly_cards(_probes, _corpus)
+                        return {
+                            "signals": persist_research_signals(_db, _probes, user_id=uid),
+                            "cards": persist_hypothesis_cards(_db, uid, _cards),
+                            "corpus_count": _corpus.get("count"),
+                        }
+                    users_p4 = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
+                    for row in users_p4:
+                        uid = row.get("id")
+                        if not uid:
+                            continue
+                        summary = await asyncio.to_thread(_run_phase4_weekly, uid)
+                        logger.info("Phase 4 weekly research refresh user=%s summary=%s", uid, summary)
+                except Exception as _p4_err:
+                    logger.warning("Phase 4 weekly research refresh failed: %s", _p4_err)
 
             # 15:35 IST — flush the day's captured index 1-minute bars (IMD-04) to
             # the index-minute store for the intraday backtester. Read-only, best-effort.

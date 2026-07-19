@@ -32,6 +32,7 @@ def _default_research_root() -> Path:
 RESEARCH_ROOT = _default_research_root()
 REQUIRED_CARD_FIELDS = ("hypothesis", "who_pays", "universe", "horizon", "judge", "data_needed", "kill_criteria")
 PROBES = ("vrp_by_strike", "earnings_iv_runup", "overnight_intraday_split", "term_structure_richness", "participant_oi_extremes")
+VALID_CARD_OUTCOMES = {"validated", "rejected", "abandoned", "untested"}
 
 
 def corpus_files(root: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -50,6 +51,39 @@ def corpus_status(root: Optional[Path] = None) -> Dict[str, Any]:
     files = corpus_files(root)
     return {"count": len(files), "files": files,
             "acceptance": {"required_min": 25, "passed": len(files) >= 25}}
+
+
+def validate_card_citations(citations: Iterable[Dict[str, Any]], *,
+                            corpus: Optional[Dict[str, Any]] = None,
+                            probes: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    checked = []
+    corpus_refs = {row.get("title") for row in corpus_files()}
+    probe_refs = set(PROBES)
+    ready_probe_refs = set()
+    if corpus is not None:
+        corpus_refs = {row.get("title") for row in corpus.get("files") or []}
+    if probes is not None:
+        probe_refs = {row.get("probe") for row in probes.get("rows") or []}
+        ready_probe_refs = {row.get("probe") for row in probes.get("rows") or [] if row.get("status") == "ready"}
+    for raw in citations or []:
+        citation = dict(raw or {})
+        ctype = str(citation.get("type") or "").strip().lower()
+        ref = str(citation.get("ref") or "").strip()
+        if ctype not in {"corpus", "probe"}:
+            raise ValueError(f"invalid citation type: {ctype or 'missing'}")
+        if not ref:
+            raise ValueError("citation ref is required")
+        if ctype == "corpus" and ref not in corpus_refs:
+            raise ValueError(f"unknown corpus citation: {ref}")
+        if ctype == "probe":
+            if ref not in probe_refs:
+                raise ValueError(f"unknown probe citation: {ref}")
+            if probes is not None and ref not in ready_probe_refs:
+                raise ValueError(f"probe citation is not ready: {ref}")
+        checked.append({"type": ctype, "ref": ref})
+    if not checked:
+        raise ValueError("hypothesis card requires at least one corpus or probe citation")
+    return checked
 
 
 def _pct(a: float, b: float) -> Optional[float]:
@@ -171,13 +205,14 @@ def run_opportunity_probes(*, store: Optional[BhavcopyStore] = None,
             "count": len(rows), "rows": rows}
 
 
-def persist_research_signals(db, result: Dict[str, Any]) -> int:
+def persist_research_signals(db, result: Dict[str, Any], *, user_id: Optional[str] = None) -> int:
     # Sync helper for CLI pymongo clients.
     n = 0
     for row in result.get("rows") or []:
-        key = f"{row.get('probe')}:{row.get('underlying') or row.get('symbol') or 'global'}"
+        scope = user_id or "global"
+        key = f"{scope}:{row.get('probe')}:{row.get('underlying') or row.get('symbol') or 'global'}"
         db.research_signals.update_one({"_id": key}, {"$set": {**row, "_id": key,
-            "updated_at": result.get("generated_at")}}, upsert=True)
+            "user_id": user_id, "updated_at": result.get("generated_at")}}, upsert=True)
         n += 1
     return n
 
@@ -246,13 +281,12 @@ def persist_hypothesis_cards(db, user_id: str, cards: Iterable[Dict[str, Any]]) 
     return n
 
 
-def build_hypothesis_card(payload: Dict[str, Any]) -> Dict[str, Any]:
+def build_hypothesis_card(payload: Dict[str, Any], *, corpus: Optional[Dict[str, Any]] = None,
+                          probes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     missing = [f for f in REQUIRED_CARD_FIELDS if not payload.get(f)]
     if missing:
         raise ValueError(f"missing required fields: {', '.join(missing)}")
-    citations = payload.get("citations") or []
-    if not citations:
-        raise ValueError("hypothesis card requires at least one corpus or probe citation")
+    citations = validate_card_citations(payload.get("citations") or [], corpus=corpus, probes=probes)
     return {"kind": "hypothesis_card", "status": "PROPOSED",
             "created_at": datetime.now(timezone.utc).isoformat(),
             **{k: payload[k] for k in REQUIRED_CARD_FIELDS},
@@ -262,11 +296,19 @@ def build_hypothesis_card(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def default_weekly_cards(probes: Dict[str, Any], corpus: Dict[str, Any]) -> List[Dict[str, Any]]:
-    citations = []
-    if corpus.get("files"):
-        citations.append({"type": "corpus", "ref": corpus["files"][0]["title"]})
-    if probes.get("rows"):
-        citations.append({"type": "probe", "ref": probes["rows"][0]["probe"]})
+    corpus_titles = {row.get("title") for row in corpus.get("files") or []}
+    ready_probes = {row.get("probe") for row in probes.get("rows") or [] if row.get("status") == "ready"}
+
+    def _citations(preferred_corpus: str, preferred_probe: str) -> List[Dict[str, Any]]:
+        out = []
+        if preferred_corpus in corpus_titles:
+            out.append({"type": "corpus", "ref": preferred_corpus})
+        if preferred_probe in ready_probes:
+            out.append({"type": "probe", "ref": preferred_probe})
+        return out
+
+    surface_citations = _citations("IV Surface Richness", "vrp_by_strike")
+    oi_citations = _citations("Participant OI Caveats", "participant_oi_extremes")
     return [
         build_hypothesis_card({
             "hypothesis": "NIFTY premium selling should stand down unless IV surface richness is positive.",
@@ -276,8 +318,8 @@ def default_weekly_cards(probes: Dict[str, Any], corpus: Dict[str, Any]) -> List
             "judge": "EOD options OOS plus IV-surface-gated comparison",
             "data_needed": "bhavcopy option chains, IV surface richness, trade costs",
             "kill_criteria": "OOS expectancy <= 0 or DSR fails after gating",
-            "citations": citations,
-        }),
+            "citations": surface_citations,
+        }, corpus=corpus, probes=probes),
         build_hypothesis_card({
             "hypothesis": "Participant-OI futures bias is only useful as a sizing overlay, not an entry signal.",
             "who_pays": "Crowded client positioning may create weak contrarian or confirmation effects.",
@@ -286,8 +328,8 @@ def default_weekly_cards(probes: Dict[str, Any], corpus: Dict[str, Any]) -> List
             "judge": "participant-OI overlay validator against base sleeve results",
             "data_needed": "participant OI store and underlying futures returns",
             "kill_criteria": "Overlay expectancy near zero or sign flips by period",
-            "citations": citations,
-        }),
+            "citations": oi_citations,
+        }, corpus=corpus, probes=probes),
     ]
 
 
@@ -295,8 +337,15 @@ def calibration_summary(cards: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     rows = list(cards)
     counts: Dict[str, int] = {}
     for card in rows:
-        outcome = ((card.get("calibration") or {}).get("outcome")
-                   or card.get("trial_status") or card.get("status") or "unknown")
+        verdict = str(card.get("trial_status") or "").upper()
+        if verdict in {"CANDIDATE_EDGE", "VALIDATED"}:
+            outcome = "validated"
+        elif verdict in {"REJECTED", "NO_EDGE_NEGATIVE", "FRAGILE"}:
+            outcome = "rejected"
+        elif str(card.get("status") or "").lower() in VALID_CARD_OUTCOMES - {"untested"}:
+            outcome = str(card.get("status")).lower()
+        else:
+            outcome = ((card.get("calibration") or {}).get("outcome") or "untested")
         counts[outcome] = counts.get(outcome, 0) + 1
     tested = sum(v for k, v in counts.items() if k in {"validated", "rejected", "abandoned"})
     hit = counts.get("validated", 0)

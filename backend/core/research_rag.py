@@ -88,12 +88,24 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
             by_source[src] = by_source.get(src, 0) + 1
 
     # ERP Phase 4 curated research corpus (disk notes reviewed by founder/agents)
+    active_research_keys = set()
     if RESEARCH_ROOT.exists():
         for path in sorted(RESEARCH_ROOT.glob("*.md"))[:wiki_limit]:
+            rag_key = f"research:{path.stem}"
+            active_research_keys.add(rag_key)
             text = path.read_text(encoding="utf-8")
             body = f"[RESEARCH] {path.stem}\n{text[:6000]}"
-            _bump(await _index_one(db, user_id, f"research:{path.stem}", body, "research",
+            _bump(await _index_one(db, user_id, rag_key, body, "research",
                                    source_refs=[f"wiki/Research/{path.name}"]), "research")
+    if active_research_keys:
+        stale = await db.hermes_memory.delete_many({
+            "user_id": user_id,
+            "_rag": True,
+            "type": "research",
+            "rag_key": {"$nin": sorted(active_research_keys)},
+        })
+        if getattr(stale, "deleted_count", 0):
+            by_source["research_stale_deleted"] = int(stale.deleted_count)
 
     # 1) Wiki notes (user-written domain knowledge / decisions / rules)
     async for w in db.wiki_docs.find(

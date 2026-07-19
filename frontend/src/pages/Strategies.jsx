@@ -97,15 +97,15 @@ export default function Strategies() {
 
   const filtered = useMemo(() => {
     let result = [...list];
-    const isQG = (s) => (s.name || "").startsWith("QG-O");
+    const isCurrentBook = (s) => s.registry?.phase === "ERP-P0" || s.registry?.source === "core.strategy_registry";
     const isArchived = (s) => s.status === "archived";
 
     if (bookView === "active") {
       result = result.filter((s) => !isArchived(s));
     } else if (bookView === "new") {
-      result = result.filter((s) => !isArchived(s) && isQG(s));
+      result = result.filter((s) => !isArchived(s) && isCurrentBook(s));
     } else if (bookView === "legacy") {
-      result = result.filter((s) => !isArchived(s) && !isQG(s));
+      result = result.filter((s) => !isArchived(s) && !isCurrentBook(s));
     } else if (bookView === "archive") {
       result = result.filter((s) => isArchived(s));
     }
@@ -126,7 +126,7 @@ export default function Strategies() {
     if (sortBy === "group") {
       const rank = (s) => {
         if (s.status === "archived") return 4;
-        if ((s.name || "").startsWith("QG-O")) return 0;
+        if (s.registry?.phase === "ERP-P0" || s.registry?.source === "core.strategy_registry") return 0;
         if (s.status === "live") return 1;
         if (s.status === "paused") return 2;
         return 3;
@@ -156,8 +156,8 @@ export default function Strategies() {
   const grouped = useMemo(() => {
     const bucketFor = (s) => {
       if (s.status === "archived") return "Archive";
-      if ((s.name || "").startsWith("QG-O")) return "Options Alpha Rebuild";
-      if (s.status === "live") return "Legacy Live";
+      if (s.registry?.phase === "ERP-P0" || s.registry?.source === "core.strategy_registry") return "ERP Current Book";
+      if (s.status === "live") return "Non-Registry Live";
       if (s.status === "paused") return "Paused / Scheduled";
       return "Draft / Other";
     };
@@ -295,9 +295,9 @@ export default function Strategies() {
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
           <div className="flex flex-wrap items-center gap-1 rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-1">
             {[
-              ["active", "Active"],
-              ["new", "New QG"],
-              ["legacy", "Old Live"],
+              ["active", "Non-Archived"],
+              ["new", "ERP Book"],
+              ["legacy", "Non-Registry"],
               ["archive", "Archive"],
               ["all", "All"],
             ].map(([value, label]) => (

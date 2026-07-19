@@ -240,13 +240,15 @@ function EdgeLab({ data, loading, onRefresh }) {
   if (loading && !data) {
     return <div className="qd-card p-10 text-center font-mono text-xs text-[var(--qd-text-3)]">Loading Edge Lab…</div>;
   }
-  if (!data || data.status === "empty") {
+  if (!data || data.status === "empty" || data.status === "stale_legacy") {
     return (
       <div className="qd-card p-10 text-center">
         <FlaskConical className="mx-auto mb-3 text-[var(--qd-text-3)]" size={24} />
-        <div className="text-sm text-[var(--qd-text)]">No Edge Lab snapshot yet.</div>
+        <div className="text-sm text-[var(--qd-text)]">
+          {data?.status === "stale_legacy" ? "Old Edge Lab snapshot hidden" : "No Edge Lab snapshot yet."}
+        </div>
         <div className="mx-auto mt-1 max-w-md text-xs text-[var(--qd-text-2)]">
-          {data?.hint || "Builds an out-of-sample verdict for the whole book from 2 years of real NSE/BSE option settlement prices."}
+          {data?.stale_reason || data?.hint || "Builds an out-of-sample verdict for the ERP current book from real NSE/BSE option settlement prices."}
         </div>
         <button
           type="button"
@@ -254,7 +256,7 @@ function EdgeLab({ data, loading, onRefresh }) {
           disabled={building}
           className="mt-4 inline-flex items-center gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-accent)]/40 bg-[var(--qd-surface-2)] px-4 py-2 font-mono text-xs uppercase tracking-wider text-[var(--qd-accent)] hover:bg-[var(--qd-surface-3)] disabled:opacity-50"
         >
-          <RefreshCw size={14} className={building ? "animate-spin" : ""} /> {building ? "Building…" : "Build snapshot"}
+          <RefreshCw size={14} className={building ? "animate-spin" : ""} /> {building ? "Building..." : "Build current snapshot"}
         </button>
       </div>
     );
@@ -285,11 +287,13 @@ function EdgeLab({ data, loading, onRefresh }) {
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-4 py-2.5">
         <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--qd-text-3)]">
           <Database size={13} />
+          <span className="text-[var(--qd-accent)]">ERP current-book OOS</span>
           {data.book && (
             <span className="text-[var(--qd-text-2)]">
-              {data.book.active_strategies || 0} active / {data.book.archived_strategies || 0} archived hidden
+              {data.book.active_strategies || 0} current / {data.book.archived_strategies || 0} archived hidden
             </span>
           )}
+          {data.book_scope && <span>{data.book_scope}</span>}
           {building ? "Rebuilding snapshot (this can take a few minutes)…" : `Snapshot ${timeAgo(data.generated_at)}`}
         </div>
         <button

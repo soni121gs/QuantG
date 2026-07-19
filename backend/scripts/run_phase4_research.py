@@ -63,7 +63,7 @@ def main() -> int:
         probes = run_opportunity_probes(start=args.start, end=args.end)
         output["probes"] = probes
         if args.persist:
-            output["persisted_signals"] = persist_research_signals(_db(), probes)
+            output["persisted_signals"] = persist_research_signals(_db(), probes, user_id=args.user_id)
 
     if args.task in ("all", "cards"):
         probes = probes or run_opportunity_probes(start=args.start, end=args.end)

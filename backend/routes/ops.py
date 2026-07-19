@@ -575,20 +575,33 @@ async def _run_edge_lab_build(user_id: str) -> None:
     try:
         from core.edge_lab import build_snapshot
         from core.bhavcopy_store import BhavcopyStore
+        from core.strategy_registry import ERP_KEEP_STRATEGY_NAMES
 
         strategies = await db.strategies.find(
-            {"user_id": user_id, "python_code": {"$nin": [None, ""]}}
+            {
+                "user_id": user_id,
+                "status": {"$ne": "archived"},
+                "python_code": {"$nin": [None, ""]},
+                "$or": [
+                    {"registry.phase": "ERP-P0"},
+                    {"registry.source": "core.strategy_registry"},
+                    {"name": {"$in": sorted(ERP_KEEP_STRATEGY_NAMES)}},
+                ],
+            }
         ).to_list(500)
         snap = await asyncio.to_thread(build_snapshot, strategies, BhavcopyStore())
         from core.edge_research_ledger import persist_trials
         await persist_trials(db, user_id, snap)
-        snap["_id"] = "latest"
+        snap["_id"] = f"latest:{user_id}"
         snap["built_by"] = user_id
-        await db.edge_lab_snapshots.replace_one({"_id": "latest"}, snap, upsert=True)
+        snap["book_scope"] = "erp_current_non_archived"
+        snap["strategy_names"] = [s.get("name") for s in strategies]
+        await db.edge_lab_snapshots.replace_one({"_id": f"latest:{user_id}"}, snap, upsert=True)
     except Exception as exc:  # noqa: BLE001
         await db.edge_lab_snapshots.update_one(
-            {"_id": "latest"},
+            {"_id": f"latest:{user_id}"},
             {"$set": {"status": "error", "error": str(exc),
+                      "built_by": user_id,
                       "generated_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True,
         )
@@ -602,7 +615,14 @@ async def ops_edge_lab(user=Depends(get_current_user)):
     finding, per-strategy OOS verdicts, and the credit-spread exit-geometry sweep).
     Read-only, instant — the heavy compute is done by POST /ops/edge-lab/refresh and
     cached. Returns {status:'empty'} until the first build runs."""
-    doc = await db.edge_lab_snapshots.find_one({"_id": "latest"}, {"_id": 0})
+    doc = await db.edge_lab_snapshots.find_one({"_id": f"latest:{user['id']}"}, {"_id": 0})
+    if not doc:
+        legacy = await db.edge_lab_snapshots.find_one({"_id": "latest", "built_by": user["id"]}, {"_id": 0})
+        if legacy:
+            legacy["status"] = "stale_legacy"
+            legacy["stale_reason"] = "Snapshot was built before user-scoped ERP current-book Edge Lab cache; rebuild required."
+            legacy["building"] = _edge_lab_building
+            return legacy
     if not doc:
         return {"status": "empty", "building": _edge_lab_building,
                 "hint": "press Refresh to build the first Edge Lab snapshot"}
@@ -620,8 +640,9 @@ async def ops_edge_lab_refresh(user=Depends(get_current_user)):
         return {"status": "building", "already_running": True}
     _edge_lab_building = True
     await db.edge_lab_snapshots.update_one(
-        {"_id": "latest"},
+        {"_id": f"latest:{user['id']}"},
         {"$set": {"status": "building",
+                  "built_by": user["id"],
                   "refresh_started_at": datetime.now(timezone.utc).isoformat()}},
         upsert=True,
     )
@@ -1035,7 +1056,7 @@ async def ops_research_signals(user=Depends(get_current_user)):
         fii = None
     rag = await db.hermes_memory.count_documents({"user_id": uid, "_rag": True})
     stored_signals = await db.research_signals.find(
-        {}, {"_id": 0}
+        {"user_id": uid}, {"_id": 0}
     ).sort("updated_at", -1).limit(50).to_list(50)
     return _json_safe({
         "kind": "research_signals",
@@ -1066,10 +1087,10 @@ async def ops_research_signals_run(start: Optional[str] = None, end: Optional[st
     persisted = 0
     now = result.get("generated_at") or datetime.now(timezone.utc).isoformat()
     for row in result.get("rows") or []:
-        key = f"{row.get('probe')}:{row.get('underlying') or row.get('symbol') or 'global'}"
+        key = f"{user['id']}:{row.get('probe')}:{row.get('underlying') or row.get('symbol') or 'global'}"
         await db.research_signals.update_one(
             {"_id": key},
-            {"$set": {**row, "_id": key, "updated_at": now}},
+            {"$set": {**row, "_id": key, "user_id": user["id"], "updated_at": now}},
             upsert=True,
         )
         persisted += 1
@@ -1712,6 +1733,7 @@ async def ops_strategy_code_audit(user=Depends(get_current_user)):
 @router.get("/default-strategy-catalog-audit")
 async def ops_default_strategy_catalog_audit(user=Depends(get_current_user)):
     from server import DEFAULT_OPTION_STRATEGIES
+    from core.strategy_registry import ERP_KEEP_STRATEGY_NAMES, ERP_PURGE_STRATEGY_NAMES
     from core.strategy_brain_schema import calculate_code_hash
     
     # Group default strategies by code hash
@@ -1763,6 +1785,9 @@ async def ops_default_strategy_catalog_audit(user=Depends(get_current_user)):
     
     return {
         "ok": True,
+        "catalog_scope": "ERP current registry is the active source; default templates are only seed templates.",
+        "erp_current_book_names": sorted(ERP_KEEP_STRATEGY_NAMES),
+        "erp_purge_names": sorted(ERP_PURGE_STRATEGY_NAMES),
         "total_default_strategies": len(DEFAULT_OPTION_STRATEGIES),
         "names": [t.get("name") for t in DEFAULT_OPTION_STRATEGIES],
         "mcx_crude_naturalgas_excluded": mcx_excluded,
@@ -1774,10 +1799,12 @@ async def ops_default_strategy_catalog_audit(user=Depends(get_current_user)):
 @router.post("/v13/strategy-brain/dry-run")
 async def ops_v13_strategy_brain_dry_run(user=Depends(get_current_user)):
     from server import DEFAULT_OPTION_STRATEGIES
+    from core.strategy_registry import ERP_KEEP_STRATEGY_NAMES, ERP_PURGE_STRATEGY_NAMES
     from core.strategy_brain_schema import calculate_code_hash
     
     db_strategies = await db.strategies.find({"user_id": user["id"]}).to_list(1000)
     db_names = {s["name"] for s in db_strategies if s.get("name")}
+    active_db_names = {s["name"] for s in db_strategies if s.get("name") and s.get("status") != "archived"}
     
     # 1. strategies_to_insert: names of default strategies not in DB
     strategies_to_insert = [
@@ -1836,6 +1863,13 @@ async def ops_v13_strategy_brain_dry_run(user=Depends(get_current_user)):
     
     return {
         "ok": True,
+        "catalog_scope": "ERP current registry is the active source; V13 default-template dry-run is legacy diagnostics only.",
+        "erp_current_book": {
+            "expected": sorted(ERP_KEEP_STRATEGY_NAMES),
+            "present_non_archived": sorted(active_db_names & ERP_KEEP_STRATEGY_NAMES),
+            "missing": sorted(ERP_KEEP_STRATEGY_NAMES - db_names),
+            "purge_still_non_archived": sorted(active_db_names & ERP_PURGE_STRATEGY_NAMES),
+        },
         "strategies_to_insert": strategies_to_insert,
         "strategies_to_update_by_name": strategies_to_update_by_name,
         "duplicate_strategy_names": duplicate_strategy_names,
