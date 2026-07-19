@@ -24,6 +24,7 @@ from core.market_context import vol_edge
 logger = logging.getLogger("quantg.entry_gate")
 
 RES2_GATE_MIN_EDGE = float(os.environ.get("RES2_GATE_MIN_EDGE", "0.0"))
+IV_SURFACE_SELLER_MIN_Z = os.environ.get("IV_SURFACE_SELLER_MIN_Z")
 # Known regimes that are NOT sell-safe for a premium seller (a strong directional
 # move runs a sold spread toward max loss). RANGE / UNKNOWN → allow.
 NON_RANGE_REGIMES = {"TREND_UP", "TREND_DOWN", "CRASH", "MELTUP", "VOLATILE"}
@@ -73,6 +74,8 @@ def seller_entry_gate(
     iv: Optional[float],
     daily_closes: Sequence[float],
     min_edge: float = RES2_GATE_MIN_EDGE,
+    iv_surface: Optional[Dict[str, Any]] = None,
+    min_surface_z: Optional[float] = None,
     require_range: bool = True,
 ) -> Dict[str, Any]:
     """Allow a premium-selling entry only when IV−RV is rich AND the regime is
@@ -86,7 +89,17 @@ def seller_entry_gate(
     if require_range and reg in NON_RANGE_REGIMES:
         return {"allow": False, "reason": f"RES2_GATE: regime {reg} not sell-safe (need RANGE)",
                 "vol_edge": ve}
-    return {"allow": True, "reason": "RES2_GATE: passed (rich + sell-safe)", "vol_edge": ve}
+    richness = (iv_surface or {}).get("richness") or {}
+    if min_surface_z is None and IV_SURFACE_SELLER_MIN_Z not in (None, ""):
+        min_surface_z = float(IV_SURFACE_SELLER_MIN_Z)
+    if min_surface_z is not None and richness.get("available"):
+        z = float(richness.get("zscore") or 0.0)
+        if z < float(min_surface_z):
+            return {"allow": False,
+                    "reason": f"RES2_GATE: IV surface not rich enough (z={z:.2f}, min {float(min_surface_z):.2f})",
+                    "vol_edge": ve, "iv_surface": {"richness": richness}}
+    return {"allow": True, "reason": "RES2_GATE: passed (rich + sell-safe)", "vol_edge": ve,
+            "iv_surface": {"richness": richness} if richness else None}
 
 
 # A day-to-day gap larger than this (calendar days) is a DATA HOLE, not a holiday
@@ -145,7 +158,18 @@ async def evaluate_entry_gate_live(
         closes = _recent_daily_closes(underlying)
         if not closes or iv is None:
             return {"allow": True, "reason": "RES2_GATE: data unavailable — fail-open"}
-        return seller_entry_gate(regime=regime, iv=iv, daily_closes=closes, min_edge=min_edge)
+        surface = None
+        try:
+            from core.bhavcopy_store import BhavcopyStore
+            from core.iv_surface import richness_zscore
+            store = BhavcopyStore()
+            days = store.trading_days()
+            if days:
+                surface = richness_zscore(store, underlying.upper(), days[-1])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("entry_gate: IV surface unavailable for %s: %s", underlying, exc)
+        return seller_entry_gate(regime=regime, iv=iv, daily_closes=closes, min_edge=min_edge,
+                                 iv_surface=surface)
     except Exception as exc:  # noqa: BLE001
         logger.warning("entry_gate: evaluation failed for %s — fail-open: %s", underlying, exc)
         return {"allow": True, "reason": f"RES2_GATE: error {exc} — fail-open"}

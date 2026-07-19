@@ -21,7 +21,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 
 ## 🔑 FOUNDER DECISIONS NEEDED (blocking gates)
 
-- [ ] **D-1** Approve the Phase-0 **purge list** (§P0-5): ~32 DB rows + dead code templates — incl. all 10 equity intraday strategies and the revived NIFTY Theta/Range spreads. Keep-list (paused): QG-O1, QG-O4, QG-O11, 3 RAE range sellers, 3 RAE trend delta-1.
+- [x] **D-1** Approve the Phase-0 **purge list** (§P0-5): founder approved in chat 2026-07-19 and P0-5 executed after snapshot/registry upsert.
 - [x] **D-2** **Upstox Plus** (paid tier): founder confirmed active 2026-07-19. This unlocks the official Expired Instruments APIs → deep options-1-min backfill (P1-5).
 - [ ] **D-3** **Paid research-lane model** for Hermes weekly hypothesis synthesis (Gemini Pro-class or Claude); free Gemini 3 Flash covers everything else (P4-1). Yes/No.
 
@@ -52,10 +52,10 @@ All sources legal per §14.1 (exchange/broker/public).
 
 ## PHASE 2 — ANALYTICS & JUDGE REFORM (~2 wks; needs parts of Phase 1)
 
-- [~] **P2-1** (T3) `core/iv_surface.py`: core module landed with Black-Scholes IV bisection, per-strike/per-expiry surface points, near-expiry skew, term summary, and trailing ATM-IV richness z-score. Remaining: wire into `market_context`/`entry_gate`/`dynamic_contract_selector` + Edge Lab UI/API after coverage verifies on VPS.
+- [x] **P2-1** (T3) IV surface wiring: `core/iv_surface.py` now feeds `market_context`, optional seller-gate richness telemetry/blocking (`IV_SURFACE_SELLER_MIN_Z`), dynamic contract-score surface factors, read-only `/ops/iv-surface`, and the Edge Lab Analytics UI/API snapshot.
 - [x] **P2-2** (T2) ERL upgrade: **Deflated Sharpe + explicit trials-count** per family on every snapshot/verdict (extends the existing multiple-testing penalty). Done: Edge Lab ERL rows now carry `trials_count` and `deflated_sharpe` proxy payload; CANDIDATE_EDGE is downgraded to OVERFIT_RISK when the deflated score fails.
-- [ ] **P2-3** (T3) EOD judge extensions: (a) stock underlyings; (b) **event-conditional mode** (grade only event-window days — the S1 judge), reusing the RAE-2 regime-conditional pattern.
-- [ ] **P2-4** (T3, =INFRA-62 start) Judge façade: one `grade(strategy_cfg, mode=eod|intraday|regime|event)` over the 4 judges; duplicate harness code deleted.
+- [x] **P2-3** (T3) EOD judge extensions: stock F&O support is available through the P1 store (`STF`/`STO`); event-conditional mode filters EOD signals around supplied earnings/event dates and reports the before/after signal audit. CLI supports `run_oos_validation.py --mode event`.
+- [x] **P2-4** (T3, =INFRA-62 start) Judge façade: added `core/judge_facade.grade(strategy_cfg, mode=eod|event|intraday|regime)` plus read-only `/ops/judge/grade`; EOD/event return normalized verdicts now, while intraday/regime point to their existing persisted runners until a later deletion pass.
 - [ ] **P2-5** (T3, deferred) Two-expiry (calendar) structures in the backtester — only if a calendar sleeve is ever promoted.
 
 ## PHASE 3 — STRATEGY SLEEVES (~3–4 wks staged; each rides the full ladder)

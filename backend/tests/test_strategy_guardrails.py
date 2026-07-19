@@ -190,6 +190,7 @@ def test_edge_lab_scores_only_active_book_and_reports_archived_count(monkeypatch
             return ["2026-01-01"]
 
     monkeypatch.setattr(edge_lab, "_coverage", lambda store, days: {"underlyings": [{"underlying": "NIFTY"}]})
+    monkeypatch.setattr(edge_lab, "_iv_surfaces", lambda store, days, present: {"samples": []})
     monkeypatch.setattr(edge_lab, "_base_rate", lambda store: [])
     monkeypatch.setattr(edge_lab, "_directional", lambda store: [])
 
@@ -204,6 +205,40 @@ def test_edge_lab_scores_only_active_book_and_reports_archived_count(monkeypatch
     assert seen["oos"] == [active]
     assert snapshot["book"] == {"active_strategies": 1, "archived_strategies": 1}
     assert [row["name"] for row in snapshot["oos"]["rows"]] == ["QG-O1"]
+
+
+def test_judge_facade_event_mode_filters_to_event_window():
+    from core.judge_facade import grade
+
+    strategy = {
+        "id": "qg-event",
+        "name": "Event Window Credit Spread",
+        "python_code": "def run(data):\n    return [{'date': d['date'], 'action': 'BUY', 'direction': 'CE'} for d in data]",
+        "visual_config": {
+            "symbol": "NIFTY",
+            "options": {
+                "enabled": True,
+                "underlying": "NIFTY",
+                "structure": "credit_spread",
+                "spread_width": 2,
+                "short_otm_pct": 0.03,
+                "exit_mode": "expiry",
+            },
+            "risk": {"max_hold_days": 10},
+        },
+    }
+
+    result = grade(
+        strategy,
+        mode="event",
+        store=_FakeBhavcopyStore(),
+        params={"event_dates": ["2026-01-20"], "event_window_days": 1},
+    )
+
+    assert result["status"] == "ready"
+    assert result["mode"] == "event"
+    assert result["event_filter"]["enabled"] is True
+    assert result["event_filter"]["signals_before"] > result["event_filter"]["signals_after"]
 
 
 @pytest.mark.asyncio

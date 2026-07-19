@@ -189,6 +189,7 @@ def build_context(
     spot: Optional[float] = None,
     chain: Optional[Sequence[Dict[str, Any]]] = None,
     contract: Optional[Dict[str, Any]] = None,
+    iv_surface: Optional[Dict[str, Any]] = None,
     date_str: Optional[str] = None,
     expiry_dates: Optional[Sequence[str]] = None,
     event_dates: Optional[Sequence[str]] = None,
@@ -212,6 +213,7 @@ def build_context(
     ev = event_context(date_str or (candles[-1].get("date") if candles else "") or "",
                        expiry_dates=expiry_dates, event_dates=event_dates)
     imbalance = orderflow_imbalance(contract or {}) if contract else None
+    surface_richness = (iv_surface or {}).get("richness") or {}
 
     reasons: List[str] = []
     allow = True
@@ -239,6 +241,13 @@ def build_context(
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "regime": regime,
         "vol_edge": ve,
+        "iv_surface": {
+            "available": bool((iv_surface or {}).get("available")),
+            "atm_iv": (iv_surface or {}).get("atm_iv"),
+            "near_expiry": ((iv_surface or {}).get("summary") or {}).get("near_expiry"),
+            "put_call_skew": ((iv_surface or {}).get("summary") or {}).get("put_call_skew"),
+            "richness": surface_richness,
+        },
         "vol_state": vs,
         "chain": ci,
         "event": ev,

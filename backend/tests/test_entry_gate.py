@@ -54,3 +54,16 @@ def test_gate_min_edge_configurable():
     lax = seller_entry_gate(regime="RANGE", iv=13.0, daily_closes=closes, min_edge=0.0)
     strict = seller_entry_gate(regime="RANGE", iv=13.0, daily_closes=closes, min_edge=99.0)
     assert lax["allow"] is True and strict["allow"] is False
+
+
+def test_gate_can_block_on_iv_surface_richness_when_configured():
+    surface = {"richness": {"available": True, "zscore": -0.5}}
+    g = seller_entry_gate(
+        regime="RANGE",
+        iv=15.0,
+        daily_closes=_flat_closes(),
+        iv_surface=surface,
+        min_surface_z=1.0,
+    )
+    assert g["allow"] is False
+    assert "IV surface not rich enough" in g["reason"]

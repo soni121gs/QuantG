@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 import pymongo  # noqa: E402
 from core.eod_options_backtest import EODOptionsBacktest, walk_forward  # noqa: E402
 from core.bhavcopy_store import BhavcopyStore  # noqa: E402
+from core.judge_facade import grade as judge_grade  # noqa: E402
 
 VERDICT_TAG = {
     "CANDIDATE_EDGE": "✅ EDGE",
@@ -34,6 +35,8 @@ def main():
     ap.add_argument("--start", default=None)
     ap.add_argument("--end", default=None)
     ap.add_argument("--name", default=None, help="substring filter on strategy name")
+    ap.add_argument("--mode", choices=["eod", "event"], default="eod")
+    ap.add_argument("--event-window-days", type=int, default=1)
     ap.add_argument("--capital", type=float, default=100_000.0)
     args = ap.parse_args()
 
@@ -55,6 +58,20 @@ def main():
     engine = EODOptionsBacktest(store)
     rows = []
     for s in strategies:
+        if args.mode == "event":
+            judged = judge_grade(
+                s, mode="event", start=args.start, end=args.end, store=store,
+                params={"event_window_days": args.event_window_days},
+            )
+            if judged.get("status") == "error":
+                rows.append((s.get("name", "?"), None, judged["error"]))
+                continue
+            res = {"structure": judged.get("structure"), "underlying": judged.get("underlying")}
+            wf = {"verdict": judged["verdict"], "overall": judged["overall"],
+                  "oos": judged.get("oos") or {}, "oos_year": judged.get("oos_year"),
+                  "pct_green_months": judged.get("pct_green_months")}
+            rows.append((s.get("name", "?"), res, wf))
+            continue
         res = engine.run(s, start=args.start, end=args.end, starting_capital=args.capital)
         if res.get("error"):
             rows.append((s.get("name", "?"), None, res["error"]))

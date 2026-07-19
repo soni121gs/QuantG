@@ -515,6 +515,54 @@ async def ops_eod_options_backtest(
             "research_hypotheses_written": ledger_written}
 
 
+@router.get("/iv-surface")
+async def ops_iv_surface(
+    underlying: str = "NIFTY",
+    day: Optional[str] = None,
+    lookback_days: int = 60,
+    user=Depends(get_current_user),
+):
+    """P2-1: read-only IV surface and ATM richness from stored bhavcopy chains."""
+    from core.bhavcopy_store import BhavcopyStore
+    from core.iv_surface import richness_zscore
+
+    store = BhavcopyStore()
+    days = await asyncio.to_thread(store.trading_days)
+    if not days:
+        return {"available": False, "reason": "bhavcopy store empty"}
+    d = str(day or days[-1])[:10]
+    return await asyncio.to_thread(
+        richness_zscore, store, underlying.upper(), d, lookback_days=max(10, min(lookback_days, 252)),
+    )
+
+
+class JudgeGradeReq(BaseModel):
+    strategy_id: str
+    mode: str = "eod"
+    start: Optional[str] = None
+    end: Optional[str] = None
+    event_window_days: int = 1
+
+
+@router.post("/judge/grade")
+async def ops_judge_grade(req: JudgeGradeReq, user=Depends(get_current_user)):
+    """P2-4: unified read-only judge facade. `mode=event` uses earnings windows."""
+    from core.bhavcopy_store import BhavcopyStore
+    from core.judge_facade import grade as judge_grade
+
+    strat = await db.strategies.find_one({"user_id": user["id"], "id": req.strategy_id})
+    if not strat:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    params = {}
+    if req.mode.lower() == "event":
+        params["event_window_days"] = max(0, min(int(req.event_window_days), 5))
+    result = await asyncio.to_thread(
+        judge_grade, strat, mode=req.mode, start=req.start, end=req.end,
+        store=BhavcopyStore(), params=params,
+    )
+    return _json_safe(result)
+
+
 # ---- Edge Lab: cached OOS research surface (coverage + base-rate + OOS + sweep) ----
 
 _edge_lab_building = False

@@ -18,6 +18,7 @@ def _score(
     preferred_direction: str,
     previous_signature: Optional[str],
     minutes_to_close: int,
+    iv_surface: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     short = spread["short_leg"]
     width = max(float(spread.get("width_points") or 0), 1.0)
@@ -28,6 +29,9 @@ def _score(
     liquidity = min(1.0, oi / 1_000_000.0)
     directional_fit = 1.0 if spread.get("direction") == preferred_direction else 0.72
     time_scale = max(0.15, min(1.0, float(minutes_to_close) / 120.0))
+    richness = (iv_surface or {}).get("richness") or {}
+    z = float(richness.get("zscore") or 0.0) if richness.get("available") else 0.0
+    surface_mult = max(0.70, min(1.25, 1.0 + (z * 0.08))) if richness.get("available") else 1.0
     signature = spread_signature(spread)
     reuse_mult = 0.55 if previous_signature and signature == previous_signature else 1.0
     score = (
@@ -36,7 +40,7 @@ def _score(
         + 0.18 * liquidity
         + 0.16 * max(0.0, 1.0 - abs(delta - 0.22) / 0.30)
         + 0.10 * directional_fit
-    ) * time_scale * reuse_mult
+    ) * time_scale * reuse_mult * surface_mult
     spread = dict(spread)
     spread.update({
         "contract_edge_score": round(max(0.0, min(1.0, score)), 4),
@@ -51,6 +55,8 @@ def _score(
             "directional_fit": directional_fit,
             "time_scale": round(time_scale, 4),
             "reuse_mult": reuse_mult,
+            "surface_mult": round(surface_mult, 4),
+            "iv_richness_z": round(z, 3) if richness.get("available") else None,
         },
         "vol_ratio": round(max(0.7, min(1.5, float(short.get("iv") or 15.0) / 15.0)), 4),
     })
@@ -64,6 +70,7 @@ def select_dynamic_credit_spread(
     width_points: float,
     previous_signature: Optional[str] = None,
     minutes_to_close: int = 120,
+    iv_surface: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Rank several deltas on the requested side and return the best candidate.
 
@@ -98,6 +105,7 @@ def select_dynamic_credit_spread(
                     preferred_direction=preferred_direction,
                     previous_signature=previous_signature,
                     minutes_to_close=minutes_to_close,
+                    iv_surface=iv_surface,
                 ))
         return out
 

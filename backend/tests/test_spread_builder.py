@@ -169,3 +169,22 @@ def test_dynamic_selector_fades_contract_score_near_close():
         minutes_to_close=20,
     )
     assert late["contract_edge_score"] < early["contract_edge_score"]
+
+
+def test_dynamic_selector_records_iv_surface_score_factor():
+    chain = _pe_chain() + _ce_chain()
+    rich = select_dynamic_credit_spread(
+        chain_nodes=chain,
+        preferred_direction="bullish",
+        width_points=100,
+        minutes_to_close=120,
+        iv_surface={"richness": {"available": True, "zscore": 2.0}},
+    )
+    neutral = select_dynamic_credit_spread(
+        chain_nodes=chain,
+        preferred_direction="bullish",
+        width_points=100,
+        minutes_to_close=120,
+    )
+    assert rich["contract_edge_score"] > neutral["contract_edge_score"]
+    assert rich["selection_factors"]["iv_richness_z"] == 2.0

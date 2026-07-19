@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from safe_exec import safe_run_strategy
@@ -69,6 +69,18 @@ def _fill(px: float, side: str) -> float:
 
 def _signal_days_from(signals: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(s.get("date"))[:10]: s for s in (signals or []) if s.get("date")}
+
+
+def _event_window_days(event_dates: List[str], width: int) -> set[str]:
+    out: set[str] = set()
+    for raw in event_dates or []:
+        try:
+            d0 = datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+        except Exception:  # noqa: BLE001
+            continue
+        for offset in range(-abs(width), abs(width) + 1):
+            out.add((d0 + timedelta(days=offset)).isoformat())
+    return out
 
 
 class EODOptionsBacktest:
@@ -158,6 +170,18 @@ class EODOptionsBacktest:
                     sig_days = rolling_sig_days
                     signal_eval = "rolling_latest_window"
 
+        if p.get("event_dates"):
+            window = int(p.get("event_window_days", 1))
+            allowed = _event_window_days([str(d) for d in p.get("event_dates") or []], window)
+            before = len(sig_days)
+            sig_days = {d: s for d, s in sig_days.items() if d in allowed}
+            signal_eval = f"{signal_eval}+event_window_{window}d"
+            event_filter = {"enabled": True, "event_count": len(p.get("event_dates") or []),
+                            "window_days": window, "signals_before": before,
+                            "signals_after": len(sig_days)}
+        else:
+            event_filter = {"enabled": False}
+
         self._close_by = close_by_day   # index close per day, for cash-settled expiry payoff
         trades: List[Dict[str, Any]] = []
         active: Optional[Dict[str, Any]] = None
@@ -219,7 +243,7 @@ class EODOptionsBacktest:
             "underlying": u, "structure": structure, "lots": lots,
             "window": {"start": days[0], "end": days[-1], "n_days": len(days)},
             "signals": len(sig_days), "signal_evaluation": signal_eval, "grade": grade(metrics),
-            **metrics, "trades": trades, "regime_breakdown": regime_breakdown,
+            "event_filter": event_filter, **metrics, "trades": trades, "regime_breakdown": regime_breakdown,
         }
 
     # ---- structure open / value / close --------------------------------------

@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional
 
 from core.bhavcopy_store import BhavcopyStore
 from core.eod_options_backtest import EODOptionsBacktest, walk_forward
+from core.iv_surface import richness_zscore
+from core.judge_facade import grade as judge_grade
 
 # underlyings we probe for coverage vs. the smaller set the studies run on
 COVERAGE_UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
@@ -170,6 +172,28 @@ def _coverage(store: BhavcopyStore, days: List[str]) -> Dict[str, Any]:
     }
 
 
+def _iv_surfaces(store: BhavcopyStore, days: List[str], present: set[str]) -> Dict[str, Any]:
+    samples = []
+    latest = days[-1] if days else None
+    for u in [x for x in BASE_RATE_UNDERLYINGS if x in present]:
+        surf = richness_zscore(store, u, latest) if latest else {"available": False}
+        summary = surf.get("summary") or {}
+        richness = surf.get("richness") or {}
+        samples.append({
+            "underlying": u,
+            "date": latest,
+            "available": bool(surf.get("available")),
+            "spot": surf.get("spot"),
+            "atm_iv": surf.get("atm_iv"),
+            "near_expiry": summary.get("near_expiry"),
+            "put_call_skew": summary.get("put_call_skew"),
+            "point_count": summary.get("point_count"),
+            "richness": richness,
+        })
+    return {"date": latest, "samples": samples,
+            "note": "ATM IV richness is computed from stored bhavcopy option chains; it is evidence for gates, not a trade by itself."}
+
+
 # ---- per-strategy OOS verdict ------------------------------------------------
 
 def _strat_underlying(s: Dict[str, Any]) -> str:
@@ -180,7 +204,6 @@ def _strat_underlying(s: Dict[str, Any]) -> str:
 
 def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
          present: Optional[set] = None) -> Dict[str, Any]:
-    engine = EODOptionsBacktest(store)
     rows = []
     for s in strategies:
         # Skip strategies whose underlying has no data (equity/stocks) WITHOUT paying
@@ -189,23 +212,21 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             rows.append({"name": s.get("name"), "underlying": _strat_underlying(s),
                          "error": "no bhavcopy data (equity/stock EOD not ingested)"})
             continue
-        res = engine.run(s)
-        if res.get("error"):
-            rows.append({"name": s.get("name"), "error": res["error"]})
+        judged = judge_grade(s, mode="eod", store=store)
+        if judged.get("status") == "error":
+            rows.append({"name": s.get("name"), "error": judged.get("error")})
             continue
-        wf = walk_forward(res)
-        o = wf["overall"]
+        o = judged.get("overall") or {}
         rows.append({
-            "name": res.get("name"), "underlying": res.get("underlying"),
-            "structure": res.get("structure"), "verdict": wf["verdict"],
+            "name": judged.get("name"), "underlying": judged.get("underlying"),
+            "structure": judged.get("structure"), "verdict": judged.get("verdict"),
             "n": o["n"], "expectancy": o["expectancy"], "win_rate": o["win_rate"],
-            "pnl": o["pnl"], "oos_year": wf.get("oos_year"),
-            "oos_expectancy": wf.get("oos", {}).get("expectancy", 0),
-            "pct_green_months": wf.get("pct_green_months"),
-            "all_years_positive": wf.get("all_years_positive"),
-            "regime_breakdown": res.get("regime_breakdown") or {},
-            "signals": res.get("signals", 0),
-            "signal_evaluation": res.get("signal_evaluation"),
+            "pnl": o["pnl"], "oos_year": judged.get("oos_year"),
+            "oos_expectancy": (judged.get("oos") or {}).get("expectancy", 0),
+            "pct_green_months": judged.get("pct_green_months"),
+            "regime_breakdown": judged.get("regime_breakdown") or {},
+            "signals": judged.get("signals", 0),
+            "signal_evaluation": judged.get("signal_evaluation"),
         })
     order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
     rows.sort(key=lambda r: order.get(r.get("verdict", ""), 9))
@@ -282,11 +303,12 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
     archived_count = len(strategies) - len(active_strategies)
     coverage = _phase("coverage", lambda: _coverage(store, days))
     present = {u["underlying"] for u in coverage.get("underlyings", [])}
+    iv_surface = _phase("iv_surface", lambda: _iv_surfaces(store, days, present))
     base_rate = _phase("base_rate", lambda: {
         "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
     oos = _phase("oos", lambda: _oos(active_strategies, store, present))
     sweep = _phase("sweep", lambda: _sweep(active_strategies, store, present)) if include_sweep else None
     from core.edge_research_ledger import enrich_snapshot
     return enrich_snapshot({"status": "ready", "generated_at": now, "coverage": coverage,
-                            "base_rate": base_rate, "oos": oos, "sweep": sweep,
+                            "iv_surface": iv_surface, "base_rate": base_rate, "oos": oos, "sweep": sweep,
                             "book": {"active_strategies": len(active_strategies), "archived_strategies": archived_count}})

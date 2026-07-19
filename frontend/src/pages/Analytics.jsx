@@ -273,6 +273,7 @@ function EdgeLab({ data, loading, onRefresh }) {
   const cov = data.coverage || {};
   const shortVol = data.base_rate?.short_vol || [];
   const directional = data.base_rate?.directional || [];
+  const ivSurface = data.iv_surface || {};
   const oos = data.oos || {};
   const oosCounts = oos.counts || {};
   const sweep = data.sweep || [];
@@ -302,6 +303,36 @@ function EdgeLab({ data, loading, onRefresh }) {
       </div>
 
       <Proposer />
+
+      <section className="qd-card p-5">
+        <div className="qd-section-title flex items-center gap-1.5"><Activity size={13} /> // IV surface richness</div>
+        <div className="mt-2 font-mono text-xs text-[var(--qd-text-2)]">
+          Stored option-chain IV, ATM richness z-score, skew, and near-expiry sample for premium gates.
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {(ivSurface.samples || []).map((s) => {
+            const r = s.richness || {};
+            const state = r.state || (s.available ? "unknown" : "missing");
+            const tone = state === "rich" ? "text-[var(--qd-profit)]" : state === "cheap" ? "text-[var(--qd-loss)]" : "text-[var(--qd-text-2)]";
+            return (
+              <div key={s.underlying} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-mono text-xs font-semibold text-[var(--qd-text)]">{s.underlying}</div>
+                  <div className={`font-mono text-[11px] uppercase ${tone}`}>{state}</div>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[11px] text-[var(--qd-text-2)]">
+                  <div>ATM IV <span className="text-[var(--qd-text)]">{num(Number(s.atm_iv || 0) * 100, 1)}%</span></div>
+                  <div>z <span className={tone}>{num(r.zscore, 2)}</span></div>
+                  <div>Skew <span className="text-[var(--qd-text)]">{num(s.put_call_skew, 3)}</span></div>
+                  <div>Pts <span className="text-[var(--qd-text)]">{s.point_count || 0}</span></div>
+                </div>
+                <div className="mt-2 font-mono text-[10px] text-[var(--qd-text-3)]">{s.date} · {s.near_expiry || "no expiry"} · n={r.sample_n || 0}</div>
+              </div>
+            );
+          })}
+        </div>
+        {!(ivSurface.samples || []).length && <div className="mt-3 font-mono text-xs text-[var(--qd-text-3)]">No IV surface sample in the current snapshot.</div>}
+      </section>
 
       <section className="qd-card p-5">
         <div className="qd-section-title">// Edge Lab v2 research ledger</div>
