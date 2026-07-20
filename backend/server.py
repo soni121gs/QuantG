@@ -17351,7 +17351,7 @@ async def startup():
                         )
                         logger.warning("Archived strategy %s during startup allowlist enforcement", s.get("name"))
 
-                    if registry_active_default(s.get("name")):
+                    if registry_active_default(s.get("name")) and not s.get("founder_forced_live"):
                         s_updates["status"] = "paused"
                         s_updates["mode"] = "paper"
                         s_updates["manual_paused"] = True
