@@ -73,7 +73,11 @@ async def store_coverage(ctx: ProbeContext) -> List[Finding]:
         from core.india_flows import participant_oi_days
         d = participant_oi_days()
         stores.append({"name": "participant_oi (F&O positioning)", "days": d,
-                       "judge": "participant-OI overlay", "critical": False})
+                       "judge": "participant-OI overlay", "critical": False,
+                       # NSE discontinued the participant-wise OI report on 2024-07-08
+                       # (§20.2). A store current up to that date is COMPLETE, not stale —
+                       # there is nothing upstream left to ingest, so don't flag it.
+                       "discontinued_after": "2024-07-08"})
     except Exception as exc:  # noqa: BLE001
         out.append(_probe_note("participant_oi", exc))
 
@@ -94,6 +98,11 @@ async def store_coverage(ctx: ProbeContext) -> List[Finding]:
                 suggested_fix="Run the store's ingest/backfill (bhavcopy_ingest / index_1m_ingest / options_1m_ingest) and check the ./data mount.",
             ))
             continue
+        disc = s.get("discontinued_after")
+        if disc:
+            gap = _days_behind(days[-1], disc)
+            if gap is not None and gap <= 15:
+                continue  # store is current up to the discontinued source's last publication
         behind = _days_behind(days[-1], today)
         if behind is not None and behind > _STALE_DAYS:
             out.append(Finding(

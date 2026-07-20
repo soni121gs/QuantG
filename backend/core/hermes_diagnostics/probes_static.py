@@ -148,38 +148,75 @@ async def spread_capital_sanity(ctx: ProbeContext) -> List[Finding]:
 
 
 @register("static.cost_floor", kind="static")
+async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any]):
+    """REAL gross credit/profit per lot from recent closed spreads — deterministic
+    evidence, not a config guess. Returns (per_lot_rupees, sample_size) or None when
+    there is no history to judge (so the probe can stay silent — §19)."""
+    struct = str(_opts(strat).get("structure"))
+    field = {"credit_spread": "net_credit", "debit_spread": "max_profit"}.get(struct)
+    if not field:
+        return None  # cost-floor credit test is only meaningful for spreads
+    try:
+        cur = db.strategy_positions.find(
+            {"user_id": user_id, "strategy_id": str(strat.get("id")),
+             "status": "CLOSED", field: {"$gt": 0}},
+            {field: 1},
+        ).sort("closed_at", -1).limit(40)
+        vals = [float(p[field]) async for p in cur if p.get(field)]
+    except Exception:  # noqa: BLE001
+        return None
+    if len(vals) < 3:
+        return None  # thin evidence -> silence, never a HIGH finding on a guess
+    per_unit = sum(vals) / len(vals)
+    try:
+        spec = contract_spec_for_underlying(_underlying(strat)) or {}
+        lot = float(spec.get("lot_size") or 0) or 1.0
+    except Exception:  # noqa: BLE001
+        lot = 1.0
+    return per_unit * lot, len(vals)
+
+
 async def cost_floor(ctx: ProbeContext) -> List[Finding]:
-    """Reject designs whose expected edge is too small versus modeled friction."""
+    """Reject designs whose expected edge is too small versus modeled friction.
+
+    Evidence order (never fire on a guess — §19): (1) a design number the strategy
+    explicitly declares; (2) else the REALIZED average gross credit-per-lot from
+    recent closed spreads; (3) else stay silent. The old probe read an
+    expected_*_per_lot field that no strategy ever sets, so it fired HIGH on an
+    implicit zero for every active option strategy — a false positive on no
+    evidence. Now it judges real economics or says nothing."""
     out: List[Finding] = []
     for strat in ctx.strategies:
         o = _opts(strat)
         if str(o.get("structure")) not in ("credit_spread", "debit_spread", "single_leg") or not _is_active(strat):
             continue
+        source, sample = "declared", None
         edge = o.get("expected_edge_per_lot") or o.get("expected_credit_per_lot") or o.get("avg_credit_per_lot")
         try:
             edge = float(edge)
         except (TypeError, ValueError):
-            credit = o.get("credit_tp_frac")
-            if credit is None:
-                continue
-            edge = 0.0
+            measured = await _realized_credit_per_lot(ctx.db, ctx.user_id, strat)
+            if measured is None:
+                continue  # no declared design number AND no realized evidence
+            edge, sample, source = measured[0], measured[1], "realized"
         friction = _round_trip_cost(strat)
         floor = _COST_FLOOR_MULT * friction
         if edge < floor:
             out.append(Finding(
                 probe_id="static.cost_floor", domain=Domain.STRATEGY,
                 severity=Severity.HIGH, entity=str(strat.get("id")),
-                title=f"Expected edge Rs{edge:.0f}/lot is below {floor:.0f} cost floor",
+                title=f"{source.title()} credit Rs{edge:.0f}/lot is below {floor:.0f} cost floor",
                 detail=("The design does not clear the ERP cost-floor law: expected edge "
                         "must be at least 3x modeled round-trip friction before paper or "
                         "promotion. This catches width-1 low-credit designs before they "
                         "spend their edge on brokerage, taxes and slippage."),
                 evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
-                          "underlying": _underlying(strat), "expected_edge_per_lot": edge,
+                          "underlying": _underlying(strat), "expected_edge_per_lot": round(edge, 1),
+                          "source": source, "sample_size": sample,
                           "round_trip_cost_per_lot": friction, "required_floor": floor,
                           "multiple": round(edge / friction, 2) if friction else None},
-                reproduction="compare strategy expected_edge_per_lot/expected_credit_per_lot to modeled round-trip friction",
-                suggested_fix="Reject or redesign the geometry until expected edge is at least 3x modeled friction.",
+                reproduction="avg net_credit/max_profit of last <=40 CLOSED positions x lot_size vs 3x modeled round-trip friction",
+                suggested_fix="Reject or redesign the geometry until realized credit is at least 3x modeled friction.",
             ))
     return out
 
