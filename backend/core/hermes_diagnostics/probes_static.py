@@ -147,7 +147,6 @@ async def spread_capital_sanity(ctx: ProbeContext) -> List[Finding]:
     return out
 
 
-@register("static.cost_floor", kind="static")
 async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any]):
     """REAL gross credit/profit per lot from recent closed spreads — deterministic
     evidence, not a config guess. Returns (per_lot_rupees, sample_size) or None when
@@ -176,6 +175,7 @@ async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any])
     return per_unit * lot, len(vals)
 
 
+@register("static.cost_floor", kind="static")
 async def cost_floor(ctx: ProbeContext) -> List[Finding]:
     """Reject designs whose expected edge is too small versus modeled friction.
 
