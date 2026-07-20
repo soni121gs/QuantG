@@ -55,6 +55,15 @@ services:
       # Reversible via env; remove/override to restore code defaults.
       PAPER_MEASUREMENT_COOLDOWN_MINUTES: "${PAPER_MEASUREMENT_COOLDOWN_MINUTES:-0}"
       REENTRY_COOLDOWN_SECONDS: "${REENTRY_COOLDOWN_SECONDS:-30}"
+      # Trailing profit-lock arms EARLIER so medium winners are protected before a
+      # round-trip to red (arm was 0.35-0.40 of MAX credit = ~70-80% of the way to
+      # TP, so a +900 winner never armed). Lowered to ~0.20 of max credit ≈ 40% of
+      # the TP target. Reversible; keep TREND arm high so trends still run.
+      DYN_EXIT_TRAIL_ARM_FRAC: "${DYN_EXIT_TRAIL_ARM_FRAC:-0.2}"
+      DYN_EXIT_TRAIL_GIVEBACK_FRAC: "${DYN_EXIT_TRAIL_GIVEBACK_FRAC:-0.45}"
+      RAE_EXIT_RANGE_ARM: "${RAE_EXIT_RANGE_ARM:-0.2}"
+      RAE_EXIT_RANGE_GIVEBACK: "${RAE_EXIT_RANGE_GIVEBACK:-0.4}"
+      RAE_EXIT_INSIDE_ARM: "${RAE_EXIT_INSIDE_ARM:-0.18}"
       FREQ_CAP_DEFAULT: "${FREQ_CAP_DEFAULT:-30}"
       FREQ_CAP_MOMENTUM: "${FREQ_CAP_MOMENTUM:-30}"
       FREQ_CAP_TREND: "${FREQ_CAP_TREND:-30}"
