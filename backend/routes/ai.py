@@ -80,6 +80,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_external_context",
     "get_trade_attribution",
     "get_hermes_brain_health",
+    "get_hermes_diagnostics",
     "get_hermes_oos_validation",
     "get_research_hypotheses",
     "get_research_critique",
@@ -572,6 +573,37 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 warnings.append("No lessons yet — the lesson store accrues one scoring pass per EOD.")
                 confidence = 0.5
             source = "db.hermes_lessons"
+        elif name == "get_hermes_diagnostics":
+            # HSI Stage 6 (§19): the daily DETERMINISTIC auditor. 12 probes across
+            # trading-logic / strategy-edge / infra / data find-and-file problems with
+            # raw evidence + a reproduction query (they never fix). Lets the user ask
+            # "what is the system getting wrong right now?" and have Hermes answer from
+            # probe evidence, not a guess — and auto-resolved findings prove a fix stuck.
+            open_findings = await db.hermes_findings.find(
+                {"user_id": user["id"], "status": "open"},
+                {"_id": 0, "key": 1, "domain": 1, "severity": 1, "title": 1,
+                 "evidence": 1, "occurrences": 1, "suggested_fix": 1, "reproduction": 1},
+            ).to_list(100)
+            sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            open_findings.sort(key=lambda f: sev_rank.get(f.get("severity"), 9))
+            by_severity: Dict[str, int] = {}
+            by_domain: Dict[str, int] = {}
+            for f in open_findings:
+                by_severity[f.get("severity", "?")] = by_severity.get(f.get("severity", "?"), 0) + 1
+                by_domain[f.get("domain", "?")] = by_domain.get(f.get("domain", "?"), 0) + 1
+            latest_run = await db.hermes_diagnostic_runs.find_one(
+                {"user_id": user["id"]}, {"_id": 0, "date": 1, "summary": 1, "narrative": 1},
+                sort=[("date", -1)])
+            data = {
+                "open_count": len(open_findings),
+                "by_severity": by_severity,
+                "by_domain": by_domain,
+                "open_findings": open_findings,
+                "latest_run": latest_run,
+            }
+            if not open_findings:
+                data["note"] = "No open diagnostic findings — every probe is clean (or fixes auto-resolved)."
+            source = "db.hermes_findings + db.hermes_diagnostic_runs"
         elif name == "get_hermes_oos_validation":
             from core.hermes_validator import get_validation_summary
             data = await get_validation_summary(db, user["id"])
@@ -1220,6 +1252,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_external_context": "EXTERNAL/UNVERIFIED macro/news/event context via Google Search — never for any QuantG number.",
     "get_trade_attribution": "Causal 'why' per closed trade: regime/bias/structure/hold/exit-reason/R-multiple.",
     "get_hermes_brain_health": "Hermes's scored lessons: dimension/bucket, hit-rate, confidence, OOS-passed flag.",
+    "get_hermes_diagnostics": "The daily deterministic auditor's (§19) OPEN findings + latest run: probe key, domain (trading-logic/strategy/infra/data), severity, evidence, and suggested fix. Answers 'what is wrong with the system / what did the diagnostician find / is anything broken right now?'. Evidence-backed, never a guess.",
     "get_hermes_oos_validation": "Hypothesis-test OOS summary from db.hermes_hypothesis_tests.",
     "get_research_hypotheses": "HIRB research hypothesis ledger: structured ideas, evidence links, and verdicts.",
     "get_research_critique": "HIRB verifier/critic: what is proven, missing, contradictory, or falsifiable.",
@@ -1717,6 +1750,17 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "what has hermes learned", "confidence", "decayed",
     ]):
         matched_tools.add("get_hermes_brain_health")
+        has_matches = True
+
+    # §19 Diagnostician: "what's broken / wrong / any bugs / diagnostics / findings".
+    if any(w in q for w in [
+        "diagnostic", "diagnostics", "diagnose", "what is wrong", "what's wrong",
+        "what is broken", "what's broken", "anything broken", "any bug", "any bugs",
+        "any error", "any errors", "any issue", "any issues", "findings", "auditor",
+        "health check", "system health", "is anything wrong", "probe", "regression",
+    ]):
+        matched_tools.add("get_hermes_diagnostics")
+        matched_tools.add("get_logs_errors")
         has_matches = True
 
     if any(w in q for w in [
