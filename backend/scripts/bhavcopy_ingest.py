@@ -195,7 +195,7 @@ def parse_udiff_csv(raw: str, underlyings: set[str], instr_types: set[str] | Non
         if itp not in allowed:
             continue
         sym = row.get("TckrSymb", "")
-        if sym not in underlyings:
+        if underlyings and sym not in underlyings:
             continue
         out.append({
             "date": row["TradDt"],
@@ -231,7 +231,7 @@ def parse_legacy_fo_csv(raw: str, underlyings: set[str], instr_types: set[str] |
         if not itp or itp not in allowed:
             continue
         sym = (row.get("SYMBOL") or "").strip().upper()
-        if sym not in underlyings:
+        if underlyings and sym not in underlyings:
             continue
         typ = (row.get("OPTION_TYP") or "").strip().upper()
         if typ == "XX":
@@ -359,6 +359,10 @@ def main():
     ap.add_argument("end", nargs="?", help="YYYY-MM-DD (omit with --from-zips)")
     ap.add_argument("--source", choices=list(SOURCES), default="nse")
     ap.add_argument("--underlyings", default="", help="override (comma-sep); default = source's set")
+    ap.add_argument("--all-underlyings", action="store_true",
+                    help="keep EVERY F&O underlying in the bhavcopy (all ~180 stocks + indices), "
+                         "not just the source's curated set. Use to backfill the full stock-option "
+                         "universe for the earnings/event sleeves.")
     ap.add_argument("--instr-types", default="",
                     help="F&O instrument types, comma-separated; default includes IDO,IDF,STO,STF")
     ap.add_argument("--overwrite", action="store_true", help="re-download days already stored")
@@ -373,8 +377,14 @@ def main():
     kind = src.get("kind", "fo")
     store_dir = store_root_for(src)
     cols = CM_OUT_COLS if kind == "cm" else OUT_COLS
-    underlyings = ({u.strip().upper() for u in args.underlyings.split(",") if u.strip()}
-                   or set(src["underlyings"]))
+    # --all-underlyings → empty set = "keep everything the parser sees" (guarded by
+    # the instr-types filter, so still only F&O). Otherwise: explicit list, else the
+    # source's curated set.
+    if args.all_underlyings:
+        underlyings: set = set()
+    else:
+        underlyings = ({u.strip().upper() for u in args.underlyings.split(",") if u.strip()}
+                       or set(src["underlyings"]))
     instr_types = _instr_types(args.instr_types) or (FO_INSTR_TYPES if kind == "fo" else set())
 
     if args.from_zips:

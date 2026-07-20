@@ -22,6 +22,7 @@ so the UI shows exactly what those console tools show — this is their JSON hom
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import statistics as st
 from datetime import datetime, timezone
@@ -280,6 +281,46 @@ def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore,
 
 # ---- top-level ---------------------------------------------------------------
 
+def _store_fingerprint(days: List[str]) -> str:
+    """Identity of the store's data: day count + newest day. Changes only when new
+    data is ingested — the exact moment the cached store-derived stages go stale."""
+    return f"{len(days)}:{days[-1]}" if days else "empty"
+
+
+def _store_derived_stages(store: BhavcopyStore, days: List[str]) -> Dict[str, Any]:
+    """coverage + iv_surface + base_rate for the whole store, cached on disk by the
+    store fingerprint. Reused across rebuilds until the store grows, turning the
+    ~11-min scan into a one-time-per-ingest cost. Cache failures fall back to a live
+    compute — never fatal."""
+    fp = _store_fingerprint(days)
+    cache_path = None
+    try:
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(store.root)), "edge_lab_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, "store_stages.json")
+        if os.path.exists(cache_path):
+            with open(cache_path) as fh:
+                cached = json.load(fh)
+            if cached.get("fingerprint") == fp:
+                cached["cache_hit"] = True
+                return cached
+    except Exception:  # noqa: BLE001
+        pass
+    coverage = _coverage(store, days)
+    present = {u["underlying"] for u in coverage.get("underlyings", [])}
+    iv_surface = _iv_surfaces(store, days, present)
+    base_rate = {"short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP}
+    result = {"fingerprint": fp, "coverage": coverage, "iv_surface": iv_surface,
+              "base_rate": base_rate, "cache_hit": False}
+    if cache_path:
+        try:
+            with open(cache_path, "w") as fh:
+                json.dump(result, fh)
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
 def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopyStore] = None,
                    include_sweep: bool = True) -> Dict[str, Any]:
     """Compute the full Edge Lab snapshot. Returns a JSON-serialisable dict with a
@@ -301,11 +342,14 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
 
     active_strategies = [s for s in strategies if str(s.get("status") or "").lower() != "archived"]
     archived_count = len(strategies) - len(active_strategies)
-    coverage = _phase("coverage", lambda: _coverage(store, days))
+    # coverage + iv_surface + base_rate scan the WHOLE store (~11 min) and depend
+    # only on the data, not the strategies — cache them by a store fingerprint so a
+    # rebuild after a strategy edit reuses them; only OOS/sweep recompute each time.
+    store_stages = _phase("store_stages", lambda: _store_derived_stages(store, days))
+    coverage = store_stages["coverage"]
+    iv_surface = store_stages["iv_surface"]
+    base_rate = store_stages["base_rate"]
     present = {u["underlying"] for u in coverage.get("underlyings", [])}
-    iv_surface = _phase("iv_surface", lambda: _iv_surfaces(store, days, present))
-    base_rate = _phase("base_rate", lambda: {
-        "short_vol": _base_rate(store), "directional": _directional(store), "slippage_pct": _SLIP})
     oos = _phase("oos", lambda: _oos(active_strategies, store, present))
     sweep = _phase("sweep", lambda: _sweep(active_strategies, store, present)) if include_sweep else None
     from core.edge_research_ledger import enrich_snapshot
