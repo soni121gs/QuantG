@@ -25,6 +25,12 @@ from typing import Any, Dict, Optional
 TRAIL_ARM_FRAC = float(os.environ.get("DYN_EXIT_TRAIL_ARM_FRAC", "0.4"))
 # Once armed, exit if profit retraces this fraction back from its peak.
 TRAIL_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_TRAIL_GIVEBACK_FRAC", "0.5"))
+# Absolute ₹ floor on the arm level. On a thin-credit spread the fractional arm
+# (arm_frac × credit) can be SMALLER than the round-trip friction (brokerage +
+# slippage on 4 legs, ~₹250–400/lot) — arming there would "lock a profit" that is
+# actually a net LOSS after costs. Never arm the trail until the peak clears real
+# friction. Fat-credit spreads already arm well above this, so they're unaffected.
+TRAIL_MIN_ARM_RUPEES = float(os.environ.get("DYN_EXIT_MIN_ARM_RUPEES", "300"))
 
 
 def update_peak_pnl(prev_peak: Optional[float], current_pnl: float) -> float:
@@ -50,7 +56,9 @@ def trailing_lock_levels(
     lock_level = peak_pnl × (1 − giveback_frac)   — exit if current P&L falls here
     """
     credit_money = float(net_credit) * int(qty)
-    arm_level = arm_frac * credit_money if credit_money > 0 else None
+    # arm at the fraction of max credit, but never below real round-trip friction —
+    # banking a "profit" smaller than the cost of the exit is a net loss.
+    arm_level = max(arm_frac * credit_money, TRAIL_MIN_ARM_RUPEES) if credit_money > 0 else None
     armed = (arm_level is not None and peak_pnl is not None and peak_pnl >= arm_level)
     lock_level = (float(peak_pnl) * (1.0 - giveback_frac)) if armed else None
     return {"armed": bool(armed), "arm_level": arm_level, "lock_level": lock_level}
