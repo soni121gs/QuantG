@@ -147,6 +147,10 @@ async def persist_trials(db, user_id: str, snapshot: Dict[str, Any]) -> int:
     count = 0
     for row in snapshot.get("oos", {}).get("rows") or []:
         doc = trial_document(user_id=user_id, row=row, snapshot=snapshot)
+        # created_at is owned by $setOnInsert below; it must NOT also appear in
+        # $set or Mongo rejects the update ("would create a conflict at
+        # 'created_at'") — which failed the whole Edge Lab build every run.
+        doc.pop("created_at", None)
         await db.strategy_trials.update_one(
             {"_id": doc["_id"]},
             {"$set": {**doc, "last_run_at": snapshot.get("generated_at")},

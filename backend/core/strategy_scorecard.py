@@ -131,10 +131,16 @@ async def build_scorecard(
 
     rows: List[Dict[str, Any]] = []
     for sid, ts in grouped.items():
+        info = meta.get(str(sid))
+        if info is None:
+            # Orphaned strategy_id: the strategy doc was deleted (e.g. the ERP
+            # Phase 0 purge) but its historical trades remain in db.trades. These
+            # rendered as "?" rows for a book that no longer exists — skip them so
+            # the scorecard shows only the CURRENT book.
+            continue
         ts.sort(key=_trade_time)
         pnls = [_trade_pnl(t) for t in ts]
         m = compute_metrics(pnls, starting_capital=SCORECARD_BASE_CAPITAL)
-        info = meta.get(str(sid), {})
         rows.append({
             "strategy_id": sid,
             "name": info.get("name", "?"),
