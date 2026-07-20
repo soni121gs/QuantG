@@ -281,10 +281,21 @@ def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore,
 
 # ---- top-level ---------------------------------------------------------------
 
-def _store_fingerprint(days: List[str]) -> str:
-    """Identity of the store's data: day count + newest day. Changes only when new
-    data is ingested — the exact moment the cached store-derived stages go stale."""
-    return f"{len(days)}:{days[-1]}" if days else "empty"
+def _store_fingerprint(store: BhavcopyStore, days: List[str]) -> str:
+    """Identity of the store's data: day count + newest day + total bytes. The byte
+    total catches a RE-INGEST that rewrites existing days with more contracts (e.g.
+    backfilling the full stock universe) — day-count alone would miss it and serve a
+    stale cache. ~1860 stat() calls, sub-second, vs the 11-min scan it guards."""
+    if not days:
+        return "empty"
+    total = 0
+    try:
+        import glob
+        for p in glob.glob(os.path.join(store.root, "*", "*.csv.gz")):
+            total += os.path.getsize(p)
+    except Exception:  # noqa: BLE001
+        total = -1
+    return f"{len(days)}:{days[-1]}:{total}"
 
 
 def _store_derived_stages(store: BhavcopyStore, days: List[str]) -> Dict[str, Any]:
@@ -292,7 +303,7 @@ def _store_derived_stages(store: BhavcopyStore, days: List[str]) -> Dict[str, An
     store fingerprint. Reused across rebuilds until the store grows, turning the
     ~11-min scan into a one-time-per-ingest cost. Cache failures fall back to a live
     compute — never fatal."""
-    fp = _store_fingerprint(days)
+    fp = _store_fingerprint(store, days)
     cache_path = None
     try:
         cache_dir = os.path.join(os.path.dirname(os.path.abspath(store.root)), "edge_lab_cache")
