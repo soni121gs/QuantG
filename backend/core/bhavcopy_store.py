@@ -29,6 +29,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("quantg.bhavcopy_store")
 
+# Per-(underlying, day) row cache. Sized to hold a full walk-forward for one
+# underlying (~1860 days) so a backtest parses each day once instead of thrashing.
+# Entries are a single underlying's slice (~2-3% of the file), so this is far
+# cheaper in memory than caching whole days.
+_ROWS_FOR_CACHE = int(os.environ.get("BHAVCOPY_ROWS_CACHE", "4096"))
+
 STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "bhavcopy_fo"),
@@ -70,7 +76,13 @@ class BhavcopyStore:
     @lru_cache(maxsize=64)
     def load_day(self, day: str) -> tuple:
         """All rows for one trading day (NSE + BSE files merged). Cached; returns a
-        tuple so it is hashable/immutable for the lru_cache."""
+        tuple so it is hashable/immutable for the lru_cache.
+
+        NOTE: prefer `rows_for(underlying, day)` in any per-underlying path (every
+        backtest). Since the full stock universe was ingested a day-file carries
+        ~30k rows and this builds a dict for ALL of them; a backtest then discards
+        ~97%. Use this only when you genuinely need every underlying (coverage).
+        """
         rows: List[Dict[str, Any]] = []
         for path in self._files_for(day):
             try:
@@ -80,6 +92,42 @@ class BhavcopyStore:
                 logger.warning("bhavcopy read failed %s: %s", path, exc)
         return tuple(rows)
 
+    @lru_cache(maxsize=_ROWS_FOR_CACHE)
+    def rows_for(self, underlying: str, day: str) -> tuple:
+        """Rows for ONE underlying on ONE day — filtered DURING the scan.
+
+        This is the hot path for every backtest. `load_day` builds a dict for all
+        ~30k rows in the file; here we read with csv.reader and only materialise a
+        dict for rows that MATCH, so we allocate ~2-3% as many objects. Combined
+        with a cache sized for a full walk-forward (load_day's 64-day cache thrashes
+        over 1860 days), a given (underlying, day) is parsed once and then reused by
+        every strategy and by both the futures and option-chain paths.
+
+        The durable fix is a per-underlying slim store written at ingest time; this
+        removes the worst of the tax without changing the on-disk layout.
+        """
+        u = underlying.upper()
+        out: List[Dict[str, Any]] = []
+        for path in self._files_for(day):
+            try:
+                with gzip.open(path, "rt") as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)
+                    if not header:
+                        continue
+                    try:
+                        ui = header.index("underlying")
+                    except ValueError:  # unexpected layout — fall back to full parse
+                        out.extend(r for r in csv.DictReader(gzip.open(path, "rt"))
+                                   if r.get("underlying") == u)
+                        continue
+                    for row in reader:
+                        if len(row) > ui and row[ui] == u:
+                            out.append(dict(zip(header, row)))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("bhavcopy read failed %s: %s", path, exc)
+        return tuple(out)
+
     # ---- underlying OHLC (from near-month futures) ---------------------------
     @lru_cache(maxsize=16)
     def underlying_daily(self, underlying: str, start: Optional[str] = None,
@@ -87,8 +135,8 @@ class BhavcopyStore:
         u = underlying.upper()
         out: List[Dict[str, Any]] = []
         for day in self.trading_days(start, end):
-            futs = [r for r in self.load_day(day)
-                    if r.get("underlying") == u and r.get("instr_type") in ("IDF", "STF")]
+            futs = [r for r in self.rows_for(u, day)
+                    if r.get("instr_type") in ("IDF", "STF")]
             if not futs:
                 continue
             # near-month = nearest expiry >= day (fallback: earliest available)
@@ -112,8 +160,8 @@ class BhavcopyStore:
     def option_chain(self, underlying: str, day: str) -> Dict[str, Dict[float, Dict[str, Any]]]:
         u = underlying.upper()
         chain: Dict[str, Dict[float, Dict[str, Any]]] = {}
-        for r in self.load_day(day):
-            if r.get("underlying") != u or r.get("instr_type") not in ("IDO", "STO"):
+        for r in self.rows_for(u, day):
+            if r.get("instr_type") not in ("IDO", "STO"):
                 continue
             typ = r.get("option_type")
             if typ not in ("CE", "PE"):
