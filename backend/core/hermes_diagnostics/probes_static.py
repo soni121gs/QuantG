@@ -97,7 +97,30 @@ async def specialist_tag_consistency(ctx: ProbeContext) -> List[Finding]:
         role = strat.get("specialist_role") or o.get("specialist_role")
         owned = strat.get("owned_regimes") or o.get("owned_regimes")
         if not role and not owned:
-            continue  # not a specialist — fine
+            # 2026-07-21 blind-spot fix: a FULLY-untagged spread is not "not a
+            # specialist" — signal_manager defaults it to 'range_seller', so it is
+            # silently gated as a premium seller whatever it actually is. That is how
+            # the IDX long-gamma sleeve ended up permitted only on calm days (0 trades
+            # ever). Flag untagged spreads instead of skipping them.
+            if str(o.get("structure")) in ("credit_spread", "debit_spread"):
+                out.append(Finding(
+                    probe_id="static.specialist_tag_consistency", domain=Domain.STRATEGY,
+                    severity=Severity.MEDIUM, entity=str(strat.get("id")),
+                    title="Spread has no specialist_role — silently routed as range_seller",
+                    detail=("This spread declares neither `specialist_role` nor "
+                            "`owned_regimes`, so signal_manager falls back to the "
+                            "'range_seller' default and the RAE router gates it to "
+                            "RANGE/INSIDE. If the strategy is not a premium seller "
+                            "(e.g. long-gamma, mean-reversion, trend), it is being "
+                            "activated in the wrong regime and stood down in its own."),
+                    evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
+                              "structure": o.get("structure"),
+                              "specialist_role": None, "owned_regimes": None,
+                              "routed_as": "range_seller (default)"},
+                    reproduction="strategies where visual_config.options.specialist_role is missing and structure is a spread",
+                    suggested_fix="Set both specialist_role and owned_regimes (see core/index_alpha_sleeves._ROLE_BY_MODE).",
+                ))
+            continue
         if bool(role) != bool(owned):
             out.append(Finding(
                 probe_id="static.specialist_tag_consistency", domain=Domain.STRATEGY,

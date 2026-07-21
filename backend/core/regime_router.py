@@ -103,6 +103,17 @@ def route(
     # off, treat a HIGH_VOL_CHOP day as a wide RANGE so the specialist's own gate
     # decides (range sellers trade on chop). EVENT is NOT overridden — it stays a
     # hard stand-down (macro fat-tail).
+    # 0a) long-vol ownership of chop is decided on the TRUE label, BEFORE the chop
+    # remap below. Otherwise RAE_CHOP_STANDDOWN=false rewrites the day to RANGE and
+    # the long-gamma sleeve — the one structure that wants expansion — is stood down
+    # for not owning RANGE. (2026-07-21: this was the IDX Long-Gamma inversion.)
+    if regime == tax.HIGH_VOL_CHOP and specialist == tax.LONG_VOL_ROLE:
+        base = _f("RAE_SIZE_LONGVOL", 1.0)
+        return RoutingDecision(
+            regime, confidence, False, base, [specialist],
+            [f"{regime}: activate {specialist} at size×{base:.2f} (long-vol owns chop)"],
+        )
+
     chop_note: Optional[str] = None
     if regime == tax.HIGH_VOL_CHOP and not chop_standdown_enabled():
         chop_note = "HIGH_VOL_CHOP veto OFF (RAE_CHOP_STANDDOWN=false) → routed as RANGE"

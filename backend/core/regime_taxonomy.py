@@ -44,9 +44,18 @@ REGIME_OWNER = {
     TREND_DOWN: "trend_delta1_short",
     RANGE: "range_seller",
     INSIDE_QUIET: "inside_mean_revert",   # sellers also participate
+    # 2026-07-21: chop is still "stand down" for PREMIUM SELLERS (the §18.4 finding —
+    # nothing that sells vol wins here). A long-gamma/long-vol sleeve is the one
+    # structure that is *supposed* to want expansion, so it may own chop explicitly
+    # via the `long_vol` role. It is NOT the default owner: an untagged strategy on a
+    # chop day still stands down. Unvalidated by OOS — forward-paper evidence only.
     HIGH_VOL_CHOP: "stand_down",
     EVENT: "stand_down",
 }
+
+# The role a long-gamma / volatility-expansion sleeve declares to own HIGH_VOL_CHOP.
+# Kept out of REGIME_OWNER on purpose so chop remains stand-down-by-default.
+LONG_VOL_ROLE = "long_vol"
 
 
 def _f(name: str, default: float) -> float:

@@ -32,6 +32,7 @@ from core.bhavcopy_store import BhavcopyStore
 from core.edge_research_ledger import deflated_sharpe
 from core.eod_options_backtest import EODOptionsBacktest, walk_forward
 from core.historical_regimes import tag_regimes
+from core import regime_taxonomy as tax
 
 # §20 cost-floor law: an index option structure needs meaningful expected edge or
 # friction eats it. Require gross expectancy ≥ COST_FLOOR_MULT × per-trade friction.
@@ -298,6 +299,38 @@ SLEEVES: List[Dict[str, Any]] = [
 #   TREND (~1%)           : trend_delta1
 #   HIGH_VOL_CHOP (13%)   : longvol   (else stand down — see §18.4)
 #   INSIDE_QUIET (26%)    : reversal_long + sellers (RANGE-adjacent)
+#
+# 2026-07-21: the map above used to live ONLY in this comment. The RAE router reads
+# `visual_config.options.specialist_role`, and signal_manager defaults an UNTAGGED
+# spread to 'range_seller' — so every sleeve seeded from here was silently routed as
+# a premium seller regardless of what it actually is. That inverted the long-gamma
+# sleeve (a volatility-EXPANSION structure permitted only on calm range days, and
+# stood down on trend: 0 trades ever). Encode the map as DATA so the router can read
+# it. `owned_regimes` is carried alongside so the Diagnostician's
+# static.specialist_tag_consistency probe covers these rows.
+_ROLE_BY_MODE: Dict[str, Dict[str, Any]] = {
+    "put_sell":         {"role": tax.REGIME_OWNER[tax.RANGE],
+                         "owned": [tax.RANGE, tax.INSIDE_QUIET]},
+    "call_sell":        {"role": tax.REGIME_OWNER[tax.RANGE],
+                         "owned": [tax.RANGE, tax.INSIDE_QUIET]},
+    "condor_sell":      {"role": tax.REGIME_OWNER[tax.RANGE],
+                         "owned": [tax.RANGE, tax.INSIDE_QUIET]},
+    "calendar_neutral": {"role": tax.REGIME_OWNER[tax.RANGE],
+                         "owned": [tax.RANGE, tax.INSIDE_QUIET]},
+    "reversal_long":    {"role": tax.REGIME_OWNER[tax.INSIDE_QUIET],
+                         "owned": [tax.INSIDE_QUIET, tax.RANGE]},
+    "trend_delta1":     {"role": "trend_delta1",
+                         "owned": [tax.TREND_UP, tax.TREND_DOWN]},
+    "longvol":          {"role": tax.LONG_VOL_ROLE,
+                         "owned": [tax.HIGH_VOL_CHOP]},
+}
+
+for _sleeve in SLEEVES:
+    _tags = _ROLE_BY_MODE.get(_sleeve["mode"])
+    if _tags:
+        _opts = _sleeve["cfg"]["visual_config"]["options"]
+        _opts.setdefault("specialist_role", _tags["role"])
+        _opts.setdefault("owned_regimes", list(_tags["owned"]))
 REGIME_COVERAGE = {
     "RANGE": ["put_sell", "call_sell", "condor_sell", "calendar_neutral", "reversal_long"],
     "TREND": ["trend_delta1"],
