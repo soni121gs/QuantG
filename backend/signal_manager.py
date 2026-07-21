@@ -656,6 +656,25 @@ async def _edge_math_spread_size(
     if _router_on:
         lots = int(round(lots * _routing.size_mult))
 
+    # RES-2 signal E — EVENT-RISK GATE (fat-tail gate). Don't sell cheap insurance
+    # into a scheduled bomb (expiry / RBI / Budget / FOMC / results). This does NOT
+    # predict direction — it reads a table of KNOWN dates and fades size, so it is
+    # fully reconstructible historically and stays OOS-validatable. OBSERVE-ONLY by
+    # default: always annotates telemetry, only changes lots when
+    # EVENT_RISK_GATE_ENABLED=true. Fail-open — any error leaves size untouched.
+    _event = {"level": "NONE", "size_mult": 1.0, "reasons": ["gate not evaluated"]}
+    _event_on = os.environ.get("EVENT_RISK_GATE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+    try:
+        from core.market_events import event_risk as _event_risk
+        _und = str(_opts.get("underlying") or (strategy.get("visual_config") or {}).get("symbol") or "")
+        _today = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+        _event = _event_risk(_today, underlying=_und or None,
+                             expiry_dates=[spread.get("expiry")] if spread.get("expiry") else None)
+        if _event_on and float(_event.get("size_mult", 1.0)) != 1.0:
+            lots = int(round(lots * float(_event["size_mult"])))
+    except Exception as _ev_err:  # noqa: BLE001 — never block a trade on calendar I/O
+        _event = {"level": "NONE", "size_mult": 1.0, "reasons": [f"event gate error: {_ev_err}"]}
+
     telemetry = {
         **decision.__dict__,
         "rolling_n": stats.n,
@@ -669,6 +688,7 @@ async def _edge_math_spread_size(
         "regime": regime,
         "vol_state": vol_state,
         "router": {**_routing.as_dict(), "enforced": _router_on},
+        "event_risk": {**_event, "enforced": _event_on},
     }
     return lots, telemetry
 
