@@ -4,7 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.spread_builder import build_credit_spread, build_credit_spread_by_offset, lots_for_risk
+from core.spread_builder import (build_credit_spread, build_credit_spread_by_offset,
+                                 lots_for_risk, tp_reachability)
 from core.dynamic_contract_selector import select_dynamic_credit_spread, spread_signature
 
 
@@ -243,3 +244,30 @@ def test_dynamic_selector_drops_candidates_that_fail_the_cost_floor():
     )
     assert res["ok"] is True
     assert res["cost_floor"]["passed"] is True
+
+
+# --- theta reachability (2026-07-21) -----------------------------------------
+
+
+def test_theta_cannot_reach_a_far_tp_in_a_short_hold():
+    """QG-O1's live setting: 120-minute hold on a ~7 DTE weekly, TP at 0.50."""
+    r = tp_reachability(0.5, dte_days=7, hold_minutes=120)
+    assert r["theta_reachable_frac"] < 0.06
+    assert r["ratio"] < 0.12               # theta supplies <12% of the target
+    assert r["directional_dependence"] > 0.88
+
+
+def test_longer_hold_and_nearer_expiry_make_the_tp_theta_reachable():
+    r = tp_reachability(0.5, dte_days=2, hold_minutes=300)
+    assert r["ratio"] >= 0.55              # theta does most of the work
+
+
+def test_reachability_ratio_rises_with_hold_and_falls_with_dte():
+    base = tp_reachability(0.5, dte_days=3, hold_minutes=120)["ratio"]
+    assert tp_reachability(0.5, dte_days=3, hold_minutes=300)["ratio"] > base
+    assert tp_reachability(0.5, dte_days=7, hold_minutes=120)["ratio"] < base
+
+
+def test_reachability_handles_zero_dte_without_dividing_by_zero():
+    r = tp_reachability(0.5, dte_days=0, hold_minutes=120)
+    assert r["ratio"] > 0

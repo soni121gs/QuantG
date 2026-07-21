@@ -107,11 +107,26 @@ TEMPLATES = {
         # SL 0.90 -> breakeven ~64%, an achievable seller WR. Stays router-gated +
         # paused pending an OOS re-run on the new shape. time_exit/cooldown unchanged
         # (120m / 15m). Forward-paper judges; all reversible.
+        # 2026-07-21 (measured on the LIVE chain, not assumed): short_delta 0.12
+        # clears the ERP cost floor in ZERO of the geometries probed — NIFTY w6
+        # multiple 2.05, BANKNIFTY w6 2.18, SENSEX w6 1.27, all below the required
+        # 3.0. At delta 0.30 the same width-6 pays multiples 6.41 / 5.87 / 3.94.
+        # Live record agreed: RAE NIFTY 1 trade, BANKNIFTY -Rs8,837/8, SENSEX
+        # -Rs2,981/6, with 0, 0 and 2 price-driven exits respectively.
+        # Width 6 -> 4 keeps per-lot defined risk near Rs10,000 at the higher delta.
+        # time_exit 120 -> 300: at 120 minutes and ~2 DTE theta supplied only 0.16
+        # of credit against a 0.50 target (32% of it), so the clock decided the
+        # trade. At 300 minutes theta supplies ~0.80 of the target.
         "options": {"strike_mode": "OTM_SELL", "structure": "credit_spread",
-                    "spread_width": 6, "short_otm_pct": 0.03, "wing_width": 6,
-                    "exit_mode": "", "short_delta": 0.12,
-                    "credit_tp_frac": 0.50, "credit_sl_mult": 0.90},
-        "risk": {"exit_mode": "signal_or_tp_sl_trailing", "time_exit_minutes": 120,
+                    "spread_width": 4, "short_otm_pct": 0.012, "wing_width": 4,
+                    "exit_mode": "", "short_delta": 0.30, "target_dte_days": 3,
+                    # TP 0.50 -> 0.45: at a realistic ~3 DTE mid-week weekly entry a
+                    # 300-minute hold lets theta supply 0.53 of a 0.50 target but
+                    # 0.59 of a 0.45 one. Breakeven WR moves 0.643 -> 0.667, still
+                    # an achievable seller win rate. SENSEX (Thursday expiry, ~2 DTE)
+                    # is overridden below where theta has more room.
+                    "credit_tp_frac": 0.45, "credit_sl_mult": 0.90},
+        "risk": {"exit_mode": "signal_or_tp_sl_trailing", "time_exit_minutes": 300,
                  "trail_trigger_pct": 4.0, "trail_step_pct": 2.0},
     },
     "trend_delta1": {
@@ -131,13 +146,21 @@ TEMPLATES = {
 }
 
 # per-underlying capital (real per-lot margin — killswitch-geometry memory).
+# 2026-07-21: range_seller caps re-derived for the new width-4 / delta-0.30
+# geometry. `lots_for_risk` sizes as budget // (max_loss_per_unit * lot_size), so
+# a cap left at the old width-6 / delta-0.12 level would SIZE UP hard on the now
+# much narrower per-lot risk: NIFTY 25000/10004 = 2 lots, BANKNIFTY 40000/9446 = 4
+# lots, SENSEX 60000/6188 = 9 lots. Per-lot max loss measured on the live chain
+# (NIFTY Rs10,004, BANKNIFTY Rs9,446, SENSEX Rs6,188) -> cap each at ~1 lot until
+# the re-cut shape has forward-paper evidence. trend_delta1 caps are unchanged
+# (single-leg ITM buyers, untouched by this credit-spread work).
 UNDERLYINGS = [
     {"underlying": "NIFTY", "symbol": "NIFTY", "exchange": "NFO",
-     "cap": {"range_seller": 25000.0, "trend_delta1": 35000.0}},
+     "cap": {"range_seller": 11000.0, "trend_delta1": 35000.0}},
     {"underlying": "BANKNIFTY", "symbol": "BANKNIFTY", "exchange": "NFO",
-     "cap": {"range_seller": 40000.0, "trend_delta1": 55000.0}},
+     "cap": {"range_seller": 10500.0, "trend_delta1": 55000.0}},
     {"underlying": "SENSEX", "symbol": "SENSEX", "exchange": "BFO",
-     "cap": {"range_seller": 60000.0, "trend_delta1": 90000.0}},
+     "cap": {"range_seller": 7000.0, "trend_delta1": 90000.0}},
 ]
 
 
@@ -169,6 +192,12 @@ def build_doc(template: dict, tpl: dict, cfg: dict, activate: bool) -> dict:
         "owned_regimes": tpl["owned"], "specialist_role": role,
     })
     opt.update(tpl["options"])
+    # SENSEX expires Thursday, so a mid-week entry sits at ~2 DTE rather than the
+    # ~3 DTE of the NIFTY/BANKNIFTY Tuesday weekly. That extra decay room lets the
+    # take-profit sit at 0.50 of credit and still be theta-reachable inside the
+    # 300-minute hold (reachability 0.80 vs 0.59), with a lower breakeven WR.
+    if role == "range_seller" and ul == "SENSEX":
+        opt.update({"target_dte_days": 2, "credit_tp_frac": 0.50})
     risk = vc.setdefault("risk", {})
     risk.update(tpl["risk"])
     return doc

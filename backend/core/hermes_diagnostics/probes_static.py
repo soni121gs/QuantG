@@ -10,6 +10,7 @@ import os
 from typing import Any, Dict, List
 
 from core.market_domains import contract_spec_for_underlying
+from core.spread_builder import tp_reachability
 from core.hermes_diagnostics.contract import Finding, Domain, Severity
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
@@ -20,6 +21,12 @@ _DEF_SL = float(os.environ.get("CREDIT_SPREAD_SL_MULT", "2.0"))
 # geometry exceeds this. R:R (profit:loss units) = tp_frac : sl_mult →
 # break-even WR = sl_mult / (sl_mult + tp_frac).
 _BE_WR_WARN = float(os.environ.get("HERMES_GEOMETRY_BE_WR_WARN", "0.75"))
+# Warn when theta supplies less than this fraction of the TP target inside the
+# hold window (i.e. the rest has to come from a favourable price move).
+_TP_REACH_WARN = float(os.environ.get("HERMES_TP_REACH_WARN", "0.55"))
+# Used when a strategy does not declare `target_dte_days`. NIFTY/SENSEX weeklies
+# average ~3-4 calendar days to expiry across a typical entry week.
+_ASSUMED_DTE = float(os.environ.get("HERMES_ASSUMED_DTE_DAYS", "3.5"))
 _COST_FLOOR_MULT = float(os.environ.get("HERMES_COST_FLOOR_MULT", "3.0"))
 # 2026-07-21: was 85.0, which disagreed 3.5x with the two other friction estimates
 # already in the codebase (dynamic_exit.TRAIL_MIN_ARM_RUPEES = 300 "slippage on 4
@@ -248,6 +255,58 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
                 reproduction="avg net_credit/max_profit of last <=40 CLOSED positions x lot_size vs 3x modeled round-trip friction",
                 suggested_fix="Reject or redesign the geometry until realized credit is at least 3x modeled friction.",
             ))
+    return out
+
+
+@register("static.tp_reachability", kind="static")
+async def tp_reachability_probe(ctx: ProbeContext) -> List[Finding]:
+    """Flag credit sellers whose take-profit cannot be reached by time decay
+    inside their own hold window.
+
+    Measured across the QuantG seller book on 2026-07-21: of 71 closed trades,
+    only 10 exited on a price trigger — 86% were decided by a clock. The per
+    strategy theta-reachability ratio rank-ordered both the price-exit rate and
+    the realized P&L. A seller whose TP needs a directional gift is not
+    harvesting theta; it is a coin flip paying friction on every cycle.
+    """
+    out: List[Finding] = []
+    for strat in ctx.strategies:
+        o = _opts(strat)
+        if str(o.get("structure")) != "credit_spread" or not _is_active(strat):
+            continue
+        risk = ((strat.get("visual_config") or {}).get("risk") or {})
+        try:
+            hold = float(risk.get("time_exit_minutes") or 0)
+        except (TypeError, ValueError):
+            continue
+        if hold <= 0:
+            continue  # hold-to-expiry sellers give theta its full life
+        tp = o.get("credit_tp_frac")
+        tp = float(tp) if tp is not None else _DEF_TP
+        dte = o.get("target_dte_days") or _ASSUMED_DTE
+        reach = tp_reachability(tp, float(dte), hold)
+        if reach["ratio"] >= _TP_REACH_WARN:
+            continue
+        out.append(Finding(
+            probe_id="static.tp_reachability", domain=Domain.STRATEGY,
+            severity=Severity.HIGH, entity=str(strat.get("id")),
+            title="Theta can only deliver {:.0f}% of the take-profit in the hold window".format(
+                reach["ratio"] * 100),
+            detail=("This seller books at {:.2f} of credit but its {:.0f}-minute hold at "
+                    "~{:.0f} DTE lets time decay supply only {:.2f} of credit. The "
+                    "remaining {:.0f}% of the target must arrive as a favourable price "
+                    "move, so the position is a directional coin flip and the exit is "
+                    "decided by whichever clock fires first — paying round-trip friction "
+                    "each cycle. Lengthen the hold, shorten the DTE, or lower the TP."
+                    ).format(tp, hold, float(dte), reach["theta_reachable_frac"],
+                             reach["directional_dependence"] * 100),
+            evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
+                      "underlying": _underlying(strat), "credit_tp_frac": tp,
+                      "time_exit_minutes": hold, "assumed_dte_days": float(dte),
+                      **reach},
+            reproduction="theta_reachable_frac = time_exit_minutes / (dte_days * 375); ratio = that / credit_tp_frac",
+            suggested_fix="Match hold window, DTE and TP so decay supplies most of the target.",
+        ))
     return out
 
 

@@ -105,14 +105,23 @@ def test_phase0_book_has_no_auto_active_qg_rows():
     by_name = {strategy["name"]: strategy for strategy in DEFAULT_OPTION_STRATEGIES}
     o11 = by_name["QG-O11 NIFTY Regime Seller Credit Scalp"]
     assert o11["structure"] == "credit_spread"
-    assert o11["spread_width"] == 1
-    assert o11["short_offset_strikes"] == 1
-    assert o11["credit_tp_frac"] == 0.50
+    # 2026-07-21: was spread_width 1 / short_offset_strikes 1. Probing the LIVE
+    # NIFTY chain (3 expiries x 5 deltas) showed width-1 clears the ERP cost floor
+    # in ZERO cases — best case multiple 1.74 against a required 3.0, and 0.14-0.40
+    # at 0 DTE. The offset was also meaningless near expiry, where delta becomes a
+    # cliff and 0.24/0.30/0.38 all resolve to the same strike. Re-cut to the
+    # width-4 / delta-0.30 shape shared by the rest of the seller book.
+    assert o11["spread_width"] == 4
+    assert o11["short_offset_strikes"] is None
+    assert o11["short_delta"] == 0.30
+    assert o11["credit_tp_frac"] == 0.45
     assert o11["credit_sl_mult"] == 0.90
     assert o11["candle_interval"] == "1minute"
     # scalp pacing must survive the blanket CREDIT_SPREAD_THETA_RISK update
-    assert o11["risk"]["max_trades_day"] == 3
+    assert o11["risk"]["max_trades_day"] == 2
     assert o11["risk"]["cooldown_minutes"] == 20
+    # the hold must be long enough for theta to supply most of the TP target
+    assert o11["risk"]["time_exit_minutes"] == 300
 
 
 def test_default_strategy_templates_are_sandbox_runnable():
@@ -134,3 +143,39 @@ def test_ema_named_default_strategies_use_true_ema_formula():
             code = strategy["python_code"]
             assert "def ema(values, period)" in code, strategy["name"]
             assert "k = 2.0 / (period + 1)" in code, strategy["name"]
+
+
+def test_seeded_credit_sellers_clear_the_geometry_invariants():
+    """Book-wide guard for the 2026-07-21 seller re-cut.
+
+    Two defects took the whole seller book negative and both were invisible to
+    every existing test:
+      1. every seller sold at short_delta 0.12-0.14, which clears the ERP 3x
+         cost floor in ZERO measured live-chain geometries;
+      2. the take-profit sat far beyond what theta could deliver in the hold
+         window, so 61 of 71 closed trades were decided by a clock, not a price.
+    """
+    from core.spread_builder import tp_reachability
+
+    for strategy in DEFAULT_OPTION_STRATEGIES:
+        if strategy.get("structure") != "credit_spread":
+            continue
+        name = strategy["name"]
+        delta = strategy.get("short_delta")
+        if delta is not None:
+            assert delta >= 0.20, f"{name}: short_delta {delta} cannot clear the cost floor"
+        assert strategy.get("spread_width", 0) >= 2, f"{name}: width too narrow to pay for itself"
+
+        tp = strategy.get("credit_tp_frac")
+        sl = strategy.get("credit_sl_mult")
+        if tp and sl:
+            be_wr = sl / (sl + tp)
+            assert be_wr <= 0.70, f"{name}: breakeven win rate {be_wr:.2f} is implausible"
+
+        hold = (strategy.get("risk") or {}).get("time_exit_minutes") or 0
+        if hold and tp:
+            dte = strategy.get("target_dte_days") or 3.5
+            ratio = tp_reachability(tp, dte, hold)["ratio"]
+            assert ratio >= 0.55, (
+                f"{name}: theta supplies only {ratio:.2f} of the TP target in a "
+                f"{hold}-minute hold — the clock would decide the trade")

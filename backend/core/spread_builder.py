@@ -43,6 +43,48 @@ SPREAD_ROUND_TRIP_COST_PER_LOT = float(os.environ.get("SPREAD_ROUND_TRIP_COST_PE
 SPREAD_COST_FLOOR_MULT = float(os.environ.get("SPREAD_COST_FLOOR_MULT", "3.0"))
 
 
+MARKET_MINUTES_PER_DAY = 375.0
+
+
+def theta_reachable_tp_frac(dte_days: float, hold_minutes: float) -> float:
+    """Fraction of a credit spread's credit that TIME DECAY ALONE can deliver
+    inside the hold window.
+
+    A credit spread's extrinsic value bleeds toward zero over its remaining life,
+    so over `hold_minutes` of a `dte_days` contract roughly
+    `hold_minutes / (dte_days * 375)` of the credit decays away (linear
+    approximation; decay is convex and faster near expiry, so this is
+    conservative for short DTE).
+
+    This matters because it is the difference between a theta strategy and a
+    directional bet wearing a theta costume. If the take-profit is set at 0.50 of
+    credit but theta can only deliver 0.05 of it inside the hold window, then 90%
+    of the target has to arrive as a favourable price move — the position is a
+    coin flip and the exit is decided by whichever clock fires first.
+    """
+    dte = max(float(dte_days or 0), 0.05)
+    return max(0.0, float(hold_minutes or 0)) / (dte * MARKET_MINUTES_PER_DAY)
+
+
+def tp_reachability(tp_frac: float, dte_days: float, hold_minutes: float) -> Dict[str, Any]:
+    """How much of the take-profit target theta can supply on its own.
+
+    ratio >= 1.0 : decay alone reaches the target — a genuine theta harvest.
+    ratio ~ 0.6  : theta does most of the work, direction is a tailwind.
+    ratio < 0.3  : the target requires a directional gift; the clock will decide
+                   the trade. Measured across QuantG's seller book on 2026-07-21,
+                   this ratio rank-ordered both the price-exit rate and the P&L.
+    """
+    tp = max(1e-9, float(tp_frac or 0))
+    reachable = theta_reachable_tp_frac(dte_days, hold_minutes)
+    return {
+        "tp_frac": round(float(tp_frac or 0), 4),
+        "theta_reachable_frac": round(reachable, 4),
+        "ratio": round(reachable / tp, 3),
+        "directional_dependence": round(max(0.0, 1.0 - reachable / tp), 3),
+    }
+
+
 def credit_cost_floor(
     net_credit: float,
     width_points: float,

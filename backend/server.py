@@ -3588,17 +3588,21 @@ DEFAULT_OPTION_STRATEGIES = [
         # UNVALIDATED: this is a new structure and must re-pass the judge before any
         # promotion. CORE_ENGINE_LIVE_ENABLED stays false.
         "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 200, "lots": 1,
-        "structure": "credit_spread", "spread_width": 4,
+        "structure": "credit_spread", "spread_width": 4, "target_dte_days": 3,
         "short_otm_pct": 0.008, "wing_width": 4, "exit_mode": "", "short_delta": 0.30,
-        "credit_tp_frac": 0.5, "credit_sl_mult": 0.9,
+        "credit_tp_frac": 0.45, "credit_sl_mult": 0.9,
         "strategy_type": "Option Selling", "required_capital": 11000.0, "instrument_group": "NFO",
         "initial_status": "live",
         # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
         # credit (credit_tp_frac 0.5), stop at 2x credit (credit_sl_mult 2.0), then
         # re-enter when the setup fires again (max_trades_day 6 / paper lifts to 24).
+        # time_exit 300 (not 120): at a 120-minute hold, theta could supply only 0.09
+        # of credit against the 0.50 TP, so 82% of the target had to come from a
+        # favourable move — which is why all 15 live exits were clock-driven. At 300
+        # minutes and ~2 DTE theta supplies ~0.80 of the target.
         "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 12000.0,
-                 "time_exit_minutes": 120, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
-                 "max_trades_day": 6},
+                 "time_exit_minutes": 300, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 3},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 20:
@@ -3692,17 +3696,24 @@ DEFAULT_OPTION_STRATEGIES = [
     {
         "name": "QG-O4 SENSEX Call Spread Range Pilot",
         "description": "SENSEX defined-risk call-spread pilot for range/down weeks. This is a 2-leg app-compatible substitute for the researched condor until 4-leg live support exists.",
+        # 2026-07-21: short_delta 0.14 -> 0.30 and credit_sl_mult 2.0 -> 0.9. Measured
+        # on the LIVE BSE chain (spot 77,483, lot 20): at delta 0.14 NO width clears
+        # the cost floor (w4 multiple 1.03-1.56); at delta 0.30 w4 pays credit 90.60,
+        # ratio 0.227, max loss Rs6,188/lot, multiple 3.02. SL 0.9 gives breakeven
+        # WR 0.64 instead of 0.80. QG-O4 is the only keeper currently in profit
+        # (+Rs1,768/19) and already had the book's highest price-exit rate (26%) —
+        # this keeps its character and fixes the two settings that were off-spec.
         "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
-        "structure": "credit_spread", "spread_width": 4,
-        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "", "short_delta": 0.14,
-        "credit_tp_frac": 0.5, "credit_sl_mult": 2.0,
-        "strategy_type": "Option Selling", "required_capital": 30000.0, "instrument_group": "BFO",
+        "structure": "credit_spread", "spread_width": 4, "target_dte_days": 2,
+        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "", "short_delta": 0.30,
+        "credit_tp_frac": 0.5, "credit_sl_mult": 0.9,
+        "strategy_type": "Option Selling", "required_capital": 7000.0, "instrument_group": "BFO",
         "initial_status": "live",
         # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
         # credit, stop at 2x credit, then re-enter when the range setup fires again.
-        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 25000.0,
-                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
-                 "max_trades_day": 6},
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 9000.0,
+                 "time_exit_minutes": 300, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "max_trades_day": 3},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 40:
@@ -3983,20 +3994,37 @@ DEFAULT_OPTION_STRATEGIES = [
         # window is unvalidated and forward-paper is the judge.
         "name": "QG-O11 NIFTY Regime Seller Credit Scalp",
         "description": "Regime-gated intraday NIFTY credit-spread scalp. One brain, three gates: trend-up day sells a bull-put spread on a VWAP-pullback hold; trend-down day sells a bear-call spread on a failed bounce at VWAP; choppy day fades RSI stretch. Width-1, 1-strike-OTM, books 35% of credit, stop at 1.5x credit. Paper-forward only.",
+        # 2026-07-21 WIDTH-1 IS DEAD, MEASURED. Probed the live NIFTY chain across
+        # 3 expiries x 5 deltas: width-1 clears the cost floor in ZERO cases. Best
+        # case is delta 0.38 at 7 DTE => credit 16.10, bankable TP Rs523 against
+        # ~Rs300 round-trip friction (multiple 1.74; the law wants 3.0). At 0 DTE it
+        # collapses to multiple 0.14-0.40. Live record agrees: 22 trades, avg credit
+        # 14.43, -Rs8,152, and only 3 of 22 exits were price-driven.
+        # This was never a signal problem — a width-1 NIFTY spread does not pay
+        # enough to cover the cost of trading it. Widened to the same width-4 /
+        # delta-0.30 shape the rest of the book now uses (measured multiple 5.00).
+        # The 1-strike-OTM offset is dropped so the delta ladder governs the strike;
+        # at 0 DTE the offset resolved 0.24/0.30/0.38 to the SAME strike because
+        # delta becomes a cliff near expiry, making "1 strike OTM" meaningless.
         "underlying": "NIFTY", "strike_mode": "ATM_BUY", "otm_points": 0, "lots": 1,
-        "structure": "credit_spread", "spread_width": 1, "short_offset_strikes": 1,
+        "structure": "credit_spread", "spread_width": 4, "short_offset_strikes": None,
+        "short_delta": 0.30, "target_dte_days": 3,
         # 2026-07-18 (Hermes Diagnostician static.reward_risk_geometry, HIGH):
         # TP 0.20 / SL 1.5 required an 88% win rate just to break even — live ran
         # 2/14 (14%) for -Rs7,558. Re-derived to TP 0.50 / SL 0.90 -> breakeven
         # ~64%, an achievable seller WR. Geometry now sane; strategy stays paused
         # pending an OOS re-run on the new shape before any redeploy (CLAUDE.md §13.4).
-        "credit_tp_frac": 0.50, "credit_sl_mult": 0.90,
+        "credit_tp_frac": 0.45, "credit_sl_mult": 0.90,
         "candle_interval": "1minute",
-        "strategy_type": "Option Selling", "required_capital": 3000.0, "instrument_group": "NFO",
+        "strategy_type": "Option Selling", "required_capital": 11000.0, "instrument_group": "NFO",
         "initial_status": "live",
-        "risk": {"risk_style": "pullback", "strategy_category": "intraday", "daily_loss_limit": 8000.0,
-                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 20,
-                 "max_trades_day": 3, "target_r_multiple": 0.5},
+        # time_exit 90 -> 300: at a 90-minute hold and ~2 DTE, theta could supply
+        # only 0.12 of credit against a 0.50 target (24% of it), so 76% of the target
+        # had to arrive as a favourable move — which is why 13 of 22 exits were
+        # time-exits. At 300 minutes theta supplies ~0.80 of the target.
+        "risk": {"risk_style": "pullback", "strategy_category": "intraday", "daily_loss_limit": 9000.0,
+                 "time_exit_minutes": 300, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 20,
+                 "max_trades_day": 2, "target_r_multiple": 0.5},
         "python_code": """def run(data):
     position = "NONE"
     if len(data) < 40:
@@ -6755,13 +6783,15 @@ for _template in DEFAULT_OPTION_STRATEGIES:
         # comment for the full geometry derivation. 11000 ~= 1 lot at the re-cut
         # max loss of ~Rs10,000/lot (lots_for_risk = budget / per-lot-max-loss).
         _template["required_capital"] = 11000.0
-        # time_exit_minutes 120: recycle a drifting spread after 2h so the slot frees
-        # for re-entry (TP 50% / SL 0.9x / trailing-lock still exit earlier when hit).
-        _risk.update({"daily_loss_limit": 12000.0, "time_exit_minutes": 120,
+        # time_exit_minutes 300 (was 120): a 2h recycle freed the slot but cut the
+        # trade before theta could deliver the TP, so the clock decided all 15 live
+        # trades. See the template comment for the reachability derivation.
+        _risk.update({"daily_loss_limit": 12000.0, "time_exit_minutes": 300,
                       "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
-                      "max_trades_day": 6, "strategy_category": "swing"})
+                      "max_trades_day": 3, "strategy_category": "swing"})
     if _template.get("name") == "QG-O4 SENSEX Call Spread Range Pilot":
-        _risk["time_exit_minutes"] = 120  # same 2h recycle as QG-O1
+        # 2026-07-21: 120 -> 300 for theta reachability (see template comment).
+        _risk["time_exit_minutes"] = 300
     # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
     # time_exit_minutes 90 (was 45): live evidence 2026-07-15 showed the 45-min cut
@@ -6769,8 +6799,11 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # at −₹585 avg vs 1 spread-tp. Exit geometry re-derived 2026-07-18 to TP 0.50 /
     # SL 0.90 (see template comment) after the Diagnostician flagged the old
     # 0.20/1.5 as needing an 88% breakeven WR. Forward-paper judges; reversible.
+    # 2026-07-21: time_exit 90 -> 300. A 90-minute hold let theta supply only ~24%
+    # of the 0.50 TP target, so the trade was a directional coin flip decided by the
+    # clock (13 of 22 live exits were time-exits). See the template comment.
     if _template.get("name") == "QG-O11 NIFTY Regime Seller Credit Scalp":
-        _risk.update({"cooldown_minutes": 20, "max_trades_day": 3, "time_exit_minutes": 90})
+        _risk.update({"cooldown_minutes": 20, "max_trades_day": 2, "time_exit_minutes": 300})
     # NOTE: "NIFTY Theta Credit Spread" / "NIFTY Range Credit Spread" are DB-only rows
     # (not code templates), so their exit geometry is set directly in the DB — see the
     # 2026-07-10 note on DEAD_STRATEGY_NAMES above. They are not normalized here.
