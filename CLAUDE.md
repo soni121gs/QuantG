@@ -984,3 +984,43 @@ P4-2..P4-6 are landed as a read-only Hermes research analyst subsystem. `wiki/Re
 
 ### 20.9 Phase 4 audit hardening (2026-07-19)
 Post-implementation audit fixes closed the Phase 4 truthfulness gaps. Hypothesis-card citations now validate real corpus refs and ready probe refs instead of accepting any non-empty citation, default cards cite relevant corpus/probe pairs, calibration prefers actual verdict/status evidence over stale `untested` blobs, research signals are user-scoped, RAG reindex deletes stale `type=research` rows when notes are removed, backend Docker root context excludes nested env files, and the existing daily scheduler runs the Phase 4 probe/card refresh weekly on Sunday 05:30 IST.
+
+---
+
+## 21. Credit-Spread Geometry Laws (added 2026-07-21)
+
+**Two structural laws every premium-selling strategy must satisfy BEFORE any signal work.** Both were derived from a live-chain measurement (3 underlyings × 3 expiries × 6 widths × 5 deltas, taken during market hours), not from a model. Violating either makes a strategy negative-expectancy before the market moves — no signal, regime gate or sizing logic can rescue it.
+
+### 21.1 Law 1 — Cost floor (now ENFORCED at build time)
+`core/spread_builder.credit_cost_floor` vetoes any credit spread whose (a) credit/width ratio < `CREDIT_SPREAD_MIN_CREDIT_RATIO` (0.12) or (b) bankable profit (`tp_frac × credit × lot_size`) < 3× round-trip friction (`SPREAD_ROUND_TRIP_COST_PER_LOT`, **300**/lot). The veto lives in `build_credit_spread` — the single choke point every credit spread passes — and `select_dynamic_credit_spread` drops failing deltas from the ladder entirely. Research paths opt out with `enforce_cost_floor=False`; the EOD/intraday judges have their own pricing and are untouched.
+
+Measured: `short_delta` 0.12 clears the floor in **ZERO** geometries; width-1 clears in **ZERO** cases at any delta/expiry; on a 0-DTE afternoon **none of 60** geometries clears. Delta 0.30 clears at 3.0–6.4×. Smaller lots sit closer to the floor — SENSEX (lot 20) needs a wider wing than NIFTY (lot 65).
+
+**Pitfall that caused this:** the law existed in research validators and as Hermes finding `static.cost_floor`, but nothing stopped the LIVE path opening the trade. Its friction constant was also 3.5× too low (85 vs the real ~300/lot, the figure `dynamic_exit.TRAIL_MIN_ARM_RUPEES` already encoded), so bad geometry passed the probe.
+
+### 21.2 Law 2 — Theta reachability (NEW)
+`core/spread_builder.tp_reachability(tp_frac, dte_days, hold_minutes)`; probe `static.tp_reachability` fires below 0.55.
+```
+theta_reachable_frac = hold_minutes / (dte_days * 375)
+ratio                = theta_reachable_frac / tp_frac
+```
+A seller's take-profit must be reachable by DECAY inside its own hold window. If not, the trade is a directional coin flip and the exit is decided by whichever clock fires first — paying round-trip friction every cycle.
+
+Measured across the book: of **71 closed trades only 10 exited on a price trigger — 86% were clock-driven.** The ratio rank-ordered both the price-exit rate and the P&L (QG-O4 0.32 → +₹1,768, the only winner; QG-O1/RAE NIFTY/RAE BANKNIFTY 0.09 → **0 price exits across 24 trades**).
+
+**Corollary — expiry cycle constrains strategy horizon.** BANKNIFTY is monthly-expiry only (nearest DTE 7–30), so reachability is 0.25 falling to 0.06. **BANKNIFTY cannot be an intraday theta seller at any width or delta**; the fix is a multi-day hold, not a wider spread. NIFTY weekly = Tuesday, SENSEX = Thursday, BANKNIFTY = monthly.
+
+The two laws pull in **opposite directions** and must be solved together: the cost floor pushes toward nearer expiry and fatter credit; reachability pushes toward shorter DTE and longer holds; 0-DTE fails the cost floor outright.
+
+### 21.3 The deployed book (2026-07-21)
+All 8 live credit sellers: `short_delta` 0.30, `credit_sl_mult` 0.90, `time_exit_minutes` 300. NIFTY/BANKNIFTY width 4 / TP 0.45 (~3 DTE); SENSEX width 6 / TP 0.50 (~2 DTE). Breakeven WR 0.64–0.67 (was up to 0.97). Verified live: 7 of 8 build at cost multiples 3.98–4.63; RAE BANKNIFTY correctly stands down per §21.2.
+
+### 21.4 Rules for changing seller geometry
+- **Capital caps are load-bearing.** `lots_for_risk = budget // (max_loss_per_unit × lot_size)`. Narrowing a wing without lowering the cap SILENTLY SIZES UP — the old caps would have given 2/4/9 lots (NIFTY/BANKNIFTY/SENSEX). Always re-derive `required_capital` from the new per-lot max loss.
+- **Code edits do NOT reach the live rows.** ERP Phase 0 disabled startup template sync (§20.1), so every geometry change needs BOTH the code template and a DB migration (`scripts/regeometry_seller_book_07_21.py` is the pattern: idempotent, dry-run by default, prints a before/after diff).
+- **Check the whole live book, not the registry.** Founder-created rows (`founder_forced_live=true`, e.g. the IDX sleeves) sit outside `ERP_KEEP_STRATEGY_NAMES` and are missed by registry-scoped fixes.
+- **Research configs ≠ live configs.** `core/index_alpha_sleeves.py` is correctly held-to-expiry, where a wide wing is legitimate (theta gets its full life, the whole credit is bankable). Seeding a live *intraday* row from a held-to-expiry research config reproduces exactly this bug class — it is what the 2026-07-09 QG-O1 change did.
+- **Debit spreads are exempt from both laws.** They are buyers: they pay a debit rather than collecting credit, and theta works against them, so a short hold is correct rather than a defect.
+- The invariant test `test_seeded_credit_sellers_clear_the_geometry_invariants` enforces all of this on the seed catalog.
+
+**Standing caveat:** satisfying these laws makes a structure FUNDABLE and internally coherent. It does not create edge. Every re-cut shape is UNVALIDATED and owes a judge run + forward-paper per §13.5. `CORE_ENGINE_LIVE_ENABLED=false`.
