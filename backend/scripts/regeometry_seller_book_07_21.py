@@ -92,6 +92,41 @@ PLAN: Dict[str, Dict[str, Any]] = {
                  "required_capital": 7000.0},
         "required_capital": 7000.0,
     },
+    # --- IDX sleeves (founder-created 2026-07-20, founder_forced_live) ----------
+    # These live rows were built from the RESEARCH configs in
+    # `core/index_alpha_sleeves.py`, which are correctly HELD-TO-EXPIRY
+    # (exit_mode="expiry", max_hold_days 8-35). Held to expiry, a 3% OTM /
+    # width-8-10 wing is a legitimate shape: theta gets its full life and the
+    # whole credit is bankable. But the live rows were seeded with a 120-minute
+    # hold and a 0.50 TP while KEEPING the held-to-expiry geometry — the same
+    # mismatch the 2026-07-09 QG-O1 change introduced. Verified against the live
+    # chain post-deploy: both are vetoed by the cost floor (NIFTY credit 20.10 on
+    # width 500 -> ratio 0.040; SENSEX credit 67.40 on width 800 -> ratio 0.084),
+    # i.e. they would silently stand down forever. Re-cut to the same intraday
+    # shape as the rest of the book. The RESEARCH configs are deliberately NOT
+    # changed — the EOD judge should keep grading the held-to-expiry version.
+    "IDX NIFTY VRP Call-Spread (RANGE+rich)": {
+        "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
+                    "short_otm_pct": 0.012, "credit_tp_frac": 0.45,
+                    "credit_sl_mult": 0.90, "target_dte_days": 3,
+                    "required_capital": 11000.0},
+        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 9000.0,
+                 "max_trades_day": 3, "required_capital": 11000.0},
+        "required_capital": 11000.0,
+    },
+    "IDX SENSEX VRP Put-Spread (RANGE+rich)": {
+        "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
+                    "short_otm_pct": 0.012, "credit_tp_frac": 0.50,
+                    "credit_sl_mult": 0.90, "target_dte_days": 2,
+                    "required_capital": 7000.0},
+        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 9000.0,
+                 "max_trades_day": 3, "required_capital": 7000.0},
+        "required_capital": 7000.0,
+    },
+    # NOTE: the two IDX *debit* sleeves (Mean-Reversion Fade, Long-Gamma) are
+    # deliberately untouched. They are BUYERS — they pay a debit rather than
+    # collecting credit, so the credit cost floor does not apply, and theta works
+    # AGAINST them, so a short 90-minute hold is correct rather than a defect.
 }
 
 WATCH_OPT = ("spread_width", "wing_width", "short_delta", "short_offset_strikes",
