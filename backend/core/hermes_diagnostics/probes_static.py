@@ -21,7 +21,14 @@ _DEF_SL = float(os.environ.get("CREDIT_SPREAD_SL_MULT", "2.0"))
 # break-even WR = sl_mult / (sl_mult + tp_frac).
 _BE_WR_WARN = float(os.environ.get("HERMES_GEOMETRY_BE_WR_WARN", "0.75"))
 _COST_FLOOR_MULT = float(os.environ.get("HERMES_COST_FLOOR_MULT", "3.0"))
-_DEFAULT_ROUND_TRIP_COST = float(os.environ.get("HERMES_DEFAULT_ROUND_TRIP_COST_PER_LOT", "85.0"))
+# 2026-07-21: was 85.0, which disagreed 3.5x with the two other friction estimates
+# already in the codebase (dynamic_exit.TRAIL_MIN_ARM_RUPEES = 300 "slippage on 4
+# legs, ~Rs250-400/lot", and earnings_iv_crush's 40/leg x 4 legs = 160). An
+# understated friction constant makes the cost floor too permissive, which is how
+# QG-O1's sub-floor geometry passed this probe. Single source: spread_builder.
+_DEFAULT_ROUND_TRIP_COST = float(os.environ.get(
+    "HERMES_DEFAULT_ROUND_TRIP_COST_PER_LOT",
+    os.environ.get("SPREAD_ROUND_TRIP_COST_PER_LOT", "300.0")))
 
 
 def _opts(strat: Dict[str, Any]) -> Dict[str, Any]:

@@ -71,6 +71,8 @@ def select_dynamic_credit_spread(
     previous_signature: Optional[str] = None,
     minutes_to_close: int = 120,
     iv_surface: Optional[Dict[str, Any]] = None,
+    lot_size: Optional[int] = None,
+    tp_frac: float = 1.0,
 ) -> Dict[str, Any]:
     """Rank several deltas on the requested side and return the best candidate.
 
@@ -93,11 +95,18 @@ def select_dynamic_credit_spread(
     def _build_side(direction: str) -> List[Dict[str, Any]]:
         out = []
         for target_delta in (0.12, 0.18, 0.24, 0.30, 0.38):
+            # Cost-floor vetoes are applied per candidate: a delta that produces a
+            # too-thin credit for this width is dropped from the ladder entirely
+            # rather than merely scoring low (a low score still opened the trade,
+            # just at the 0.10 size floor — which is how QG-O1 kept trading a
+            # structure its own edge math had already condemned).
             spread = build_credit_spread(
                 chain_nodes=chain_nodes,
                 direction=direction,
                 width_points=width_points,
                 short_delta=target_delta,
+                lot_size=lot_size,
+                tp_frac=tp_frac,
             )
             if spread.get("ok"):
                 out.append(_score(

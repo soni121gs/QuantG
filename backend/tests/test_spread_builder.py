@@ -188,3 +188,58 @@ def test_dynamic_selector_records_iv_surface_score_factor():
     )
     assert rich["contract_edge_score"] > neutral["contract_edge_score"]
     assert rich["selection_factors"]["iv_richness_z"] == 2.0
+
+
+# --- ERP cost-floor guard (2026-07-21) ---------------------------------------
+# Regression guards for the QG-O1 root cause: a credit spread that collects a
+# token fraction of the risk it takes, on a wing so wide the long leg is inert.
+
+
+def test_cost_floor_vetoes_thin_credit_on_wide_wing():
+    """The exact QG-O1 shape: ~8.5 credit on a 500-point wing (ratio 0.017)."""
+    chain = [
+        _node(22500, pe=_leg("PE|22500", -0.02, 0.46)),   # inert long wing
+        _node(23000, pe=_leg("PE|23000", -0.12, 8.97)),   # short
+    ]
+    res = build_credit_spread(chain_nodes=chain, direction="bullish",
+                              width_points=500, short_delta=0.12, lot_size=65)
+    assert res["ok"] is False
+    assert "cost_floor" in res["reason"]
+    assert res["cost_floor"]["credit_ratio"] < 0.05
+
+
+def test_cost_floor_allows_healthy_credit_to_width_ratio():
+    res = build_credit_spread(chain_nodes=_pe_chain(), direction="bullish",
+                              width_points=100, short_delta=0.30)
+    assert res["ok"] is True
+    # credit 55 - 30 = 25 on width 100 => ratio 0.25, comfortably above the floor
+    assert res["cost_floor"]["credit_ratio"] >= 0.12
+    assert res["cost_floor"]["passed"] is True
+
+
+def test_cost_floor_rejects_when_bankable_profit_is_below_friction():
+    """Ratio can pass while the achievable rupee profit still loses to friction:
+    tp_frac x credit x lot_size must clear 3x round-trip cost."""
+    res = build_credit_spread(chain_nodes=_pe_chain(), direction="bullish",
+                              width_points=100, short_delta=0.30,
+                              lot_size=10, tp_frac=0.5)
+    assert res["ok"] is False
+    assert res["cost_floor"]["ratio_passed"] is True
+    assert res["cost_floor"]["floor_passed"] is False
+
+
+def test_cost_floor_can_be_disabled_for_research_paths():
+    res = build_credit_spread(chain_nodes=_pe_chain(), direction="bullish",
+                              width_points=500, short_delta=0.30,
+                              enforce_cost_floor=False)
+    assert res["ok"] is True
+
+
+def test_dynamic_selector_drops_candidates_that_fail_the_cost_floor():
+    """A vetoed delta must leave the ladder entirely, not merely score low."""
+    res = select_dynamic_credit_spread(
+        chain_nodes=_pe_chain() + _ce_chain(), preferred_direction="bullish",
+        width_points=100, minutes_to_close=120, lot_size=65, tp_frac=0.5,
+    )
+    assert res["ok"] is True
+    assert res["cost_floor"]["passed"] is True

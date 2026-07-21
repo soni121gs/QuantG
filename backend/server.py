@@ -3562,17 +3562,42 @@ DEFAULT_OPTION_STRATEGIES = [
         # PAPER-ACTIVE for forward testing only. CORE_ENGINE_LIVE_ENABLED stays false.
         "name": "QG-O1 NIFTY Put Spread Theta Core",
         "description": "Defined-risk NIFTY put-spread income pilot from EDR-09/QG-O1: sell a ~3% OTM put spread with a wider 10-strike defined-risk wing and hold to weekly expiry to harvest downside volatility-risk premium. This is the primary paper-forward candidate; real-live promotion still requires forward-paper evidence.",
-        "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 720, "lots": 1,
-        "structure": "credit_spread", "spread_width": 10,
-        "short_otm_pct": 0.03, "wing_width": 10, "exit_mode": "", "short_delta": 0.12,
-        "credit_tp_frac": 0.5, "credit_sl_mult": 2.0,
-        "strategy_type": "Option Selling", "required_capital": 35000.0, "instrument_group": "NFO",
+        # 2026-07-21 GEOMETRY RE-CUT (founder-directed: keep intraday, fix the math).
+        # The 07-09 change made this a 120-minute trade but left the HELD-to-expiry
+        # structure in place, and the two are mathematically incompatible:
+        #   - short_delta 0.12 + wing 10 strikes (500 pts) collected 8-25 premium
+        #     points against a 475-491 point max loss => credit/width 1.7-5%,
+        #     reward:risk up to 1:58, break-even win rate ~97%.
+        #   - the long wing 500 pts OTM priced at 0.46-3.91: it consumed the entire
+        #     Rs31,947/lot defined-risk budget while providing no real protection.
+        #   - a 0.12-delta weekly spread decays ~0.5 premium points per market hour,
+        #     so a 50%-of-credit target needs DAYS. In 120 minutes it captured ~1
+        #     point (~Rs65) against ~Rs300 round-trip friction: negative before NIFTY
+        #     moved at all. Live evidence: 0 TP hits, 0 SL hits across every trade —
+        #     100% of exits were clock-driven (time-exit / 15:25 squareoff / EOD).
+        # Re-cut for the 120-minute horizon: sell near-the-money enough to collect a
+        # credit worth transacting, on a narrow wing that makes the stop reachable.
+        # Width 4 strikes (200 pts) at delta 0.30, Black-Scholes-checked at NIFTY
+        # 25000 / IV 12-14%: credit ~40-47 pts, ratio ~0.20-0.24, TP ~Rs1,300-1,500,
+        # max loss ~Rs10,000/lot => break-even WR 64%, cost-floor multiple 4.3-5.1x.
+        # DELIBERATE consequence: the same check FAILS at 0-1 DTE (credit collapses
+        # to ~22 pts, multiple 2.4x), so the new cost-floor guard stands the strategy
+        # down on expiry day instead of selling into expiry gamma. NIFTY weekly
+        # expiry is Tuesday, so expiry_offset 0 means it now trades roughly Wed-Fri
+        # and sits out Mon-Tue. That is the intended behaviour, not a starvation bug.
+        # UNVALIDATED: this is a new structure and must re-pass the judge before any
+        # promotion. CORE_ENGINE_LIVE_ENABLED stays false.
+        "underlying": "NIFTY", "strike_mode": "OTM_SELL", "otm_points": 200, "lots": 1,
+        "structure": "credit_spread", "spread_width": 4,
+        "short_otm_pct": 0.008, "wing_width": 4, "exit_mode": "", "short_delta": 0.30,
+        "credit_tp_frac": 0.5, "credit_sl_mult": 0.9,
+        "strategy_type": "Option Selling", "required_capital": 11000.0, "instrument_group": "NFO",
         "initial_status": "live",
         # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
         # credit (credit_tp_frac 0.5), stop at 2x credit (credit_sl_mult 2.0), then
         # re-enter when the setup fires again (max_trades_day 6 / paper lifts to 24).
-        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 40000.0,
-                 "time_exit_minutes": 0, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+        "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 12000.0,
+                 "time_exit_minutes": 120, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
                  "max_trades_day": 6},
         "python_code": """def run(data):
     position = "NONE"
@@ -3586,7 +3611,7 @@ DEFAULT_OPTION_STRATEGIES = [
         'date': d['date'], 'action': 'BUY', 'direction': 'CE',
         'setup_type': 'defined_risk_put_spread_income',
         'confidence': 72.0,
-        'entry_reason': 'QG-O1 sell 3% OTM NIFTY put spread with 10-strike wing, hold to expiry',
+        'entry_reason': 'QG-O1 sell near-OTM NIFTY put spread, 3-strike wing, 120-min intraday book',
         'target_R': 1.0, 'initial_stop_R': 1.0, 'trail_after_R': 0.0,
         'max_hold_minutes': 0, 'invalidation_rule': 'weekly_expiry_defined_risk',
         'regime_required': 'range_to_up', 'option_selection_preference': 'OTM',
@@ -6723,10 +6748,16 @@ for _template in DEFAULT_OPTION_STRATEGIES:
     # removes QG-O1's held-to-expiry OOS validation — it is now an unvalidated intraday
     # variant (aligned with the RES §15 dynamic-seller mandate); forward-paper evidence.
     if _template.get("name") == "QG-O1 NIFTY Put Spread Theta Core":
-        _template["required_capital"] = 35000.0
+        # 2026-07-21: required_capital 35000 -> 8000 and daily_loss_limit 40000 ->
+        # 12000 to match the re-cut 3-strike wing (max loss ~Rs7,500/lot, not
+        # ~Rs32,000/lot). Leaving the old figures here would size the narrow spread
+        # up to 4 lots and defeat the point of narrowing it. See the template
+        # comment for the full geometry derivation. 11000 ~= 1 lot at the re-cut
+        # max loss of ~Rs10,000/lot (lots_for_risk = budget / per-lot-max-loss).
+        _template["required_capital"] = 11000.0
         # time_exit_minutes 120: recycle a drifting spread after 2h so the slot frees
-        # for re-entry (TP 50% / SL 2x / trailing-lock still exit earlier when hit).
-        _risk.update({"daily_loss_limit": 40000.0, "time_exit_minutes": 120,
+        # for re-entry (TP 50% / SL 0.9x / trailing-lock still exit earlier when hit).
+        _risk.update({"daily_loss_limit": 12000.0, "time_exit_minutes": 120,
                       "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
                       "max_trades_day": 6, "strategy_category": "swing"})
     if _template.get("name") == "QG-O4 SENSEX Call Spread Range Pilot":
@@ -17748,6 +17779,20 @@ async def startup():
                                 )
                                 _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
                                 _minutes_to_close = max(0, (15 * 60 + 30) - (_now_ist.hour * 60 + _now_ist.minute))
+                                # ERP cost-floor context: the builder needs the contract
+                                # lot size and the strategy's booking fraction to judge
+                                # whether the profit this spread can actually bank clears
+                                # round-trip friction. Without them only the ratio test runs.
+                                try:
+                                    from core.market_domains import resolve_domain_by_underlying
+                                    _lot_size = int(resolve_domain_by_underlying(_u).get_lot_size(_u))
+                                except Exception:
+                                    _lot_size = None
+                                try:
+                                    _tp_frac = float(_opts_cfg.get("credit_tp_frac")
+                                                     or os.environ.get("CREDIT_SPREAD_TP_FRAC", "0.5"))
+                                except (TypeError, ValueError):
+                                    _tp_frac = 0.5
                                 if _opts_cfg.get("dynamic_chain_selection", True):
                                     _spread = select_dynamic_credit_spread(
                                         chain_nodes=_nodes,
@@ -17755,6 +17800,8 @@ async def startup():
                                         width_points=_intervals.get(_u, 50) * _wstrikes,
                                         previous_signature=(_previous or {}).get("selection_signature"),
                                         minutes_to_close=_minutes_to_close,
+                                        lot_size=_lot_size,
+                                        tp_frac=_tp_frac,
                                     )
                                 elif _opts_cfg.get("short_offset_strikes") is not None:
                                     _offset = _opts_cfg.get("short_offset_strikes")
@@ -17768,6 +17815,7 @@ async def startup():
                                     _spread = build_credit_spread(
                                         chain_nodes=_nodes, direction=_direction,
                                         width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
+                                        lot_size=_lot_size, tp_frac=_tp_frac,
                                     )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"

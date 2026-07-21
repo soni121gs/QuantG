@@ -26,6 +26,66 @@ CREDIT_SPREAD_SHORT_DELTA = float(os.environ.get("CREDIT_SPREAD_SHORT_DELTA", "0
 # Default distance between short and long strikes, in number of strike intervals.
 CREDIT_SPREAD_WIDTH_STRIKES = int(os.environ.get("CREDIT_SPREAD_WIDTH_STRIKES", "2"))
 
+# --- ERP cost-floor law, enforced at BUILD time (2026-07-21) -----------------
+# The law (CLAUDE.md §20) says reject any structure whose expected edge is below
+# 3x modeled round-trip friction. It was only ever enforced in the research
+# validators and as a Hermes *finding* — nothing stopped the live path from
+# opening the trade anyway. QG-O1 did exactly that: it opened spreads collecting
+# 8.5 premium points on a 500-point-wide wing (credit/width = 1.7%, max loss 58x
+# the credit, long wing priced at 0.46 = no real protection). Round-trip friction
+# on 4 legs is ~Rs250-400/lot (the figure dynamic_exit.TRAIL_MIN_ARM_RUPEES
+# already encodes), so the ENTIRE achievable profit was smaller than the cost of
+# transacting it. This is a structural veto, not a signal opinion: a spread this
+# thin is negative-expectancy before the market moves, so refuse to build it.
+CREDIT_SPREAD_MIN_CREDIT_RATIO = float(os.environ.get("CREDIT_SPREAD_MIN_CREDIT_RATIO", "0.12"))
+# Modeled round-trip friction per lot (slippage on 4 legs + brokerage + taxes).
+SPREAD_ROUND_TRIP_COST_PER_LOT = float(os.environ.get("SPREAD_ROUND_TRIP_COST_PER_LOT", "300"))
+SPREAD_COST_FLOOR_MULT = float(os.environ.get("SPREAD_COST_FLOOR_MULT", "3.0"))
+
+
+def credit_cost_floor(
+    net_credit: float,
+    width_points: float,
+    *,
+    lot_size: Optional[int] = None,
+    tp_frac: float = 1.0,
+) -> Dict[str, Any]:
+    """Judge a candidate credit spread against the ERP cost-floor law.
+
+    Two independent tests, both structural (no signal opinion):
+      1. credit/width ratio — a spread collecting a token fraction of the risk it
+         takes needs an implausible win rate no matter how good the signal is.
+      2. achievable gross profit vs friction — `tp_frac x credit x lot_size` is
+         what the exit engine can actually bank; it must clear
+         SPREAD_COST_FLOOR_MULT x round-trip friction.
+
+    Returns {passed, credit_ratio, ...}. `lot_size=None` skips test 2 (the pure
+    ratio test still applies), so callers without contract context still get the
+    structural check.
+    """
+    width = max(float(width_points or 0), 1.0)
+    credit = float(net_credit or 0)
+    credit_ratio = credit / width
+    out: Dict[str, Any] = {
+        "credit_ratio": round(credit_ratio, 4),
+        "min_credit_ratio": CREDIT_SPREAD_MIN_CREDIT_RATIO,
+        "ratio_passed": bool(credit_ratio >= CREDIT_SPREAD_MIN_CREDIT_RATIO),
+    }
+    out["passed"] = out["ratio_passed"]
+    if lot_size:
+        friction = SPREAD_ROUND_TRIP_COST_PER_LOT
+        floor = SPREAD_COST_FLOOR_MULT * friction
+        achievable = max(0.0, min(1.0, float(tp_frac or 1.0))) * credit * int(lot_size)
+        out.update({
+            "achievable_gross_profit": round(achievable, 2),
+            "round_trip_cost_per_lot": friction,
+            "required_floor": round(floor, 2),
+            "cost_multiple": round(achievable / friction, 2) if friction else None,
+            "floor_passed": bool(achievable >= floor),
+        })
+        out["passed"] = bool(out["ratio_passed"] and out["floor_passed"])
+    return out
+
 
 def _node_strike(node: Dict[str, Any]) -> Optional[float]:
     return _to_float(node.get("strike_price"))
@@ -87,6 +147,9 @@ def build_credit_spread(
     direction: str,
     width_points: float,
     short_delta: float = CREDIT_SPREAD_SHORT_DELTA,
+    lot_size: Optional[int] = None,
+    tp_frac: float = 1.0,
+    enforce_cost_floor: bool = True,
 ) -> Dict[str, Any]:
     """Build a vertical credit spread.
 
@@ -132,6 +195,22 @@ def build_credit_spread(
     if max_loss <= 0:
         return {"ok": False, "reason": f"non-positive max loss ({max_loss})"}
 
+    # ERP cost-floor law: veto structurally negative-expectancy geometry here, at
+    # the single choke point every credit spread passes through, rather than
+    # letting it reach the order path and be discovered in the P&L.
+    floor = credit_cost_floor(net_credit, actual_width, lot_size=lot_size, tp_frac=tp_frac)
+    if enforce_cost_floor and not floor["passed"]:
+        _detail = ""
+        if "achievable_gross_profit" in floor and not floor.get("floor_passed"):
+            _detail = ", achievable Rs{:.0f} < Rs{:.0f} floor".format(
+                floor["achievable_gross_profit"], floor["required_floor"])
+        return {
+            "ok": False,
+            "reason": "cost_floor: credit {:.2f} on width {:.0f} (ratio {:.3f} < {:.3f} min{})".format(
+                net_credit, actual_width, floor["credit_ratio"], floor["min_credit_ratio"], _detail),
+            "cost_floor": floor,
+        }
+
     sd = short_leg.get("delta") or 0.0
     ld = long_leg.get("delta") or 0.0
     st = short_leg.get("theta") or 0.0
@@ -148,6 +227,7 @@ def build_credit_spread(
         "max_profit": net_credit,
         "max_loss": max_loss,            # defined risk per unit
         "width_points": actual_width,
+        "cost_floor": floor,
         # Net greeks: short leg is a SOLD option, so its greeks flip sign.
         "net_delta": round(-sd + ld, 4),
         "net_theta": round(-st + lt, 4),
