@@ -160,7 +160,7 @@ UNDERLYINGS = [
     {"underlying": "BANKNIFTY", "symbol": "BANKNIFTY", "exchange": "NFO",
      "cap": {"range_seller": 10500.0, "trend_delta1": 55000.0}},
     {"underlying": "SENSEX", "symbol": "SENSEX", "exchange": "BFO",
-     "cap": {"range_seller": 7000.0, "trend_delta1": 90000.0}},
+     "cap": {"range_seller": 10500.0, "trend_delta1": 90000.0}},
 ]
 
 
@@ -196,8 +196,15 @@ def build_doc(template: dict, tpl: dict, cfg: dict, activate: bool) -> dict:
     # ~3 DTE of the NIFTY/BANKNIFTY Tuesday weekly. That extra decay room lets the
     # take-profit sit at 0.50 of credit and still be theta-reachable inside the
     # 300-minute hold (reachability 0.80 vs 0.59), with a lower breakeven WR.
+    # SENSEX also runs a WIDER wing (6 vs 4). Its lot size is only 20, so rupee
+    # credit per lot is small and a width-4 spread lands right on the cost-floor
+    # boundary (measured TP Rs884 against a Rs900 floor) — it would trade only on
+    # the richest days and silently stand down otherwise. Width 6 collects
+    # materially more (measured multiple 3.94 vs 3.02) while keeping per-lot max
+    # loss near Rs9,600, so the cap moves with it.
     if role == "range_seller" and ul == "SENSEX":
-        opt.update({"target_dte_days": 2, "credit_tp_frac": 0.50})
+        opt.update({"target_dte_days": 2, "credit_tp_frac": 0.50,
+                    "spread_width": 6, "wing_width": 6})
     risk = vc.setdefault("risk", {})
     risk.update(tpl["risk"])
     return doc

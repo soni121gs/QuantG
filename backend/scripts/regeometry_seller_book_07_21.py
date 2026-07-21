@@ -49,12 +49,12 @@ PLAN: Dict[str, Dict[str, Any]] = {
         "required_capital": 11000.0,
     },
     "QG-O4 SENSEX Call Spread Range Pilot": {
-        "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
+        "options": {"spread_width": 6, "wing_width": 6, "short_delta": 0.30,
                     "credit_tp_frac": 0.50, "credit_sl_mult": 0.90,
-                    "target_dte_days": 2, "required_capital": 7000.0},
-        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 9000.0,
-                 "max_trades_day": 3, "required_capital": 7000.0},
-        "required_capital": 7000.0,
+                    "target_dte_days": 2, "required_capital": 10500.0},
+        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 11000.0,
+                 "max_trades_day": 3, "required_capital": 10500.0},
+        "required_capital": 10500.0,
     },
     "QG-O11 NIFTY Regime Seller Credit Scalp": {
         "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
@@ -84,13 +84,13 @@ PLAN: Dict[str, Dict[str, Any]] = {
         "required_capital": 10500.0,
     },
     "RAE SENSEX Range Seller (RANGE/INSIDE)": {
-        "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
+        "options": {"spread_width": 6, "wing_width": 6, "short_delta": 0.30,
                     "short_otm_pct": 0.012, "credit_tp_frac": 0.50,
                     "credit_sl_mult": 0.90, "target_dte_days": 2,
-                    "required_capital": 7000.0},
-        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 9000.0,
-                 "required_capital": 7000.0},
-        "required_capital": 7000.0,
+                    "required_capital": 10500.0},
+        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 11000.0,
+                 "required_capital": 10500.0},
+        "required_capital": 10500.0,
     },
     # --- IDX sleeves (founder-created 2026-07-20, founder_forced_live) ----------
     # These live rows were built from the RESEARCH configs in
@@ -115,13 +115,13 @@ PLAN: Dict[str, Dict[str, Any]] = {
         "required_capital": 11000.0,
     },
     "IDX SENSEX VRP Put-Spread (RANGE+rich)": {
-        "options": {"spread_width": 4, "wing_width": 4, "short_delta": 0.30,
+        "options": {"spread_width": 6, "wing_width": 6, "short_delta": 0.30,
                     "short_otm_pct": 0.012, "credit_tp_frac": 0.50,
                     "credit_sl_mult": 0.90, "target_dte_days": 2,
-                    "required_capital": 7000.0},
-        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 9000.0,
-                 "max_trades_day": 3, "required_capital": 7000.0},
-        "required_capital": 7000.0,
+                    "required_capital": 10500.0},
+        "risk": {"time_exit_minutes": 300, "daily_loss_limit": 11000.0,
+                 "max_trades_day": 3, "required_capital": 10500.0},
+        "required_capital": 10500.0,
     },
     # NOTE: the two IDX *debit* sleeves (Mean-Reversion Fade, Long-Gamma) are
     # deliberately untouched. They are BUYERS — they pay a debit rather than

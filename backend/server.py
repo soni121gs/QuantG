@@ -3704,8 +3704,8 @@ DEFAULT_OPTION_STRATEGIES = [
         # (+Rs1,768/19) and already had the book's highest price-exit rate (26%) —
         # this keeps its character and fixes the two settings that were off-spec.
         "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
-        "structure": "credit_spread", "spread_width": 4, "target_dte_days": 2,
-        "short_otm_pct": 0.02, "wing_width": 4, "exit_mode": "", "short_delta": 0.30,
+        "structure": "credit_spread", "spread_width": 6, "target_dte_days": 2,
+        "short_otm_pct": 0.02, "wing_width": 6, "exit_mode": "", "short_delta": 0.30,
         "credit_tp_frac": 0.5, "credit_sl_mult": 0.9,
         "strategy_type": "Option Selling", "required_capital": 7000.0, "instrument_group": "BFO",
         "initial_status": "live",
