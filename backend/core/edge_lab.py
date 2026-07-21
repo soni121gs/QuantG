@@ -155,21 +155,62 @@ def _directional(store: BhavcopyStore) -> List[Dict[str, Any]]:
 # ---- coverage ----------------------------------------------------------------
 
 def _coverage(store: BhavcopyStore, days: List[str]) -> Dict[str, Any]:
-    unders = []
-    for u in COVERAGE_UNDERLYINGS:
-        ud = store.underlying_daily(u)
-        if ud:
-            unders.append({"underlying": u, "days": len(ud),
-                           "first": ud[0]["date"][:10], "last": ud[-1]["date"][:10]})
+    """ONE pass over the store, not N.
+
+    The old version called store.underlying_daily(u) per index — and that helper
+    re-loads EVERY day-file each time, so 6 underlyings x ~1860 days meant ~11k gz
+    decompressions (the 423s stage, far worse now the store carries the full stock
+    universe). One pass collects every underlying at once.
+
+    It also reports the STOCK universe. The previous hard-coded index list made the
+    183-220 backfilled stock names invisible, and `present` (derived from it) made
+    the OOS gate reject any stock strategy as "no bhavcopy data" even though the
+    data was right there.
+    """
+    idx: Dict[str, Dict[str, Any]] = {}
+    stock_names: set[str] = set()
+    stock_days = 0
+    for d in days:
+        seen_idx: set[str] = set()
+        day_has_stock = False
+        for r in store.load_day(d):
+            it = r.get("instr_type")
+            u = r.get("underlying")
+            if not u:
+                continue
+            if it in ("IDF", "IDO"):
+                seen_idx.add(u)
+            elif it in ("STF", "STO"):
+                stock_names.add(u)
+                day_has_stock = True
+        for u in seen_idx:
+            e = idx.setdefault(u, {"days": 0, "first": d, "last": d})
+            e["days"] += 1
+            e["last"] = d
+        if day_has_stock:
+            stock_days += 1
+
+    unders = [{"underlying": u, "days": e["days"], "first": e["first"], "last": e["last"]}
+              for u, e in sorted(idx.items(), key=lambda kv: -kv[1]["days"])]
+
+    gaps = ["Intraday / 1-min data absent — validates held-to-theta, not scalpers"]
+    if not stock_names:
+        gaps.insert(0, "Stock (STO/STF) derivatives not ingested — index only")
+
     return {
         "n_days": len(days),
         "first": days[0] if days else None,
         "last": days[-1] if days else None,
         "underlyings": unders,
-        "gaps": [
-            "Equity (NSE_EQ stock EOD) not ingested — index derivatives only",
-            "Intraday / 1-min data absent — validates held-to-theta, not scalpers",
-        ],
+        "stock_universe": {
+            "count": len(stock_names),
+            "days_with_stock_data": stock_days,
+            "sample": sorted(stock_names)[:25],
+        },
+        # Full set the OOS gate checks against — indices AND stocks, so a stock
+        # strategy is graded instead of being rejected as "no data".
+        "present_underlyings": sorted(set(idx.keys()) | stock_names),
+        "gaps": gaps,
     }
 
 
@@ -211,7 +252,7 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
         # a full ~18s backtest just to surface the same "no data" error.
         if present is not None and _strat_underlying(s) not in present:
             rows.append({"name": s.get("name"), "underlying": _strat_underlying(s),
-                         "error": "no bhavcopy data (equity/stock EOD not ingested)"})
+                         "error": "underlying not present in the bhavcopy store"})
             continue
         judged = judge_grade(s, mode="eod", store=store)
         if judged.get("status") == "error":
@@ -360,7 +401,10 @@ def build_snapshot(strategies: List[Dict[str, Any]], store: Optional[BhavcopySto
     coverage = store_stages["coverage"]
     iv_surface = store_stages["iv_surface"]
     base_rate = store_stages["base_rate"]
-    present = {u["underlying"] for u in coverage.get("underlyings", [])}
+    # Real store contents (indices + every backfilled stock), NOT the old hard-coded
+    # index list — otherwise a stock strategy is falsely rejected as "no data".
+    present = set(coverage.get("present_underlyings")
+                  or [u["underlying"] for u in coverage.get("underlyings", [])])
     oos = _phase("oos", lambda: _oos(active_strategies, store, present))
     sweep = _phase("sweep", lambda: _sweep(active_strategies, store, present)) if include_sweep else None
     from core.edge_research_ledger import enrich_snapshot
