@@ -25,6 +25,7 @@ import itertools
 import json
 import os
 import statistics as st
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -247,14 +248,31 @@ def _strat_underlying(s: Dict[str, Any]) -> str:
 def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
          present: Optional[set] = None) -> Dict[str, Any]:
     rows = []
-    for s in strategies:
+    # CACHE LOCALITY — grade all strategies on one underlying before moving to the
+    # next. The store's per-(underlying, day) cache comfortably holds ONE
+    # underlying's full history, so grouped order means each underlying is parsed
+    # once and every later strategy on it runs warm (measured 127s cold → 14s warm).
+    # In arbitrary order the cache evicts between underlyings and every strategy
+    # re-parses — that is what made OOS run 1h20m+ without finishing.
+    ordered = sorted(strategies, key=lambda s: _strat_underlying(s))
+    total = len(ordered)
+    t_stage = time.time()
+    for i, s in enumerate(ordered, 1):
         # Skip strategies whose underlying has no data (equity/stocks) WITHOUT paying
         # a full ~18s backtest just to surface the same "no data" error.
         if present is not None and _strat_underlying(s) not in present:
             rows.append({"name": s.get("name"), "underlying": _strat_underlying(s),
                          "error": "underlying not present in the bhavcopy store"})
+            print(f"[edge_lab]   oos {i}/{total} {_strat_underlying(s)} "
+                  f"{str(s.get('name'))[:38]} — skipped (no data)", flush=True)
             continue
+        t0 = time.time()
         judged = judge_grade(s, mode="eod", store=store)
+        # Per-strategy progress: without this the stage is a black box for its whole
+        # runtime and the only way to answer "how long?" is to guess.
+        print(f"[edge_lab]   oos {i}/{total} {_strat_underlying(s)} "
+              f"{str(s.get('name'))[:38]} — {time.time()-t0:.0f}s "
+              f"(stage {time.time()-t_stage:.0f}s)", flush=True)
         if judged.get("status") == "error":
             rows.append({"name": s.get("name"), "error": judged.get("error")})
             continue
@@ -295,9 +313,12 @@ def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore,
                        == "credit_spread")][:2]
     grid = list(itertools.product(_CREDIT_TP, _CREDIT_SL, _WIDTH, _MAX_DTE))
     out = []
-    for strat in targets:
+    for ti, strat in enumerate(targets, 1):
         cells = []
         pos_oos = edges = 0
+        t0 = time.time()
+        print(f"[edge_lab]   sweep {ti}/{len(targets)} {str(strat.get('name'))[:38]} "
+              f"— {len(grid)} configs", flush=True)
         for tp, sl, width, dte in grid:
             params = {"credit_tp": tp, "credit_sl": sl, "width": width,
                       "min_dte": _MIN_DTE, "max_dte": dte, "max_hold_days": dte}
@@ -315,6 +336,9 @@ def _sweep(strategies: List[Dict[str, Any]], store: BhavcopyStore,
                           "expectancy": o["expectancy"], "oos_expectancy": oe,
                           "win_rate": o["win_rate"], "verdict": wf["verdict"]})
         cells.sort(key=lambda c: -c["oos_expectancy"])
+        print(f"[edge_lab]   sweep {ti}/{len(targets)} done in {time.time()-t0:.0f}s "
+              f"({len(cells)} configs, {pos_oos} positive-OOS, {edges} candidate-edge)",
+              flush=True)
         out.append({"name": strat.get("name"), "configs": len(cells),
                     "positive_oos": pos_oos, "candidate_edges": edges, "cells": cells})
     return out

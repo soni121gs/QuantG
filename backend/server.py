@@ -16777,6 +16777,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _candle_backfill_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
+    _edge_lab_rebuild_done_date: Optional[str] = None
     _index_flush_done_date: Optional[str] = None
     _hist_validate_done_week: Optional[str] = None
     _earnings_forward_done_week: Optional[str] = None
@@ -16931,6 +16932,22 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Candle backfill: %s", _cres)
                 except Exception as _cb_err:
                     logger.debug("Candle backfill failed: %s", _cb_err)
+
+            # 20:30 IST daily — rebuild the Edge Lab snapshot automatically, off-market
+            # and after the EOD bhavcopy ingest. The Lab used to require a manual
+            # detached run: the heavy build only writes its cache at the very end, so a
+            # half-finished or SSH-killed run left the UI showing a stale snapshot with
+            # no way to tell. Running it here (inside the persistent app process, which
+            # nothing SIGHUPs) means the tab is simply always fresh by morning.
+            if hour == 20 and minute == 30 and _edge_lab_rebuild_done_date != today:
+                _edge_lab_rebuild_done_date = today
+                try:
+                    from routes.ops import _run_edge_lab_build
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
+                        asyncio.create_task(_run_edge_lab_build(_row["id"]))
+                    logger.info("Edge Lab: nightly rebuild scheduled")
+                except Exception as _el_err:
+                    logger.warning("Edge Lab nightly rebuild failed to start: %s", _el_err)
 
             # Saturday 05:00 IST — weekly: re-validate STRUCTURE lessons against the
             # 2yr bhavcopy OOS engine (heavy; run off-market on the weekend). Keeps the
