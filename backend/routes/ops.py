@@ -575,18 +575,16 @@ async def _run_edge_lab_build(user_id: str) -> None:
     try:
         from core.edge_lab import build_snapshot
         from core.bhavcopy_store import BhavcopyStore
-        from core.strategy_registry import ERP_KEEP_STRATEGY_NAMES
-
+        # Grade the CURRENT BOOK: every non-archived strategy that has code. The old
+        # filter pinned this to the ERP-P0 registry phase, so any strategy created
+        # after that cutover (e.g. the IDX-ALPHA sleeves) was silently excluded and
+        # never appeared in the Edge Lab. ERP Phase 0 already deleted the dead rows,
+        # so "non-archived + has code" IS the book.
         strategies = await db.strategies.find(
             {
                 "user_id": user_id,
                 "status": {"$ne": "archived"},
                 "python_code": {"$nin": [None, ""]},
-                "$or": [
-                    {"registry.phase": "ERP-P0"},
-                    {"registry.source": "core.strategy_registry"},
-                    {"name": {"$in": sorted(ERP_KEEP_STRATEGY_NAMES)}},
-                ],
             }
         ).to_list(500)
         snap = await asyncio.to_thread(build_snapshot, strategies, BhavcopyStore())
