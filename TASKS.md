@@ -64,7 +64,7 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
 `J1` (highest value-per-hour in the codebase) → rest in parallel.
 
 ### Track R — regression repair (my own 2026-07-22 changes; ~2 h total)
-- [ ] **P5-R1** (T3) ⚠️ **LIVE DEFECT — do first in this track.** `core/regime_router.route()`: my
+- [x] **P5-R1** (T3) ✅ DONE 2026-07-23 — ⚠️ **LIVE DEFECT — do first in this track.** `core/regime_router.route()`: my
   coarse-regime fallback rewrites `regime` at the TOP of the function, above every protective guard, which
   breaks three things at once:
   **(F)** the `long_vol` guard at :110 — explicitly documented as the 2026-07-21 *"IDX Long-Gamma
@@ -86,7 +86,7 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   finding reading *"1 of them since the re-cut"*). This is precisely the sample-laundering the epoch split
   was built to prevent. Fix the constant (and prefer stamping apply-time), re-apply, re-run diagnostics.
   **Acceptance:** `trades_since_change == 0` for QG-O1/QG-O4/QG-O11 until they trade again.
-- [ ] **P5-R3** (T2) `RAE_ROUTER_FINE_MIN_CONF` (0.50) **exceeds** `RANGE_BASE_CONF` (0.40), so the RANGE
+- [~] **P5-R3** (T2) mostly settled by R1 (FINE_MIN_CONF no longer gates the defer; it only scales seller size) — `RAE_ROUTER_FINE_MIN_CONF` (0.50) **exceeds** `RANGE_BASE_CONF` (0.40), so the RANGE
   branch can never clear the maturity test — a 200-bar established range defers exactly like a 10-bar one
   (verified). The gate I documented does not exist; only the size scaling works. Decide deliberately:
   lower the threshold (~0.30) or raise `RANGE_BASE_CONF`. **Depends on R1** — once the fallback is
@@ -170,12 +170,12 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   `agent_tool_audit`. **LLM narrates, code computes** stays intact.
 
 ### Track M — breadth & money (the only track that can generate P&L)
-- [ ] **P5-M1** (T1) ⭐⭐ **DO FIRST — one flag.** The bhavcopy cron omits `--all-underlyings`, so the
+- [~] **P5-M1** (T1) ✅ CODE+VERIFIED, backfill running 2026-07-22 — ⭐⭐ **DO FIRST — one flag.** The bhavcopy cron omits `--all-underlyings`, so the
   store holds **10** stock names (`INFY TCS ICICIBANK RELIANCE LT HDFCBANK KOTAKBANK SBIN AXISBANK
   BHARTIARTL`) while the downloaded file contains ~180 and the ingest already supports the flag. Add it to
   the 13:30 cron, backfill 2019→today, verify row counts and store size (~6–9 GB expected, 80 GB free).
   **Acceptance:** `distinct STO underlyings ≥ 150` on a recent day.
-- [ ] **P5-M2** (T2) Widen the earnings calendar beyond the **top-30** default
+- [~] **P5-M2** (T2) ✅ CODE, backfill queued behind M1 — Widen the earnings calendar beyond the **top-30** default
   (`scripts/earnings_calendar_fetch_nse.py`; store has 309 events / 30 symbols) to the full F&O universe,
   and backfill. **M1 and M2 must both land** — the sleeve trades their intersection.
 - [ ] **P5-M3** (T3) Re-run the P3-1 earnings IV-crush validator on real breadth
