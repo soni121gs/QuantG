@@ -285,3 +285,74 @@ async def test_epoch_split_flags_a_mature_post_change_sample():
              {"_id": True, "pnl": -1720.0, "trades": 20}]
     out = await persistent_live_loss(_loss_ctx(strat, split))
     assert "large enough to judge on its own" in out[0].detail
+
+
+# ── 2026-07-22: cost floor must measure BANKABLE profit, not gross credit ────
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def sort(self, *a, **kw):
+        return self
+
+    def limit(self, n):
+        return self
+
+    def __aiter__(self):
+        async def gen():
+            for r in self._rows:
+                yield r
+        return gen()
+
+
+class _CreditDB:
+    def __init__(self, rows):
+        self._rows = rows
+        self.last_query = None
+        self.strategy_positions = self
+
+    def find(self, q, proj=None):
+        self.last_query = q
+        return _FakeCursor(self._rows)
+
+
+@pytest.mark.asyncio
+async def test_cost_floor_scales_realized_credit_by_take_profit():
+    """A seller booking 45% of credit banks 45% of it. Measuring gross made the
+    probe ~1/tp_frac too permissive (§21.1 defect class)."""
+    from core.hermes_diagnostics.probes_static import _realized_credit_per_lot
+    strat = {"id": "s1", "visual_config": {"options": {
+        "structure": "credit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
+    db = _CreditDB([{"net_credit": 18.97}] * 5)
+    bankable, n = await _realized_credit_per_lot(db, "u1", strat)
+    assert n == 5
+    assert round(bankable) == round(18.97 * 65 * 0.45)   # 555, not the gross 1233
+
+
+@pytest.mark.asyncio
+async def test_cost_floor_only_counts_the_current_geometry_epoch():
+    from core.hermes_diagnostics.probes_static import _realized_credit_per_lot
+    strat = {"id": "s1", "geometry_changed_at": "2026-07-22T00:00:00+00:00",
+             "visual_config": {"options": {"structure": "credit_spread",
+                                           "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
+    db = _CreditDB([{"net_credit": 20.0}] * 4)
+    await _realized_credit_per_lot(db, "u1", strat)
+    assert db.last_query["created_at"] == {"$gte": "2026-07-22T00:00:00+00:00"}
+
+
+@pytest.mark.asyncio
+async def test_cost_floor_stays_silent_on_thin_post_recut_evidence():
+    from core.hermes_diagnostics.probes_static import _realized_credit_per_lot
+    strat = {"id": "s1", "visual_config": {"options": {
+        "structure": "credit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
+    assert await _realized_credit_per_lot(_CreditDB([{"net_credit": 20.0}] * 2), "u1", strat) is None
+
+
+@pytest.mark.asyncio
+async def test_debit_spread_max_profit_is_not_scaled_again():
+    from core.hermes_diagnostics.probes_static import _realized_credit_per_lot
+    strat = {"id": "s1", "visual_config": {"options": {
+        "structure": "debit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
+    bankable, _ = await _realized_credit_per_lot(_CreditDB([{"max_profit": 10.0}] * 5), "u1", strat)
+    assert round(bankable) == 650   # 10 x 65, no tp scaling

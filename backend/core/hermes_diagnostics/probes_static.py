@@ -220,19 +220,38 @@ async def spread_capital_sanity(ctx: ProbeContext) -> List[Finding]:
 
 
 async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any]):
-    """REAL gross credit/profit per lot from recent closed spreads — deterministic
+    """REAL BANKABLE profit per lot from recent closed spreads — deterministic
     evidence, not a config guess. Returns (per_lot_rupees, sample_size) or None when
-    there is no history to judge (so the probe can stay silent — §19)."""
+    there is no history to judge (so the probe can stay silent — §19).
+
+    2026-07-22, two corrections:
+
+    1. This returned GROSS credit x lot, but the cost-floor law — and
+       `spread_builder.credit_cost_floor`, which enforces it at build time — define
+       the quantity as the profit the exit engine can actually BANK, i.e.
+       `tp_frac x credit x lot`. A seller booking at 45% of credit keeps 45% of
+       that gross, so the probe was 1/tp_frac (~2.2x) too permissive and stayed
+       silent on strategies running at ~1.6-1.9x friction. Same defect class as the
+       85-vs-300 friction constant recorded in §21.1: an understated input makes
+       the floor too generous, and sub-floor geometry sails through.
+
+    2. Only trades from the CURRENT geometry epoch count. Grading a re-cut strategy
+       on credits collected by the shape it no longer runs is not evidence about
+       the shape it does run, and §19 says thin evidence must produce SILENCE
+       rather than a confident wrong number. The live path is protected by the
+       build-time floor regardless, so silence here is safe.
+    """
     struct = str(_opts(strat).get("structure"))
     field = {"credit_spread": "net_credit", "debit_spread": "max_profit"}.get(struct)
     if not field:
         return None  # cost-floor credit test is only meaningful for spreads
+    q: Dict[str, Any] = {"user_id": user_id, "strategy_id": str(strat.get("id")),
+                         "status": "CLOSED", field: {"$gt": 0}}
+    epoch = strat.get("geometry_changed_at")
+    if epoch:
+        q["created_at"] = {"$gte": str(epoch)}
     try:
-        cur = db.strategy_positions.find(
-            {"user_id": user_id, "strategy_id": str(strat.get("id")),
-             "status": "CLOSED", field: {"$gt": 0}},
-            {field: 1},
-        ).sort("closed_at", -1).limit(40)
+        cur = db.strategy_positions.find(q, {field: 1}).sort("closed_at", -1).limit(40)
         vals = [float(p[field]) async for p in cur if p.get(field)]
     except Exception:  # noqa: BLE001
         return None
@@ -244,7 +263,16 @@ async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any])
         lot = float(spec.get("lot_size") or 0) or 1.0
     except Exception:  # noqa: BLE001
         lot = 1.0
-    return per_unit * lot, len(vals)
+    # A credit seller banks `tp_frac` of the credit; a debit spread's max_profit is
+    # already the ceiling the exit can reach, so it is not scaled again.
+    bankable = per_unit * lot
+    if struct == "credit_spread":
+        try:
+            tp = float(_opts(strat).get("credit_tp_frac") or _DEF_TP)
+        except (TypeError, ValueError):
+            tp = _DEF_TP
+        bankable *= max(0.0, min(1.0, tp))
+    return bankable, len(vals)
 
 
 @register("static.cost_floor", kind="static")
@@ -277,7 +305,7 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
             out.append(Finding(
                 probe_id="static.cost_floor", domain=Domain.STRATEGY,
                 severity=Severity.HIGH, entity=str(strat.get("id")),
-                title=f"{source.title()} credit Rs{edge:.0f}/lot is below {floor:.0f} cost floor",
+                title=f"{source.title()} bankable profit Rs{edge:.0f}/lot is below {floor:.0f} cost floor",
                 detail=("The design does not clear the ERP cost-floor law: expected edge "
                         "must be at least 3x modeled round-trip friction before paper or "
                         "promotion. This catches width-1 low-credit designs before they "
