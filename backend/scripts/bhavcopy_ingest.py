@@ -44,6 +44,8 @@ from datetime import date, datetime, timedelta
 
 # EDR-05: the 10 equity-strategy stocks — the NSE cash (CM) bhavcopy carries their
 # EOD OHLC so equity strategies can finally be backtested (index-only until now).
+# Kept only as the CASH-market default (the CM bhavcopy carries ~2,000 symbols and
+# nothing consumes the long tail yet). It is NO LONGER the F&O default — see below.
 STOCK_FO_UNDERLYINGS = {"RELIANCE", "SBIN", "HDFCBANK", "ICICIBANK", "TCS", "INFY",
                         "AXISBANK", "LT", "BHARTIARTL", "KOTAKBANK"}
 CM_UNDERLYINGS = set(STOCK_FO_UNDERLYINGS)
@@ -53,7 +55,15 @@ FO_INSTR_TYPES = {"IDO", "IDF", "STO", "STF"}
 SOURCES = {
     "nse": {
         "url": "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{d}_F_0000.csv.zip",
-        "underlyings": {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"} | STOCK_FO_UNDERLYINGS,
+        # ERP P5-M1 (2026-07-23): EMPTY = keep every F&O underlying the file carries.
+        # The downloaded bhavcopy already contains all ~180 stock F&O names; this set
+        # used to whitelist 10 of them and silently discard the rest, which capped the
+        # store at 10 stocks. That starved the earnings IV-crush sleeve — QuantG's only
+        # genuine breadth play (IR = IC*sqrt(BR), CLAUDE.md §20) — below its own n>=300
+        # event gate, so the flagship could never pass no matter how good the signal was.
+        # Safe to keep everything: the instr-type filter (FO_INSTR_TYPES) already
+        # restricts rows to IDO/IDF/STO/STF, i.e. F&O only. Narrow with --underlyings.
+        "underlyings": set(),
         "prefix": "BhavCopy_FO_",           # keep legacy NSE filename (494 files already stored)
         "referer": "https://www.nseindia.com/",
         "kind": "fo", "store": "bhavcopy_fo",

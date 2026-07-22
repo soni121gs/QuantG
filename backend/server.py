@@ -16968,12 +16968,18 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             if ist.weekday() == 5 and hour == 5 and _earnings_forward_done_week != _iso_week:
                 _earnings_forward_done_week = _iso_week
                 try:
-                    from scripts.earnings_calendar_fetch_nse import DEFAULT_TOP30_FNO, collect_events
+                    # P5-M2: universe comes from the bhavcopy store (every stock that
+                    # actually has options), not a hand-maintained top-30 list, so it
+                    # widens automatically with the P5-M1 ingest instead of silently
+                    # capping the earnings sleeve's event count.
+                    from scripts.earnings_calendar_fetch_nse import (
+                        collect_events, fno_universe_from_store)
                     _start = ist.date() - timedelta(days=45)
                     _end = ist.date() + timedelta(days=45)
+                    _universe = await asyncio.to_thread(fno_universe_from_store)
                     _er = await asyncio.to_thread(
-                        collect_events, DEFAULT_TOP30_FNO, _start, _end,
-                        chunk_days=120, sleep_sec=0.25,
+                        collect_events, _universe, _start, _end,
+                        chunk_days=120, sleep_sec=0.5,
                     )
                     logger.info("Weekly earnings-calendar forward refresh: %s", _er)
                 except Exception as _ec_err:

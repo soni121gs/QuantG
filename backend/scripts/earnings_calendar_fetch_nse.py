@@ -34,6 +34,36 @@ DEFAULT_TOP30_FNO = [
     "BAJAJFINSV",
 ]
 
+
+def fno_universe_from_store(*, lookback_days: int = 30) -> List[str]:
+    """Every stock that actually has OPTIONS in the bhavcopy store (ERP P5-M2).
+
+    The earnings sleeve trades the INTERSECTION of "we know the event date" and "we
+    have an option chain to price it with", so the universe must come from the store
+    rather than a hand-maintained list. Before 2026-07-23 this fetcher defaulted to 30
+    names while the store held 10, and P3-1's paper gate needs n>=300 events — the
+    flagship could not pass arithmetically. Deriving it here means the universe grows
+    automatically as P5-M1's ingest widens, and never silently drifts out of sync.
+
+    Falls back to DEFAULT_TOP30_FNO if the store is unreadable, so the weekly refresh
+    degrades instead of failing.
+    """
+    try:
+        from core.bhavcopy_store import BhavcopyStore
+
+        store = BhavcopyStore()
+        days = store.trading_days()[-lookback_days:]
+        names: set = set()
+        for day in days:
+            for row in store.load_day(day):
+                if row.get("instr_type") == "STO" and row.get("underlying"):
+                    names.add(str(row["underlying"]).upper())
+        if names:
+            return sorted(names)
+    except Exception as exc:  # noqa: BLE001 — never fail the weekly refresh on store I/O
+        print(f"universe-from-store failed ({exc}); falling back to DEFAULT_TOP30_FNO")
+    return list(DEFAULT_TOP30_FNO)
+
 NSE_HOME = "https://www.nseindia.com/"
 NSE_BOARD_URL = "https://www.nseindia.com/api/corporate-board-meetings"
 REFERER = "https://www.nseindia.com/companies-listing/corporate-filings-board-meetings"
@@ -166,7 +196,9 @@ def main() -> int:
     ap.add_argument("--to", dest="end", default="")
     ap.add_argument("--forward-days", type=int, default=0,
                     help="If set, fetch from today-N through today+N for weekly forward refresh")
-    ap.add_argument("--symbols", default=",".join(DEFAULT_TOP30_FNO))
+    ap.add_argument("--symbols", default="",
+                    help="comma-sep override; default = every stock with options in the "
+                         "bhavcopy store (P5-M2), falling back to the top-30 list")
     ap.add_argument("--chunk-days", type=int, default=365)
     ap.add_argument("--sleep-sec", type=float, default=0.25)
     ap.add_argument("--verify-symbol", default="RELIANCE")
@@ -182,7 +214,9 @@ def main() -> int:
             ap.error("--from and --to are required unless --forward-days is set")
         start = _parse_date(args.start)
         end = _parse_date(args.end)
-    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    symbols = ([s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+               or fno_universe_from_store())
+    print(f"universe: {len(symbols)} symbols")
     result = collect_events(symbols, start, end, chunk_days=max(1, args.chunk_days), sleep_sec=max(0.0, args.sleep_sec))
     print(result)
     if args.debug_rows and symbols:
