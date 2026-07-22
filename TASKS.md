@@ -94,9 +94,21 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
 - [ ] **P5-R4** (T1) `core/hermes_diagnostics/probes_static.py:58` imports `dte_from_expiry` inside a
   function while `core.spread_builder` is already imported at :13 — no circular-import justification,
   violates CLAUDE.md §9. Move to module scope.
-- [ ] **P5-R5** (T2) **The full test suite has never been run to completion in this work.** ~135 targeted
-  tests pass; `pytest tests/` has only ever timed out. Run it to green, fix or document what falls out
-  (known pre-existing red: `test_trade_frequency.py::…boosted_cap`).
+- [ ] **P5-R5** (T2) **`pytest tests/` does not hang because it is slow — it blocks on network I/O.**
+  Diagnosed 2026-07-23: four attempts sat 60–90 min each at **~26 s CPU** (i.e. idle, waiting). At least
+  `tests/backend_test.py` is a LIVE-SERVER integration suite (`requests` against
+  `REACT_APP_BACKEND_URL`, 44 network calls); `test_iteration2-5`, `test_hermes_sidecar`,
+  `test_agent_tools`, `test_environment_preflight`, `test_p4_gemini_model` also reach out. Excluding those
+  still hung, so at least one more culprit remains unidentified.
+  **Do:** (a) mark the network suites with a `@pytest.mark.integration` marker and default
+  `addopts = -m "not integration"` in `pytest.ini`; (b) finish the per-file hang sweep to name the
+  remaining offender; (c) get the offline suite green (known pre-existing red:
+  `test_trade_frequency.py::…boosted_cap`).
+  **Run it ON THE VPS in background, not in a session** (see P5-R7).
+- [ ] **P5-R7** (T2) **Move all long jobs to the VPS.** The box runs 24/7; nothing slow should ever block
+  a local session. Add a `scripts/ci_run.sh` that runs the offline suite + the diagnostics run in the
+  backend container, logs to `/var/log/quantg_ci.log`, and a nightly cron for it. Same pattern for
+  backfills and OOS sweeps (`nohup docker exec … &`, read the log next turn).
 - [ ] **P5-R6** (T1) Verify the two `options_1m` repairs actually fire — neither has run yet:
   the 15:35 IST capture flush (window widened + failures now WARN with traceback; previously swallowed at
   debug, which is how the store went 8 days stale) and the new ingest cron (11:15 UTC weekdays). Check
