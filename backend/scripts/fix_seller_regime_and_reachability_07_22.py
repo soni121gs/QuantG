@@ -27,11 +27,17 @@ Two changes, both per CLAUDE.md law:
               its full remaining life, the whole credit is bankable, and the
               reachability law does not bite (the builder exempts exit_mode
               "expiry"). Its RES-2 IV-rich + RANGE gate stays on.
-     QG-O11 → stays the intraday 1-min scalp it is designed to be, but its target
-              comes down to what 300 minutes of decay can actually deliver on the
-              expiries it will meet, and it now only fires when the reachability
-              guard passes — i.e. it works near expiry (Mon/Tue for NIFTY) and
-              stands down the rest of the week. Stand-down is a strategy (§18.4).
+     QG-O11 → stays the intraday 1-min scalp it is designed to be, with its
+              geometry UNCHANGED. The first draft of this migration cut its TP
+              0.45 → 0.30 to make the target reachable on far expiries; Hermes
+              `static.reward_risk_geometry` immediately flagged it, correctly —
+              lowering TP against an unchanged 0.90 stop raises the break-even
+              win rate from 0.67 to 0.75. Reachability is not a geometry problem
+              for a scalp, it is a WHICH-DAYS problem: at tp 0.45 over a 300-min
+              hold the ratio is 0.89 at 2 DTE and 0.30 at 6 DTE. So leave the
+              geometry alone and let the build-time guard pick the days — it
+              trades near expiry (Mon/Tue for the NIFTY weekly) and stands down
+              the rest of the week. Stand-down is a strategy (§18.4).
      QG-O4  → SENSEX expires Thursday, so its realized DTE is already 1–2 and its
               ratio is fine. Tag only; geometry untouched.
 
@@ -71,7 +77,8 @@ PLAN = {
         "risk": {},
     },
     "QG-O11 NIFTY Regime Seller Credit Scalp": {
-        "options": {**SELLER_TAGS, "credit_tp_frac": 0.30},
+        # Geometry deliberately untouched — see the QG-O11 note in the docstring.
+        "options": {**SELLER_TAGS, "credit_tp_frac": 0.45},
         "risk": {},
     },
 }
