@@ -75,19 +75,21 @@ def test_enabled_defaults_off():
 
 # --- 2026-07-22: the confidence leak that let sellers trade a TREND_DOWN day ---
 
-def test_low_confidence_fine_read_defers_to_coarse_regime():
-    """The fine classifier's fall-through label is RANGE — the sellers' home — so an
-    immature 'don't know yet' used to read as a full-size green light. Below
-    FINE_MIN_CONF we defer to the mature coarse regime instead."""
+def test_range_fallthrough_is_cross_checked_against_the_coarse_regime():
+    """RANGE is the classifier's no-signature default AND the sellers' home, so it
+    is the one label that gets cross-checked. 2026-07-22: fine said RANGE/0.40 all
+    morning while the mature coarse read said TREND_DOWN."""
     d = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
     assert d.regime == tax.TREND_DOWN
     assert d.stand_down and d.size_mult == 0.0
-    assert any("deferring to coarse" in r for r in d.reasons)
+    assert any("cross-checking" in r for r in d.reasons)
 
 
-def test_confident_fine_read_ignores_the_coarse_fallback():
-    d = route(tax.RANGE, 0.80, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
-    assert d.regime == tax.RANGE and not d.stand_down
+def test_affirmative_fine_label_is_trusted_and_not_cross_checked():
+    """An affirmative TREND/CHOP/INSIDE call is a real detection — only the RANGE
+    default is second-guessed."""
+    d = route(tax.TREND_UP, 0.95, specialist="trend_delta1", fallback_regime=tax.RANGE)
+    assert d.regime == tax.TREND_UP and not d.stand_down
 
 
 def test_no_fallback_supplied_preserves_old_behaviour():
@@ -100,3 +102,38 @@ def test_range_size_scales_with_confidence():
     lo = route(tax.RANGE, 0.20, specialist="range_seller").size_mult
     hi = route(tax.RANGE, 0.90, specialist="range_seller").size_mult
     assert 0 < lo < hi
+
+
+# --- P5-R1 (2026-07-23): the fallback must only ever REDUCE risk -------------
+# The first version of the cross-check rewrote the regime label at the top of
+# route(), above every protective guard, and broke three things at once.
+
+def test_long_vol_still_owns_chop_when_a_range_fallback_is_supplied(monkeypatch):
+    """Regression guard for the 2026-07-21 'IDX Long-Gamma inversion', which the
+    first fallback implementation reintroduced: rewriting CHOP->RANGE meant the
+    long-vol guard never fired and the sleeve stood down on the one regime it owns."""
+    monkeypatch.setenv("RAE_CHOP_STANDDOWN", "true")
+    d = route(tax.HIGH_VOL_CHOP, 0.40, specialist=tax.LONG_VOL_ROLE,
+              fallback_regime=tax.RANGE)
+    assert not d.stand_down and d.size_mult > 0
+
+
+def test_fallback_cannot_defeat_the_chop_veto(monkeypatch):
+    """A low-confidence CHOP read must not be laundered into RANGE so sellers trade it."""
+    monkeypatch.setenv("RAE_CHOP_STANDDOWN", "true")
+    d = route(tax.HIGH_VOL_CHOP, 0.40, specialist="range_seller", fallback_regime=tax.RANGE)
+    assert d.stand_down
+
+
+def test_fallback_cannot_launder_a_trend_into_range():
+    """A low-confidence TREND is still a trend — a seller must not trade it just
+    because the coarse regime happens to read RANGE."""
+    d = route(tax.TREND_DOWN, 0.30, specialist="range_seller", fallback_regime=tax.RANGE)
+    assert d.stand_down
+
+
+def test_cross_check_never_authorizes_what_the_fine_read_refused():
+    """The more conservative decision always wins."""
+    permissive = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.RANGE)
+    checked = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
+    assert checked.size_mult <= permissive.size_mult

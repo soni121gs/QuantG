@@ -89,6 +89,13 @@ def _stand_down(regime: str, conf: float, reason: str,
     return RoutingDecision(regime, conf, True, 0.0, [], [*(notes or []), reason])
 
 
+def _more_conservative(a: RoutingDecision, b: RoutingDecision) -> RoutingDecision:
+    """Whichever decision risks less: a stand-down beats trading; else smaller size."""
+    if a.stand_down != b.stand_down:
+        return a if a.stand_down else b
+    return a if a.size_mult <= b.size_mult else b
+
+
 def route(
     regime_label: str,
     confidence: float = 0.5,
@@ -101,24 +108,51 @@ def route(
     When `specialist` is None the decision is regime-generic (owner activated).
 
     `fallback_regime` is the COARSE regime (`market_regime_state.regime`, VWAP-based
-    over the whole session). The fine intraday classifier is honest about being
-    immature early in the day, but its fall-through label is RANGE — the sellers'
-    home — so a low-confidence "don't know yet" used to read as a full-size green
-    light. When the fine read is below FINE_MIN_CONF we defer to the coarse regime,
-    which is an independent, mature signal available from the open. On 2026-07-22
-    the fine read said RANGE/0.40 all morning while the coarse read said TREND_DOWN;
-    deferring would have stood the sellers down.
+    over the whole session) and acts as a CROSS-CHECK, never a replacement.
+
+    Why a cross-check and not a substitution (2026-07-23, P5-R1): RANGE is the
+    classifier's FALL-THROUGH label — "no decisive trend/chop/inside signature" — and
+    it is also the premium sellers' home regime, so "we don't know yet" used to read
+    as a full-size green light. That cost ₹2.2k on 2026-07-22, when the fine read said
+    RANGE/0.40 all morning while the mature coarse read said TREND_DOWN.
+
+    The first fix rewrote `regime` to the coarse label at the top of this function and
+    broke three things, because it ran ABOVE every protective guard below:
+      * the long-vol guard never saw HIGH_VOL_CHOP, so the long-gamma sleeve stood
+        down on the one regime it owns — a reintroduction of the 2026-07-21 inversion;
+      * a low-confidence CHOP read was laundered into RANGE, defeating the chop veto;
+      * a low-confidence TREND was laundered into RANGE, so a seller traded it.
+
+    So the cross-check now fires ONLY when this router has landed in RANGE — i.e. we
+    are about to trade the permissive default on what may be a non-signal. An
+    affirmative classification (TREND/CHOP/INSIDE) is a real detection and is trusted
+    as-is. When it does fire, the MORE CONSERVATIVE of the two decisions wins, so the
+    fallback can only ever reduce risk, never authorize a trade the fine read refused.
     """
+    fine_label = str(regime_label or "").upper()
+    decision = _route_one(fine_label, confidence, specialist, notes=[])
+
+    coarse = str(fallback_regime or "").upper()
+    if (decision.regime == tax.RANGE and coarse in tax.REGIME_LABELS
+            and coarse != tax.RANGE):
+        note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to RANGE (the "
+                f"no-signature default, confidence {confidence:.2f}) — cross-checking "
+                f"the mature coarse regime {coarse}")
+        alt = _route_one(coarse, confidence, specialist, notes=[note])
+        return _more_conservative(alt, decision)
+    return decision
+
+
+def _route_one(
+    regime_label: str,
+    confidence: float,
+    specialist: Optional[str],
+    *,
+    notes: List[str],
+) -> RoutingDecision:
+    """Route a SINGLE regime label. All the ownership/veto/sizing logic lives here so
+    `route()` can evaluate the fine and coarse labels through identical rules."""
     regime = str(regime_label or "").upper()
-    notes: List[str] = []
-    if fallback_regime and confidence < FINE_MIN_CONF:
-        coarse = str(fallback_regime).upper()
-        if coarse in tax.REGIME_LABELS and coarse != regime:
-            notes.append(
-                f"fine regime {regime} confidence {confidence:.2f} < {FINE_MIN_CONF:.2f} "
-                f"(immature) → deferring to coarse regime {coarse}"
-            )
-            regime = coarse
     if regime not in tax.REGIME_LABELS:
         # coarse/unknown live regime → treat as RANGE (sellers' home), size 1
         regime = tax.RANGE
