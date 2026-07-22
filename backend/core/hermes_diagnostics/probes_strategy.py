@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.hermes_diagnostics.contract import Finding, Domain, Severity
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
@@ -36,21 +36,77 @@ async def persistent_live_loss(ctx: ProbeContext) -> List[Finding]:
             continue
         strat = ctx.strategy_by_id(sid) or {}
         wr = (r.get("wins", 0) / trades) if trades else 0
+        # Split the sample at the strategy's last MATERIAL geometry change. A
+        # trailing loss is only evidence against the CURRENT machine; if the
+        # geometry was re-cut two days ago, the older trades measure a strategy
+        # that no longer exists. This never resolves or downgrades the finding —
+        # it stays open at the same severity until the post-change sample is both
+        # large enough AND positive — it only stops a stale number from reading as
+        # a verdict on the current configuration.
+        epoch = await _epoch_split(ctx, sid, strat)
+        title = f"Net-negative over {trades} trades (₹{pnl:,.0f}, {wr*100:.0f}% WR)"
+        detail = (f"This strategy has lost money over the last {_LOOKBACK_DAYS} days on "
+                  "a sample large enough to be signal, not noise. It is a candidate "
+                  "for review or removal rather than continued paper-forward — grade "
+                  "the idea on its expectancy, not hope.")
+        evidence = {"strategy_id": sid, "name": strat.get("name"),
+                    "window_days": _LOOKBACK_DAYS, "trades": trades,
+                    "realized_pnl": round(pnl, 2), "win_rate": round(wr, 3)}
+        if epoch:
+            evidence.update(epoch)
+            n_post = epoch["trades_since_change"]
+            title += f" — {n_post} of them since the {epoch['geometry_changed_at'][:10]} re-cut"
+            detail += (
+                f"\n\nSAMPLE SPLIT: the geometry was re-cut on "
+                f"{epoch['geometry_changed_at'][:10]} ({epoch.get('geometry_change_note') or 'config change'}). "
+                f"{epoch['trades_before_change']} of these trades ran the OLD geometry "
+                f"(₹{epoch['pnl_before_change']:,.0f}); {n_post} have run the new one "
+                f"(₹{epoch['pnl_since_change']:,.0f}). "
+                + ("The post-change sample is still too thin to judge — this finding stays "
+                   "open until it reaches the evidence floor, and the pre-change loss is "
+                   "NOT proof the current geometry is bad."
+                   if n_post < _MIN_TRADES_FOR_LOSS_CALL else
+                   "The post-change sample is now large enough to judge on its own — read it, "
+                   "not the blended number."))
         out.append(Finding(
             probe_id="strategy.persistent_live_loss", domain=Domain.STRATEGY,
             severity=Severity.MEDIUM, entity=sid,
-            title=f"Net-negative over {trades} trades (₹{pnl:,.0f}, {wr*100:.0f}% WR)",
-            detail=(f"This strategy has lost money over the last {_LOOKBACK_DAYS} days on "
-                    "a sample large enough to be signal, not noise. It is a candidate "
-                    "for review or removal rather than continued paper-forward — grade "
-                    "the idea on its expectancy, not hope."),
-            evidence={"strategy_id": sid, "name": strat.get("name"),
-                      "window_days": _LOOKBACK_DAYS, "trades": trades,
-                      "realized_pnl": round(pnl, 2), "win_rate": round(wr, 3)},
+            title=title,
+            detail=detail,
+            evidence=evidence,
             reproduction=("db.strategy_positions.aggregate group by strategy_id since %s, sum realized_pnl" % since),
             suggested_fix="Review the strategy's OOS/forward-paper evidence; archive if the edge is absent (CLAUDE.md §13).",
         ))
     return out
+
+
+async def _epoch_split(ctx: ProbeContext, sid: str, strat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Split this strategy's trailing trades either side of its last material
+    geometry change (`geometry_changed_at`, stamped by the re-cut migrations).
+
+    Returns None when the strategy has never been re-cut, so untouched strategies
+    keep the plain blended verdict.
+    """
+    changed_at = strat.get("geometry_changed_at")
+    if not changed_at:
+        return None
+    since = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    cursor = ctx.db.strategy_positions.aggregate([
+        {"$match": {"user_id": ctx.user_id, "status": "CLOSED", "strategy_id": sid,
+                    "created_at": {"$gte": since}}},
+        {"$group": {"_id": {"$gte": ["$created_at", changed_at]},
+                    "pnl": {"$sum": "$realized_pnl"}, "trades": {"$sum": 1}}},
+    ])
+    buckets = {bool(r["_id"]): r for r in await cursor.to_list(10)}
+    post, pre = buckets.get(True, {}), buckets.get(False, {})
+    return {
+        "geometry_changed_at": str(changed_at),
+        "geometry_change_note": strat.get("geometry_change_note"),
+        "trades_since_change": int(post.get("trades") or 0),
+        "pnl_since_change": round(float(post.get("pnl") or 0.0), 2),
+        "trades_before_change": int(pre.get("trades") or 0),
+        "pnl_before_change": round(float(pre.get("pnl") or 0.0), 2),
+    }
 
 
 @register("strategy.thin_sample_grading", kind="dynamic")

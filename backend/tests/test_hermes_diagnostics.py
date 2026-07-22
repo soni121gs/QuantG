@@ -19,6 +19,7 @@ from core.hermes_diagnostics.probes_execution import (
 )
 from core.hermes_diagnostics.probes_infra import feed_regime_artifact
 from core.hermes_diagnostics.probes_static import reward_risk_geometry
+from core.hermes_diagnostics.contract import Severity
 from core.hermes_diagnostics import runner
 
 
@@ -216,3 +217,71 @@ async def test_runner_persists_and_auto_resolves():
     assert geo["status"] == "resolved"
     task = [t for t in db.hermes_fix_tasks.docs if "reward_risk_geometry" in t["key"]][0]
     assert task["status"] == "auto_closed"
+
+
+# ── 2026-07-22: geometry-change epoch split on persistent_live_loss ──────────
+
+class _FakeAgg:
+    """Minimal aggregate() stand-in returning canned group rows."""
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def to_list(self, n):
+        return self._rows
+
+
+class _FakeDB:
+    def __init__(self, group_rows, split_rows):
+        self._group, self._split = group_rows, split_rows
+        self.strategy_positions = self
+
+    def aggregate(self, pipeline):
+        # the split query pins a single strategy_id in its $match
+        pinned = any("strategy_id" in (st.get("$match") or {}) for st in pipeline)
+        return _FakeAgg(self._split if pinned else self._group)
+
+
+def _loss_ctx(strat, split_rows):
+    return _ctx(db=_FakeDB([{"_id": "s1", "pnl": -7720.0, "trades": 35, "wins": 12}],
+                           split_rows),
+                strategies=[strat])
+
+
+@pytest.mark.asyncio
+async def test_persistent_loss_without_epoch_keeps_plain_verdict():
+    from core.hermes_diagnostics.probes_strategy import persistent_live_loss
+    out = await persistent_live_loss(_loss_ctx({"id": "s1", "name": "X"}, []))
+    assert len(out) == 1
+    assert "geometry_changed_at" not in out[0].evidence
+    assert "SAMPLE SPLIT" not in out[0].detail
+
+
+@pytest.mark.asyncio
+async def test_epoch_split_reports_both_sides_but_never_resolves():
+    """A re-cut must add context, not silence the finding — otherwise changing a
+    parameter becomes a way to launder a losing strategy."""
+    from core.hermes_diagnostics.probes_strategy import persistent_live_loss
+    strat = {"id": "s1", "name": "X",
+             "geometry_changed_at": "2026-07-22T00:00:00+00:00",
+             "geometry_change_note": "reachability guard"}
+    split = [{"_id": False, "pnl": -7720.0, "trades": 35},
+             {"_id": True, "pnl": 0.0, "trades": 0}]
+    out = await persistent_live_loss(_loss_ctx(strat, split))
+    assert len(out) == 1                      # still fires
+    f = out[0]
+    assert f.severity == Severity.MEDIUM      # not downgraded
+    assert f.evidence["trades_since_change"] == 0
+    assert f.evidence["trades_before_change"] == 35
+    assert f.evidence["realized_pnl"] == -7720.0   # blended number still present
+    assert "too thin to judge" in f.detail
+
+
+@pytest.mark.asyncio
+async def test_epoch_split_flags_a_mature_post_change_sample():
+    from core.hermes_diagnostics.probes_strategy import persistent_live_loss
+    strat = {"id": "s1", "name": "X",
+             "geometry_changed_at": "2026-07-22T00:00:00+00:00"}
+    split = [{"_id": False, "pnl": -6000.0, "trades": 15},
+             {"_id": True, "pnl": -1720.0, "trades": 20}]
+    out = await persistent_live_loss(_loss_ctx(strat, split))
+    assert "large enough to judge on its own" in out[0].detail
