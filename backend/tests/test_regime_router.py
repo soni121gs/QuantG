@@ -71,3 +71,32 @@ def test_generic_route_activates_owner():
 def test_enabled_defaults_off():
     os.environ.pop("RAE_ROUTER_ENABLED", None)
     assert enabled() is False
+
+
+# --- 2026-07-22: the confidence leak that let sellers trade a TREND_DOWN day ---
+
+def test_low_confidence_fine_read_defers_to_coarse_regime():
+    """The fine classifier's fall-through label is RANGE — the sellers' home — so an
+    immature 'don't know yet' used to read as a full-size green light. Below
+    FINE_MIN_CONF we defer to the mature coarse regime instead."""
+    d = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
+    assert d.regime == tax.TREND_DOWN
+    assert d.stand_down and d.size_mult == 0.0
+    assert any("deferring to coarse" in r for r in d.reasons)
+
+
+def test_confident_fine_read_ignores_the_coarse_fallback():
+    d = route(tax.RANGE, 0.80, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
+    assert d.regime == tax.RANGE and not d.stand_down
+
+
+def test_no_fallback_supplied_preserves_old_behaviour():
+    d = route(tax.RANGE, 0.40, specialist="range_seller")
+    assert d.regime == tax.RANGE and not d.stand_down
+
+
+def test_range_size_scales_with_confidence():
+    """A barely-formed range earns less size than an established one."""
+    lo = route(tax.RANGE, 0.20, specialist="range_seller").size_mult
+    hi = route(tax.RANGE, 0.90, specialist="range_seller").size_mult
+    assert 0 < lo < hi

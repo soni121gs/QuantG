@@ -652,7 +652,8 @@ async def _edge_math_spread_size(
     # RANGE/TREND regime; fall back to coarse when the fine label isn't available yet.
     _routing = _rae_route(str(spread.get("router_regime") or regime or "UNKNOWN"),
                           float(spread.get("regime_confidence") or 0.5),
-                          specialist=_specialist)
+                          specialist=_specialist,
+                          fallback_regime=str(regime) if regime else None)
     if _router_on:
         lots = int(round(lots * _routing.size_mult))
 
@@ -1046,7 +1047,35 @@ async def _dispatch_signal_via_unified_engine(
             or (sig.get("visual_config") or {}).get("options", {}).get("required_capital")
             or 15000.0
         )
+        # RAE-4: the debit path had NO router gate — only credit spreads (inside
+        # _edge_math_spread_size) and single-leg buyers were regime-gated. So the
+        # IDX mean-reversion/long-gamma debit sleeves traded any regime they liked;
+        # on 2026-07-22 the INSIDE_QUIET/RANGE fade entered on a TREND_DOWN and lost.
+        # Same gate, same telemetry, same env switch as the credit path.
+        from core.regime_router import route as _rae_route_db, enabled as _rae_enabled_db
+        _db_opts = (strategy.get("visual_config") or {}).get("options", {}) or {}
+        _db_specialist = str(_db_opts.get("specialist_role") or "") or None
+        if _db_specialist:
+            _db_regime = (_regime_fine_at_entry
+                          if _regime_fine_at_entry not in ("", "UNKNOWN") else _regime_at_entry)
+            _db_routing = _rae_route_db(str(_db_regime or "UNKNOWN"),
+                                        float(_regime_fine_conf or 0.5),
+                                        specialist=_db_specialist,
+                                        fallback_regime=str(_regime_at_entry) if _regime_at_entry else None)
+            _spread["rae_router"] = {**_db_routing.as_dict(), "enforced": _rae_enabled_db()}
+            if _rae_enabled_db() and _db_routing.stand_down:
+                _db_reason = f"RAE router stand-down: {(_db_routing.reasons or ['off-regime'])[0]}"
+                try:
+                    await db.strategies.update_one(
+                        {"id": strategy.get("id"), "user_id": user_id},
+                        {"$set": {"last_filter_reason": _db_reason}})
+                except Exception:
+                    pass
+                return {"ok": False, "status": "SKIPPED", "reason": _db_reason,
+                        "reason_code": "RAE_ROUTER_STAND_DOWN"}
         _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        if _db_specialist and _rae_enabled_db() and _db_routing.size_mult != 1.0:
+            _spread_lots = max(1, int(round(_spread_lots * _db_routing.size_mult)))
         return await open_debit_spread(
             db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,
@@ -1079,7 +1108,8 @@ async def _dispatch_signal_via_unified_engine(
         _sl_regime = _regime_fine_at_entry if _regime_fine_at_entry not in ("", "UNKNOWN") else _regime_at_entry
         _sl_routing = _rae_route_sl(str(_sl_regime or "UNKNOWN"),
                                     float(_regime_fine_conf or 0.5),
-                                    specialist=_sl_specialist)
+                                    specialist=_sl_specialist,
+                                    fallback_regime=str(_regime_at_entry) if _regime_at_entry else None)
         _sl_router_on = _rae_enabled_sl()
         if option_contract is not None:
             option_contract["rae_router"] = {**_sl_routing.as_dict(), "enforced": _sl_router_on}

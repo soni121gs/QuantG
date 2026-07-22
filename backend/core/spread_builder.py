@@ -42,6 +42,18 @@ CREDIT_SPREAD_MIN_CREDIT_RATIO = float(os.environ.get("CREDIT_SPREAD_MIN_CREDIT_
 SPREAD_ROUND_TRIP_COST_PER_LOT = float(os.environ.get("SPREAD_ROUND_TRIP_COST_PER_LOT", "300"))
 SPREAD_COST_FLOOR_MULT = float(os.environ.get("SPREAD_COST_FLOOR_MULT", "3.0"))
 
+# --- Law 2, theta reachability, enforced at BUILD time (2026-07-22) ----------
+# CLAUDE.md §21.2 states the law but nothing enforced it on the live path, and the
+# static probe judged the CONFIGURED `target_dte_days` — a field no selection code
+# ever reads. So the book kept picking whatever expiry the chain offered: on a
+# Wednesday the nearest NIFTY weekly is 6 days out, which makes a 300-minute hold
+# able to decay ~13% of the credit against a 45% take-profit (ratio 0.30). The
+# result was measured on 2026-07-22: 5 of 5 spreads exited on the clock, none on
+# price. Enforce it where the cost floor already is, off the REALIZED expiry.
+SPREAD_MIN_TP_REACHABILITY = float(os.environ.get("SPREAD_MIN_TP_REACHABILITY", "0.55"))
+SPREAD_ENFORCE_REACHABILITY = os.environ.get(
+    "SPREAD_ENFORCE_REACHABILITY", "true").strip().lower() == "true"
+
 
 MARKET_MINUTES_PER_DAY = 375.0
 
@@ -129,6 +141,33 @@ def credit_cost_floor(
     return out
 
 
+def dte_from_expiry(expiry: Any, *, today: Optional[str] = None) -> Optional[float]:
+    """Calendar days from `today` (IST) to an option expiry, or None if unparseable.
+
+    Tolerant of the shapes the chain hands back: "2026-07-28", an ISO datetime, or
+    an epoch-millis integer. Returns a float so a same-day (0-DTE) contract lands
+    on a small positive number rather than dividing by zero downstream.
+    """
+    from datetime import date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    if expiry in (None, ""):
+        return None
+    exp: Optional[date] = None
+    if isinstance(expiry, (int, float)) or (isinstance(expiry, str) and expiry.isdigit()):
+        try:
+            exp = _dt.fromtimestamp(float(expiry) / 1000.0, tz=_tz.utc).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+    else:
+        try:
+            exp = _dt.fromisoformat(str(expiry).replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    ref = (_dt.fromisoformat(today).date() if today
+           else _dt.now(_tz(_td(hours=5, minutes=30))).date())
+    return max(0.0, float((exp - ref).days))
+
+
 def _node_strike(node: Dict[str, Any]) -> Optional[float]:
     return _to_float(node.get("strike_price"))
 
@@ -192,11 +231,18 @@ def build_credit_spread(
     lot_size: Optional[int] = None,
     tp_frac: float = 1.0,
     enforce_cost_floor: bool = True,
+    hold_minutes: Optional[float] = None,
+    enforce_reachability: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Build a vertical credit spread.
 
     direction: "bullish" → bull put spread; "bearish" → bear call spread.
     width_points: absolute strike distance between short and long legs.
+    hold_minutes: the hold window the exit engine will actually give this trade
+    (time-exit, capped by the square-off). When supplied, the §21.2 reachability
+    law is enforced off the REALIZED expiry — a take-profit that decay cannot
+    reach inside the hold is a directional bet, so refuse to build it. Pass None
+    (research paths, tests) to skip the test.
 
     Returns {ok, reason, structure, direction, option_type, short_leg, long_leg,
     net_credit, max_loss, max_profit, width_points, net_delta, net_theta}.
@@ -253,6 +299,30 @@ def build_credit_spread(
             "cost_floor": floor,
         }
 
+    # §21.2 theta-reachability law, judged on the expiry actually resolved above
+    # (not on the strategy's decorative `target_dte_days`) and on the hold window
+    # the exit engine will actually grant.
+    reach: Optional[Dict[str, Any]] = None
+    _enforce_reach = (SPREAD_ENFORCE_REACHABILITY if enforce_reachability is None
+                      else bool(enforce_reachability))
+    _dte = dte_from_expiry(short_leg.get("expiry"))
+    if hold_minutes is not None and _dte is not None:
+        reach = tp_reachability(tp_frac, _dte, hold_minutes)
+        reach.update({"dte_days": _dte, "hold_minutes": round(float(hold_minutes), 1),
+                      "min_ratio": SPREAD_MIN_TP_REACHABILITY})
+        reach["passed"] = bool(reach["ratio"] >= SPREAD_MIN_TP_REACHABILITY)
+        if _enforce_reach and not reach["passed"]:
+            return {
+                "ok": False,
+                "reason": (
+                    "tp_reachability: {:.0f}-DTE contract over a {:.0f}min hold decays "
+                    "{:.1%} of credit vs a {:.0%} target (ratio {:.2f} < {:.2f}) — "
+                    "the clock, not theta, would close this"
+                ).format(_dte, hold_minutes, reach["theta_reachable_frac"],
+                         tp_frac, reach["ratio"], SPREAD_MIN_TP_REACHABILITY),
+                "tp_reachability": reach,
+            }
+
     sd = short_leg.get("delta") or 0.0
     ld = long_leg.get("delta") or 0.0
     st = short_leg.get("theta") or 0.0
@@ -270,6 +340,7 @@ def build_credit_spread(
         "max_loss": max_loss,            # defined risk per unit
         "width_points": actual_width,
         "cost_floor": floor,
+        "tp_reachability": reach,
         # Net greeks: short leg is a SOLD option, so its greeks flip sign.
         "net_delta": round(-sd + ld, 4),
         "net_theta": round(-st + lt, 4),

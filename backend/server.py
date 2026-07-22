@@ -17013,20 +17013,26 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
 
             # 15:35 IST — flush the day's captured index 1-minute bars (IMD-04) to
             # the index-minute store for the intraday backtester. Read-only, best-effort.
-            if hour == 15 and minute == 35 and _index_flush_done_date != today:
+            # Window, not an exact minute: this loop ticks every 10s but a single
+            # tick can overrun a minute, and `minute == 35` silently skips the whole
+            # day when it does. The done-date guard already makes it run-once, so a
+            # window is strictly safer. Failures log at WARNING with the traceback —
+            # they used to be swallowed at debug, which is how the options_1m store
+            # went 8 days stale (2026-07-14 → 07-22) with nothing in the logs.
+            if hour == 15 and minute >= 35 and _index_flush_done_date != today:
                 _index_flush_done_date = today
                 try:
                     _ic_res = await asyncio.to_thread(_get_live_index_capture().flush_day, today)
                     logger.info("Index minute capture flush: %s", _ic_res)
-                except Exception as _ic_err:
-                    logger.debug("Index capture flush failed: %s", _ic_err)
+                except Exception:
+                    logger.warning("Index capture flush failed", exc_info=True)
                 # IMD-04: flush the day's captured OPTION 1-minute bars for the
                 # contracts the book traded today. Read-only, best-effort.
                 try:
                     _oc_res = await asyncio.to_thread(_get_live_option_capture().flush_day, today)
                     logger.info("Option minute capture flush: %s", _oc_res)
-                except Exception as _oc_err:
-                    logger.debug("Option capture flush failed: %s", _oc_err)
+                except Exception:
+                    logger.warning("Option capture flush failed", exc_info=True)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
@@ -17843,6 +17849,20 @@ async def startup():
                                                      or os.environ.get("CREDIT_SPREAD_TP_FRAC", "0.5"))
                                 except (TypeError, ValueError):
                                     _tp_frac = 0.5
+                                # §21.2 reachability context: the hold this trade will
+                                # actually get is its time-exit, capped by the intraday
+                                # square-off. A hold-to-expiry strategy (exit_mode
+                                # "expiry") gets theta's full remaining life, so it is
+                                # exempt — the law only bites when a clock closes the
+                                # trade before decay can reach the target.
+                                _risk_cfg = ((strategy or {}).get("visual_config") or {}).get("risk", {}) or {}
+                                _time_exit = _risk_cfg.get("time_exit_minutes")
+                                if str(_opts_cfg.get("exit_mode") or "").lower() == "expiry":
+                                    _hold_minutes = None
+                                elif _time_exit:
+                                    _hold_minutes = min(float(_time_exit), float(_minutes_to_close))
+                                else:
+                                    _hold_minutes = float(_minutes_to_close)
                                 if _opts_cfg.get("dynamic_chain_selection", True):
                                     _spread = select_dynamic_credit_spread(
                                         chain_nodes=_nodes,
@@ -17852,6 +17872,7 @@ async def startup():
                                         minutes_to_close=_minutes_to_close,
                                         lot_size=_lot_size,
                                         tp_frac=_tp_frac,
+                                        hold_minutes=_hold_minutes,
                                     )
                                 elif _opts_cfg.get("short_offset_strikes") is not None:
                                     _offset = _opts_cfg.get("short_offset_strikes")
@@ -17866,6 +17887,7 @@ async def startup():
                                         chain_nodes=_nodes, direction=_direction,
                                         width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
                                         lot_size=_lot_size, tp_frac=_tp_frac,
+                                        hold_minutes=_hold_minutes,
                                     )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"

@@ -166,8 +166,20 @@ def classify_intraday(
         return RegimeSnapshot(tax.INSIDE_QUIET, conf, f, reasons)
 
     # ---- RANGE (default) ----
-    reasons.append("no decisive trend/chop/inside signature — default RANGE")
-    return RegimeSnapshot(tax.RANGE, RANGE_BASE_CONF, f, reasons)
+    # RANGE is the fall-through: "no decisive signature YET". Every other branch
+    # scales its confidence by maturity; this one used to return a flat 0.40, so an
+    # immature session was indistinguishable from a genuinely established range.
+    # That is not a cosmetic gap — RANGE is the premium sellers' home regime, so a
+    # confident-looking default meant "we don't know yet" was routed as "green
+    # light, full size". Measured 2026-07-22: every entry that day stamped
+    # RANGE/0.40 while the mature coarse regime read TREND_DOWN, and the sellers
+    # lost ₹2.2k selling puts into it. Scale it like everything else.
+    conf = _clamp(RANGE_BASE_CONF * maturity)
+    reasons.append(
+        f"no decisive trend/chop/inside signature — default RANGE "
+        f"(maturity {maturity:.2f} over {int(f['bars'])} bars)"
+    )
+    return RegimeSnapshot(tax.RANGE, conf, f, reasons)
 
 
 def classify_at(day_bars: Sequence[Dict[str, Any]], cutoff_hhmm: str,

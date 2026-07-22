@@ -57,6 +57,10 @@ REGIME_SIZE = {
     tax.EVENT: 0.0,
 }
 TREND_MIN_CONF = _f("RAE_ROUTER_TREND_CONF", 0.90)   # trend needs high confidence (precision)
+# Below this, the fine intraday read is "we don't know yet" rather than a regime
+# call, and we defer to the coarse (VWAP/whole-session) regime, which is mature
+# from the open. See the 2026-07-22 note in `route()`.
+FINE_MIN_CONF = _f("RAE_ROUTER_FINE_MIN_CONF", 0.50)
 # sellers co-own the quiet regimes with the mean-revert specialist
 SELLER_OK_REGIMES = {tax.RANGE, tax.INSIDE_QUIET}
 # a single delta-1 trend specialist owns BOTH trend directions (its code picks CE vs
@@ -80,8 +84,9 @@ class RoutingDecision:
                 "active_specialists": list(self.active_specialists), "reasons": list(self.reasons)}
 
 
-def _stand_down(regime: str, conf: float, reason: str) -> RoutingDecision:
-    return RoutingDecision(regime, conf, True, 0.0, [], [reason])
+def _stand_down(regime: str, conf: float, reason: str,
+                notes: Optional[List[str]] = None) -> RoutingDecision:
+    return RoutingDecision(regime, conf, True, 0.0, [], [*(notes or []), reason])
 
 
 def route(
@@ -89,11 +94,31 @@ def route(
     confidence: float = 0.5,
     *,
     specialist: Optional[str] = None,
+    fallback_regime: Optional[str] = None,
 ) -> RoutingDecision:
     """Decide whether/how much to trade in `regime_label` for a strategy playing the
     `specialist` role (from `regime_taxonomy.REGIME_OWNER` values, e.g. 'range_seller').
-    When `specialist` is None the decision is regime-generic (owner activated)."""
+    When `specialist` is None the decision is regime-generic (owner activated).
+
+    `fallback_regime` is the COARSE regime (`market_regime_state.regime`, VWAP-based
+    over the whole session). The fine intraday classifier is honest about being
+    immature early in the day, but its fall-through label is RANGE — the sellers'
+    home — so a low-confidence "don't know yet" used to read as a full-size green
+    light. When the fine read is below FINE_MIN_CONF we defer to the coarse regime,
+    which is an independent, mature signal available from the open. On 2026-07-22
+    the fine read said RANGE/0.40 all morning while the coarse read said TREND_DOWN;
+    deferring would have stood the sellers down.
+    """
     regime = str(regime_label or "").upper()
+    notes: List[str] = []
+    if fallback_regime and confidence < FINE_MIN_CONF:
+        coarse = str(fallback_regime).upper()
+        if coarse in tax.REGIME_LABELS and coarse != regime:
+            notes.append(
+                f"fine regime {regime} confidence {confidence:.2f} < {FINE_MIN_CONF:.2f} "
+                f"(immature) → deferring to coarse regime {coarse}"
+            )
+            regime = coarse
     if regime not in tax.REGIME_LABELS:
         # coarse/unknown live regime → treat as RANGE (sellers' home), size 1
         regime = tax.RANGE
@@ -111,18 +136,18 @@ def route(
         base = _f("RAE_SIZE_LONGVOL", 1.0)
         return RoutingDecision(
             regime, confidence, False, base, [specialist],
-            [f"{regime}: activate {specialist} at size×{base:.2f} (long-vol owns chop)"],
+            [*notes, f"{regime}: activate {specialist} at size×{base:.2f} (long-vol owns chop)"],
         )
 
-    chop_note: Optional[str] = None
     if regime == tax.HIGH_VOL_CHOP and not chop_standdown_enabled():
-        chop_note = "HIGH_VOL_CHOP veto OFF (RAE_CHOP_STANDDOWN=false) → routed as RANGE"
+        notes.append("HIGH_VOL_CHOP veto OFF (RAE_CHOP_STANDDOWN=false) → routed as RANGE")
         regime = tax.RANGE
         owner = tax.REGIME_OWNER.get(regime, "range_seller")
 
     # 1) hard stand-down regimes (nothing wins / fat tails)
     if regime in (tax.HIGH_VOL_CHOP, tax.EVENT):
-        return _stand_down(regime, confidence, f"{regime}: stand down (no edge / fat-tail)")
+        return _stand_down(regime, confidence,
+                           f"{regime}: stand down (no edge / fat-tail)", notes)
 
     # 2) specialist ownership — a strategy only trades the regime(s) it owns
     if specialist is not None:
@@ -133,20 +158,27 @@ def route(
         )
         if not owns:
             return _stand_down(regime, confidence,
-                               f"{specialist} does not own {regime} (owner={owner}) — stand down")
+                               f"{specialist} does not own {regime} (owner={owner}) — stand down",
+                               notes)
 
     # 3) trend needs high confidence (the 498-day study: bare trend calls are 16% precise)
     if regime in (tax.TREND_UP, tax.TREND_DOWN) and confidence < TREND_MIN_CONF:
         return _stand_down(regime, confidence,
-                           f"{regime} confidence {confidence:.2f} < {TREND_MIN_CONF} — likely fakeout, stand down")
+                           f"{regime} confidence {confidence:.2f} < {TREND_MIN_CONF} — likely fakeout, stand down",
+                           notes)
 
     base = REGIME_SIZE.get(regime, 1.0)
+    # Quiet regimes scale with conviction too. An established range earns full size;
+    # a barely-formed one earns a fraction. This is the EM "continuous size, never a
+    # hard block" philosophy applied to the seller's own home regime — previously
+    # RANGE was flat size×1.0 at any confidence, so the sellers were maximally
+    # exposed exactly when the classifier was least sure (2026-07-22).
+    if regime in SELLER_OK_REGIMES and FINE_MIN_CONF > 0:
+        base *= max(0.25, min(1.0, confidence / FINE_MIN_CONF))
     # trend size scales with how far past the confidence gate we are (precision → size)
     if regime in (tax.TREND_UP, tax.TREND_DOWN) and TREND_MIN_CONF < 1.0:
         scale = (confidence - TREND_MIN_CONF) / (1.0 - TREND_MIN_CONF)
         base *= max(0.0, min(1.0, 0.5 + 0.5 * scale))   # 0.5..1.0 across the confident band
     active = [specialist] if specialist else [owner]
-    reasons = [f"{regime}: activate {active[0]} at size×{base:.2f}"]
-    if chop_note:
-        reasons.insert(0, chop_note)
+    reasons = [*notes, f"{regime}: activate {active[0]} at size×{base:.2f}"]
     return RoutingDecision(regime, confidence, False, base, active, reasons)

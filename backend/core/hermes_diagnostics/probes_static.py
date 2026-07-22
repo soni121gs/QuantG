@@ -46,6 +46,41 @@ def _is_active(strat: Dict[str, Any]) -> bool:
     return str(strat.get("status")) in ("live", "active", "paused")  # paused RAE rows still fire via allowlist
 
 
+def _realized_dte(strat: Dict[str, Any], ctx: ProbeContext) -> Any:
+    """Median days-to-expiry this strategy actually traded today, or None.
+
+    Reads the expiry off the short leg of each of the strategy's positions and
+    measures it against that position's own entry date, so the answer is the DTE
+    the trade really had rather than the DTE the config wishes for.
+    """
+    from datetime import datetime as _dt
+
+    from core.spread_builder import dte_from_expiry
+
+    sid = strat.get("id")
+    seen: List[float] = []
+    for pos in list(ctx.closed_today) + list(ctx.open_positions):
+        if pos.get("strategy_id") != sid:
+            continue
+        legs = pos.get("legs") or []
+        expiry = next((l.get("expiry") for l in legs if l.get("role") == "short"), None)
+        expiry = expiry or next((l.get("expiry") for l in legs if l.get("expiry")), None)
+        opened = str(pos.get("created_at") or pos.get("opened_at") or "")[:10]
+        if not expiry or not opened:
+            continue
+        try:
+            _dt.fromisoformat(opened)
+        except ValueError:
+            continue
+        d = dte_from_expiry(expiry, today=opened)
+        if d is not None:
+            seen.append(d)
+    if not seen:
+        return None
+    seen.sort()
+    return seen[len(seen) // 2]
+
+
 def _underlying(strat: Dict[str, Any]) -> str:
     visual = strat.get("visual_config") or {}
     opts = visual.get("options") or {}
@@ -283,7 +318,15 @@ async def tp_reachability_probe(ctx: ProbeContext) -> List[Finding]:
             continue  # hold-to-expiry sellers give theta its full life
         tp = o.get("credit_tp_frac")
         tp = float(tp) if tp is not None else _DEF_TP
-        dte = o.get("target_dte_days") or _ASSUMED_DTE
+        # Judge the DTE the strategy ACTUALLY traded, not the one it declares.
+        # `target_dte_days` is decorative — no selection code reads it — so a
+        # strategy configured for 3 DTE happily opens a 6-DTE contract whenever
+        # that is the nearest expiry, and this probe stayed silent because it
+        # believed the config. That is exactly how the 2026-07-22 book showed
+        # 5 clock-driven exits out of 5 with no reachability finding open.
+        dte, dte_src = _realized_dte(strat, ctx), "realized"
+        if dte is None:
+            dte, dte_src = float(o.get("target_dte_days") or _ASSUMED_DTE), "configured"
         reach = tp_reachability(tp, float(dte), hold)
         if reach["ratio"] >= _TP_REACH_WARN:
             continue
@@ -302,7 +345,9 @@ async def tp_reachability_probe(ctx: ProbeContext) -> List[Finding]:
                              reach["directional_dependence"] * 100),
             evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
                       "underlying": _underlying(strat), "credit_tp_frac": tp,
-                      "time_exit_minutes": hold, "assumed_dte_days": float(dte),
+                      "time_exit_minutes": hold, "dte_days": float(dte),
+                      "dte_source": dte_src,
+                      "configured_target_dte_days": o.get("target_dte_days"),
                       **reach},
             reproduction="theta_reachable_frac = time_exit_minutes / (dte_days * 375); ratio = that / credit_tp_frac",
             suggested_fix="Match hold window, DTE and TP so decay supplies most of the target.",

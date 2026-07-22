@@ -271,3 +271,46 @@ def test_reachability_ratio_rises_with_hold_and_falls_with_dte():
 def test_reachability_handles_zero_dte_without_dividing_by_zero():
     r = tp_reachability(0.5, dte_days=0, hold_minutes=120)
     assert r["ratio"] > 0
+
+
+# --- 2026-07-22: §21.2 theta reachability enforced at build time ---
+
+def test_reachability_vetoes_a_far_expiry_intraday_seller():
+    """A 6-DTE contract over a 300-minute hold can decay ~13% of the credit against
+    a 45% target — the clock, not theta, decides the trade. Refuse to build it."""
+    from datetime import date, timedelta
+    far = (date.today() + timedelta(days=6)).isoformat()
+    chain = [_node(s, pe=n["put_options"], expiry=far)
+             for s, n in ((x["strike_price"], x) for x in _pe_chain())]
+    r = build_credit_spread(chain_nodes=chain, direction="bullish", width_points=200,
+                            short_delta=0.30, tp_frac=0.45, hold_minutes=300,
+                            enforce_cost_floor=False)
+    assert not r["ok"]
+    assert "tp_reachability" in r["reason"]
+    assert r["tp_reachability"]["dte_days"] == 6
+
+
+def test_reachability_passes_near_expiry():
+    from datetime import date, timedelta
+    near = (date.today() + timedelta(days=1)).isoformat()
+    chain = [_node(s, pe=n["put_options"], expiry=near)
+             for s, n in ((x["strike_price"], x) for x in _pe_chain())]
+    r = build_credit_spread(chain_nodes=chain, direction="bullish", width_points=200,
+                            short_delta=0.30, tp_frac=0.45, hold_minutes=300,
+                            enforce_cost_floor=False)
+    assert r["ok"] and r["tp_reachability"]["passed"]
+
+
+def test_reachability_skipped_when_no_hold_window_given():
+    """Research paths and hold-to-expiry sellers pass hold_minutes=None and are exempt."""
+    r = build_credit_spread(chain_nodes=_pe_chain(), direction="bullish", width_points=200,
+                            short_delta=0.30, tp_frac=0.45, enforce_cost_floor=False)
+    assert r["ok"] and r["tp_reachability"] is None
+
+
+def test_dte_from_expiry_parses_the_shapes_the_chain_returns():
+    from core.spread_builder import dte_from_expiry
+    assert dte_from_expiry("2026-07-28", today="2026-07-22") == 6.0
+    assert dte_from_expiry("2026-07-22T00:00:00+00:00", today="2026-07-22") == 0.0
+    assert dte_from_expiry("", today="2026-07-22") is None
+    assert dte_from_expiry("not-a-date", today="2026-07-22") is None
