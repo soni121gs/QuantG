@@ -1,7 +1,8 @@
 # TASKS.md — QuantG Work Queue · Edge Rebuild Program (REBUILT 2026-07-19)
 
 **Read AGENTS.md first (tiers + workflow), CLAUDE.md §20 for the program spec.**
-**This file was rewritten 2026-07-19.** The previous 295KB queue (RES/EM/RAE/IA/IMD/ERL/HIRB campaigns, Priority 0–12) lives in git history (`git log -- TASKS.md`); completed programs are one-liners in ARCHIVE below. Program source: Edge Reports v1–v3 (memory `project_edge_report_v3_full_07_19.md`).
+**Active work: PHASE 5 (below) — everything above it in ERP Phases 0–4 is complete.**
+**This file was rewritten 2026-07-19; Phase 5 appended 2026-07-23.** The previous 295KB queue (RES/EM/RAE/IA/IMD/ERL/HIRB campaigns, Priority 0–12) lives in git history (`git log -- TASKS.md`); completed programs are one-liners in ARCHIVE below. Program source: Edge Reports v1–v3 (memory `project_edge_report_v3_full_07_19.md`).
 
 Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequisite · 🔑 founder decision · (T1/T2/T3) = AGENTS.md model tier
 
@@ -27,7 +28,167 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 
 ---
 
-## PHASE 0 — CLEANUP & GUARDRAILS (~1 wk) — start here
+## PHASE 5 — TRUTHFUL INSTRUMENTS & BREADTH (added 2026-07-23) ⇦ **START HERE**
+
+**Source:** full-system audit 2026-07-22/23 (loss post-mortem → Hermes findings → self-audit of that
+work → statistics review → wiki/RAG audit). Memory: `project_regime_confidence_and_reachability_07_22.md`.
+
+**The three findings that justify this phase:**
+
+1. **The judge has never computed a variance.** `eod_options_backtest._bucket_metrics` (:508) returns
+   `n / pnl / expectancy / win_rate` and no dispersion — the `pnls` list is right there and never gets a
+   second moment. `walk_forward` (:543) then decides on pure thresholds. **Every verdict QuantG has ever
+   issued** (0/11 strategies, 0/72 configs, QG-O11 `CANDIDATE_EDGE`, QG-O1's §15.5 pass) was made with no
+   notion of variance: `+₹5/trade @ σ=3000` and `+₹500 @ σ=200` are indistinguishable to this code. The one
+   place claiming rigour, `edge_research_ledger.deflated_sharpe` (:79), is `(expectancy / 500.0)` — an
+   arbitrary constant, never touches volatility, so "Deflated **Sharpe**" is a misnomer that cannot detect
+   a high-variance strategy.
+2. **Hermes cannot tell its own lessons from noise.** 19 hypotheses tested, promotion at
+   `correct≥3 AND hit_rate≥0.6` with **no multiple-testing correction** and **no base-rate null** (the book
+   runs 202/558 = **36.2%** win rate). Under a coin-flip null ≈**6** false promotions are expected;
+   **5 lessons are active.** `confidence = hit_rate × sample_factor` is a shrunk effect size wearing a
+   probability's name. These feed `get_hermes_brain_health` and get narrated as learned wisdom.
+3. **The flagship sleeve cannot pass its own gate, and three ✅ tasks hide it.** P1-1 delivered **10**
+   stock names (cron omits `--all-underlyings`; the downloaded file already contains ~180). P1-2 delivered
+   **30** earnings names / 309 events. P3-1's paper gate needs **n≥300 events**. The intersection is
+   10 names × ~4 events/yr × 2.5 yr ≈ **100 events** — the earnings IV-crush flagship, QuantG's only
+   genuine breadth play, is structurally starved by two config constants. Disk is not the blocker
+   (80 GB free; `bhavcopy_fo` is 571 MB today, ~6–9 GB at full universe).
+
+**Money framing (honest):** tracks R/J/K do not make money — they stop the book deploying noise and stop
+Hermes asserting falsehoods. Only track **M** has a mechanism for new P&L, and `M1→M2→M3` is the only path
+in this file to an edge that isn't a re-parameterisation of the one bet the census already killed
+(−₹68,011 / 494 trades). `IR = IC·√BR`; today BR ≈ 1.
+
+**Order:** `M1` (one flag, unblocks everything, backfill runs overnight) → `R1,R2` (live defects) →
+`J1` (highest value-per-hour in the codebase) → rest in parallel.
+
+### Track R — regression repair (my own 2026-07-22 changes; ~2 h total)
+- [ ] **P5-R1** (T3) ⚠️ **LIVE DEFECT — do first in this track.** `core/regime_router.route()`: my
+  coarse-regime fallback rewrites `regime` at the TOP of the function, above every protective guard, which
+  breaks three things at once:
+  **(F)** the `long_vol` guard at :110 — explicitly documented as the 2026-07-21 *"IDX Long-Gamma
+  inversion"* fix — never sees `HIGH_VOL_CHOP`, so the long-gamma sleeve **stands down on the one regime it
+  owns**. Verified: `route(HIGH_VOL_CHOP, 0.40, specialist=long_vol)` = TRADES 1.0; with
+  `fallback_regime=RANGE` = STAND_DOWN. **This is live now** (bites at low confidence, i.e. early session).
+  **(A)** with `RAE_CHOP_STANDDOWN=true` a low-confidence chop day is laundered into RANGE and sellers
+  trade it — a safety veto I silently defeated. **(B)** a low-confidence `TREND_DOWN` + coarse `RANGE`
+  now TRADES: I documented a safety net but implemented a label swap that can *increase* risk.
+  **Fix:** stop rewriting the label. Evaluate `route()` on the fine label and on the coarse label, return
+  the **more conservative** decision (stand_down wins; else `min(size_mult)`), preserving both reason
+  strings. That single restructure fixes A, B and F together.
+  **Acceptance:** new test — long_vol still trades CHOP with a RANGE fallback; chop veto holds when
+  `RAE_CHOP_STANDDOWN=true`; the 2026-07-22 case (fine RANGE/0.40, coarse TREND_DOWN) still stands the
+  seller down; existing 14 router tests green.
+- [ ] **P5-R2** (T2) `geometry_changed_at` epoch is **18.5 h too early**:
+  `scripts/fix_qgo4_costfloor_and_epoch_07_22.py` stamps `2026-07-22T00:00:00Z` but the fix deployed at
+  **18:34Z**, so all six trades opened 04:17–09:20Z **under the old code** count as post-re-cut (hence the
+  finding reading *"1 of them since the re-cut"*). This is precisely the sample-laundering the epoch split
+  was built to prevent. Fix the constant (and prefer stamping apply-time), re-apply, re-run diagnostics.
+  **Acceptance:** `trades_since_change == 0` for QG-O1/QG-O4/QG-O11 until they trade again.
+- [ ] **P5-R3** (T2) `RAE_ROUTER_FINE_MIN_CONF` (0.50) **exceeds** `RANGE_BASE_CONF` (0.40), so the RANGE
+  branch can never clear the maturity test — a 200-bar established range defers exactly like a 10-bar one
+  (verified). The gate I documented does not exist; only the size scaling works. Decide deliberately:
+  lower the threshold (~0.30) or raise `RANGE_BASE_CONF`. **Depends on R1** — once the fallback is
+  conservative-only, an always-on fallback is safe, so this is correctness, not urgency.
+- [ ] **P5-R4** (T1) `core/hermes_diagnostics/probes_static.py:58` imports `dte_from_expiry` inside a
+  function while `core.spread_builder` is already imported at :13 — no circular-import justification,
+  violates CLAUDE.md §9. Move to module scope.
+- [ ] **P5-R5** (T2) **The full test suite has never been run to completion in this work.** ~135 targeted
+  tests pass; `pytest tests/` has only ever timed out. Run it to green, fix or document what falls out
+  (known pre-existing red: `test_trade_frequency.py::…boosted_cap`).
+- [ ] **P5-R6** (T1) Verify the two `options_1m` repairs actually fire — neither has run yet:
+  the 15:35 IST capture flush (window widened + failures now WARN with traceback; previously swallowed at
+  debug, which is how the store went 8 days stale) and the new ingest cron (11:15 UTC weekdays). Check
+  `docker logs | grep "minute capture flush"` and `/var/log/options_1m.log` after the first firing.
+  Minor edge case to note while there: `dte_from_expiry` returns `0.0` for a past expiry, which *passes*
+  reachability rather than flagging it.
+
+### Track J — make the instruments trustworthy (~2 days)
+- [ ] **P5-J1** (T2) ⭐ **Highest value-per-hour in the codebase.** Add σ and a t-stat to
+  `_bucket_metrics` (`core/eod_options_backtest.py:508`) — 4 lines, `pnls` already in hand — and require
+  **|t| ≥ 3** for `CANDIDATE_EDGE` in `walk_forward` (:543). Report `t_stat`/`p_value` on every bucket.
+  **Expect this to re-grade history and demote existing passes — that is the point.** Cross-check QG-O11's
+  "+₹194/trade, PF 5.08" and QG-O1's §15.5 pass under the honest bar.
+- [ ] **P5-J2** (T2) Replace the DSR proxy with a real Deflated Sharpe from stored per-trade returns.
+  `edge_research_ledger.deflated_sharpe` (:66) already declares itself the replacement point
+  (*"when trade-return vectors are stored, this function is the single replacement point"*) and
+  `run()` already returns `trades`. Kill the `/500.0` constant.
+- [ ] **P5-J3** (T2) `core/hermes_lessons.py`: add a **binomial test against the 36.2% book base rate** and
+  a **Šidák/BH correction across the ~19 tested hypotheses** before promotion; make `confidence` calibrated
+  (or rename it `effect_size`). Re-score the 5 active lessons under the corrected bar and record how many
+  survive. **Acceptance:** a lesson indistinguishable from the base rate cannot reach `active`.
+- [ ] **P5-J4** (T2) `phase4_research.calibration_summary` (:336) is a hit-rate tally, not calibration —
+  no confidence bins, no Brier score, no stated prior on the cards. Either make it real (cards carry a
+  numeric prior; score with Brier + reliability bins) or rename it so `get_hermes_brain_health` stops
+  reporting it as calibration.
+- [ ] **P5-J5** (T3) Newey-West / HAC standard errors on the significance tests (returns and vol cluster,
+  so raw errors flatter the signal). Do after J1 — marginal until a t-stat exists at all.
+
+### Track K — truthful knowledge for Hermes & the wiki (~2 days)
+- [ ] **P5-K1** (T2) **Index CLAUDE.md into the RAG.** `research_rag.reindex_all` indexes
+  `wiki/Research/*.md`, `db.wiki_docs`, lessons and OOS verdicts — **CLAUDE.md is not indexed**, so the
+  1,000+ line canonical manual holding every law, pitfall and root cause is invisible to Hermes. Chunk by
+  `##` section with `source_ref=CLAUDE.md §N`. Cheapest large knowledge gain available.
+- [ ] **P5-K2** (T2) **Kill the false-capability notes — the wiki currently teaches Hermes things that are
+  not true.** `wiki/Research/Lopez de Prado Deflated Sharpe.md` asserts *"ERL carries … a DSR proxy"*
+  (it is a scaled expectancy); `Grinold-Kahn Fundamental Law.md` asserts breadth practice while IC is
+  computed nowhere (`grep information_coefficient|spearman` = **0 hits**). Add required frontmatter to
+  every note — `claim_type: measured|literature|aspiration`, `verified: <date>`, `reproduction: <cmd>`
+  (mandatory when `measured`) — and downgrade the false ones to `aspiration` until J1/J2 land, then flip.
+  **0 of 34 notes currently carry any provenance.**
+- [ ] **P5-K3** (T2) **Write the dead-ends register** (`wiki/Research/Dead Ends.md`) — QuantG's most
+  valuable and completely unrecorded knowledge; without it every new agent session re-proposes what you
+  already killed. Seed from existing evidence: option **buyers dead across 5 independent studies**;
+  credit geometry risking 100% of credit for 50% (needs ~67% WR, runs 33–48%); iron condor FRAGILE
+  (0/18 configs → do not build 4-leg infra); GEX/OI dead on NIFTY; FII/DII cash dead (9-yr test);
+  BANKNIFTY impossible as an intraday theta seller at any width (monthly expiry, §21.2); 0-DTE fails the
+  cost floor outright.
+- [ ] **P5-K4** (T2) Auto-generate `wiki/Measured/` **from** code/DB so it cannot drift: current book
+  geometry, lot sizes + expiry cycles, book base rate, friction constant, cost-floor/reachability
+  measurements, store coverage. Generated notes are `claim_type: measured` by construction.
+- [ ] **P5-K5** (T1) `wiki/Trading Rules/`, `wiki/Meeting transcripts/`, `wiki/YouTube transcripts/` are
+  **empty** and `wiki/Decisions/` has **1** file. Populate Trading Rules from CLAUDE.md §21 (both geometry
+  laws + their measurements), §13.5, §14.4, §20.
+- [ ] **P5-K6** (T3) **Hermes can observe but cannot research.** All 37 tools read internal state
+  (`get_external_context` is Google news; `get_historical_context` is past sessions) — there is **no tool
+  to ask a new question of the bhavcopy / index_1m / options_1m stores**, so every hypothesis card needs a
+  human or an agent to run it. That human bottleneck is the research engine's rate limit. Add ONE bounded,
+  read-only, deterministic query tool (fixed verbs, capped rows, no free-form code) and route it through
+  `agent_tool_audit`. **LLM narrates, code computes** stays intact.
+
+### Track M — breadth & money (the only track that can generate P&L)
+- [ ] **P5-M1** (T1) ⭐⭐ **DO FIRST — one flag.** The bhavcopy cron omits `--all-underlyings`, so the
+  store holds **10** stock names (`INFY TCS ICICIBANK RELIANCE LT HDFCBANK KOTAKBANK SBIN AXISBANK
+  BHARTIARTL`) while the downloaded file contains ~180 and the ingest already supports the flag. Add it to
+  the 13:30 cron, backfill 2019→today, verify row counts and store size (~6–9 GB expected, 80 GB free).
+  **Acceptance:** `distinct STO underlyings ≥ 150` on a recent day.
+- [ ] **P5-M2** (T2) Widen the earnings calendar beyond the **top-30** default
+  (`scripts/earnings_calendar_fetch_nse.py`; store has 309 events / 30 symbols) to the full F&O universe,
+  and backfill. **M1 and M2 must both land** — the sleeve trades their intersection.
+- [ ] **P5-M3** (T3) Re-run the P3-1 earnings IV-crush validator on real breadth
+  (`scripts/run_earnings_iv_crush_validation.py`) under the J1 t-stat and J2 DSR. This is the flagship and
+  the only sleeve with a plausible new-edge mechanism. Gate unchanged: n≥300 events, DSR pass, ≥3×
+  cost floor, before any registry paper wake.
+- [ ] **P5-M4** (T3) **Alpha-vs-beta separation — the unanswered question about the whole book.** Build a
+  daily short-vol benchmark from bhavcopy (sell ATM straddle/strangle, held per the book's horizon) and
+  regress each strategy's daily returns on it (plus NIFTY return). Report α, β, t(α). **If β≈1 and α≈0 the
+  seller book is a risk premium you are paying costs to replicate — that finding redirects the entire
+  program.** Ties directly to the §20 census ("one bet expressed 11 ways") and to `IR = IC·√BR`.
+- [ ] **P5-M5** (T3) **Validate the three scoring systems you already built and never checked** — compute
+  IC (rank correlation vs realized forward P&L) for `contract_edge_score`
+  (`core/dynamic_contract_selector.py`), RAE regime confidence, and EdgeMath conviction. An IC ≈ 0 means
+  that machinery is decoration. Also closes the §20 breadth law's dependency on an IC that is computed
+  nowhere.
+- [ ] **P5-M6** (T2) Cost-floor siblings left unfixed on 2026-07-22 (all contained — the build-time floor
+  vetoes them, so this is hygiene not urgency): `idx-nifty-callspread-0001` at **787/lot** (surfaced only
+  after the probe was corrected to measure bankable rather than gross), and RAE SENSEX + IDX SENSEX at
+  **894 < 900**. Same measured lever as QG-O4 (tp 0.50→0.60). ⚠️ The IDX rows are founder-created
+  (`founder_forced_live`) — §21.4 says registry-scoped fixes miss them; confirm before touching.
+
+---
+
+## PHASE 0 — CLEANUP & GUARDRAILS (~1 wk) — done, kept for provenance
 Goal: a small honest book, config-as-data, design-time tripwires. Absorbs QGX INFRA Rung 1.
 
 - [x] **P0-1** (T2) History snapshot before ANY delete: JSON export of `strategies` + `strategy_positions` + `trade_fills` (+ signals counts) to `data/archive/book_snapshot_2026-07/`. Done 2026-07-19 by Codex before purge: VPS snapshot contains 41 strategies, 505 positions, 741 fills, 2472 signals, plus `signal_counts_by_strategy.json` and `manifest.json`.
