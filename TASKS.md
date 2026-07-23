@@ -80,7 +80,7 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   **Acceptance:** new test — long_vol still trades CHOP with a RANGE fallback; chop veto holds when
   `RAE_CHOP_STANDDOWN=true`; the 2026-07-22 case (fine RANGE/0.40, coarse TREND_DOWN) still stands the
   seller down; existing 14 router tests green.
-- [ ] **P5-R2** (T2) `geometry_changed_at` epoch is **18.5 h too early**:
+- [x] **P5-R2** (T2) ✅ DONE 2026-07-23 (epoch 00:00Z→18:02Z; verified trades_since_change==0). `geometry_changed_at` epoch was **18.5 h too early**:
   `scripts/fix_qgo4_costfloor_and_epoch_07_22.py` stamps `2026-07-22T00:00:00Z` but the fix deployed at
   **18:34Z**, so all six trades opened 04:17–09:20Z **under the old code** count as post-re-cut (hence the
   finding reading *"1 of them since the re-cut"*). This is precisely the sample-laundering the epoch split
