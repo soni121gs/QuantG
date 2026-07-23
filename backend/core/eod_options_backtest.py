@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import statistics
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,9 @@ BROKERAGE_PER_LEG = 20.0
 SLIPPAGE_PCT = float(os.environ.get("BACKTEST_SLIPPAGE_PCT", "0.03"))  # adverse, per leg, each side
 MIN_DTE_DAYS = 2   # avoid 0-DTE gamma; give theta room
 MAX_DTE_DAYS = 10  # prefer the near weekly
+# P5-J1: minimum |t-stat| for a positive expectancy to count as a CANDIDATE_EDGE.
+# 3.0 is the standard bar for a NEW signal (article + CLAUDE.md §20). Env-tunable.
+T_STAT_MIN = float(os.environ.get("JUDGE_T_STAT_MIN", "3.0"))
 
 
 def _dte(entry_day: str, expiry: str) -> int:
@@ -506,14 +510,32 @@ class EODOptionsBacktest:
 # ---- walk-forward / OOS verdict --------------------------------------------
 
 def _bucket_metrics(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    pnls = [t["pnl"] for t in trades]
+    """Per-bucket P&L stats INCLUDING dispersion (P5-J1, 2026-07-23).
+
+    Until now this returned n / pnl / expectancy / win_rate and no second moment,
+    so `+₹5/trade at σ=3000` and `+₹500/trade at σ=200` were indistinguishable —
+    every verdict QuantG ever issued was made blind to variance. The t-statistic
+    (`expectancy / standard_error`, H0: expectancy=0) is the honest test of whether
+    a positive expectancy is signal or noise; a per-trade Sharpe is reported too.
+    A single trade has no dispersion, so std/t_stat/sharpe are None then.
+    """
+    pnls = [float(t["pnl"]) for t in trades]
     n = len(pnls)
     if not n:
-        return {"n": 0, "pnl": 0.0, "expectancy": 0.0, "win_rate": 0.0}
+        return {"n": 0, "pnl": 0.0, "expectancy": 0.0, "win_rate": 0.0,
+                "std": 0.0, "t_stat": None, "sharpe": None}
     wins = [p for p in pnls if p > 0]
+    mean = sum(pnls) / n
+    sd = statistics.stdev(pnls) if n > 1 else 0.0          # sample std (ddof=1)
+    se = sd / (n ** 0.5) if (sd > 0 and n > 1) else 0.0
+    t_stat = (mean / se) if se > 0 else None
+    sharpe = (mean / sd) if sd > 0 else None
     return {"n": n, "pnl": round(sum(pnls), 0),
-            "expectancy": round(sum(pnls) / n, 1),
-            "win_rate": round(100 * len(wins) / n, 1)}
+            "expectancy": round(mean, 1),
+            "win_rate": round(100 * len(wins) / n, 1),
+            "std": round(sd, 1),
+            "t_stat": round(t_stat, 2) if t_stat is not None else None,
+            "sharpe": round(sharpe, 3) if sharpe is not None else None}
 
 
 def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -540,11 +562,19 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
     all_years_positive = bool(year_keys) and all(years[y]["pnl"] > 0 for y in year_keys)
     oos_positive = bool(oos_year) and years[oos_year]["expectancy"] > 0
 
-    # verdict
+    # verdict — P5-J1 (2026-07-23): a positive expectancy is not an edge until it is
+    # statistically distinguishable from zero. Serious desks demand |t|>=3 on a NEW
+    # signal (the article's rule; CLAUDE.md §20 overfitting law), so CANDIDATE_EDGE now
+    # requires the overall t-stat to clear JUDGE_T_STAT_MIN on top of the persistence
+    # checks. A positive-but-insignificant result is FRAGILE, not a candidate — this is
+    # the fix for "the winning theta cluster was small-sample illusion".
+    t_overall = overall.get("t_stat")
     if overall["n"] < 30:
         verdict = "INSUFFICIENT_DATA"
     elif overall["expectancy"] <= 0:
         verdict = "NO_EDGE_NEGATIVE"
+    elif t_overall is None or t_overall < T_STAT_MIN:
+        verdict = "FRAGILE"        # positive but not significant — noise, not edge
     elif all_years_positive and oos_positive and pct_green >= 55:
         verdict = "CANDIDATE_EDGE"
     else:
@@ -556,4 +586,5 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
         "by_year": years, "pct_green_months": pct_green,
         "n_months": len(months), "green_months": green_months,
         "all_years_positive": all_years_positive,
+        "t_stat": t_overall, "t_stat_min": T_STAT_MIN,
     }

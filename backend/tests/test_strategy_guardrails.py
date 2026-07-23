@@ -307,3 +307,36 @@ async def test_scorecard_include_empty_shows_active_strategies_but_not_archive()
     assert [row["name"] for row in rows] == ["QG-O1"]
     assert rows[0]["verdict"] == "WATCH"
     assert rows[0]["verdict_reason"] == "awaiting realized paper trades"
+
+
+# --- P5-J1 (2026-07-23): the judge now weighs variance, not just expectancy ---
+
+def test_bucket_metrics_reports_tstat_and_handles_edge_cases():
+    from core.eod_options_backtest import _bucket_metrics
+    tight = _bucket_metrics([{"pnl": p} for p in [500, 480, 520, 510, 490] * 8])
+    assert tight["t_stat"] > 3 and tight["std"] > 0
+    noisy = _bucket_metrics([{"pnl": p} for p in [3000, -2900, 3100, -2800, 50] * 8])
+    assert abs(noisy["t_stat"]) < 3          # same-ish mean, huge variance -> insignificant
+    assert _bucket_metrics([])["t_stat"] is None
+    assert _bucket_metrics([{"pnl": 100}])["t_stat"] is None   # n=1, no dispersion
+
+
+def test_walk_forward_rejects_high_variance_positive_expectancy():
+    """A positive expectancy that is statistically indistinguishable from zero must
+    be FRAGILE, never CANDIDATE_EDGE — the fix for the small-sample illusion."""
+    from core.eod_options_backtest import walk_forward
+
+    def _mk(pnls):
+        out = []
+        for i, p in enumerate(pnls):
+            y = 2024 if i < len(pnls) // 2 else 2025
+            out.append({"pnl": p, "exit_date": f"{y}-{(i % 12) + 1:02d}-15"})
+        return out
+
+    noisy = walk_forward({"trades": _mk([2000, -1900, 2100, -1800, 50] * 10)})
+    assert noisy["overall"]["expectancy"] > 0        # positive on average
+    assert noisy["overall"]["t_stat"] < 3
+    assert noisy["verdict"] == "FRAGILE"
+
+    tight = walk_forward({"trades": _mk([200, 180, 220, 210, 190] * 10)})
+    assert tight["verdict"] == "CANDIDATE_EDGE"       # low variance, persistent -> real
