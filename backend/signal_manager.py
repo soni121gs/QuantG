@@ -953,6 +953,31 @@ async def _dispatch_signal_via_unified_engine(
                 "reason_code": "SPREAD_POSITION_ALREADY_OPEN",
             }
 
+    # A strategy that DECLARES a spread structure must trade a spread or STAND DOWN —
+    # it must never degrade into a naked single leg. When the spread build failed
+    # upstream (a geometry veto — cost-floor / reachability — or a thin chain), the
+    # strategy runner logs "spread-build … skipped" but leaves option_contract as a
+    # single-leg contract (server.py:17906), so both spread branches below are skipped
+    # and the signal would fall through to the single-leg BUYER path — placing a NAKED
+    # directional option, the #1 dead strategy (buyers dead across 5 studies). On
+    # 2026-07-23 the reachability veto turned this rare latent fallback into a constant
+    # one: 7 naked single-leg buys were opened by credit-spread sellers in one morning.
+    # Stand down instead. (Regression-guarded by Hermes probe exec.structure_mismatch.)
+    _declared_struct = str(
+        ((strategy.get("visual_config") or {}).get("options") or {}).get("structure") or ""
+    ).lower()
+    if _declared_struct in ("credit_spread", "debit_spread") and not _oc.get("spread"):
+        _sd_reason = (f"{_declared_struct} not buildable (geometry veto / no candidate) — "
+                      "standing down, no naked single-leg fallback")
+        try:
+            await db.strategies.update_one(
+                {"id": strategy.get("id"), "user_id": user_id},
+                {"$set": {"last_filter_reason": _sd_reason}})
+        except Exception:
+            pass
+        return {"ok": False, "status": "SKIPPED", "reason": _sd_reason,
+                "reason_code": "SPREAD_BUILD_FAILED"}
+
     if _oc.get("structure") == "credit_spread" and _oc.get("spread"):
         from core.spread_builder import CREDIT_SPREADS_ENABLED, lots_for_risk
         from core.spread_lifecycle import open_credit_spread

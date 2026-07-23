@@ -356,3 +356,39 @@ async def test_debit_spread_max_profit_is_not_scaled_again():
         "structure": "debit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
     bankable, _ = await _realized_credit_per_lot(_CreditDB([{"max_profit": 10.0}] * 5), "u1", strat)
     assert round(bankable) == 650   # 10 x 65, no tp scaling
+
+
+# --- 2026-07-23: structure mismatch (spread strategy → naked single leg) -----
+
+@pytest.mark.asyncio
+async def test_structure_mismatch_flags_spread_strategy_holding_single_leg():
+    """The 7-naked-buys bug: a credit-spread SELLER opened single-leg option buys
+    when the spread build was vetoed. Must be CRITICAL."""
+    from core.hermes_diagnostics.probes_execution import structure_mismatch
+    strat = {"id": "s1", "name": "QG Credit",
+             "visual_config": {"options": {"structure": "credit_spread"}}}
+    naked = [{"strategy_id": "s1", "structure": "single_leg", "target_symbol": "NIFTY 24000 CE"},
+             {"strategy_id": "s1", "structure": "single_leg", "target_symbol": "NIFTY 24050 CE"}]
+    out = await structure_mismatch(_ctx(strategies=[strat], open_positions=naked))
+    assert len(out) == 1
+    assert out[0].severity == Severity.CRITICAL
+    assert out[0].evidence["naked_single_leg_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_structure_mismatch_silent_when_spread_holds_a_spread():
+    from core.hermes_diagnostics.probes_execution import structure_mismatch
+    strat = {"id": "s1", "name": "QG Credit",
+             "visual_config": {"options": {"structure": "credit_spread"}}}
+    ok = [{"strategy_id": "s1", "structure": "credit_spread", "target_symbol": "NIFTY spread"}]
+    assert await structure_mismatch(_ctx(strategies=[strat], closed_today=ok)) == []
+
+
+@pytest.mark.asyncio
+async def test_structure_mismatch_ignores_single_leg_declared_strategies():
+    """A trend delta-1 buyer legitimately holds single legs — must not fire."""
+    from core.hermes_diagnostics.probes_execution import structure_mismatch
+    strat = {"id": "s2", "name": "Trend",
+             "visual_config": {"options": {"structure": "single_leg"}}}
+    pos = [{"strategy_id": "s2", "structure": "single_leg", "target_symbol": "NIFTY 24000 CE"}]
+    assert await structure_mismatch(_ctx(strategies=[strat], open_positions=pos)) == []

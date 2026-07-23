@@ -226,3 +226,54 @@ async def spread_mark_staleness(ctx: ProbeContext) -> List[Finding]:
                 suggested_fix="Subscribe legs[].instrument_key to the WS feed at intraday open; position_monitor._leg_ltp.",
             ))
     return out
+
+
+@register("exec.structure_mismatch", kind="dynamic")
+async def structure_mismatch(ctx: ProbeContext) -> List[Finding]:
+    """CRITICAL guard (2026-07-23). A strategy that DECLARES a spread structure must
+    only ever hold spread positions. A SINGLE-LEG position under a credit/debit-spread
+    strategy means the spread build failed (a geometry veto — cost-floor / reachability
+    — or a thin chain) and the signal degraded to a NAKED directional option instead of
+    standing down: a defined-risk seller turned into the #1 dead strategy (option buyers
+    dead across 5 studies). This is exactly what the P5 reachability veto exposed — 7
+    naked single-leg buys opened by credit-spread sellers in one morning. Deterministic:
+    today's opened positions vs the owning strategy's declared structure."""
+    out: List[Finding] = []
+    by_strat: Dict[str, Dict[str, Any]] = {}
+    for pos in list(ctx.closed_today) + list(ctx.open_positions):
+        strat = ctx.strategy_by_id(str(pos.get("strategy_id") or "")) or {}
+        declared = str(
+            ((strat.get("visual_config") or {}).get("options") or {}).get("structure") or ""
+        ).lower()
+        if declared not in _SPREAD_STRUCTS:
+            continue
+        if str(pos.get("structure") or "single_leg").lower() in _SPREAD_STRUCTS:
+            continue  # correctly a spread
+        sid = str(pos.get("strategy_id"))
+        agg = by_strat.setdefault(
+            sid, {"name": strat.get("name"), "declared": declared, "symbols": [], "count": 0})
+        agg["count"] += 1
+        sym = pos.get("target_symbol")
+        if sym and sym not in agg["symbols"]:
+            agg["symbols"].append(sym)
+    for sid, agg in by_strat.items():
+        out.append(Finding(
+            probe_id="exec.structure_mismatch", domain=Domain.EXECUTION,
+            severity=Severity.CRITICAL, entity=sid,
+            title=f"{agg['declared']} strategy opened {agg['count']} naked single-leg position(s) today",
+            detail=("A strategy declared as a defined-risk spread produced naked single-leg "
+                    "option positions. This happens when the spread build fails and the "
+                    "signal path degrades to a single-leg order instead of standing down, "
+                    "turning a defined-risk seller into a naked directional buyer (the #1 "
+                    "dead strategy). A spread strategy must stand down when its spread cannot "
+                    "be built — never place a single leg."),
+            evidence={"strategy_id": sid, "name": agg["name"],
+                      "declared_structure": agg["declared"],
+                      "naked_single_leg_count": agg["count"], "symbols": agg["symbols"][:10]},
+            reproduction=("positions opened today WHERE strategy.visual_config.options.structure "
+                          "in (credit_spread,debit_spread) AND position.structure is single_leg"),
+            suggested_fix=("signal_manager: a spread-declared strategy must return SKIPPED "
+                           "(SPREAD_BUILD_FAILED) when no spread payload is present, never fall "
+                           "through to the single-leg path."),
+        ))
+    return out
