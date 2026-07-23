@@ -125,11 +125,16 @@ def test_fallback_cannot_defeat_the_chop_veto(monkeypatch):
     assert d.stand_down
 
 
-def test_fallback_cannot_launder_a_trend_into_range():
-    """A low-confidence TREND is still a trend — a seller must not trade it just
-    because the coarse regime happens to read RANGE."""
+def test_low_conf_trend_defers_to_mature_coarse_range():
+    """2026-07-23: a LOW-confidence fine trend is noise — when the mature coarse
+    regime says RANGE (the seller's home), the seller trades on the coarse read
+    rather than being suppressed. (The real 07-22 loss had coarse genuinely
+    TREND_DOWN — that still stands down, covered by the range-fallthrough test.)"""
     d = route(tax.TREND_DOWN, 0.30, specialist="range_seller", fallback_regime=tax.RANGE)
-    assert d.stand_down
+    assert not d.stand_down
+    # but a CONFIDENT fine trend is real and still stands the seller down:
+    assert route(tax.TREND_DOWN, 0.90, specialist="range_seller",
+                 fallback_regime=tax.RANGE).stand_down
 
 
 def test_cross_check_never_authorizes_what_the_fine_read_refused():
@@ -137,3 +142,33 @@ def test_cross_check_never_authorizes_what_the_fine_read_refused():
     permissive = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.RANGE)
     checked = route(tax.RANGE, 0.40, specialist="range_seller", fallback_regime=tax.TREND_DOWN)
     assert checked.size_mult <= permissive.size_mult
+
+
+# --- 2026-07-23: symmetric rescue — low-confidence fine trend must not stand a
+# seller down when the mature coarse regime is its home (QG-O1 over-block fix) ---
+
+def test_low_conf_fine_trend_defers_to_owned_coarse_regime():
+    """QG-O1: fine=TREND_UP at 0.03 (noise) stood the range_seller down while coarse
+    was RANGE (its home). It must trade, not be suppressed by noise."""
+    d = route(tax.TREND_UP, 0.03, specialist="range_seller", fallback_regime=tax.RANGE)
+    assert not d.stand_down and d.size_mult > 0
+
+
+def test_high_conf_fine_trend_still_stands_the_seller_down():
+    """A CONFIDENT trend is real — the rescue must not fire above FINE_MIN_CONF."""
+    d = route(tax.TREND_UP, 0.95, specialist="range_seller", fallback_regime=tax.RANGE)
+    assert d.stand_down
+
+
+def test_rescue_never_suppresses_a_trade_only_enables_one():
+    """The rescue only turns a stand-down into a trade — never the reverse."""
+    # fine says trade (owns INSIDE), low conf, coarse RANGE — must still trade
+    d = route(tax.INSIDE_QUIET, 0.10, specialist="range_seller", fallback_regime=tax.RANGE)
+    assert not d.stand_down
+
+
+def test_rescue_does_not_reintroduce_the_longvol_inversion():
+    """long_vol owns CHOP and is never stood down there, so the rescue is moot — it
+    must keep trading chop (guard against re-breaking the 2026-07-21 inversion)."""
+    d = route(tax.HIGH_VOL_CHOP, 0.40, specialist=tax.LONG_VOL_ROLE, fallback_regime=tax.RANGE)
+    assert not d.stand_down

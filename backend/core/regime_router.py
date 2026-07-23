@@ -131,8 +131,11 @@ def route(
     """
     fine_label = str(regime_label or "").upper()
     decision = _route_one(fine_label, confidence, specialist, notes=[])
-
     coarse = str(fallback_regime or "").upper()
+
+    # (a) R1: the fine read RESOLVED to RANGE (its no-signature default). Cross-check
+    # the mature coarse regime and take the MORE CONSERVATIVE — this stands a seller
+    # down when coarse says TREND but the fine defaulted to RANGE (the 2026-07-22 loss).
     if (decision.regime == tax.RANGE and coarse in tax.REGIME_LABELS
             and coarse != tax.RANGE):
         note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to RANGE (the "
@@ -140,6 +143,25 @@ def route(
                 f"the mature coarse regime {coarse}")
         alt = _route_one(coarse, confidence, specialist, notes=[note])
         return _more_conservative(alt, decision)
+
+    # (b) 2026-07-23 symmetric rescue: the fine read is a LOW-CONFIDENCE TREND that
+    # stood this specialist down, while the mature coarse regime is one it DOES own.
+    # A 0.03-confidence "trend" is noise — it must not suppress a validated seller
+    # whose coarse home is RANGE (QG-O1 was stood down 6x this way on 2026-07-23,
+    # while trend SPECIALISTS need 0.90 confidence to act — an asymmetry). Scoped to
+    # TRENDS only: a low-confidence CHOP still warns of whipsaw (asymmetric downside
+    # for a seller), so the chop veto is left intact. This ONLY turns an off-regime
+    # stand-down into a trade; it never suppresses one, so it can only reduce
+    # over-blocking, never add risk. The real 07-22 loss (coarse genuinely TREND_DOWN)
+    # is unaffected — there the coarse is NOT owned, so `alt` also stands down.
+    if (decision.stand_down and confidence < FINE_MIN_CONF
+            and fine_label in (tax.TREND_UP, tax.TREND_DOWN)
+            and coarse in tax.REGIME_LABELS and coarse != fine_label):
+        note = (f"fine regime {fine_label} confidence {confidence:.2f} < {FINE_MIN_CONF} "
+                f"(noise) stood {specialist} down; deferring to the mature coarse regime {coarse}")
+        alt = _route_one(coarse, confidence, specialist, notes=[note])
+        if not alt.stand_down:
+            return alt
     return decision
 
 

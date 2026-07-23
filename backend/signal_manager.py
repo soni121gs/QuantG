@@ -1538,6 +1538,24 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                         {"id": sig["strategy_id"], "user_id": user_id},
                                         {"$set": {"last_signal_at": now_str, "last_signal_validated": True}, "$inc": {"order_count_today": 1}}
                                     )
+                                else:
+                                    # 2026-07-23: surface the skip reason on the STRATEGY too, not
+                                    # only on the signal + event store. Every dispatch-boundary skip
+                                    # (RAE router stand-down, RES-2 gate, sizing, greeks, daily-loss,
+                                    # preflight) flows through here; without this the strategy's
+                                    # last_filter_reason stays stale/"(none)" and it looks silently
+                                    # idle — QG-O1 was skipped 18x in one session invisibly this way.
+                                    _skip_human = ((signal_update.get("rejection_detail") or {}).get("human_reason")
+                                                   or signal_update.get("rejection_reason")
+                                                   or "skipped at execution boundary")
+                                    try:
+                                        await db.strategies.update_one(
+                                            {"id": sig["strategy_id"], "user_id": user_id},
+                                            {"$set": {"last_filter_reason": str(_skip_human)[:300],
+                                                      "last_skip_reason_code": signal_update.get("rejection_reason"),
+                                                      "last_signal_validated": False}})
+                                    except Exception:
+                                        pass
                             except Exception as exec_err:
                                 logger.warning(f"Signal {sig['id']} skipped by execution boundary: {exec_err}")
                                 await db.signals.update_one(

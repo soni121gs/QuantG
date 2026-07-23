@@ -392,3 +392,22 @@ async def test_structure_mismatch_ignores_single_leg_declared_strategies():
              "visual_config": {"options": {"structure": "single_leg"}}}
     pos = [{"strategy_id": "s2", "structure": "single_leg", "target_symbol": "NIFTY 24000 CE"}]
     assert await structure_mismatch(_ctx(strategies=[strat], open_positions=pos)) == []
+
+
+# --- 2026-07-23: unexplained-skip observability guard ------------------------
+
+@pytest.mark.asyncio
+async def test_unexplained_skips_flags_blank_reason():
+    from core.hermes_diagnostics.probes_execution import unexplained_skips
+    sigs = [{"strategy_id": "s1", "status": "SKIPPED_SIGNAL"} for _ in range(4)]  # no reason
+    out = await unexplained_skips(_ctx(strategies=[{"id": "s1", "name": "X"}], signals_today=sigs))
+    assert len(out) == 1 and out[0].severity == Severity.HIGH
+    assert out[0].evidence["unexplained_skips"] == 4
+
+
+@pytest.mark.asyncio
+async def test_unexplained_skips_silent_when_reason_recorded():
+    from core.hermes_diagnostics.probes_execution import unexplained_skips
+    sigs = [{"strategy_id": "s1", "status": "SKIPPED_SIGNAL", "rejection_reason": "RES2_GATE_BLOCKED",
+             "rejection_detail": {"human_reason": "IV not rich"}} for _ in range(5)]
+    assert await unexplained_skips(_ctx(strategies=[{"id": "s1"}], signals_today=sigs)) == []

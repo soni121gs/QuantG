@@ -277,3 +277,45 @@ async def structure_mismatch(ctx: ProbeContext) -> List[Finding]:
                            "through to the single-leg path."),
         ))
     return out
+
+
+@register("exec.unexplained_skips", kind="dynamic")
+async def unexplained_skips(ctx: ProbeContext) -> List[Finding]:
+    """Observability regression guard (2026-07-23). A signal skipped with NO recorded
+    reason is invisible on the dashboard — the strategy looks silently idle. QG-O1 was
+    skipped 18x in one session with last_filter_reason '(none)', hiding both a
+    legitimate gate (RES-2) and an over-block (router). Every skip MUST carry a
+    reason_code + human_reason. Flags a strategy with skipped signals today whose reason
+    is blank/unrecorded."""
+    by_strat: Dict[str, int] = {}
+    for g in ctx.signals_today:
+        if str(g.get("status")) not in ("SKIPPED_SIGNAL", "SKIPPED"):
+            continue
+        rc = g.get("rejection_reason") or (g.get("rejection_detail") or {}).get("reason_code")
+        hr = (g.get("rejection_detail") or {}).get("human_reason")
+        if rc and hr:
+            continue  # properly recorded — nothing to flag
+        sid = str(g.get("strategy_id") or "")
+        by_strat[sid] = by_strat.get(sid, 0) + 1
+    out: List[Finding] = []
+    for sid, n in by_strat.items():
+        if n < 3:
+            continue
+        strat = ctx.strategy_by_id(sid) or {}
+        out.append(Finding(
+            probe_id="exec.unexplained_skips", domain=Domain.EXECUTION,
+            severity=Severity.HIGH, entity=sid,
+            title=f"{n} signals skipped today with NO recorded reason",
+            detail=("Signals were skipped without a reason_code or human_reason, so the "
+                    "strategy shows no explanation for being idle — it looks silently "
+                    "stuck when it may be legitimately gated or wrongly over-blocked. "
+                    "Every skip must record why, on the signal and on the strategy's "
+                    "last_filter_reason, or a real block hides in plain sight."),
+            evidence={"strategy_id": sid, "name": strat.get("name"), "unexplained_skips": n},
+            reproduction=("signals today status SKIPPED_SIGNAL WHERE rejection_reason is blank "
+                          "AND rejection_detail.human_reason is blank"),
+            suggested_fix=("signal_manager dispatch boundary must set rejection_reason + "
+                           "rejection_detail.human_reason AND strategy.last_filter_reason on "
+                           "every skip path."),
+        ))
+    return out
