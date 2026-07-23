@@ -53,7 +53,16 @@ if _BACKEND_DIR not in sys.path:
 
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
-EPOCH_AT = "2026-07-22T00:00:00+00:00"
+# P5-R2 (2026-07-23): this was "2026-07-22T00:00:00+00:00" — MIDNIGHT, which is
+# BEFORE that day's market session, so all six 07-22 trades (opened 04:17-09:20Z)
+# were mis-counted as POST-change and the persistent-loss split read "1 of them
+# since the re-cut". That is exactly the sample-laundering the epoch split exists to
+# prevent. The boundary must sit AFTER the last old-code trade and BEFORE the next
+# session: the geometry fix (commit d34b7ce) landed 18:02Z, well after the 07-22
+# close (10:00Z / 15:30 IST) and after the last trade (09:20Z), so no 07-22 trade
+# ran the new machine. A fixed constant (not now()) keeps the script idempotent; a
+# re-run rewrites the stale midnight value to this correct one.
+EPOCH_AT = "2026-07-22T18:02:31+00:00"   # commit d34b7ce commit-time (UTC)
 EPOCH_NOTE = ("regime-confidence fix + theta-reachability guard "
               "(commit d34b7ce) — all earlier trades ran the pre-fix machine")
 
