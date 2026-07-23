@@ -63,6 +63,20 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
 **Order:** `M1` (one flag, unblocks everything, backfill runs overnight) → `R1,R2` (live defects) →
 `J1` (highest value-per-hour in the codebase) → rest in parallel.
 
+### Track X — emergent live-session fixes (2026-07-23, not originally listed) ✅ SHIPPED
+- [x] **P5-X1** Credit-spread strategies were opening NAKED single-leg option buys when the spread build
+  failed (a geometry veto left `option_contract` single-leg → fell through to the buyer path). The
+  reachability veto turned this rare latent bug into a constant one — 7 naked buys by credit sellers in one
+  morning. Fix: `signal_manager` returns SKIPPED (`SPREAD_BUILD_FAILED`) when a spread-declared strategy has
+  no spread payload — stand down, never degrade to a single leg. **Deployed + verified LIVE in-market**
+  (0 naked buys post-deploy; strategy reason shows "standing down, no naked single-leg fallback").
+- [x] **P5-X2** Hermes blind spot: it filed 0 execution findings while 7 naked buys sat in the book. New
+  CRITICAL probe `exec.structure_mismatch` flags any spread-declared strategy holding a single-leg position.
+  Deployed + verified: catches all 7 (QG-O11 ×3, IDX NIFTY ×3, IDX SENSEX ×1). 3 probe tests.
+- [x] **P5-X3** (07-22) Static probes hardened: `static.cost_floor` measured GROSS credit not bankable
+  (`tp_frac×credit×lot`) — was ~1/tp_frac too permissive, hiding QG-O1 (1.85×) and QG-O11 (1.61×) sub-floor
+  violations; `persistent_live_loss` now splits at `geometry_changed_at` but never resolves on it.
+
 ### Track R — regression repair (my own 2026-07-22 changes; ~2 h total)
 - [x] **P5-R1** (T3) ✅ DONE 2026-07-23 — ⚠️ **LIVE DEFECT — do first in this track.** `core/regime_router.route()`: my
   coarse-regime fallback rewrites `regime` at the TOP of the function, above every protective guard, which
@@ -117,11 +131,11 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   reachability rather than flagging it.
 
 ### Track J — make the instruments trustworthy (~2 days)
-- [ ] **P5-J1** (T2) ⭐ **Highest value-per-hour in the codebase.** Add σ and a t-stat to
-  `_bucket_metrics` (`core/eod_options_backtest.py:508`) — 4 lines, `pnls` already in hand — and require
-  **|t| ≥ 3** for `CANDIDATE_EDGE` in `walk_forward` (:543). Report `t_stat`/`p_value` on every bucket.
-  **Expect this to re-grade history and demote existing passes — that is the point.** Cross-check QG-O11's
-  "+₹194/trade, PF 5.08" and QG-O1's §15.5 pass under the honest bar.
+- [x] **P5-J1** (T2) ✅ DONE 2026-07-23 — `_bucket_metrics` now reports `std`, per-trade `sharpe`, and
+  `t_stat` (expectancy / standard_error); `walk_forward` requires the overall t-stat to clear
+  `JUDGE_T_STAT_MIN` (default 3.0) for `CANDIDATE_EDGE`, else FRAGILE. Verified: same-sign expectancy,
+  t=0.36 (noisy)→FRAGILE vs t=99 (tight)→CANDIDATE. Research-only (never in the live loop). 9 guardrail
+  + 24 affected tests green. Commit pushed; real-book re-grade run in progress (feeds P5-M3).
 - [ ] **P5-J2** (T2) Replace the DSR proxy with a real Deflated Sharpe from stored per-trade returns.
   `edge_research_ledger.deflated_sharpe` (:66) already declares itself the replacement point
   (*"when trade-return vectors are stored, this function is the single replacement point"*) and
@@ -170,14 +184,14 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   `agent_tool_audit`. **LLM narrates, code computes** stays intact.
 
 ### Track M — breadth & money (the only track that can generate P&L)
-- [~] **P5-M1** (T1) ✅ CODE+VERIFIED, backfill running 2026-07-22 — ⭐⭐ **DO FIRST — one flag.** The bhavcopy cron omits `--all-underlyings`, so the
-  store holds **10** stock names (`INFY TCS ICICIBANK RELIANCE LT HDFCBANK KOTAKBANK SBIN AXISBANK
-  BHARTIARTL`) while the downloaded file contains ~180 and the ingest already supports the flag. Add it to
-  the 13:30 cron, backfill 2019→today, verify row counts and store size (~6–9 GB expected, 80 GB free).
-  **Acceptance:** `distinct STO underlyings ≥ 150` on a recent day.
-- [~] **P5-M2** (T2) ✅ CODE, backfill queued behind M1 — Widen the earnings calendar beyond the **top-30** default
-  (`scripts/earnings_calendar_fetch_nse.py`; store has 309 events / 30 symbols) to the full F&O universe,
-  and backfill. **M1 and M2 must both land** — the sleeve trades their intersection.
+- [x] **P5-M1** (T1) ✅ DONE 2026-07-23 — the `nse` F&O source no longer whitelists 10 stock names (empty
+  set = keep every F&O underlying; instr-type filter still restricts to IDO/IDF/STO/STF). Full 2019→2026
+  backfill (`--overwrite`) completed on the VPS. **Acceptance cleared: 210 distinct STO underlyings** on a
+  recent day (was 10); store 571 MB → 1.3 GB.
+- [x] **P5-M2** (T2) ✅ DONE 2026-07-23 — `fno_universe_from_store()` derives the earnings universe from
+  stocks that actually have options in the bhavcopy store (not a hand-maintained top-30), wired into the CLI
+  default + Saturday scheduler. Backfill complete: **211 symbols / 3,062 events** (was 30 / 309). The
+  earnings sleeve's n≥300 gate is now reachable.
 - [ ] **P5-M3** (T3) Re-run the P3-1 earnings IV-crush validator on real breadth
   (`scripts/run_earnings_iv_crush_validation.py`) under the J1 t-stat and J2 DSR. This is the flagship and
   the only sleeve with a plausible new-edge mechanism. Gate unchanged: n≥300 events, DSR pass, ≥3×
