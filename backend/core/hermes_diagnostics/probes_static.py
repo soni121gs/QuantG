@@ -333,7 +333,11 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
                           "underlying": _underlying(strat), "expected_edge_per_lot": round(edge, 1),
                           "source": source, "sample_size": sample,
                           "round_trip_cost_per_lot": round(friction, 1),
-                          "friction_basis": ("premium_proportional" if legs_ctx[0] else "flat_constant"),
+                          # Report what BOUND, not merely what was available: the flat
+                          # constant is a lower bound, so legs being known does not mean
+                          # the proportional term won.
+                          "friction_basis": ("premium_proportional"
+                                             if friction > _DEFAULT_ROUND_TRIP_COST else "flat_floor"),
                           "avg_leg_premium_sum": (round(legs_ctx[0], 2) if legs_ctx[0] else None),
                           "required_floor": round(floor, 1),
                           "multiple": round(edge / friction, 2) if friction else None},
