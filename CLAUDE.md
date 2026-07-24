@@ -1122,3 +1122,59 @@ these, including the exact 0.027 / 220% signature and the 360-signal / 1-trade s
 **Standing caveat (unchanged):** none of this creates edge. It removes defects that made the
 book undiagnosable and the judges unrunnable. Every strategy in the book still grades
 `NO_EDGE_NEGATIVE` or `INSUFFICIENT_DATA`. `CORE_ENGINE_LIVE_ENABLED=false`.
+
+### 22.7 Second pass (2026-07-25) — adversarial re-audit found the ROOT cause + 2 regressions
+The §22.1 fix was correct but stopped one level short, and two of the §22 fixes
+introduced regressions. Found by re-auditing the fixes themselves.
+
+- **THE ROOT CAUSE: the capture tick listeners are orphaned by the daily OAuth reconnect.**
+  They were attached ONCE, 8 s after boot, in `_subscribe_open_position_tokens_on_startup`.
+  The founder's every-morning Upstox reconnect calls `get_user_upstox_gateway(fresh=True)`,
+  which builds a new `UpstoxGateway` → new `UpstoxMarketDataFeedV3` with an EMPTY
+  `_tick_listeners`. Nothing re-attached. **The live 1-minute capture has therefore never
+  written a file in its life** — every `index_1m`/`options_1m` file on disk is T+2 backfill
+  from the ingest cron (all exactly 376 lines; a live flush would be gappy and stamped
+  ~15:35). That is why `LiveIndexCapture._bars` was empty and the classifier saw only the
+  3 leaked open bars. Fix: `_attach_capture_listeners(gateway)` on every ticker (re)start.
+  **Law: a listener attached to an object that gets rebuilt must be re-attached where the
+  object is rebuilt, not once at boot.**
+- **REGRESSION (mine): closing the leak made the stale-regime problem worse.** With the
+  buffer genuinely empty, `snapshot_minutes` returns 0 rows → the scheduler's
+  `if len(_bars) < 3: continue` skips the write → `market_regime_state` keeps its LAST
+  value forever (it only ever `$set`s). 07-24 closed on NIFTY `TREND_UP confidence 1.0`,
+  so the router would have traded Monday on Friday's label **at full confidence** — worse
+  than the 0.027 it replaced, which at least advertised its ignorance. `signal_manager`
+  now honours a fine regime only if `regime_fine_at` is today (IST).
+- **REGRESSION (mine): interning `BhavcopyStore` froze the day index.** One instance per
+  process meant `self._days` was cached for the process lifetime, so a newly-ingested
+  bhavcopy day was invisible until restart — on the per-signal `entry_gate` path. Now
+  TTL'd (`BHAVCOPY_DAYS_TTL_SEC` 900 s), reset in `clear_caches`, and `__new__`/`__init__`
+  are lock-guarded (these stores are built inside `asyncio.to_thread` workers).
+- **Edge Lab was permanently wedged**, not merely slow: `status:"building"` is written to
+  the DB before the task starts while the completion flag is process-memory only, so a
+  build that dies with the process leaves the doc "building" forever AND the UI disables
+  its own Rebuild button. Both stored snapshots had been stuck since 07-18/07-21 — **no
+  completed Edge Lab snapshot has ever existed.** Now aged out to `failed` after
+  `EDGE_LAB_BUILD_TIMEOUT_SEC`.
+- **`/api/core/signals` 500'd on 100% of calls** since extraction (`96e2106`): no
+  `{"_id": 0}` projection, and all 3,839 signal docs carry a BSON ObjectId. The one screen
+  showing WHY a strategy skipped was unreachable on the day 359 of 360 signals were skips.
+
+### 22.8 Measured feasibility envelope for an intraday NIFTY credit seller
+96 real sessions, short leg picked by **Black-Scholes delta 0.30** (an OTM-% proxy
+understates near-expiry credit and gives the wrong answer — it said 22% where the real
+number is 72%). Build rate = clears BOTH §21 laws at a 300-min hold:
+
+| DTE (NIFTY weekday) | width 4 / tp 0.45 | width 8 / tp 0.30 | binding constraint |
+|---|---|---|---|
+| 0 (Tue) | 14% | 5% | cost floor — credit collapses to ~₹9 |
+| **1 (Mon)** | **72%** | 56% | — |
+| 4 (Fri) | 0% | **94%** | reachability at tp 0.45 (0.44) |
+| 5 (Thu) | 0% | 0% | reachability (max 0.53 even at tp 0.30) |
+| 6 (Wed) | 0% | 0% | reachability (max 0.44) |
+
+**The current book geometry is a MONDAY geometry.** Wed/Thu are infeasible at any tested
+width/tp with a 300-min hold; Friday needs width 8 + tp 0.30. This — not a bug — is why
+2026-07-24 (a Friday, NIFTY 4 DTE / SENSEX 6 DTE) produced 279 build vetoes. Corrections
+to §22.6: on NIFTY/BANKNIFTY the **cost floor** is the more FREQUENT veto (452 vs 308) though
+reachability is the BINDING one, and SENSEX that day was 6 DTE, not 4.
