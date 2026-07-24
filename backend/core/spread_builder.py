@@ -39,7 +39,21 @@ CREDIT_SPREAD_WIDTH_STRIKES = int(os.environ.get("CREDIT_SPREAD_WIDTH_STRIKES", 
 # thin is negative-expectancy before the market moves, so refuse to build it.
 CREDIT_SPREAD_MIN_CREDIT_RATIO = float(os.environ.get("CREDIT_SPREAD_MIN_CREDIT_RATIO", "0.12"))
 # Modeled round-trip friction per lot (slippage on 4 legs + brokerage + taxes).
+# FLOOR ONLY, not the whole model. Real friction is PROPORTIONAL to premium, and a
+# flat constant misprices every instrument that is not NIFTY. Measured over 123
+# closed July spreads (slippage + real charges, per lot):
+#     NIFTY     Rs  303   -> 1.01x the constant   (the constant was fitted here)
+#     SENSEX    Rs  240   -> 0.80x                (conservative)
+#     BANKNIFTY Rs 1271   -> 4.24x  UNDER-CHARGED
+# So every BANKNIFTY credit spread was clearing a bar set at a quarter of its true
+# cost. Third instance of the §21.5 "probe under-measures" class. Friction is now
+# derived from the legs when they are known, with the constant as a lower bound for
+# the fixed part (brokerage/taxes) and for callers with no leg context.
 SPREAD_ROUND_TRIP_COST_PER_LOT = float(os.environ.get("SPREAD_ROUND_TRIP_COST_PER_LOT", "300"))
+# Per-leg-transaction slippage. Mirrors spread_lifecycle._apply_paper_slippage, which
+# is what the paper fills actually pay; a round trip crosses 4 leg-transactions
+# (open short+long, close short+long).
+SPREAD_SLIPPAGE_PCT = float(os.environ.get("PAPER_SPREAD_SLIPPAGE_PCT", "0.03"))
 SPREAD_COST_FLOOR_MULT = float(os.environ.get("SPREAD_COST_FLOOR_MULT", "3.0"))
 
 # --- Law 2, theta reachability, enforced at BUILD time (2026-07-22) ----------
@@ -97,12 +111,29 @@ def tp_reachability(tp_frac: float, dte_days: float, hold_minutes: float) -> Dic
     }
 
 
+def round_trip_friction(leg_premium_sum: Optional[float], lot_size: Optional[int]) -> float:
+    """Modeled round-trip friction for ONE lot of a two-leg spread.
+
+    THE single definition of friction — the build-time enforcement and the Hermes
+    `static.cost_floor` probe both call this, so they cannot drift apart (§21.5:
+    when a probe and an enforcement point encode the same law they must share the
+    arithmetic). A round trip crosses 4 leg-transactions, each paying
+    SPREAD_SLIPPAGE_PCT of that leg's premium; the flat constant is the lower bound
+    for the fixed part (brokerage/taxes) and for callers with no leg context.
+    """
+    if not leg_premium_sum or not lot_size:
+        return SPREAD_ROUND_TRIP_COST_PER_LOT
+    modeled = 2.0 * SPREAD_SLIPPAGE_PCT * float(leg_premium_sum) * int(lot_size)
+    return max(SPREAD_ROUND_TRIP_COST_PER_LOT, modeled)
+
+
 def credit_cost_floor(
     net_credit: float,
     width_points: float,
     *,
     lot_size: Optional[int] = None,
     tp_frac: float = 1.0,
+    leg_premium_sum: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Judge a candidate credit spread against the ERP cost-floor law.
 
@@ -127,7 +158,14 @@ def credit_cost_floor(
     }
     out["passed"] = out["ratio_passed"]
     if lot_size:
-        friction = SPREAD_ROUND_TRIP_COST_PER_LOT
+        # Proportional when the legs are known: 4 leg-transactions per round trip,
+        # each crossing SPREAD_SLIPPAGE_PCT of that leg's premium. The flat constant
+        # remains a lower bound (brokerage/taxes barely scale with premium).
+        friction = round_trip_friction(leg_premium_sum, lot_size)
+        out["friction_basis"] = (
+            "premium_proportional" if friction > SPREAD_ROUND_TRIP_COST_PER_LOT
+            else ("flat_floor" if leg_premium_sum else "flat_floor_no_leg_context")
+        )
         floor = SPREAD_COST_FLOOR_MULT * friction
         achievable = max(0.0, min(1.0, float(tp_frac or 1.0))) * credit * int(lot_size)
         out.update({
@@ -286,7 +324,10 @@ def build_credit_spread(
     # ERP cost-floor law: veto structurally negative-expectancy geometry here, at
     # the single choke point every credit spread passes through, rather than
     # letting it reach the order path and be discovered in the P&L.
-    floor = credit_cost_floor(net_credit, actual_width, lot_size=lot_size, tp_frac=tp_frac)
+    floor = credit_cost_floor(
+        net_credit, actual_width, lot_size=lot_size, tp_frac=tp_frac,
+        leg_premium_sum=short_leg["premium"] + long_leg["premium"],
+    )
     if enforce_cost_floor and not floor["passed"]:
         _detail = ""
         if "achievable_gross_profit" in floor and not floor.get("floor_passed"):

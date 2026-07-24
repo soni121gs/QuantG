@@ -325,7 +325,7 @@ async def test_cost_floor_scales_realized_credit_by_take_profit():
     strat = {"id": "s1", "visual_config": {"options": {
         "structure": "credit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
     db = _CreditDB([{"net_credit": 18.97}] * 5)
-    bankable, n = await _realized_credit_per_lot(db, "u1", strat)
+    bankable, n, _legs = await _realized_credit_per_lot(db, "u1", strat)
     assert n == 5
     assert round(bankable) == round(18.97 * 65 * 0.45)   # 555, not the gross 1233
 
@@ -354,7 +354,7 @@ async def test_debit_spread_max_profit_is_not_scaled_again():
     from core.hermes_diagnostics.probes_static import _realized_credit_per_lot
     strat = {"id": "s1", "visual_config": {"options": {
         "structure": "debit_spread", "underlying": "NIFTY", "credit_tp_frac": 0.45}}}
-    bankable, _ = await _realized_credit_per_lot(_CreditDB([{"max_profit": 10.0}] * 5), "u1", strat)
+    bankable, _, _lg = await _realized_credit_per_lot(_CreditDB([{"max_profit": 10.0}] * 5), "u1", strat)
     assert round(bankable) == 650   # 10 x 65, no tp scaling
 
 

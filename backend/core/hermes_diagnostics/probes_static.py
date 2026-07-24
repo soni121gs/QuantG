@@ -10,7 +10,7 @@ import os
 from typing import Any, Dict, List
 
 from core.market_domains import contract_spec_for_underlying
-from core.spread_builder import tp_reachability
+from core.spread_builder import tp_reachability, round_trip_friction as _round_trip_friction
 from core.hermes_diagnostics.contract import Finding, Domain, Severity
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
@@ -251,13 +251,30 @@ async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any])
     if epoch:
         q["created_at"] = {"$gte": str(epoch)}
     try:
-        cur = db.strategy_positions.find(q, {field: 1}).sort("closed_at", -1).limit(40)
-        vals = [float(p[field]) async for p in cur if p.get(field)]
+        cur = db.strategy_positions.find(q, {field: 1, "legs": 1}).sort("closed_at", -1).limit(40)
+        vals, prem_sums = [], []
+        async for p in cur:
+            if not p.get(field):
+                continue
+            vals.append(float(p[field]))
+            # Realized leg premiums -> proportional friction (see round_trip_friction).
+            legs = [l for l in (p.get("legs") or []) if isinstance(l, dict)]
+            s = 0.0
+            for leg in legs:
+                px = leg.get("entry_price") or leg.get("average_price") or leg.get("premium")
+                try:
+                    s += abs(float(px))
+                except (TypeError, ValueError):
+                    s = 0.0
+                    break
+            if s > 0:
+                prem_sums.append(s)
     except Exception:  # noqa: BLE001
         return None
     if len(vals) < 3:
         return None  # thin evidence -> silence, never a HIGH finding on a guess
     per_unit = sum(vals) / len(vals)
+    avg_prem = (sum(prem_sums) / len(prem_sums)) if prem_sums else None
     try:
         spec = contract_spec_for_underlying(_underlying(strat)) or {}
         lot = float(spec.get("lot_size") or 0) or 1.0
@@ -272,7 +289,7 @@ async def _realized_credit_per_lot(db: Any, user_id: str, strat: Dict[str, Any])
         except (TypeError, ValueError):
             tp = _DEF_TP
         bankable *= max(0.0, min(1.0, tp))
-    return bankable, len(vals)
+    return bankable, len(vals), (avg_prem, lot)
 
 
 @register("static.cost_floor", kind="static")
@@ -290,7 +307,7 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
         o = _opts(strat)
         if str(o.get("structure")) not in ("credit_spread", "debit_spread", "single_leg") or not _is_active(strat):
             continue
-        source, sample = "declared", None
+        source, sample, legs_ctx = "declared", None, (None, None)
         edge = o.get("expected_edge_per_lot") or o.get("expected_credit_per_lot") or o.get("avg_credit_per_lot")
         try:
             edge = float(edge)
@@ -298,8 +315,10 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
             measured = await _realized_credit_per_lot(ctx.db, ctx.user_id, strat)
             if measured is None:
                 continue  # no declared design number AND no realized evidence
-            edge, sample, source = measured[0], measured[1], "realized"
-        friction = _round_trip_cost(strat)
+            edge, sample, legs_ctx, source = measured[0], measured[1], measured[2], "realized"
+        # Same function the builder enforces with, so probe and enforcement cannot
+        # drift (§21.5). Falls back to the flat constant when legs are unknown.
+        friction = _round_trip_friction(*legs_ctx) if legs_ctx[0] else _round_trip_cost(strat)
         floor = _COST_FLOOR_MULT * friction
         if edge < floor:
             out.append(Finding(
@@ -313,7 +332,10 @@ async def cost_floor(ctx: ProbeContext) -> List[Finding]:
                 evidence={"strategy_id": strat.get("id"), "name": strat.get("name"),
                           "underlying": _underlying(strat), "expected_edge_per_lot": round(edge, 1),
                           "source": source, "sample_size": sample,
-                          "round_trip_cost_per_lot": friction, "required_floor": floor,
+                          "round_trip_cost_per_lot": round(friction, 1),
+                          "friction_basis": ("premium_proportional" if legs_ctx[0] else "flat_constant"),
+                          "avg_leg_premium_sum": (round(legs_ctx[0], 2) if legs_ctx[0] else None),
+                          "required_floor": round(floor, 1),
                           "multiple": round(edge / friction, 2) if friction else None},
                 reproduction="avg net_credit/max_profit of last <=40 CLOSED positions x lot_size vs 3x modeled round-trip friction",
                 suggested_fix="Reject or redesign the geometry until realized credit is at least 3x modeled friction.",

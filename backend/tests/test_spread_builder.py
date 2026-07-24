@@ -237,13 +237,36 @@ def test_cost_floor_can_be_disabled_for_research_paths():
 
 
 def test_dynamic_selector_drops_candidates_that_fail_the_cost_floor():
-    """A vetoed delta must leave the ladder entirely, not merely score low."""
+    """A vetoed delta must leave the ladder entirely, not merely score low.
+
+    Under premium-proportional friction these fixture legs (credit 25 against 85 of
+    leg premium) cannot clear the floor at ANY delta: passing needs
+    tp x credit >= 3 * 2 * slip * leg_premium_sum, i.e. credit/premium >= 0.36 at
+    tp 0.5, and this chain offers 0.29. So the whole ladder empties — and the
+    selector must say so with the binding law named, not merely score everything low.
+    """
     res = select_dynamic_credit_spread(
         chain_nodes=_pe_chain() + _ce_chain(), preferred_direction="bullish",
         width_points=100, minutes_to_close=120, lot_size=65, tp_frac=0.5,
     )
+    assert res["ok"] is False
+    assert res["veto_law"] == "cost_floor"
+    assert res["veto_counts"]["cost_floor"] >= 1
+
+
+def test_cost_floor_passes_when_credit_is_rich_against_leg_premium():
+    """The mirror case: same structure, thin legs. Friction scales with premium, so
+    a spread collecting 30 against 35 of leg premium clears easily."""
+    chain = [
+        _node(22800, pe=_leg("PE|22800", -0.20, 2.5)),
+        _node(22900, pe=_leg("PE|22900", -0.30, 32.5, theta=-10)),
+    ]
+    res = build_credit_spread(chain_nodes=chain, direction="bullish",
+                              width_points=100, short_delta=0.30,
+                              lot_size=65, tp_frac=0.5)
     assert res["ok"] is True
     assert res["cost_floor"]["passed"] is True
+    assert res["cost_floor"]["friction_basis"] == "flat_floor"
 
 
 # --- theta reachability (2026-07-21) -----------------------------------------
