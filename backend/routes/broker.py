@@ -180,9 +180,16 @@ async def delete_broker_key(key_id: str, user=Depends(get_current_user)):
 @router.get("/upstox/data-health")
 async def upstox_data_health(user=Depends(get_current_user)):
     from server import feed_health_status, get_user_settings, get_user_upstox_gateway
-    from core.bhavcopy_store import available_days as bhavcopy_days
+    # bhavcopy exposes coverage as BhavcopyStore().trading_days(), not a module-level
+    # available_days — that name only exists on earnings_calendar. The wrong import
+    # made this endpoint raise ImportError on EVERY call (500 since 2026-07-19), so
+    # the one screen that reports store health was itself dark.
+    from core.bhavcopy_store import BhavcopyStore
     from core.earnings_calendar import available_days as earnings_days
     from core.india_flows import participant_oi_days
+
+    def bhavcopy_days() -> list:
+        return BhavcopyStore().trading_days()
 
     settings = await get_user_settings(user["id"])
     gateway = await get_user_upstox_gateway(user["id"])

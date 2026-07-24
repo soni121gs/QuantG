@@ -605,6 +605,14 @@ async def _run_edge_lab_build(user_id: str) -> None:
         )
     finally:
         _edge_lab_building = False
+        # Release the walk-forward working set. This build touches ~1860 day-slices
+        # per underlying; leaving them resident in the trading process is what took
+        # uvicorn to 9.9 GB and got it OOM-killed nightly (2026-07-23/24).
+        try:
+            from core.bhavcopy_store import BhavcopyStore
+            BhavcopyStore().clear_caches()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @router.get("/edge-lab")

@@ -967,7 +967,9 @@ async def _dispatch_signal_via_unified_engine(
         ((strategy.get("visual_config") or {}).get("options") or {}).get("structure") or ""
     ).lower()
     if _declared_struct in ("credit_spread", "debit_spread") and not _oc.get("spread"):
-        _sd_reason = (f"{_declared_struct} not buildable (geometry veto / no candidate) — "
+        _veto = _oc.get("spread_veto") or {}
+        _sd_detail = _veto.get("reason") or "geometry veto / no candidate"
+        _sd_reason = (f"{_declared_struct} not buildable ({_sd_detail}) — "
                       "standing down, no naked single-leg fallback")
         try:
             await db.strategies.update_one(

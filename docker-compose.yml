@@ -33,6 +33,12 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    # Backstop for the 2026-07-23/24 OOM: an unbounded research cache took uvicorn
+    # to 9.9 GB and the HOST oom-killer chose the process, taking the whole app
+    # down mid-session. A container limit makes a runaway job fail inside its own
+    # cgroup instead of putting the box under global memory pressure.
+    mem_limit: 6g
+    memswap_limit: 6g
     env_file: ./backend/.env
     environment:
       MONGO_URL: mongodb://mongo:27017

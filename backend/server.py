@@ -51,6 +51,7 @@ from brokers.upstox_portfolio_stream import UpstoxPortfolioStream
 import options_helper
 import backtrader_runner
 import strategy_runner
+from position_monitor import _spread_past_expiry, _strategy_holds_to_expiry
 from signal_manager import signal_manager_loop
 from options_delta import OPTION_DELTA_SELECTION_ENABLED, target_delta_for_style, pick_delta_strike
 from option_state_ledger import OptionStateLedger
@@ -16603,6 +16604,20 @@ async def request_upstox_token_refresh_for_user(user_id: str) -> Dict[str, Any]:
         return {"ok": False, "reason": str(e)}
 
 
+async def _hold_to_expiry_positions_due(user_id: str, strategy_id: str) -> bool:
+    """True when a hold-to-expiry strategy has at least one open position that has
+    actually reached its option expiry — the only case where the EOD backstop should
+    close it. Anything unparseable counts as due (never hold a spread indefinitely),
+    matching position_monitor._spread_past_expiry."""
+    rows = await db.strategy_positions.find(
+        {"user_id": user_id, "strategy_id": strategy_id,
+         "status": {"$in": ["PENDING_BROKER", "OPEN", "FILLED"]},
+         "open_quantity": {"$gt": 0}},
+        {"expiry": 1, "legs.expiry": 1, "_id": 0},
+    ).to_list(200)
+    return any(_spread_past_expiry(r) for r in rows)
+
+
 async def _eod_square_off_all_users(spread_phase: bool = False) -> Dict[str, Any]:
     """EXIT GUARANTEE: unconditional EOD square-off of open positions.
 
@@ -16656,6 +16671,16 @@ async def _eod_square_off_all_users(spread_phase: bool = False) -> Dict[str, Any
         sid = pair["_id"].get("strategy_id")
         if not uid or not sid:
             continue
+        # EDR-11 parity: position_monitor deliberately spares a hold-to-expiry spread
+        # at 15:25, and this backstop then closed it at 15:26 — 283 closed spreads,
+        # ZERO overnight holds, one 'expiry-settlement' in all history. That silently
+        # invalidated the reachability exemption build_credit_spread grants those
+        # strategies (theta "gets its full remaining life"). Skip them until the
+        # option's own expiry day, which _spread_past_expiry decides.
+        if spread_phase and await _strategy_holds_to_expiry(db, sid):
+            if not await _hold_to_expiry_positions_due(uid, sid):
+                summary["hold_to_expiry_skipped"] = summary.get("hold_to_expiry_skipped", 0) + 1
+                continue
         try:
             await _close_strategy_positions(uid, sid, reason="eod-square-off")
             summary["strategies_swept"] += 1
@@ -17027,18 +17052,32 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # went 8 days stale (2026-07-14 → 07-22) with nothing in the logs.
             if hour == 15 and minute >= 35 and _index_flush_done_date != today:
                 _index_flush_done_date = today
+                # Outcomes are PERSISTED, not just logged: a WARNING in a rotating
+                # container log is invisible to the daily audit, which is how these
+                # flushes failed on a filesystem permission for days while
+                # data.store_coverage stayed under its staleness bar.
+                _flush_doc: Dict[str, Any] = {"_id": f"capture:{today}", "date": today}
                 try:
                     _ic_res = await asyncio.to_thread(_get_live_index_capture().flush_day, today)
                     logger.info("Index minute capture flush: %s", _ic_res)
-                except Exception:
+                    _flush_doc["index"] = _ic_res
+                except Exception as _icf:
                     logger.warning("Index capture flush failed", exc_info=True)
+                    _flush_doc["index"] = {"error": f"{type(_icf).__name__}: {_icf}"}
                 # IMD-04: flush the day's captured OPTION 1-minute bars for the
                 # contracts the book traded today. Read-only, best-effort.
                 try:
                     _oc_res = await asyncio.to_thread(_get_live_option_capture().flush_day, today)
                     logger.info("Option minute capture flush: %s", _oc_res)
-                except Exception:
+                    _flush_doc["options"] = _oc_res
+                except Exception as _ocf:
                     logger.warning("Option capture flush failed", exc_info=True)
+                    _flush_doc["options"] = {"error": f"{type(_ocf).__name__}: {_ocf}"}
+                try:
+                    await db.capture_flush_runs.replace_one(
+                        {"_id": _flush_doc["_id"]}, _flush_doc, upsert=True)
+                except Exception as _fpe:  # noqa: BLE001
+                    logger.warning("could not persist capture flush result: %s", _fpe)
 
             # 8:50 AM IST — token push + daily paper lifecycle reset
             if hour == 8 and minute == 50 and _token_push_done_date != today:
@@ -17176,6 +17215,18 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
 @app.on_event("startup")
 async def startup():
     global _analytics
+    # Durable restart trail. The backend was OOM-killed and auto-restarted 7 times
+    # across 2026-07-23/24 — once mid-session at 11:24 IST — and nothing recorded it,
+    # so the diagnostics had no way to see that the process had died under them.
+    # `infra.process_restarts` reads this.
+    try:
+        await db.app_starts.insert_one({
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+        })
+    except Exception as _start_err:  # noqa: BLE001
+        logger.warning("could not record app start: %s", _start_err)
+
     _analytics_token = os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip()
     if _analytics_token:
         _analytics = UpstoxAnalyticsClient(_analytics_token)
@@ -17904,6 +17955,14 @@ async def startup():
                                         _spread["short_leg"]["strike"], _spread["long_leg"]["strike"],
                                     )
                                 else:
+                                    # Carry the veto forward so the SKIPPED signal records
+                                    # WHICH law rejected the geometry and by how much,
+                                    # instead of a bare "not buildable".
+                                    contract_payload["spread_veto"] = {
+                                        "reason": _spread.get("reason"),
+                                        "law": _spread.get("veto_law"),
+                                        "counts": _spread.get("veto_counts"),
+                                    }
                                     logger.info("spread-build (credit) skipped (%s): %s", _u, _spread.get("reason"))
                             elif _struct == "debit_spread" and DEBIT_SPREADS_ENABLED:
                                 _spread = build_debit_spread(

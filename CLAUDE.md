@@ -1033,3 +1033,92 @@ Stating a law and enforcing it are different things, and until this date only La
 - **Re-cuts carry an epoch.** `geometry_changed_at` / `geometry_change_note` on the strategy row scope realized-evidence probes to the current shape. `static.cost_floor` falls silent when the post-re-cut sample is thin (§19: thin evidence → silence); `strategy.persistent_live_loss` splits the sample and reports both sides but **never** resolves or downgrades on it — a grading reset is how a losing strategy gets laundered.
 
 **Standing caveat:** satisfying these laws makes a structure FUNDABLE and internally coherent. It does not create edge. Every re-cut shape is UNVALIDATED and owes a judge run + forward-paper per §13.5. `CORE_ENGINE_LIVE_ENABLED=false`.
+
+---
+
+## 22. Full-System Audit Fixes (2026-07-24)
+
+A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
+independent defects, four of them invisible to the Diagnostician. Memory:
+`project_full_system_audit_07_24.md`. All seven fixes shipped together.
+
+### 22.1 The fine regime was NEVER real — cross-index bar leak
+`live_index_capture.snapshot_minutes()` applied the `wanted` underlying filter in its
+`add_row` helper but **not** in the `include_open` branch, so a request for NIFTY also
+returned BANKNIFTY's and SENSEX's open bars. With the completed-bar buffer empty that is
+exactly **3 "bars" at 23700 / 56400 / 75900** → `classify_intraday` → `RANGE`,
+**confidence 0.027**, `ret_pct 220%`. That 0.027 is the number stamped on every skip
+reason that session. Cross-check: NIFTY closed **−0.45%** while
+`market_regime_state.regime_fine` read **TREND_UP confidence 1.0**.
+**The RAE router was never wrong — it was fed garbage.** The 2026-07-22 "immature RANGE"
+loss was diagnosed as a confidence-scaling bug and fixed as one; the input was already
+corrupt. **Pitfall: when a filter is applied in a helper, check every branch that appends
+to the same result list.**
+`flush_day` now isolates failures per underlying and ALWAYS clears the buffer — a raised
+write error used to leave the buffer un-cleared, so the next session mixed two days.
+
+### 22.2 The nightly Edge Lab job OOM-killed the backend
+`Out of memory: Killed process (uvicorn) anon-rss:9885948kB` — **9.9 GB**, `RestartCount=7`,
+including a **mid-session restart at 11:24 IST**. Trigger: the 20:30 IST / 15:00 UTC
+nightly rebuild; restarts followed at 15:04 on both 07-23 and 07-24.
+Two compounding causes:
+1. `bhavcopy_store.rows_for` was `lru_cache(maxsize=4096)` sized by **entry count** on the
+   assumption slices are small. **Measured: a NIFTY day is 1597 rows / 3.76 MB**, BANKNIFTY
+   2.47 MB, `load_day` 90.75 MB → 8–15 GB. Now budgeted in **rows** (`BHAVCOPY_ROWS_CACHE_MB`,
+   default 1024) so entry count floats with the underlying's width.
+2. **`lru_cache` on a METHOD keys on `self`.** With 45 `BhavcopyStore()` construction sites
+   (one on the per-signal path) every instance got its own copy of the cache and was pinned
+   alive by it. The store is now **interned per root**.
+Plus: `_run_edge_lab_build` calls `clear_caches()` in its `finally`, and the container has
+`mem_limit: 6g` so a runaway job fails in its own cgroup instead of the host oom-killer
+choosing the trading process.
+**The Edge Lab was never finishing** (it writes its cache only at the end), which is why
+`edge_lab_snapshots` sat at 07-21 and `strategy_trials` at 07-20. That was the "backtest
+data problem" — a crash, not data.
+
+### 22.3 Hold-to-expiry had NEVER executed — 283 closed spreads, 0 overnight holds
+`position_monitor._process_spread_position` deliberately spares hold-to-expiry spreads at
+15:25 (EDR-11); `_eod_square_off_all_users(spread_phase=True)` then closed them at **15:26**
+with no exemption. One `expiry-settlement` exit in all history.
+This is load-bearing, not cosmetic: `build_credit_spread` waives the §21.2 reachability veto
+for `options.exit_mode=="expiry"` because "theta gets its full remaining life". QG-O1 is the
+only such strategy and was **the only one that could build a spread** — on a promise the
+system broke daily. Its §15.5 OOS pass (QuantG's only pass ever) was for a structure that had
+never once run. The backstop now skips hold-to-expiry strategies until
+`_spread_past_expiry` says a position has actually reached expiry.
+**Rule: if one exit engine grants an exemption, every other exit path must honour it.**
+
+### 22.4 `GET /api/upstox/data-health` 500'd on every call since it shipped
+`ImportError: cannot import name 'available_days' from 'core.bhavcopy_store'`
+(`routes/broker.py`) — that name only exists on `core.earnings_calendar`; bhavcopy exposes
+`BhavcopyStore().trading_days()`. Broken by `50cb129` (2026-07-19), the commit §20.2 credits
+with surfacing data health. **The one screen that reports store health was itself dark.**
+
+### 22.5 The 1-minute capture was failing on filesystem permissions
+`PermissionError` writing `/app/data/index_1m/...` and `options_1m` — root-owned `./data`,
+container runs as uid 999 (the §1 pitfall). Masked for `index_1m` by a root cron backfilling
+a day late; `options_1m` genuinely 3 days behind. `data.store_coverage` used `_STALE_DAYS=6`,
+which spans a weekend plus two working days — now **3** (`HERMES_STORE_STALE_DAYS`).
+
+### 22.6 Observability + the Diagnostician's own blind spots
+- `select_dynamic_credit_spread` discarded every candidate's reason and returned a bare
+  `"no valid dynamic spread candidates"`. It now aggregates per-delta vetoes and reports the
+  dominant law with its numbers; `server.py` carries it to `contract_payload["spread_veto"]`
+  and `signal_manager` puts it in the SKIPPED reason. **279 of 360 signals died undiagnosable.**
+- `infra.overgated_book` — the probe for exactly this question — was muted by
+  **`trades > 0`** (one trade silenced it) AND a 0.8 dominance bar (actual: 279/359 = 0.777).
+  It now judges **conversion rate** (`HERMES_QUIET_CONVERSION`, default 2%) with dominance
+  0.6, at MEDIUM.
+- New probes: **`infra.process_restarts`** (reads `db.app_starts`, written at startup;
+  CRITICAL for a mid-session restart), **`data.capture_flush_failed`** (reads
+  `db.capture_flush_runs`, persisted by the 15:35 scheduler), **`data.store_writable`**
+  (write-tests each store root, catching the permission class *before* a day is lost).
+- **Standing rule: when a probe's guard clause could mute it on the day it matters most,
+  that guard IS the bug.**
+
+Regression guards: `backend/tests/test_audit_fixes_07_24.py` (10 tests) pin every one of
+these, including the exact 0.027 / 220% signature and the 360-signal / 1-trade shape.
+
+**Standing caveat (unchanged):** none of this creates edge. It removes defects that made the
+book undiagnosable and the judges unrunnable. Every strategy in the book still grades
+`NO_EDGE_NEGATIVE` or `INSUFFICIENT_DATA`. `CORE_ENGINE_LIVE_ENABLED=false`.

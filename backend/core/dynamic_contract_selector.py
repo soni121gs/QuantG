@@ -93,6 +93,13 @@ def select_dynamic_credit_spread(
     side_order = ([_pref, ("bearish" if _pref == "bullish" else "bullish")]
                   if _valid else ["bullish", "bearish"])
 
+    # Every rejected delta's reason, so a stand-down is diagnosable. build_credit_spread
+    # returns a precise reason per candidate (cost_floor with the actual ratio,
+    # tp_reachability with DTE/hold/ratio) and this function used to throw all of them
+    # away and report "no valid dynamic spread candidates" — which is how 279 of 360
+    # signals died on 2026-07-24 with no way to tell WHICH law vetoed them, or by how far.
+    vetoes: List[Dict[str, Any]] = []
+
     def _build_side(direction: str) -> List[Dict[str, Any]]:
         out = []
         for target_delta in (0.12, 0.18, 0.24, 0.30, 0.38):
@@ -118,6 +125,15 @@ def select_dynamic_credit_spread(
                     minutes_to_close=minutes_to_close,
                     iv_surface=iv_surface,
                 ))
+            else:
+                vetoes.append({
+                    "direction": direction,
+                    "short_delta": target_delta,
+                    "reason": spread.get("reason"),
+                    "law": ("cost_floor" if spread.get("cost_floor")
+                            else "tp_reachability" if spread.get("tp_reachability")
+                            else "chain"),
+                })
         return out
 
     used_fallback_side = False
@@ -129,7 +145,19 @@ def select_dynamic_credit_spread(
         candidates = _build_side(side_order[1])
         used_fallback_side = bool(candidates)
     if not candidates:
-        return {"ok": False, "reason": "no valid dynamic spread candidates"}
+        by_law: Dict[str, int] = {}
+        for v in vetoes:
+            by_law[v["law"]] = by_law.get(v["law"], 0) + 1
+        dominant = max(by_law.items(), key=lambda kv: kv[1])[0] if by_law else "none"
+        closest = next((v["reason"] for v in vetoes if v["law"] == dominant), None)
+        return {
+            "ok": False,
+            "reason": "no valid dynamic spread candidates — {} of {} deltas vetoed by {} ({})".format(
+                by_law.get(dominant, 0), len(vetoes), dominant, closest or "no candidate built"),
+            "veto_law": dominant,
+            "veto_counts": by_law,
+            "vetoes": vetoes,
+        }
     best = max(candidates, key=lambda row: row["contract_edge_score"])
     best["candidate_count"] = len(candidates)
     best["side_gated"] = True

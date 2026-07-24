@@ -59,18 +59,30 @@ class LiveIndexCapture:
                 self._bars.setdefault(u, []).append(bar)
         written = 0
         rows = 0
+        failed: Dict[str, str] = {}
         for u, bars in self._bars.items():
             candles = [{
                 "timestamp_ist": b.minute_ts, "underlying": u,
                 "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume,
             } for b in bars]
-            if candles:
+            if not candles:
+                continue
+            # Per-underlying isolation: one store failure (e.g. a root-owned ./data
+            # giving the container user EPERM) must not abort the other underlyings
+            # OR leave the buffer unflushed — stale bars carried into the next
+            # session would mix two days and corrupt the regime classifier.
+            try:
                 self.store.write_day(u, date, candles)
                 written += 1
                 rows += len(candles)
+            except Exception as exc:  # noqa: BLE001
+                failed[u] = f"{type(exc).__name__}: {exc}"
+                logger.error("LiveIndexCapture write failed %s %s: %s", u, date, exc, exc_info=True)
         self._bars = {}
-        logger.info("LiveIndexCapture flushed %s index-days (%s bars) for %s", written, rows, date)
-        return {"date": date, "underlyings_written": written, "bars": rows, "ticks_seen": self._ticks}
+        logger.info("LiveIndexCapture flushed %s index-days (%s bars) for %s (failed=%s)",
+                    written, rows, date, len(failed))
+        return {"date": date, "underlyings_written": written, "bars": rows,
+                "ticks_seen": self._ticks, "failed": failed}
 
     def snapshot_minutes(self, underlying: str = None, include_open: bool = True) -> List[Dict[str, Any]]:
         """Return buffered live bars without mutating the EOD flush buffer."""
@@ -98,7 +110,11 @@ class LiveIndexCapture:
         if include_open:
             for key, bar in self.agg._open.items():
                 u = self.map.get(key)
-                if not u:
+                # Must honour `wanted` exactly as add_row does. Without this filter a
+                # request for NIFTY also returned BANKNIFTY's and SENSEX's open bars,
+                # so the regime classifier saw 3 "bars" at 23700/56400/75900 and read
+                # ret_pct=220% at maturity 3/45 -> RANGE confidence 0.027 all session.
+                if not u or (wanted and u != wanted):
                     continue
                 rows.append({
                     "timestamp_ist": bar.minute_ts,

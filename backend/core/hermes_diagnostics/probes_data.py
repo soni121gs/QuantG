@@ -16,7 +16,10 @@ from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
 # A store is "stale" if its newest day is this many CALENDAR days behind the audit
 # date (weekends/holidays give slack; a working cron never lags this much).
-_STALE_DAYS = 6
+# Was 6, which spans a whole weekend plus two working days: on 2026-07-24 the live
+# 1-min capture had been failing on a filesystem permission for days and options_1m
+# sat 3 days behind, still under the bar. 3 covers a Fri->Mon gap and nothing more.
+_STALE_DAYS = int(__import__("os").environ.get("HERMES_STORE_STALE_DAYS", "3"))
 
 
 def _days_behind(last_day: Optional[str], today: str) -> Optional[int]:

@@ -23,17 +23,28 @@ import glob
 import logging
 import os
 from bisect import bisect_left
+from collections import OrderedDict
 from datetime import date as _date
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("quantg.bhavcopy_store")
 
-# Per-(underlying, day) row cache. Sized to hold a full walk-forward for one
-# underlying (~1860 days) so a backtest parses each day once instead of thrashing.
-# Entries are a single underlying's slice (~2-3% of the file), so this is far
-# cheaper in memory than caching whole days.
-_ROWS_FOR_CACHE = int(os.environ.get("BHAVCOPY_ROWS_CACHE", "4096"))
+# Per-(underlying, day) row cache, budgeted in MEMORY not entry count.
+#
+# It was `lru_cache(maxsize=4096)` sized by day-count on the assumption that a
+# per-underlying slice is small. Measured on the real store it is not: one NIFTY
+# day is 1597 rows / 3.76 MB and one BANKNIFTY day 2.47 MB, so 4096 entries is
+# 8-15 GB. The nightly Edge Lab walk-forward filled it and the kernel OOM-killed
+# uvicorn at 9.9 GB on 2026-07-23 and -24, ~3.5 min after the 20:30 IST job began.
+# Row count is a good proxy for bytes (~2.4 KB/row across index and stock rows),
+# so budget in rows and let the entry count float with the underlying's width.
+_ROWS_CACHE_MB = float(os.environ.get("BHAVCOPY_ROWS_CACHE_MB", "1024"))
+_BYTES_PER_ROW = 2400.0
+_ROWS_CACHE_BUDGET = int(_ROWS_CACHE_MB * 1024 * 1024 / _BYTES_PER_ROW)
+# load_day materialises EVERY underlying (~38.6k rows / 90.75 MB per day) and is
+# only used by _coverage; a deep cache of it is pure waste.
+_LOAD_DAY_CACHE = int(os.environ.get("BHAVCOPY_LOAD_DAY_CACHE", "4"))
 
 STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
@@ -49,9 +60,44 @@ def _f(v: Any) -> float:
 
 
 class BhavcopyStore:
+    # Interned per root. `lru_cache` on a METHOD keys on `self`, so every
+    # `BhavcopyStore()` used to get its own copy of the cache AND be pinned alive by
+    # it forever. There are 45 construction sites (one of them, entry_gate, on the
+    # per-signal path), so the same day was cached many times over and nothing was
+    # ever released — the multiplier behind the 9.9 GB OOM. One instance per root
+    # means one shared cache and a stable cache key.
+    _instances: Dict[str, "BhavcopyStore"] = {}
+
+    def __new__(cls, root: str = STORE_ROOT):
+        inst = cls._instances.get(root)
+        if inst is None:
+            inst = super().__new__(cls)
+            inst._initialised = False
+            cls._instances[root] = inst
+        return inst
+
     def __init__(self, root: str = STORE_ROOT):
+        if self._initialised:
+            return
         self.root = root
         self._days: Optional[List[str]] = None  # cached sorted 'YYYY-MM-DD'
+        self._rows_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
+        self._rows_cached = 0  # rows currently held, against _ROWS_CACHE_BUDGET
+        self._initialised = True
+
+    def cache_stats(self) -> Dict[str, Any]:
+        return {"entries": len(self._rows_cache), "rows": self._rows_cached,
+                "budget_rows": _ROWS_CACHE_BUDGET,
+                "approx_mb": round(self._rows_cached * _BYTES_PER_ROW / 1e6, 1)}
+
+    def clear_caches(self) -> None:
+        """Release the row cache. Call after a heavy walk-forward so a batch job
+        does not leave its working set resident in the trading process."""
+        self._rows_cache.clear()
+        self._rows_cached = 0
+        self.load_day.cache_clear()
+        self.underlying_daily.cache_clear()
+        self.option_chain.cache_clear()
 
     # ---- day index -----------------------------------------------------------
     def trading_days(self, start: Optional[str] = None, end: Optional[str] = None) -> List[str]:
@@ -73,7 +119,7 @@ class BhavcopyStore:
         year = day[:4]
         return sorted(glob.glob(os.path.join(self.root, year, f"*{yyyymmdd}.csv.gz")))
 
-    @lru_cache(maxsize=64)
+    @lru_cache(maxsize=_LOAD_DAY_CACHE)
     def load_day(self, day: str) -> tuple:
         """All rows for one trading day (NSE + BSE files merged). Cached; returns a
         tuple so it is hashable/immutable for the lru_cache.
@@ -92,7 +138,6 @@ class BhavcopyStore:
                 logger.warning("bhavcopy read failed %s: %s", path, exc)
         return tuple(rows)
 
-    @lru_cache(maxsize=_ROWS_FOR_CACHE)
     def rows_for(self, underlying: str, day: str) -> tuple:
         """Rows for ONE underlying on ONE day — filtered DURING the scan.
 
@@ -105,8 +150,17 @@ class BhavcopyStore:
 
         The durable fix is a per-underlying slim store written at ingest time; this
         removes the worst of the tax without changing the on-disk layout.
+
+        Cached under a ROW budget (`BHAVCOPY_ROWS_CACHE_MB`), not an entry count —
+        a NIFTY day is 15x heavier than a single-stock day, so a fixed entry count
+        cannot bound memory. See the module header.
         """
         u = underlying.upper()
+        key = (u, day)
+        hit = self._rows_cache.get(key)
+        if hit is not None:
+            self._rows_cache.move_to_end(key)
+            return hit
         out: List[Dict[str, Any]] = []
         for path in self._files_for(day):
             try:
@@ -126,7 +180,13 @@ class BhavcopyStore:
                             out.append(dict(zip(header, row)))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("bhavcopy read failed %s: %s", path, exc)
-        return tuple(out)
+        res = tuple(out)
+        self._rows_cache[key] = res
+        self._rows_cached += len(res)
+        while self._rows_cached > _ROWS_CACHE_BUDGET and len(self._rows_cache) > 1:
+            _, evicted = self._rows_cache.popitem(last=False)
+            self._rows_cached -= len(evicted)
+        return res
 
     # ---- underlying OHLC (from near-month futures) ---------------------------
     @lru_cache(maxsize=16)
