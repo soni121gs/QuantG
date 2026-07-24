@@ -15903,6 +15903,30 @@ async def _start_user_kotak_ticker(user_id: str, symbols: Optional[List[str]] = 
     return {"started": False, "reason": "kotak_neo_removed"}
 
 
+def _attach_capture_listeners(gateway) -> None:
+    """Attach the read-only 1-minute capture listeners to a gateway's live feed.
+
+    MUST be called on every path that starts or restarts a feed, not once at boot.
+    `get_user_upstox_gateway(fresh=True)` — which the daily Upstox OAuth reconnect
+    calls (routes/broker.py) — throws away the gateway AND its UpstoxMarketDataFeedV3,
+    and the new feed starts with an empty `_tick_listeners`. Attaching only in
+    `_subscribe_open_position_tokens_on_startup` meant that from the founder's first
+    morning reconnect onward, NO tick ever reached the capture: `LiveIndexCapture._bars`
+    stayed empty all session, so the fine-regime classifier ran on ~0 bars and every
+    index_1m/options_1m file on disk is T+2 backfill, never live capture.
+
+    `add_tick_listener` de-duplicates, so calling this repeatedly is safe.
+    """
+    feed = getattr(gateway, "_feed_v3", None)
+    if feed is None:
+        return
+    for get_capture in (_get_live_index_capture, _get_live_option_capture):
+        try:
+            feed.add_tick_listener(get_capture().on_tick)
+        except Exception as exc:  # noqa: BLE001 — capture must never break the feed
+            logger.warning("could not attach capture listener: %s", exc)
+
+
 async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
     status = await get_user_upstox_status(user_id)
     if not status.get("token_valid"):
@@ -15939,6 +15963,7 @@ async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] =
     # keys later joining this connection get bid/ask depth + greeks/IV/OI.
     result = await asyncio.to_thread(gateway.start_market_data_ws, keys, "full")
     if result.get("ok"):
+        _attach_capture_listeners(gateway)
         logger.info("Upstox ticker startup successful user=%s tokens=%s", user_id, len(keys))
     else:
         logger.warning("Upstox ticker startup skipped/failed user=%s reason=%s result=%s", user_id, result.get("reason"), result)
@@ -18064,16 +18089,10 @@ async def startup():
                 await _start_user_upstox_ticker(uid)
                 # Always subscribe baseline index tokens regardless of open positions
                 await asyncio.to_thread(gateway.start_market_data_ws, _BASELINE_TOKENS, "full")
-                # IMD-04: attach the read-only index 1-minute capture to this feed.
-                try:
-                    gateway._feed_v3.add_tick_listener(_get_live_index_capture().on_tick)
-                except Exception:
-                    pass
-                # IMD-04: attach the read-only OPTION 1-minute capture to this feed.
-                try:
-                    gateway._feed_v3.add_tick_listener(_get_live_option_capture().on_tick)
-                except Exception:
-                    pass
+                # IMD-04: attach the read-only 1-minute capture listeners. Also done on
+                # every ticker (re)start — see _attach_capture_listeners for why once
+                # at boot was not enough.
+                _attach_capture_listeners(gateway)
                 # Subscribe any open position instrument keys (options etc.)
                 open_positions = await db.strategy_positions.find(
                     {"user_id": uid, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},

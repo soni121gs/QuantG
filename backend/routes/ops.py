@@ -566,6 +566,10 @@ async def ops_judge_grade(req: JudgeGradeReq, user=Depends(get_current_user)):
 # ---- Edge Lab: cached OOS research surface (coverage + base-rate + OOS + sweep) ----
 
 _edge_lab_building = False
+# A DB doc still marked "building" older than this, with no build running in THIS
+# process, is a build that died with a previous process — report it as failed so the
+# UI re-enables Refresh instead of showing "Rebuilding…" forever.
+_EDGE_LAB_BUILD_TIMEOUT_SEC = float(os.environ.get("EDGE_LAB_BUILD_TIMEOUT_SEC", "3600"))
 
 
 async def _run_edge_lab_build(user_id: str) -> None:
@@ -632,6 +636,25 @@ async def ops_edge_lab(user=Depends(get_current_user)):
     if not doc:
         return {"status": "empty", "building": _edge_lab_building,
                 "hint": "press Refresh to build the first Edge Lab snapshot"}
+    # `status: "building"` is written to the DB before the task starts, but the
+    # completion flag `_edge_lab_building` lives only in process memory. When the
+    # build dies with the process — which it did, uvicorn was OOM-killed nightly —
+    # the doc stays "building" FOREVER and the UI disables its own Rebuild button,
+    # so the founder cannot recover from the screen. Both stored snapshots have been
+    # wedged this way since 07-18/07-21; no completed snapshot has ever existed.
+    # Age the flag out so a dead build reports as failed and Refresh comes back.
+    if str(doc.get("status")) == "building" and not _edge_lab_building:
+        started = str(doc.get("refresh_started_at") or "")
+        stale = True
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds()
+            stale = age > _EDGE_LAB_BUILD_TIMEOUT_SEC
+        except Exception:  # noqa: BLE001 — unparseable/absent start time == stale
+            pass
+        if stale:
+            doc["status"] = "failed"
+            doc["error"] = (doc.get("error")
+                            or "build did not finish (process died mid-build); press Refresh to retry")
     doc["building"] = _edge_lab_building
     return doc
 

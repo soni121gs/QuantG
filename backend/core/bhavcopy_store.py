@@ -22,6 +22,8 @@ import gzip
 import glob
 import logging
 import os
+import threading
+import time
 from bisect import bisect_left
 from collections import OrderedDict
 from datetime import date as _date
@@ -45,6 +47,9 @@ _ROWS_CACHE_BUDGET = int(_ROWS_CACHE_MB * 1024 * 1024 / _BYTES_PER_ROW)
 # load_day materialises EVERY underlying (~38.6k rows / 90.75 MB per day) and is
 # only used by _coverage; a deep cache of it is pure waste.
 _LOAD_DAY_CACHE = int(os.environ.get("BHAVCOPY_LOAD_DAY_CACHE", "4"))
+# How long the globbed day index may be trusted. The store is now interned per root,
+# so without a TTL the running backend would never see a newly-ingested day.
+_DAYS_TTL_SEC = float(os.environ.get("BHAVCOPY_DAYS_TTL_SEC", "900"))
 
 STORE_ROOT = os.environ.get(
     "BHAVCOPY_STORE",
@@ -67,20 +72,26 @@ class BhavcopyStore:
     # ever released — the multiplier behind the 9.9 GB OOM. One instance per root
     # means one shared cache and a stable cache key.
     _instances: Dict[str, "BhavcopyStore"] = {}
+    _instances_lock = threading.Lock()
 
     def __new__(cls, root: str = STORE_ROOT):
-        inst = cls._instances.get(root)
-        if inst is None:
-            inst = super().__new__(cls)
-            inst._initialised = False
-            cls._instances[root] = inst
-        return inst
+        # Locked: these stores are built inside asyncio.to_thread workers, so without
+        # it a second thread can take the instance out of _instances after __new__
+        # registers it but before __init__ binds _rows_cache -> AttributeError.
+        with cls._instances_lock:
+            inst = cls._instances.get(root)
+            if inst is None:
+                inst = super().__new__(cls)
+                inst._initialised = False
+                cls._instances[root] = inst
+            return inst
 
     def __init__(self, root: str = STORE_ROOT):
         if self._initialised:
             return
         self.root = root
         self._days: Optional[List[str]] = None  # cached sorted 'YYYY-MM-DD'
+        self._days_at = 0.0                     # monotonic stamp for _DAYS_TTL_SEC
         self._rows_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
         self._rows_cached = 0  # rows currently held, against _ROWS_CACHE_BUDGET
         self._initialised = True
@@ -95,12 +106,21 @@ class BhavcopyStore:
         does not leave its working set resident in the trading process."""
         self._rows_cache.clear()
         self._rows_cached = 0
+        self._days = None          # force a re-glob; a batch job must not pin the index
         self.load_day.cache_clear()
         self.underlying_daily.cache_clear()
         self.option_chain.cache_clear()
 
     # ---- day index -----------------------------------------------------------
     def trading_days(self, start: Optional[str] = None, end: Optional[str] = None) -> List[str]:
+        # TTL, not cache-once. Before interning, each of the 45 construction sites got
+        # a fresh instance and re-globbed, so the nightly ingest's new day appeared
+        # immediately. With one process-lifetime instance a plain cache would freeze
+        # the day index until restart — and entry_gate reads recent daily closes on
+        # the PER-SIGNAL path, the same blindness that starved QG-O1 for six months
+        # when the store had a hole (§2026-07-09).
+        if self._days is not None and (time.monotonic() - self._days_at) > _DAYS_TTL_SEC:
+            self._days = None
         if self._days is None:
             days = set()
             for path in glob.glob(os.path.join(self.root, "*", "*.csv.gz")):
@@ -110,6 +130,7 @@ class BhavcopyStore:
                     d = digits[-8:]
                     days.add(f"{d[:4]}-{d[4:6]}-{d[6:8]}")
             self._days = sorted(days)
+            self._days_at = time.monotonic()
         lo = bisect_left(self._days, start) if start else 0
         hi = bisect_left(self._days, end + "~") if end else len(self._days)
         return self._days[lo:hi]

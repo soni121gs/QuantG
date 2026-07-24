@@ -141,3 +141,75 @@ def test_process_restarts_quiet_on_a_single_clean_start():
     rows = [{"started_at": "2026-07-24T15:04:14+00:00"}]
     assert asyncio.run(process_restarts(
         ProbeContext(db=_FakeDb(rows), user_id="u", date_str="2026-07-24"))) == []
+
+
+# ── second-pass fixes (2026-07-25): defects found by adversarial re-audit ──
+
+def test_store_day_index_is_not_pinned_forever_by_interning():
+    """Interning gave one instance per process; without a TTL the globbed day index
+    would freeze and the nightly bhavcopy ingest would be invisible until restart —
+    on the per-signal entry_gate path."""
+    import time as _t
+    from core.bhavcopy_store import _DAYS_TTL_SEC
+    s = BhavcopyStore()
+    s.trading_days()
+    stamped = s._days_at
+    assert stamped > 0
+    s._days_at = _t.monotonic() - _DAYS_TTL_SEC - 1
+    s.trading_days()
+    assert s._days_at > stamped, "expired day index was not re-globbed"
+
+
+def test_clear_caches_also_drops_the_day_index():
+    s = BhavcopyStore()
+    s.trading_days()
+    assert s._days is not None
+    s.clear_caches()
+    assert s._days is None
+
+
+def test_store_construction_is_thread_safe():
+    """Stores are built inside asyncio.to_thread workers; an unsynchronised __new__
+    lets a second thread see a half-initialised instance."""
+    import threading
+    errors = []
+
+    def build():
+        try:
+            BhavcopyStore().trading_days()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+
+
+def test_capture_listeners_reattach_helper_is_idempotent_and_feed_safe():
+    """The daily OAuth reconnect rebuilds the gateway AND its feed, so listeners
+    attached once at boot were lost for the rest of every session."""
+    from server import _attach_capture_listeners
+
+    class _Feed:
+        def __init__(self):
+            self.listeners = []
+
+        def add_tick_listener(self, fn):
+            if fn not in self.listeners:
+                self.listeners.append(fn)
+
+    class _GW:
+        def __init__(self, feed):
+            self._feed_v3 = feed
+
+    feed = _Feed()
+    gw = _GW(feed)
+    _attach_capture_listeners(gw)
+    assert len(feed.listeners) == 2          # index + option capture
+    _attach_capture_listeners(gw)
+    assert len(feed.listeners) == 2          # de-duplicated, not doubled
+
+    _attach_capture_listeners(_GW(None))     # no feed yet -> must not raise

@@ -997,9 +997,18 @@ async def _dispatch_signal_via_unified_engine(
         try:
             _fine = await db.market_regime_state.find_one(
                 {"index": str(symbol).upper()},
-                {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1},
+                {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1, "regime_fine_at": 1},
             )
-            if _fine and _fine.get("regime_fine"):
+            # STALENESS GUARD: the scheduler only ever $sets regime_fine, never clears
+            # it, and it skips the write entirely when the capture buffer is short. So
+            # a stalled capture leaves YESTERDAY's label sitting there — and it is the
+            # high-confidence ones that persist (2026-07-24 closed on TREND_UP/1.0).
+            # Routing today's trades on a stale label at full confidence is strictly
+            # worse than routing on a low-confidence fresh one, because the router
+            # trusts it. Only honour a fine regime stamped today (IST).
+            _fine_at = str((_fine or {}).get("regime_fine_at") or "")
+            _today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+            if _fine and _fine.get("regime_fine") and _fine_at[:10] == _today_ist:
                 _spread["router_regime"] = _fine["regime_fine"]
                 _spread["regime_confidence"] = _fine.get("regime_fine_confidence") or 0.5
         except Exception:
