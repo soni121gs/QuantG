@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Carver Systematic Trading
 
 Core idea: robust systems combine simple forecasts, diversification, volatility targeting, and conservative risk overlays.

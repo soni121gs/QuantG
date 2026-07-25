@@ -336,6 +336,7 @@ def default_weekly_cards(probes: Dict[str, Any], corpus: Dict[str, Any]) -> List
 def calibration_summary(cards: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     rows = list(cards)
     counts: Dict[str, int] = {}
+    scored = []
     for card in rows:
         verdict = str(card.get("trial_status") or "").upper()
         if verdict in {"CANDIDATE_EDGE", "VALIDATED"}:
@@ -347,10 +348,28 @@ def calibration_summary(cards: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         else:
             outcome = ((card.get("calibration") or {}).get("outcome") or "untested")
         counts[outcome] = counts.get(outcome, 0) + 1
+        cal = card.get("calibration") or {}
+        prior = cal.get("prior_probability")
+        realized = cal.get("realized")
+        if prior is not None and realized is not None:
+            try:
+                p = max(0.0, min(1.0, float(prior)))
+                y = 1.0 if bool(realized) else 0.0
+                scored.append((p - y) ** 2)
+            except (TypeError, ValueError):
+                pass
     tested = sum(v for k, v in counts.items() if k in {"validated", "rejected", "abandoned"})
     hit = counts.get("validated", 0)
-    return {"total_cards": len(rows), "counts": counts, "tested_cards": tested,
-            "hit_rate": round(hit / tested, 3) if tested else 0.0}
+    return {
+        "total_cards": len(rows),
+        "counts": counts,
+        "tested_cards": tested,
+        "outcome_hit_rate": round(hit / tested, 3) if tested else 0.0,
+        "brier_score": round(mean(scored), 4) if scored else None,
+        "calibration_type": "probability_brier" if scored else "outcome_tally",
+        "is_probability_calibration": bool(scored),
+        "warning": None if scored else "No numeric priors on cards; this is an outcome tally, not probability calibration.",
+    }
 
 
 def paid_lane_status() -> Dict[str, Any]:

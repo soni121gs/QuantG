@@ -219,6 +219,18 @@ async def test_runner_persists_and_auto_resolves():
     assert task["status"] == "auto_closed"
 
 
+@pytest.mark.asyncio
+async def test_runner_context_scopes_signals_to_user():
+    db = _DB()
+    db.strategies.docs.append({"id": "s1", "user_id": "u1"})
+    db.signals.docs.extend([
+        {"id": "mine", "user_id": "u1", "created_at": "2026-07-17T10:00:00+00:00"},
+        {"id": "other", "user_id": "u2", "created_at": "2026-07-17T10:01:00+00:00"},
+    ])
+    ctx = await runner._build_context(db, "u1", "2026-07-17", datetime(2026, 7, 17, tzinfo=timezone.utc))
+    assert [s["id"] for s in ctx.signals_today] == ["mine"]
+
+
 # ── 2026-07-22: geometry-change epoch split on persistent_live_loss ──────────
 
 class _FakeAgg:

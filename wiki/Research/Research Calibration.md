@@ -1,3 +1,9 @@
+﻿---
+claim_type: aspiration
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Research Calibration
 
 Core idea: a research brain improves by tracking which proposed hypotheses later validate or fail.

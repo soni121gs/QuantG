@@ -87,7 +87,9 @@ def test_default_cards_persist_and_calibrate():
     assert persist_hypothesis_cards(db, "user-1", cards) == 2
     summary = calibration_summary(db.research_hypotheses.rows.values())
     assert summary["total_cards"] == 2
-    assert summary["hit_rate"] == 0.0
+    assert summary["outcome_hit_rate"] == 0.0
+    assert summary["calibration_type"] == "outcome_tally"
+    assert summary["is_probability_calibration"] is False
 
 
 def test_calibration_prefers_actual_verdict_over_stale_outcome():
@@ -105,7 +107,7 @@ def test_calibration_prefers_actual_verdict_over_stale_outcome():
     ])
     assert summary["counts"] == {"validated": 1, "rejected": 1}
     assert summary["tested_cards"] == 2
-    assert summary["hit_rate"] == 0.5
+    assert summary["outcome_hit_rate"] == 0.5
 
 
 class FakeSignalCollection:

@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Event Volatility Premium
 
 Core idea: earnings and event options can overprice realized moves, but the tail and physical settlement risks are severe.

@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # India Options Liquidity
 
 Core idea: Indian index options are liquid, but stock options and far wings can be sparse and costly.

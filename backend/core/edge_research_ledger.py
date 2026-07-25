@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import statistics
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
@@ -24,8 +25,10 @@ def trial_document(*, user_id: str, row: Dict[str, Any], snapshot: Dict[str, Any
         "_id": trial_hash, "trial_hash": trial_hash, "user_id": user_id,
         "strategy_name": row.get("name"), "config": config,
         "metrics": {k: row.get(k) for k in (
-            "n", "pnl", "expectancy", "oos_expectancy", "win_rate", "pct_green_months"
+            "n", "pnl", "expectancy", "oos_expectancy", "win_rate", "pct_green_months",
+            "std", "t_stat", "sharpe",
         )},
+        "trade_returns": row.get("trade_returns") or [],
         "verdict": row.get("verdict") or "ERROR",
         "reject_reasons": row.get("reject_reasons") or [],
         "primary_reject_reason": row.get("primary_reject_reason"),
@@ -63,17 +66,38 @@ def robustness(row: Dict[str, Any], *, trials_tested: int = 1, plateau: float = 
             "plateau_score": round(plateau, 3), "warning": warning}
 
 
-def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str, Any]:
-    """Conservative Deflated-Sharpe proxy for Edge Lab rows.
+def _standardized_moment(vals: List[float], power: int, mean: float, sd: float) -> float:
+    if sd <= 0:
+        return 0.0
+    return sum(((v - mean) / sd) ** power for v in vals) / len(vals)
 
-    Edge Lab snapshots do not persist per-trade returns yet, so this is not a
-    Bailey/Lopez de Prado full DSR. It is an explicit, auditable penalty that
-    deflates the observed OOS signal by sample size, month breadth, and number
-    of tried configs. When trade-return vectors are stored, this function is the
-    single replacement point for the exact DSR formula.
-    """
+
+def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str, Any]:
+    """Deflated Sharpe from stored per-trade returns, with a labelled legacy fallback."""
     n = int(row.get("n") or 0)
     exp = float(row.get("oos_expectancy") or row.get("expectancy") or 0.0)
+    returns = [float(x) for x in (row.get("trade_returns") or row.get("returns") or []) if x is not None]
+    if len(returns) >= 3:
+        mean = statistics.mean(returns)
+        sd = statistics.stdev(returns)
+        sharpe = mean / sd if sd > 0 else 0.0
+        skew = _standardized_moment(returns, 3, mean, sd) if sd > 0 else 0.0
+        kurt = _standardized_moment(returns, 4, mean, sd) if sd > 0 else 3.0
+        trials = max(1, int(trials_tested))
+        expected_max_noise = math.sqrt(2.0 * math.log(max(2, trials)))
+        variance_adj = max(0.25, 1.0 - skew * sharpe + ((kurt - 1.0) / 4.0) * sharpe * sharpe)
+        dsr = (sharpe * math.sqrt(len(returns)) - expected_max_noise) / math.sqrt(variance_adj)
+        return {
+            "trials_count": trials,
+            "observed_sharpe": round(sharpe, 4),
+            "deflated_sharpe": round(dsr, 3),
+            "multiple_testing_penalty": round(expected_max_noise, 3),
+            "method": "return_vector_dsr_v1",
+            "sample_n": len(returns),
+            "skew": round(skew, 3),
+            "kurtosis": round(kurt, 3),
+            "passed": bool(dsr > 0 and len(returns) >= 30 and exp > 0),
+        }
     green = max(0.0, min(1.0, float(row.get("pct_green_months") or 0.0) / 100.0))
     sample_scale = math.sqrt(min(n, 250) / 30.0) if n > 0 else 0.0
     observed = (exp / 500.0) * sample_scale * (0.5 + 0.5 * green)
@@ -85,6 +109,7 @@ def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str,
         "deflated_sharpe": round(dsr, 3),
         "multiple_testing_penalty": round(penalty, 3),
         "method": "edge_lab_proxy_v1",
+        "warning": "legacy row has no trade_returns; not a full Deflated Sharpe",
         "passed": bool(dsr > 0 and n >= 30 and exp > 0),
     }
 

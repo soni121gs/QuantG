@@ -1,3 +1,9 @@
+﻿---
+claim_type: aspiration
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Grinold-Kahn Fundamental Law
 
 Core idea: information ratio scales with skill times breadth: `IR = IC * sqrt(BR)`.

@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # India PEAD Surprise Data Gap
 
 Core idea: PEAD is strongest when sorted by unexpected earnings, not merely by event date.

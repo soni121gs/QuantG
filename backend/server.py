@@ -16989,7 +16989,8 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # half-finished or SSH-killed run left the UI showing a stale snapshot with
             # no way to tell. Running it here (inside the persistent app process, which
             # nothing SIGHUPs) means the tab is simply always fresh by morning.
-            if hour == 20 and minute == 30 and _edge_lab_rebuild_done_date != today:
+            edge_lab_in_app = os.environ.get("EDGE_LAB_NIGHTLY_IN_APP", "false").lower() == "true"
+            if edge_lab_in_app and hour == 20 and minute == 30 and _edge_lab_rebuild_done_date != today:
                 _edge_lab_rebuild_done_date = today
                 try:
                     from routes.ops import _run_edge_lab_build

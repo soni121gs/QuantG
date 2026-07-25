@@ -48,7 +48,7 @@ async def _build_context(db, user_id: str, date_str: str, now: Optional[datetime
         {"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER", "EXITING"]}}
     ).to_list(500)
     signals_today = await db.signals.find(
-        {"created_at": {"$regex": f"^{date_str}"}}
+        {"user_id": user_id, "created_at": {"$regex": f"^{date_str}"}}
     ).to_list(5000)
     daily_report = await db.daily_reports.find_one({"user_id": user_id, "date": date_str})
 

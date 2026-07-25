@@ -33,11 +33,11 @@ from core.bhavcopy_store import BhavcopyStore
 from core.eod_options_backtest import EODOptionsBacktest, walk_forward
 from core.iv_surface import richness_zscore
 from core.judge_facade import grade as judge_grade
+from core.market_domains import contract_spec_for_underlying
 
 # underlyings we probe for coverage vs. the smaller set the studies run on
 COVERAGE_UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
 BASE_RATE_UNDERLYINGS = ["NIFTY", "BANKNIFTY", "SENSEX"]
-LOT = {"NIFTY": 75, "BANKNIFTY": 35, "SENSEX": 20, "BANKEX": 15, "FINNIFTY": 65, "MIDCPNIFTY": 120}
 
 _ENTRY_DTE = (2, 8)
 _SLIP = float(os.environ.get("STUDY_SLIP_PCT", "0.015"))  # entry slippage per leg (matches base_rate_studies)
@@ -55,6 +55,13 @@ def _dte(a: str, b: str) -> int:
     return (datetime.strptime(b, "%Y-%m-%d") - datetime.strptime(a, "%Y-%m-%d")).days
 
 
+def _lot_size(underlying: str) -> int:
+    try:
+        return int(contract_spec_for_underlying(str(underlying or "").upper()).get("lot_size") or 50)
+    except Exception:  # noqa: BLE001
+        return 50
+
+
 _OTM_LEVELS = (("atm", 0.0), ("otm_1pct", 0.01), ("otm_2pct", 0.02))
 
 
@@ -70,7 +77,7 @@ def _short_vol_multi(store: BhavcopyStore, u: str) -> Dict[str, List[Dict[str, f
         return buckets
     close_by = {c["date"][:10]: c["close"] for c in candles}
     days = [c["date"][:10] for c in candles]
-    lot = LOT.get(u, 50)
+    lot = _lot_size(u)
     entered: set = set()
     for day in days:
         pick = None
@@ -126,7 +133,7 @@ def _base_rate(store: BhavcopyStore) -> List[Dict[str, Any]]:
     out = []
     for u in BASE_RATE_UNDERLYINGS:
         buckets = _short_vol_multi(store, u)
-        row: Dict[str, Any] = {"underlying": u, "lot": LOT.get(u)}
+        row: Dict[str, Any] = {"underlying": u, "lot": _lot_size(u)}
         for label, _ in _OTM_LEVELS:
             row[label] = _summ(buckets[label])
         out.append(row)
@@ -281,12 +288,14 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             "name": judged.get("name"), "underlying": judged.get("underlying"),
             "structure": judged.get("structure"), "verdict": judged.get("verdict"),
             "n": o["n"], "expectancy": o["expectancy"], "win_rate": o["win_rate"],
+            "std": o.get("std"), "t_stat": o.get("t_stat"), "sharpe": o.get("sharpe"),
             "pnl": o["pnl"], "oos_year": judged.get("oos_year"),
             "oos_expectancy": (judged.get("oos") or {}).get("expectancy", 0),
             "pct_green_months": judged.get("pct_green_months"),
             "regime_breakdown": judged.get("regime_breakdown") or {},
             "signals": judged.get("signals", 0),
             "signal_evaluation": judged.get("signal_evaluation"),
+            "trade_returns": [float(t.get("pnl") or 0.0) for t in (judged.get("trades") or [])],
         })
     order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
     rows.sort(key=lambda r: order.get(r.get("verdict", ""), 9))

@@ -1,3 +1,9 @@
+﻿---
+claim_type: measured
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Breadth Law For QuantG
 
 Core idea: a book built from diverse weak-to-moderate edges can be more robust than one tuned strong-looking edge.

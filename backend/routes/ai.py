@@ -561,7 +561,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 {"_id": 0, "status": 1, "verdict": 1, "research_context": 1},
             ).to_list(500)
             from core.phase4_research import calibration_summary
-            data["research_calibration"] = calibration_summary([
+            data["research_outcome_tally"] = calibration_summary([
                 {
                     "status": row.get("status"),
                     "trial_status": (row.get("verdict") or {}).get("status"),
@@ -856,7 +856,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             # source of truth for "does this strategy have an out-of-sample edge?",
             # short-vol base rates, config sweeps, and data coverage. Held-to-theta
             # daily-settle granularity — NOT intraday (see get_intraday_oos).
-            snap = await db.edge_lab_snapshots.find_one({"_id": "latest"})
+            snap = await db.edge_lab_snapshots.find_one({"_id": f"latest:{user_id}"})
+            if not snap:
+                snap = await db.edge_lab_snapshots.find_one({"_id": "latest", "built_by": user_id})
+                if snap:
+                    warnings.append("Using legacy global Edge Lab snapshot; rebuild to refresh the user-scoped cache.")
             if not snap or snap.get("status") != "ready":
                 data = {"error": "No Edge Lab snapshot is ready yet. It is compiled off-hours from the bhavcopy OOS engine (run_oos_validation / edge_lab.build_snapshot)."}
                 warnings.append("Edge Lab snapshot not built or not ready.")

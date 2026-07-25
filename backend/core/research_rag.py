@@ -41,6 +41,10 @@ def _default_research_root() -> Path:
 RESEARCH_ROOT = _default_research_root()
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -107,6 +111,45 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
         if getattr(stale, "deleted_count", 0):
             by_source["research_stale_deleted"] = int(stale.deleted_count)
 
+    # Canonical operator manual. This is where the current laws, postmortems,
+    # deployment caveats, and broker pitfalls live; Hermes must retrieve it as
+    # manual truth, not depend on shorter wiki summaries.
+    manual = _repo_root() / "CLAUDE.md"
+    if manual.exists():
+        text = manual.read_text(encoding="utf-8", errors="replace")
+        current_title = "CLAUDE.md"
+        current_lines: List[str] = []
+        active_manual_keys = set()
+
+        async def _flush_manual() -> None:
+            if not current_lines:
+                return
+            section = "\n".join(current_lines).strip()
+            if not section:
+                return
+            rag_key = f"manual:{current_title}"
+            active_manual_keys.add(rag_key)
+            body = f"[MANUAL] {current_title}\n{section[:7000]}"
+            _bump(await _index_one(db, user_id, rag_key, body, "manual",
+                                   source_refs=[current_title]), "manual")
+
+        for line in text.splitlines():
+            if line.startswith("## "):
+                await _flush_manual()
+                current_title = "CLAUDE.md " + line[3:].strip()
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+        await _flush_manual()
+        stale = await db.hermes_memory.delete_many({
+            "user_id": user_id,
+            "_rag": True,
+            "type": "manual",
+            "rag_key": {"$nin": sorted(active_manual_keys)},
+        })
+        if getattr(stale, "deleted_count", 0):
+            by_source["manual_stale_deleted"] = int(stale.deleted_count)
+
     # 1) Wiki notes (user-written domain knowledge / decisions / rules)
     async for w in db.wiki_docs.find(
             {"user_id": user_id},
@@ -118,7 +161,7 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
                                source_refs=[title]), "wiki")
 
     # 2) Hermes lessons (self-scored, validated/decayed rules)
-    async for l in db.hermes_lessons.find({}):
+    async for l in db.hermes_lessons.find({"user_id": user_id}):
         text = (f"[LESSON] dimension={l.get('dimension')} bucket={l.get('bucket')} "
                 f"status={l.get('status')} hit_rate={l.get('hit_rate')} "
                 f"confidence={l.get('confidence')} :: {l.get('claim') or l.get('text') or ''}")
@@ -143,9 +186,11 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
                                    text, "oos", source_refs=[row.get("name")]), "oos_regime")
 
     # 4) Edge Lab (EOD theta OOS) latest verdicts, if present
-    snap = await db.edge_lab_snapshots.find_one({"_id": "latest"})
+    snap = await db.edge_lab_snapshots.find_one({"_id": f"latest:{user_id}"})
+    if not snap:
+        snap = await db.edge_lab_snapshots.find_one({"_id": "latest", "built_by": user_id})
     if snap:
-        for row in (snap.get("scorecard") or snap.get("rows") or [])[:60]:
+        for row in ((snap.get("oos") or {}).get("rows") or snap.get("scorecard") or snap.get("rows") or [])[:60]:
             nm = row.get("name") or row.get("strategy")
             v = row.get("verdict")
             if not nm or not v:

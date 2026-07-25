@@ -34,6 +34,7 @@ Public API
 from __future__ import annotations
 
 import logging
+import math
 import os
 import uuid
 from datetime import datetime, timezone
@@ -50,6 +51,9 @@ LESSON_MIN_N = int(os.environ.get("LESSON_MIN_N", "3"))
 # candidate -> active once it has been confirmed this many times AND holds hit_rate.
 LESSON_PROMOTE_K = int(os.environ.get("LESSON_PROMOTE_K", "3"))
 LESSON_PROMOTE_HITRATE = float(os.environ.get("LESSON_PROMOTE_HITRATE", "0.6"))
+LESSON_BOOK_BASE_RATE = float(os.environ.get("LESSON_BOOK_BASE_RATE", "0.362"))
+LESSON_TESTS_COUNT = int(os.environ.get("LESSON_TESTS_COUNT", "19"))
+LESSON_ALPHA = float(os.environ.get("LESSON_ALPHA", "0.05"))
 # Decay: not confirmed in this many calendar days (stale), OR hit_rate below the
 # floor once there are at least this many observations (wrong).
 LESSON_DECAY_DAYS = int(os.environ.get("LESSON_DECAY_DAYS", "10"))
@@ -76,13 +80,41 @@ def _days_between(a: str, b: str) -> int:
 
 
 def _confidence(correct: int, observations: int) -> float:
-    """Confidence = accuracy scaled by sample size. A brand-new 1/1 lesson is low
-    confidence; a 6/6 lesson is 1.0; a 3/6 lesson is 0.5."""
+    """Backward-compatible effect-size score, not calibrated probability."""
     if observations <= 0:
         return 0.0
     hit_rate = correct / observations
     sample_factor = min(1.0, observations / LESSON_CONF_FULL_OBS)
     return round(hit_rate * sample_factor, 3)
+
+
+def _binomial_survival(k: int, n: int, p: float) -> float:
+    """P(X >= k) for X~Binomial(n,p), using only stdlib math."""
+    if n <= 0:
+        return 1.0
+    p = max(0.0, min(1.0, p))
+    return min(1.0, sum(
+        math.comb(n, i) * (p ** i) * ((1.0 - p) ** (n - i))
+        for i in range(max(0, k), n + 1)
+    ))
+
+
+def _sidak_alpha(alpha: float = LESSON_ALPHA, tests: int = LESSON_TESTS_COUNT) -> float:
+    tests = max(1, int(tests or 1))
+    return 1.0 - ((1.0 - alpha) ** (1.0 / tests))
+
+
+def _promotion_stats(correct: int, observations: int) -> Dict[str, Any]:
+    p_value = _binomial_survival(correct, observations, LESSON_BOOK_BASE_RATE)
+    threshold = _sidak_alpha()
+    return {
+        "base_rate_null": LESSON_BOOK_BASE_RATE,
+        "tests_count": LESSON_TESTS_COUNT,
+        "alpha": LESSON_ALPHA,
+        "sidak_alpha": round(threshold, 6),
+        "binomial_p_value": round(p_value, 6),
+        "passes_multiple_testing": bool(p_value <= threshold),
+    }
 
 
 def _claim(dimension: str, bucket: str, direction: str, expectancy: float,
@@ -119,6 +151,8 @@ def new_lesson(user_id: str, dimension: str, bucket: str, direction: str,
         "correct_count": 1,
         "hit_rate": 1.0,
         "confidence": _confidence(1, 1),
+        "effect_size": _confidence(1, 1),
+        "promotion_test": _promotion_stats(1, 1),
         "status": "candidate",
         "created_at": _now_iso(),
         "last_confirmed_at": date_str,
@@ -141,6 +175,7 @@ def apply_observation(lesson: Dict[str, Any], direction: str, n: int, expectancy
         "correct_count": correct,
         "hit_rate": hit_rate,
         "confidence": _confidence(correct, observations),
+        "effect_size": _confidence(correct, observations),
         "sample_size": int(lesson.get("sample_size", 0)) + n,
         "metric_latest": round(expectancy, 2),
         "win_rate_latest": round(win_rate, 3),
@@ -149,6 +184,8 @@ def apply_observation(lesson: Dict[str, Any], direction: str, n: int, expectancy
         "claim": _claim(lesson["dimension"], lesson["bucket"], lesson["direction"],
                         expectancy, win_rate, int(lesson.get("sample_size", 0)) + n),
     }
+    promotion_test = _promotion_stats(correct, observations)
+    patch["promotion_test"] = promotion_test
     if confirmed:
         patch["last_confirmed_at"] = date_str
 
@@ -157,7 +194,12 @@ def apply_observation(lesson: Dict[str, Any], direction: str, n: int, expectancy
         status = "decayed"
         patch["decay_reason"] = "low_hit_rate"
         patch["decayed_at"] = date_str
-    elif status == "candidate" and correct >= LESSON_PROMOTE_K and hit_rate >= LESSON_PROMOTE_HITRATE:
+    elif (
+        status == "candidate"
+        and correct >= LESSON_PROMOTE_K
+        and hit_rate >= LESSON_PROMOTE_HITRATE
+        and promotion_test["passes_multiple_testing"]
+    ):
         status = "active"
         patch["promoted_at"] = date_str
     patch["status"] = status
@@ -292,6 +334,8 @@ async def get_brain_health(db, user_id: str) -> Dict[str, Any]:
                 "claim": l.get("claim"),
                 "direction": l.get("direction"),
                 "confidence": l.get("confidence"),
+                "effect_size": l.get("effect_size"),
+                "promotion_test": l.get("promotion_test"),
                 "hit_rate": l.get("hit_rate"),
                 "sample_size": l.get("sample_size"),
                 "observations": l.get("observations_count"),

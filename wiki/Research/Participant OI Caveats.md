@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Participant OI Caveats
 
 Core idea: participant-wise F&O open interest can describe positioning, but directional predictive power must be proven.

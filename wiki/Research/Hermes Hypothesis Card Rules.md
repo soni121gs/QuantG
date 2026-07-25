@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Hermes Hypothesis Card Rules
 
 Core idea: Hermes may draft research, but code computes evidence and humans approve actions.

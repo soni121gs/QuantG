@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Calendar Spread Caveats
 
 Core idea: calendar spreads depend on term structure, realized move, and near/far expiry liquidity.

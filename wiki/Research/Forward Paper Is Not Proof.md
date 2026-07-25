@@ -1,3 +1,9 @@
+﻿---
+claim_type: measured
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Forward Paper Is Not Proof
 
 Core idea: paper P&L is useful for operational proof but not sufficient statistical evidence.

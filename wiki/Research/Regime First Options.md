@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Regime First Options
 
 Core idea: options edge depends heavily on market regime: trend, range, chop, event, and volatility state.

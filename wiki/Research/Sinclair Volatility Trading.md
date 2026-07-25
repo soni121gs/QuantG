@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Sinclair Volatility Trading
 
 Core idea: short-volatility edge exists only when implied volatility is rich versus realized volatility after transaction costs and tail risk.

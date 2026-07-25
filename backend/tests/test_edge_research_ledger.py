@@ -26,6 +26,20 @@ def test_enrichment_builds_heatmap_and_allocation():
     row = out["oos"]["rows"][0]
     assert row["trials_count"] == 3
     assert row["deflated_sharpe"]["method"] == "edge_lab_proxy_v1"
+    assert "warning" in row["deflated_sharpe"]
+
+
+def test_deflated_sharpe_uses_return_vector_when_present():
+    row = {
+        "n": 40,
+        "oos_expectancy": 120,
+        "pct_green_months": 70,
+        "trade_returns": [120, 140, 90, 160, -30, 110, 130, 100] * 5,
+    }
+    dsr = deflated_sharpe(row, trials_tested=3)
+    assert dsr["method"] == "return_vector_dsr_v1"
+    assert dsr["sample_n"] == 40
+    assert "observed_sharpe" in dsr
 
 
 def test_deflated_sharpe_penalizes_many_trials():

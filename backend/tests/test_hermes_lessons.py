@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import hermes_lessons as HL
 from core.hermes_lessons import (
     new_lesson, apply_observation, is_stale, _confidence, _direction_of, _days_between,
-    score_and_update_lessons, get_brain_health,
+    score_and_update_lessons, get_brain_health, _promotion_stats,
 )
 
 
@@ -42,15 +42,21 @@ def test_new_lesson_is_low_confidence_candidate():
     assert "credit_spread" in l["claim"]
 
 
-def test_apply_observation_promotes_after_k_confirmations():
+def test_apply_observation_does_not_promote_noise_after_three_confirmations():
     l = new_lesson("u1", "structure", "credit_spread", "good", 5, 120.0, 0.67, "2026-07-01")
     # Two more same-direction confirmations (K=3 total) → active.
     for i, d in enumerate(("2026-07-02", "2026-07-03")):
         patch_fields = apply_observation(l, "good", 5, 100.0, 0.6, d)
         l.update(patch_fields)
     assert l["correct_count"] == 3
-    assert l["status"] == "active"
+    assert l["status"] == "candidate"
     assert l["hit_rate"] == 1.0
+    assert l["promotion_test"]["passes_multiple_testing"] is False
+
+
+def test_promotion_stats_passes_only_after_significant_evidence():
+    assert _promotion_stats(3, 3)["passes_multiple_testing"] is False
+    assert _promotion_stats(10, 10)["passes_multiple_testing"] is True
 
 
 def test_apply_observation_contradiction_decays_on_low_hitrate():
@@ -135,9 +141,9 @@ async def test_score_creates_then_promotes_and_is_idempotent():
         await score_and_update_lessons(db, "u1", "2026-07-02")
         s3 = await score_and_update_lessons(db, "u1", "2026-07-03")
         lesson = db.hermes_lessons.docs[0]
-        assert lesson["status"] == "active"
+        assert lesson["status"] == "candidate"
         assert lesson["correct_count"] == 3
-        assert s3["promoted"] == 1
+        assert s3["promoted"] == 0
 
 
 @pytest.mark.asyncio

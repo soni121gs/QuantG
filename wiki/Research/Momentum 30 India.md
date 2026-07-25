@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Momentum 30 India
 
 Core idea: medium-horizon momentum can persist, but daily/overnight implementation must survive costs and whipsaws.

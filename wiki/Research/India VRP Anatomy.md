@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # India VRP Anatomy
 
 Core idea: volatility risk premium can exist in Indian index and stock options, but it is regime-dependent and cost-sensitive.

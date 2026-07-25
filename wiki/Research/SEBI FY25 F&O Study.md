@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # SEBI FY25 F&O Study
 
 Core idea: most retail F&O participation loses money after costs.

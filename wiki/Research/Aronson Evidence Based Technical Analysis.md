@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Aronson Evidence Based Technical Analysis
 
 Core idea: technical ideas need statistical testing, multiple-comparison control, and clear null hypotheses.

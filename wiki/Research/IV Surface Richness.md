@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # IV Surface Richness
 
 Core idea: ATM IV level alone is incomplete; richness relative to recent history, skew, and term structure matters.

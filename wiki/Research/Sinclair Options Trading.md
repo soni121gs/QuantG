@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # Sinclair Options Trading
 
 Core idea: option structures are vehicles for expressing a measurable forecast, not strategies by themselves.

@@ -1,3 +1,9 @@
+﻿---
+claim_type: literature
+verified: 2026-07-25
+reproduction: review source note and linked QuantG code or task evidence
+---
+
 # India Day Night Option Returns
 
 Core idea: intraday and overnight returns can have different drivers and should not be pooled blindly.
