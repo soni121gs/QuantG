@@ -42,6 +42,12 @@ RESEARCH_ROOT = _default_research_root()
 
 
 def _repo_root() -> Path:
+    configured = os.environ.get("QUANTG_REPO_ROOT")
+    if configured:
+        return Path(configured)
+    container_root = Path("/app")
+    if (container_root / "CLAUDE.md").exists():
+        return container_root
     return Path(__file__).resolve().parents[2]
 
 
@@ -75,7 +81,8 @@ async def _index_one(db, user_id: str, rag_key: str, text: str, mtype: str,
         {"$set": {"user_id": user_id, "rag_key": rag_key, "content_hash": ch,
                   "text": text, "type": mtype, "source_refs": source_refs or [],
                   "embedding": emb, "date": date or now.date().isoformat(),
-                  "created_at": now.isoformat(), "_rag": True}},
+                  "updated_at": now.isoformat(), "_rag": True},
+         "$setOnInsert": {"created_at": now.isoformat()}},
         upsert=True)
     return "indexed"
 
@@ -114,7 +121,7 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
     # Canonical operator manual. This is where the current laws, postmortems,
     # deployment caveats, and broker pitfalls live; Hermes must retrieve it as
     # manual truth, not depend on shorter wiki summaries.
-    manual = _repo_root() / "CLAUDE.md"
+    manual = Path(os.environ.get("QUANTG_MANUAL_PATH", _repo_root() / "CLAUDE.md"))
     if manual.exists():
         text = manual.read_text(encoding="utf-8", errors="replace")
         current_title = "CLAUDE.md"
@@ -149,6 +156,39 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
         })
         if getattr(stale, "deleted_count", 0):
             by_source["manual_stale_deleted"] = int(stale.deleted_count)
+    else:
+        stale = await db.hermes_memory.delete_many({
+            "user_id": user_id, "_rag": True, "type": "manual",
+        })
+        if getattr(stale, "deleted_count", 0):
+            by_source["manual_stale_deleted"] = int(stale.deleted_count)
+
+    # Repository knowledge is owner-maintained global truth. Index it explicitly
+    # as global knowledge instead of requiring a user-triggered wiki sync.
+    wiki_root = _repo_root() / "wiki"
+    active_knowledge_keys = set()
+    if wiki_root.exists():
+        for path in sorted(wiki_root.rglob("*.md")):
+            if path.name.lower() == "memory.md":
+                continue
+            rel = path.relative_to(wiki_root).as_posix()
+            if rel.startswith("Research/"):
+                continue
+            body_text = path.read_text(encoding="utf-8", errors="replace")
+            rag_key = f"knowledge:{rel}"
+            active_knowledge_keys.add(rag_key)
+            body = f"[GLOBAL KNOWLEDGE] {rel}\n{body_text[:7000]}"
+            _bump(await _index_one(
+                db, user_id, rag_key, body, "global_knowledge", source_refs=[rel],
+            ), "global_knowledge")
+    stale = await db.hermes_memory.delete_many({
+        "user_id": user_id,
+        "_rag": True,
+        "type": "global_knowledge",
+        "rag_key": {"$nin": sorted(active_knowledge_keys)},
+    })
+    if getattr(stale, "deleted_count", 0):
+        by_source["global_knowledge_stale_deleted"] = int(stale.deleted_count)
 
     # 1) Wiki notes (user-written domain knowledge / decisions / rules)
     async for w in db.wiki_docs.find(
@@ -161,23 +201,36 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
                                source_refs=[title]), "wiki")
 
     # 2) Hermes lessons (self-scored, validated/decayed rules)
-    async for l in db.hermes_lessons.find({"user_id": user_id}):
+    active_lesson_keys = set()
+    async for l in db.hermes_lessons.find({
+        "user_id": user_id,
+        "status": "active",
+        "promotion_test.passes_multiple_testing": True,
+    }):
+        lesson_key = f"lesson:{l.get('dimension')}:{l.get('bucket')}"
+        active_lesson_keys.add(lesson_key)
         text = (f"[LESSON] dimension={l.get('dimension')} bucket={l.get('bucket')} "
                 f"status={l.get('status')} hit_rate={l.get('hit_rate')} "
                 f"confidence={l.get('confidence')} :: {l.get('claim') or l.get('text') or ''}")
         _bump(await _index_one(db, user_id,
-                               f"lesson:{l.get('dimension')}:{l.get('bucket')}",
+                               lesson_key,
                                text, "lesson"), "lesson")
+    stale = await db.hermes_memory.delete_many({
+        "user_id": user_id, "_rag": True, "type": "lesson",
+        "rag_key": {"$nin": sorted(active_lesson_keys)},
+    })
+    if getattr(stale, "deleted_count", 0):
+        by_source["lesson_stale_deleted"] = int(stale.deleted_count)
 
     # 3) Regime-conditional OOS verdicts (the reformed judge — our validated truth)
     run = await db.regime_oos_runs.find_one(
-        {"rows": {"$exists": True}}, sort=[("generated_at", -1)])
+        {"rows": {"$exists": True}, "scope": "global"}, sort=[("generated_at", -1)])
     if run:
         for row in run.get("rows", []):
             if not row.get("verdict"):
                 continue
             on = row.get("on_regime") or {}
-            text = (f"[OOS regime-conditional] {row.get('name')} "
+            text = (f"[GLOBAL OOS regime-conditional] {row.get('name')} "
                     f"[{row.get('underlying')} {row.get('structure')}] owns={row.get('owns')} "
                     f"VERDICT={row.get('verdict')} on-regime n={on.get('n')} avg=₹{on.get('avg')} "
                     f"wr={on.get('wr')}%; IS={row.get('in_sample', {}).get('avg')} "
@@ -199,6 +252,14 @@ async def reindex_all(db, user_id: str, *, wiki_limit: int = 500) -> Dict[str, A
                     f"expectancy=₹{row.get('expectancy')} n={row.get('n') or row.get('trades')}")
             _bump(await _index_one(db, user_id, f"oos-edgelab:{nm}", text, "oos",
                                    source_refs=[nm]), "oos_edgelab")
+
+    active_keys = set()
+    async for row in db.wiki_docs.find({"user_id": user_id}, {"_id": 1}):
+        active_keys.add(f"wiki:{row['_id']}")
+    await db.hermes_memory.delete_many({
+        "user_id": user_id, "_rag": True, "type": "wiki",
+        "rag_key": {"$nin": sorted(active_keys)},
+    })
 
     return {"stats": stats, "by_source": by_source,
             "generated_at": datetime.now(timezone.utc).isoformat()}

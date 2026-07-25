@@ -115,6 +115,15 @@ def test_disk_operations():
             except Exception:
                 pass
 
+
+def test_disk_operations_reject_topic_traversal(monkeypatch):
+    scratch = Path(__file__).resolve().parent.parent / "scratch" / "wiki_traversal"
+    scratch.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("WIKI_DIR", str(scratch))
+    with pytest.raises(ValueError, match="Invalid wiki topic"):
+        save_wiki_to_disk("escape", "../../outside", "x", [], {})
+
+
 def test_wrap_first_occurrence():
     from routes.wiki import wrap_first_occurrence
     

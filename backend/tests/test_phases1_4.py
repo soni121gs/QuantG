@@ -15,6 +15,7 @@ Tests:
 All tests use mocked DB and pure functions — no I/O.
 """
 import asyncio
+from unittest.mock import patch
 import sys
 import os
 import time
@@ -284,9 +285,10 @@ def test_07_loss_streak_throttle():
                 return {"current_streak": 3, "paused_until": future_pause,
                         "last_sl_at": datetime.now(timezone.utc).isoformat()}
 
-        ok, reason = await check_frequency_gate(
-            _StreamDB(), "s1", "NIFTY HFT Quick Scalper", "u1", freq_multiplier=1.0
-        )
+        with patch("trade_frequency.LOSS_STREAK_TRIGGER", 3):
+            ok, reason = await check_frequency_gate(
+                _StreamDB(), "s1", "NIFTY HFT Quick Scalper", "u1", freq_multiplier=1.0
+            )
         assert not ok, "Loss-streak throttle should block"
         assert "LOSS_STREAK" in (reason or ""), f"Unexpected reason: {reason}"
         print("PASS test_07_loss_streak_throttle")

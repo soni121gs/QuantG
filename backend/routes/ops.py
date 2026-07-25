@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from core import db, get_current_user
+from core.research_jobs import enqueue_research_job, research_job_status
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
 
@@ -625,16 +626,19 @@ async def ops_edge_lab(user=Depends(get_current_user)):
     finding, per-strategy OOS verdicts, and the credit-spread exit-geometry sweep).
     Read-only, instant — the heavy compute is done by POST /ops/edge-lab/refresh and
     cached. Returns {status:'empty'} until the first build runs."""
+    job = await research_job_status(db, kind="edge_lab", user_id=user["id"])
+    building = job.get("status") in {"queued", "running"}
     doc = await db.edge_lab_snapshots.find_one({"_id": f"latest:{user['id']}"}, {"_id": 0})
     if not doc:
         legacy = await db.edge_lab_snapshots.find_one({"_id": "latest", "built_by": user["id"]}, {"_id": 0})
         if legacy:
             legacy["status"] = "stale_legacy"
             legacy["stale_reason"] = "Snapshot was built before user-scoped ERP current-book Edge Lab cache; rebuild required."
-            legacy["building"] = _edge_lab_building
+            legacy["building"] = building
+            legacy["job"] = job
             return legacy
     if not doc:
-        return {"status": "empty", "building": _edge_lab_building,
+        return {"status": "empty", "building": building, "job": job,
                 "hint": "press Refresh to build the first Edge Lab snapshot"}
     # `status: "building"` is written to the DB before the task starts, but the
     # completion flag `_edge_lab_building` lives only in process memory. When the
@@ -643,7 +647,7 @@ async def ops_edge_lab(user=Depends(get_current_user)):
     # so the founder cannot recover from the screen. Both stored snapshots have been
     # wedged this way since 07-18/07-21; no completed snapshot has ever existed.
     # Age the flag out so a dead build reports as failed and Refresh comes back.
-    if str(doc.get("status")) == "building" and not _edge_lab_building:
+    if str(doc.get("status")) == "building" and not building:
         started = str(doc.get("refresh_started_at") or "")
         stale = True
         try:
@@ -655,7 +659,8 @@ async def ops_edge_lab(user=Depends(get_current_user)):
             doc["status"] = "failed"
             doc["error"] = (doc.get("error")
                             or "build did not finish (process died mid-build); press Refresh to retry")
-    doc["building"] = _edge_lab_building
+    doc["building"] = building
+    doc["job"] = job
     return doc
 
 
@@ -664,10 +669,9 @@ async def ops_edge_lab_refresh(user=Depends(get_current_user)):
     """Kick off a background rebuild of the Edge Lab snapshot (10s–several min over
     2yr of chains). Returns immediately; poll GET /ops/edge-lab for the fresh
     `generated_at`. Idempotent while a build is already running."""
-    global _edge_lab_building
-    if _edge_lab_building:
-        return {"status": "building", "already_running": True}
-    _edge_lab_building = True
+    queued = await enqueue_research_job(
+        db, kind="edge_lab", user_id=user["id"],
+    )
     await db.edge_lab_snapshots.update_one(
         {"_id": f"latest:{user['id']}"},
         {"$set": {"status": "building",
@@ -675,13 +679,12 @@ async def ops_edge_lab_refresh(user=Depends(get_current_user)):
                   "refresh_started_at": datetime.now(timezone.utc).isoformat()}},
         upsert=True,
     )
-    asyncio.create_task(_run_edge_lab_build(user["id"]))
-    return {"status": "building", "already_running": False}
+    return {"status": "building", **queued}
 
 
 @router.get("/edge-lab/trials")
 async def ops_edge_lab_trials(strategy: str = "", limit: int = 100, user=Depends(get_current_user)):
-    query = {"user_id": user["id"]}
+    query = {"user_id": user["id"], "config.judge_version": "eod_oos_v2"}
     if strategy:
         query["strategy_name"] = strategy
     rows = await db.strategy_trials.find(query, {"_id": 0}).sort(
@@ -964,11 +967,13 @@ async def ops_intraday_oos(user=Depends(get_current_user)):
     coverage = await asyncio.to_thread(OptionsMinuteStore().coverage)
     latest = await db.intraday_options_oos_runs.find_one(
         {"verdict_counts": {"$exists": True}}, {"_id": 0}, sort=[("generated_at", -1)])
+    job = await research_job_status(db, kind="intraday_oos", user_id=user["id"])
     return _json_safe({
         "kind": "intraday_1m_oos",
         "coverage": coverage,
         "latest_run": latest,
-        "running": _intraday_oos_running,
+        "running": job.get("status") in {"queued", "running"},
+        "job": job,
         "note": "Intraday 1m OOS judges option buyers; separate from the EOD theta OOS in Edge Lab.",
     })
 
@@ -978,12 +983,10 @@ async def ops_intraday_oos_refresh(start: str = "2025-01-01", end: str = "2025-1
                                    user=Depends(get_current_user)):
     """Kick a background intraday OOS validation run. Returns immediately; poll
     GET /ops/intraday-oos for the fresh verdicts."""
-    global _intraday_oos_running
-    if _intraday_oos_running:
-        return {"status": "running", "already_running": True}
-    _intraday_oos_running = True
-    asyncio.create_task(_run_intraday_oos(start, end))
-    return {"status": "running", "already_running": False}
+    return await enqueue_research_job(
+        db, kind="intraday_oos", user_id=user["id"],
+        params={"start": start, "end": end},
+    )
 
 
 # ---- RAE re-judge: regime-conditional OOS for the whole option book ---------
@@ -1017,10 +1020,12 @@ async def ops_regime_oos(user=Depends(get_current_user)):
     OOS (Edge Lab) and the intraday 1m OOS. Read-only; returns the latest stored run."""
     latest = await db.regime_oos_runs.find_one(
         {"rows": {"$exists": True}}, {"_id": 0}, sort=[("generated_at", -1)])
+    job = await research_job_status(db, kind="regime_oos", user_id=user["id"])
     return _json_safe({
         "kind": "regime_conditional_oos",
         "latest_run": latest,
-        "running": _regime_oos_running,
+        "running": job.get("status") in {"queued", "running"},
+        "job": job,
         "note": "Graded on each strategy's OWNED regime, not blended all-days. "
                 "SENSEX/BANKNIFTY need 1-min data before they can be regime-judged.",
     })
@@ -1031,12 +1036,10 @@ async def ops_regime_oos_refresh(status: str = "all", start: Optional[str] = Non
                                  end: Optional[str] = None, user=Depends(get_current_user)):
     """Kick a background regime-conditional re-judge over ALL strategy statuses.
     Returns immediately; poll GET /ops/regime-oos for the fresh scorecard."""
-    global _regime_oos_running
-    if _regime_oos_running:
-        return {"status": "running", "already_running": True}
-    _regime_oos_running = True
-    asyncio.create_task(_run_regime_oos(start, end, status))
-    return {"status": "running", "already_running": False}
+    return await enqueue_research_job(
+        db, kind="regime_oos", user_id=user["id"],
+        params={"start": start, "end": end, "status": status},
+    )
 
 
 # ---- IA-7: research RAG — index our validated history for Hermes recall ------

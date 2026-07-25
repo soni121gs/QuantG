@@ -344,3 +344,25 @@ async def get_brain_health(db, user_id: str) -> Dict[str, Any]:
         ],
         "as_of": _now_iso(),
     }
+async def requalify_legacy_active_lessons(db, user_id: str | None = None) -> int:
+    """Downgrade active lessons that predate the current significance contract."""
+    query: Dict[str, Any] = {
+        "status": "active",
+        "$or": [
+            {"promotion_test": {"$exists": False}},
+            {"promotion_test.passes_multiple_testing": {"$ne": True}},
+        ],
+    }
+    if user_id:
+        query["user_id"] = user_id
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.hermes_lessons.update_many(
+        query,
+        {"$set": {
+            "status": "candidate",
+            "legacy_requalification_required": True,
+            "requalified_at": now,
+            "updated_at": now,
+        }},
+    )
+    return int(result.modified_count)

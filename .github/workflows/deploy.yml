@@ -1,27 +1,52 @@
-name: 🚀 Auto Deploy to VPS
+name: Test and deploy QuantG
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main]
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: 🚚 Checkout Code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt pytest pytest-timeout
+      - name: Run offline backend tests
+        working-directory: backend
+        run: >-
+          python -m pytest tests -m "not integration"
+          --timeout=60
+          --ignore=tests/test_live_readiness.py
+          --ignore=tests/test_execution_bridge_upstox_only.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
 
-      - name: 🔑 Deploy to VPS via SSH
-        uses: appleboy/ssh-action@master
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy verified main to VPS
+        uses: appleboy/ssh-action@v1.2.2
         with:
           host: 82.180.145.183
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /home/QuantG
-            git pull origin main || git pull origin master
-            docker-compose down --remove-orphans
-            docker-compose up -d --build
-            docker system prune -f
+            set -e
+            cd /opt/QuantG
+            git pull --ff-only origin main
+            chmod 600 .env.hermes
+            docker compose build backend frontend hermes
+            docker compose up -d backend frontend hermes caddy
+            docker compose ps

@@ -194,7 +194,7 @@ class _DB:
 @pytest.mark.asyncio
 async def test_runner_persists_and_auto_resolves():
     db = _DB()
-    bad = {"id": "s1", "name": "Bad Geo", "status": "live",
+    bad = {"id": "s1", "user_id": "u1", "name": "Bad Geo", "status": "live",
            "visual_config": {"options": {"structure": "credit_spread",
                                          "credit_tp_frac": 0.35, "credit_sl_mult": 1.5}}}
     db.strategies.docs.append(bad)

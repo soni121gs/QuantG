@@ -18,7 +18,7 @@ from core.market_domains import contract_spec_for_underlying  # noqa: E402
 from core.spread_builder import SPREAD_ROUND_TRIP_COST_PER_LOT  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("QUANTG_REPO_ROOT", Path(__file__).resolve().parents[2]))
 OUT = ROOT / "wiki" / "Measured"
 
 

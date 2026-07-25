@@ -284,7 +284,15 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             rows.append({"name": s.get("name"), "error": judged.get("error")})
             continue
         o = judged.get("overall") or {}
+        oos_trades = judged.get("oos_trades") or []
         rows.append({
+            "strategy_id": s.get("id"),
+            "strategy_config": {
+                "python_code": s.get("python_code"),
+                "visual_config": s.get("visual_config"),
+                "parameters": s.get("parameters"),
+                "logic_version": s.get("strategy_logic_version"),
+            },
             "name": judged.get("name"), "underlying": judged.get("underlying"),
             "structure": judged.get("structure"), "verdict": judged.get("verdict"),
             "n": o["n"], "expectancy": o["expectancy"], "win_rate": o["win_rate"],
@@ -295,7 +303,11 @@ def _oos(strategies: List[Dict[str, Any]], store: BhavcopyStore,
             "regime_breakdown": judged.get("regime_breakdown") or {},
             "signals": judged.get("signals", 0),
             "signal_evaluation": judged.get("signal_evaluation"),
-            "trade_returns": [float(t.get("pnl") or 0.0) for t in (judged.get("trades") or [])],
+            "oos_returns": [
+                float(t.get("pnl") or 0.0) / 100_000.0
+                for t in oos_trades
+            ],
+            "return_basis": "oos_trade_pnl_divided_by_starting_capital",
         })
     order = {"CANDIDATE_EDGE": 0, "FRAGILE": 1, "INSUFFICIENT_DATA": 2, "NO_EDGE_NEGATIVE": 3}
     rows.sort(key=lambda r: order.get(r.get("verdict", ""), 9))

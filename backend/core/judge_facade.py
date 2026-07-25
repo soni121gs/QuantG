@@ -75,6 +75,7 @@ def grade(
             "overall": overall,
             "oos": wf.get("oos"),
             "oos_year": wf.get("oos_year"),
+            "oos_trades": wf.get("oos_trades") or [],
             "pct_green_months": wf.get("pct_green_months"),
             "signals": res.get("signals", 0),
             "signal_evaluation": res.get("signal_evaluation"),

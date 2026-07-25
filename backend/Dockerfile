@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app sources
 COPY backend/ /app
-COPY wiki/Research/ /app/wiki/Research/
+COPY CLAUDE.md /app/CLAUDE.md
+COPY wiki/ /app/wiki/
 
 # Create a non-root user and give ownership of the app directory
 RUN mkdir -p /data \

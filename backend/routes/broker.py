@@ -289,13 +289,18 @@ async def upstox_option_chain(
     if not spot_key:
         raise HTTPException(status_code=400, detail=f"Unsupported option-chain underlying: {underlying}")
     if not expiry_date:
-        from datetime import date as _date, timedelta as _td
+        from datetime import date as _date
 
-        expiry_weekday = 4 if underlying == "SENSEX" else 3
         today = _date.today()
-        days_ahead = (expiry_weekday - today.weekday()) % 7
-        nearest = today + _td(days=days_ahead)
-        expiry_date = nearest.strftime("%Y-%m-%d")
+        contracts = await asyncio.to_thread(gateway.get_option_contracts, spot_key, None)
+        expiries = sorted({
+            str(row.get("expiry"))
+            for row in ((contracts or {}).get("data") or [])
+            if str(row.get("expiry") or "") >= today.isoformat()
+        })
+        if not expiries:
+            raise HTTPException(status_code=502, detail="No currently listed option expiry was returned by Upstox.")
+        expiry_date = expiries[0]
     try:
         chain = await asyncio.to_thread(gateway.get_option_chain, spot_key, expiry_date)
     except RuntimeError as exc:

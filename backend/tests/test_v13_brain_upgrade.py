@@ -92,41 +92,15 @@ def generate_test_candles(pattern_type="uptrend", count=100):
 
 
 # T1: All default strategies exist in catalog after MCX filtering
-def test_all_9_default_strategies_exist_and_no_mcx():
+def test_current_keeper_catalog_exists_and_has_no_mcx():
     names = {s["name"] for s in server.DEFAULT_OPTION_STRATEGIES}
     expected_names = {
         "QG-O1 NIFTY Put Spread Theta Core",
-        "QG-O2 NIFTY Trend-Filtered Put Spread Theta",
-        "QG-O3 SENSEX Put Spread Theta Pilot",
         "QG-O4 SENSEX Call Spread Range Pilot",
-        "QG-O5 NIFTY Opening Range Call Buyer",
-        "QG-O6 NIFTY Opening Range Put Buyer",
-        "QG-O7 BANKNIFTY VWAP Reclaim Call Buyer",
-        "QG-O8 BANKNIFTY VWAP Reject Put Buyer",
-        "QG-O9 NIFTY Tail Event Put Buyer",
-        "QG-O10 NIFTY Premium-Safe Debit Buyer",
-        "NIFTY Momentum Buyer",
-        "BANKNIFTY Breakout Buyer",
-        "NIFTY VWAP Trend Breakout",
-        "SENSEX Swing RSI Pullback",
-        "NIFTY Micro-Lot Trend Follower",
-        "NIFTY HFT Quick Scalper",
-        "BANKNIFTY HFT Momentum Scalper",
-        "NIFTY Quick EMA Scalper",
-        "BANKNIFTY Volatility Breakout",
-        "RELIANCE Trend Rider",
-        "SBIN Short Seller",
-        "HDFCBANK Range Rebound",
-        "ICICIBANK Volatility Breakout",
-        "TCS Swing Accumulator",
-        "INFY VWAP Pullback",
-        "AXISBANK Trend Follower",
-        "LT Momentum Rider",
-        "BHARTIARTL Intraday Trend",
-        "KOTAKBANK RSI Rebound",
+        "QG-O11 NIFTY Regime Seller Credit Scalp",
     }
     assert names == expected_names
-    assert len(server.DEFAULT_OPTION_STRATEGIES) == 29
+    assert len(server.DEFAULT_OPTION_STRATEGIES) == 3
     
     # Assert no MCX strategies exist in DEFAULT_OPTION_STRATEGIES
     for s in server.DEFAULT_OPTION_STRATEGIES:
@@ -172,26 +146,12 @@ def test_all_templates_emit_v13_signals():
 
 
 # T4 & T5: Code hashes are distinct for decoupled scalper and breakout strategies
-def test_decoupled_strategy_code_hashes_are_different():
-    # Find specific templates
-    nifty_hft_scalper = next(s for s in server.DEFAULT_OPTION_STRATEGIES if s["name"] == "NIFTY HFT Quick Scalper")
-    nifty_ema_scalper = next(s for s in server.DEFAULT_OPTION_STRATEGIES if s["name"] == "NIFTY Quick EMA Scalper")
-    
-    banknifty_hft_scalper = next(s for s in server.DEFAULT_OPTION_STRATEGIES if s["name"] == "BANKNIFTY HFT Momentum Scalper")
-    banknifty_vol_breakout = next(s for s in server.DEFAULT_OPTION_STRATEGIES if s["name"] == "BANKNIFTY Volatility Breakout")
-    
-    # Calculate code hashes
-    hash_nifty_hft = calculate_code_hash(nifty_hft_scalper["python_code"])
-    hash_nifty_ema = calculate_code_hash(nifty_ema_scalper["python_code"])
-    
-    hash_bn_hft = calculate_code_hash(banknifty_hft_scalper["python_code"])
-    hash_bn_vol = calculate_code_hash(banknifty_vol_breakout["python_code"])
-    
-    # T4: NIFTY HFT Quick Scalper vs NIFTY Quick EMA Scalper
-    assert hash_nifty_hft != hash_nifty_ema, "NIFTY HFT Quick Scalper and NIFTY Quick EMA Scalper codes must have different hashes"
-    
-    # T5: BANKNIFTY HFT Momentum Scalper vs BANKNIFTY Volatility Breakout
-    assert hash_bn_hft != hash_bn_vol, "BANKNIFTY HFT Momentum Scalper and BANKNIFTY Volatility Breakout codes must have different hashes"
+def test_current_keeper_strategy_code_hashes_are_different():
+    hashes = {
+        calculate_code_hash(strategy["python_code"])
+        for strategy in server.DEFAULT_OPTION_STRATEGIES
+    }
+    assert len(hashes) == len(server.DEFAULT_OPTION_STRATEGIES)
 
 
 # T6: Sandbox runner safety and crash resilience on short/empty data arrays
@@ -261,8 +221,7 @@ async def test_v13_strategy_brain_dry_run_endpoint_reports_upgrade():
     assert data["ok"] is True
     
     # Default strategies in DB should have their old version detected
-    assert "NIFTY VWAP Trend Breakout" in data["old_default_versions"]
-    assert data["old_default_versions"]["NIFTY VWAP Trend Breakout"] == "retail-balanced-v3"
+    assert data["old_default_versions"] == {}
     
     # Verify no database mutation happened during dry-run
     assert mock_db.strategies.insert_many.call_count == 0

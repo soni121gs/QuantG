@@ -196,6 +196,7 @@ async def test_daily_paper_lifecycle_resets_today_and_marks_stale_positions():
     mock_db.positions.update_many = AsyncMock(return_value=result(modified=1))
     mock_db.orders.update_many = AsyncMock(return_value=result(modified=5))
     mock_db.strategies.update_many = AsyncMock(return_value=result(modified=3))
+    mock_db.strategy_loss_streaks.update_many = AsyncMock(return_value=result(modified=0))
     mock_db.paper_session_state.update_one = AsyncMock()
 
     with patch("server.db", mock_db):
@@ -206,6 +207,7 @@ async def test_daily_paper_lifecycle_resets_today_and_marks_stale_positions():
         "stale_positions": 1,
         "history_orders_marked": 5,
         "strategies_reset": 3,
+        "loss_streaks_reset": 0,
     }
     stale_update = mock_db.strategy_positions.update_many.await_args.args[1]
     assert stale_update["$set"]["status"] == "STALE_NEEDS_REVIEW"

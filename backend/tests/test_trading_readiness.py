@@ -633,7 +633,7 @@ class TestPart2LTPResolver(unittest.TestCase):
                 ltp, source = await resolve_position_ltp(
                     db, pos, mock_quote_ltp, mock_get_ltp, mock_settings, allow_entry_fallback=False
                 )
-                self.assertNotEqual(source, "WS_CACHE")
+            self.assertEqual(source, "WS_CACHE")
             
         asyncio.run(run_test())
 

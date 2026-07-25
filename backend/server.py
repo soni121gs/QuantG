@@ -16993,10 +16993,12 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             if edge_lab_in_app and hour == 20 and minute == 30 and _edge_lab_rebuild_done_date != today:
                 _edge_lab_rebuild_done_date = today
                 try:
-                    from routes.ops import _run_edge_lab_build
+                    from core.research_jobs import enqueue_research_job
                     for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
-                        asyncio.create_task(_run_edge_lab_build(_row["id"]))
-                    logger.info("Edge Lab: nightly rebuild scheduled")
+                        await enqueue_research_job(
+                            db, kind="edge_lab", user_id=_row["id"],
+                        )
+                    logger.info("Edge Lab: nightly rebuild queued for host worker")
                 except Exception as _el_err:
                     logger.warning("Edge Lab nightly rebuild failed to start: %s", _el_err)
 
@@ -17007,64 +17009,39 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             if ist.weekday() == 5 and hour == 5 and _hist_validate_done_week != _iso_week:
                 _hist_validate_done_week = _iso_week
                 try:
-                    from core.hermes_historical_validator import validate_structure_lessons
-                    from core.hermes_advisor import compile_hermes_advice
+                    from core.research_jobs import enqueue_research_job
                     for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
-                        _hv = await validate_structure_lessons(db, _row["id"])
-                        await compile_hermes_advice(db, _row["id"])
-                        logger.info("Weekly Hermes historical validation user=%s: %s", _row["id"], _hv.get("validated"))
+                        await enqueue_research_job(
+                            db, kind="hermes_validation", user_id=_row["id"],
+                        )
+                    logger.info("Weekly Hermes historical validation queued")
                 except Exception as _hv_err:
                     logger.error("Weekly historical validation failed: %s", _hv_err)
 
             if ist.weekday() == 5 and hour == 5 and _earnings_forward_done_week != _iso_week:
                 _earnings_forward_done_week = _iso_week
                 try:
-                    # P5-M2: universe comes from the bhavcopy store (every stock that
-                    # actually has options), not a hand-maintained top-30 list, so it
-                    # widens automatically with the P5-M1 ingest instead of silently
-                    # capping the earnings sleeve's event count.
-                    from scripts.earnings_calendar_fetch_nse import (
-                        collect_events, fno_universe_from_store)
-                    _start = ist.date() - timedelta(days=45)
-                    _end = ist.date() + timedelta(days=45)
-                    _universe = await asyncio.to_thread(fno_universe_from_store)
-                    _er = await asyncio.to_thread(
-                        collect_events, _universe, _start, _end,
-                        chunk_days=120, sleep_sec=0.5,
+                    from core.research_jobs import enqueue_research_job
+                    await enqueue_research_job(
+                        db, kind="earnings_calendar", user_id="system",
                     )
-                    logger.info("Weekly earnings-calendar forward refresh: %s", _er)
+                    logger.info("Weekly earnings-calendar refresh queued")
                 except Exception as _ec_err:
                     logger.error("Weekly earnings-calendar forward refresh failed: %s", _ec_err)
 
             if ist.weekday() == 6 and hour == 5 and minute >= 30 and _phase4_research_done_week != _iso_week:
                 _phase4_research_done_week = _iso_week
                 try:
-                    def _run_phase4_weekly(uid: str) -> Dict[str, Any]:
-                        import pymongo
-                        from core.phase4_research import (
-                            corpus_status,
-                            default_weekly_cards,
-                            persist_hypothesis_cards,
-                            persist_research_signals,
-                            run_opportunity_probes,
-                        )
-                        _client = pymongo.MongoClient(os.environ.get("MONGO_URL", "mongodb://mongo:27017"))
-                        _db = _client[os.environ.get("DB_NAME", "quantg")]
-                        _corpus = corpus_status()
-                        _probes = run_opportunity_probes()
-                        _cards = default_weekly_cards(_probes, _corpus)
-                        return {
-                            "signals": persist_research_signals(_db, _probes, user_id=uid),
-                            "cards": persist_hypothesis_cards(_db, uid, _cards),
-                            "corpus_count": _corpus.get("count"),
-                        }
+                    from core.research_jobs import enqueue_research_job
                     users_p4 = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
                     for row in users_p4:
                         uid = row.get("id")
                         if not uid:
                             continue
-                        summary = await asyncio.to_thread(_run_phase4_weekly, uid)
-                        logger.info("Phase 4 weekly research refresh user=%s summary=%s", uid, summary)
+                        await enqueue_research_job(
+                            db, kind="phase4_research", user_id=uid,
+                        )
+                    logger.info("Phase 4 weekly research refresh queued")
                 except Exception as _p4_err:
                     logger.warning("Phase 4 weekly research refresh failed: %s", _p4_err)
 

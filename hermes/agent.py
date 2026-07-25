@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import re
+import json
 from datetime import datetime, timezone, timedelta
 import requests
 from dotenv import load_dotenv
@@ -13,8 +14,11 @@ load_dotenv(".env.hermes")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 QUANTG_BACKEND_URL = os.getenv("QUANTG_BACKEND_URL", "http://backend:8000/api")
-QUANTG_OPERATOR_EMAIL = os.getenv("QUANTG_OPERATOR_EMAIL", "demo@quantdesk.io")
-QUANTG_OPERATOR_PASSWORD = os.getenv("QUANTG_OPERATOR_PASSWORD", "demo1234")
+QUANTG_OPERATOR_EMAIL = os.getenv("QUANTG_OPERATOR_EMAIL")
+QUANTG_OPERATOR_PASSWORD = os.getenv("QUANTG_OPERATOR_PASSWORD")
+HEALTH_PATH = os.getenv("HERMES_HEALTH_PATH", "/tmp/hermes_health.json")
+_telegram_failures = 0
+_error_log_at = {}
 
 # Rate limit watchdog alerts: alert once per hour per type
 last_alert_sent = {}
@@ -24,6 +28,44 @@ ALERT_COOLDOWN_SECONDS = 3600
 DROUGHT_CUTOFF_IST = os.getenv("DROUGHT_CUTOFF_IST", "12:00")
 DRAWDOWN_ALERT_FRAC = float(os.getenv("DRAWDOWN_ALERT_FRAC", "0.8"))
 LOSS_STREAK_N = int(os.getenv("LOSS_STREAK_N", "3"))
+
+def _safe_error(exc):
+    message = str(exc)
+    if TELEGRAM_BOT_TOKEN:
+        message = message.replace(TELEGRAM_BOT_TOKEN, "[REDACTED]")
+    return message
+
+
+def _log_error(key, message):
+    now = time.time()
+    if now - _error_log_at.get(key, 0) >= 60:
+        print(message)
+        _error_log_at[key] = now
+
+
+def _write_health():
+    payload = {
+        "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+        "telegram_failures": _telegram_failures,
+        "status": "ok" if _telegram_failures < 5 else "degraded",
+    }
+    temp = HEALTH_PATH + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    os.replace(temp, HEALTH_PATH)
+
+
+def _validate_config():
+    required = {
+        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
+        "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+        "QUANTG_OPERATOR_EMAIL": QUANTG_OPERATOR_EMAIL,
+        "QUANTG_OPERATOR_PASSWORD": QUANTG_OPERATOR_PASSWORD,
+    }
+    missing = [key for key, value in required.items() if not value]
+    if missing:
+        raise RuntimeError("Missing required Hermes configuration: " + ", ".join(missing))
+
 
 class QuantGClient:
     def __init__(self, base_url, email, password):
@@ -75,6 +117,7 @@ class QuantGClient:
 client = QuantGClient(QUANTG_BACKEND_URL, QUANTG_OPERATOR_EMAIL, QUANTG_OPERATOR_PASSWORD)
 
 def send_telegram_alert(text):
+    global _telegram_failures
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[TELEGRAM] Missing bot token or chat ID, cannot send message.")
         return False
@@ -87,13 +130,16 @@ def send_telegram_alert(text):
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
+            _telegram_failures = 0
             print("[TELEGRAM] Message sent successfully")
             return True
         else:
-            print(f"[TELEGRAM] Send failed with status code {r.status_code}: {r.text}")
+            _telegram_failures += 1
+            _log_error("telegram_send_status", f"[TELEGRAM] Send failed with status code {r.status_code}")
             return False
     except Exception as e:
-        print(f"[TELEGRAM] Exception sending alert: {e}")
+        _telegram_failures += 1
+        _log_error("telegram_send", f"[TELEGRAM] Exception sending alert: {_safe_error(e)}")
         return False
 
 def is_market_hours():
@@ -399,18 +445,21 @@ def run_eod_report(date_str):
 
 
 def init_telegram_offset():
+    global _telegram_failures
     if not TELEGRAM_BOT_TOKEN:
         return 0
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     try:
         r = requests.get(url, params={"offset": -1, "timeout": 0}, timeout=5)
         if r.status_code == 200:
+            _telegram_failures = 0
             data = r.json()
             results = data.get("result", [])
             if results:
                 return results[-1]["update_id"] + 1
     except Exception as e:
-        print(f"[TELEGRAM] Error initializing offset: {e}")
+        _telegram_failures += 1
+        _log_error("telegram_init", f"[TELEGRAM] Error initializing offset: {_safe_error(e)}")
     return 0
 
 
@@ -603,6 +652,7 @@ def handle_incoming_message(message):
 
 
 def poll_telegram_updates(offset):
+    global _telegram_failures
     if not TELEGRAM_BOT_TOKEN:
         return offset
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
@@ -610,6 +660,7 @@ def poll_telegram_updates(offset):
     try:
         r = requests.get(url, params=params, timeout=7)
         if r.status_code == 200:
+            _telegram_failures = 0
             data = r.json()
             updates = data.get("result", [])
             for update in updates:
@@ -630,7 +681,8 @@ def poll_telegram_updates(offset):
                 
                 handle_incoming_message(message)
     except Exception as e:
-        print(f"[TELEGRAM] Error polling updates: {e}")
+        _telegram_failures += 1
+        _log_error("telegram_poll", f"[TELEGRAM] Error polling updates: {_safe_error(e)}")
     return offset
 
 
@@ -692,6 +744,7 @@ def run_weekly_ranking_report(date_str):
 
 
 def run_loop():
+    _validate_config()
     last_watchdog_run = 0
     last_premarket_date = None
     last_briefing_date = None
@@ -711,6 +764,7 @@ def run_loop():
     
     while True:
         try:
+            _write_health()
             now_utc = datetime.now(timezone.utc)
             ist = now_utc + timedelta(hours=5, minutes=30)
             today_str = ist.strftime("%Y-%m-%d")
@@ -750,7 +804,7 @@ def run_loop():
         except Exception as e:
             print(f"[AGENT] Exception in main loop: {e}")
             
-        time.sleep(1)
+        time.sleep(min(60, max(1, 2 ** min(_telegram_failures, 6))))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import json
 import math
 import statistics
 from datetime import datetime, timezone
+from statistics import NormalDist
 from typing import Any, Dict, Iterable, List
 
 
@@ -16,9 +17,15 @@ def stable_hash(value: Any) -> str:
 
 def trial_document(*, user_id: str, row: Dict[str, Any], snapshot: Dict[str, Any]) -> Dict[str, Any]:
     config = {
+        "user_id": user_id,
+        "strategy_id": row.get("strategy_id"),
         "strategy": row.get("name"), "underlying": row.get("underlying"),
         "structure": row.get("structure"), "window": snapshot.get("coverage"),
         "costs": snapshot.get("base_rate", {}).get("slippage_pct"),
+        "strategy_config_hash": stable_hash(row.get("strategy_config") or {}),
+        "judge_version": "eod_oos_v2",
+        "cost_model_version": "spread_cost_v1",
+        "return_basis": row.get("return_basis"),
     }
     trial_hash = stable_hash(config)
     return {
@@ -28,7 +35,7 @@ def trial_document(*, user_id: str, row: Dict[str, Any], snapshot: Dict[str, Any
             "n", "pnl", "expectancy", "oos_expectancy", "win_rate", "pct_green_months",
             "std", "t_stat", "sharpe",
         )},
-        "trade_returns": row.get("trade_returns") or [],
+        "oos_returns": row.get("oos_returns") or [],
         "verdict": row.get("verdict") or "ERROR",
         "reject_reasons": row.get("reject_reasons") or [],
         "primary_reject_reason": row.get("primary_reject_reason"),
@@ -73,10 +80,10 @@ def _standardized_moment(vals: List[float], power: int, mean: float, sd: float) 
 
 
 def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str, Any]:
-    """Deflated Sharpe from stored per-trade returns, with a labelled legacy fallback."""
+    """Probability that OOS Sharpe exceeds the multiple-testing noise threshold."""
     n = int(row.get("n") or 0)
     exp = float(row.get("oos_expectancy") or row.get("expectancy") or 0.0)
-    returns = [float(x) for x in (row.get("trade_returns") or row.get("returns") or []) if x is not None]
+    returns = [float(x) for x in (row.get("oos_returns") or []) if x is not None]
     if len(returns) >= 3:
         mean = statistics.mean(returns)
         sd = statistics.stdev(returns)
@@ -84,33 +91,42 @@ def deflated_sharpe(row: Dict[str, Any], *, trials_tested: int = 1) -> Dict[str,
         skew = _standardized_moment(returns, 3, mean, sd) if sd > 0 else 0.0
         kurt = _standardized_moment(returns, 4, mean, sd) if sd > 0 else 3.0
         trials = max(1, int(trials_tested))
-        expected_max_noise = math.sqrt(2.0 * math.log(max(2, trials)))
+        if trials == 1:
+            expected_max_noise = 0.0
+        else:
+            normal = NormalDist()
+            euler_gamma = 0.5772156649
+            expected_max_noise = (
+                (1.0 - euler_gamma) * normal.inv_cdf(1.0 - 1.0 / trials)
+                + euler_gamma * normal.inv_cdf(1.0 - 1.0 / (trials * math.e))
+            ) / math.sqrt(max(1, len(returns) - 1))
         variance_adj = max(0.25, 1.0 - skew * sharpe + ((kurt - 1.0) / 4.0) * sharpe * sharpe)
-        dsr = (sharpe * math.sqrt(len(returns)) - expected_max_noise) / math.sqrt(variance_adj)
+        z_score = (
+            (sharpe - expected_max_noise) * math.sqrt(len(returns) - 1)
+            / math.sqrt(variance_adj)
+        )
+        probability = NormalDist().cdf(z_score)
         return {
             "trials_count": trials,
             "observed_sharpe": round(sharpe, 4),
-            "deflated_sharpe": round(dsr, 3),
+            "deflated_sharpe_probability": round(probability, 6),
+            "deflated_sharpe": round(probability, 6),
             "multiple_testing_penalty": round(expected_max_noise, 3),
-            "method": "return_vector_dsr_v1",
+            "method": "oos_normalized_dsr_v2",
             "sample_n": len(returns),
             "skew": round(skew, 3),
             "kurtosis": round(kurt, 3),
-            "passed": bool(dsr > 0 and len(returns) >= 30 and exp > 0),
+            "passed": bool(probability >= 0.95 and len(returns) >= 30 and exp > 0),
         }
-    green = max(0.0, min(1.0, float(row.get("pct_green_months") or 0.0) / 100.0))
-    sample_scale = math.sqrt(min(n, 250) / 30.0) if n > 0 else 0.0
-    observed = (exp / 500.0) * sample_scale * (0.5 + 0.5 * green)
-    penalty = min(1.5, math.sqrt(math.log(max(2, trials_tested))) / 2.0)
-    dsr = observed - penalty
     return {
         "trials_count": int(max(1, trials_tested)),
-        "observed_sharpe_proxy": round(observed, 3),
-        "deflated_sharpe": round(dsr, 3),
-        "multiple_testing_penalty": round(penalty, 3),
-        "method": "edge_lab_proxy_v1",
-        "warning": "legacy row has no trade_returns; not a full Deflated Sharpe",
-        "passed": bool(dsr > 0 and n >= 30 and exp > 0),
+        "deflated_sharpe_probability": None,
+        "deflated_sharpe": None,
+        "multiple_testing_penalty": None,
+        "method": "insufficient_oos_returns",
+        "warning": "No normalized OOS return vector; DSR cannot be computed.",
+        "sample_n": len(returns),
+        "passed": False,
     }
 
 

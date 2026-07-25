@@ -35,9 +35,7 @@ async def _build_context(db, user_id: str, date_str: str, now: Optional[datetime
     hm = f"{ist.hour:02d}:{ist.minute:02d}"
     in_hours = (ist.weekday() < 5) and ("09:15" <= hm <= "15:30")
 
-    strategies = await db.strategies.find(
-        {"user_id": user_id} if await db.strategies.count_documents({"user_id": user_id}) else {}
-    ).to_list(500)
+    strategies = await db.strategies.find({"user_id": user_id}).to_list(500)
     closed_today = await db.strategy_positions.find(
         {"user_id": user_id, "status": "CLOSED",
          "$or": [{"created_at": {"$regex": f"^{date_str}"}},
@@ -81,9 +79,16 @@ async def _persist(db, user_id: str, date_str: str,
     ran = set(ran_probe_ids)
     resolved = 0
     async for prev in db.hermes_findings.find(
-        {"user_id": user_id, "status": "open"}, {"key": 1, "probe_id": 1}
+        {"user_id": user_id, "status": "open"}, {"key": 1, "probe_id": 1, "entity": 1}
     ):
-        if prev.get("probe_id") in ran and prev.get("key") not in emitted_keys:
+        probe_succeeded = (
+            prev.get("probe_id") in ran
+            or (
+                prev.get("probe_id") == "infra.probe_error"
+                and prev.get("entity") in ran
+            )
+        )
+        if probe_succeeded and prev.get("key") not in emitted_keys:
             await db.hermes_findings.update_one(
                 {"user_id": user_id, "key": prev.get("key")},
                 {"$set": {"status": "resolved", "resolved_at": now_iso,
@@ -123,8 +128,14 @@ async def run_diagnostics(db, user_id: str, date_str: Optional[str] = None,
     findings: List[Finding] = []
     ran_ids: List[str] = []
     for spec in specs:
-        ran_ids.append(spec.probe_id)
-        findings.extend(await run_probe_safe(spec, ctx))
+        emitted = await run_probe_safe(spec, ctx)
+        crashed = any(
+            f.probe_id == "infra.probe_error" and f.entity == spec.probe_id
+            for f in emitted
+        )
+        if not crashed:
+            ran_ids.append(spec.probe_id)
+        findings.extend(emitted)
 
     # Verifier (Layer 3): findings are deterministic; a probe that emitted with
     # real evidence is CONFIRMED. Probes already return nothing (not a guess) when

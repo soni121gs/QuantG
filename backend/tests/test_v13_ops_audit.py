@@ -219,25 +219,17 @@ async def test_ops_default_strategy_catalog_audit():
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["total_default_strategies"] == 19
+    assert data["total_default_strategies"] == 3
     assert data["mcx_crude_naturalgas_excluded"] is True
     
     # Confirm names are returned
     names = data["names"]
-    assert "NIFTY VWAP Trend Breakout" in names
-    assert "SENSEX Swing RSI Pullback" in names
-    assert "NIFTY Quick EMA Scalper" in names
+    assert "QG-O1 NIFTY Put Spread Theta Core" in names
+    assert "QG-O4 SENSEX Call Spread Range Pilot" in names
+    assert "QG-O11 NIFTY Regime Seller Credit Scalp" in names
     
-    # Verify duplicates inside default catalog are decoupled
-    # NIFTY HFT Quick Scalper and NIFTY Quick EMA Scalper no longer share the same code
     assert data["shares_code_with_another"] is False
-    
-    # Locate HFT and Quick EMA scalpers and check they do not share_code
-    scalpers = [s for s in data["strategies"] if s["name"] in ("NIFTY HFT Quick Scalper", "NIFTY Quick EMA Scalper")]
-    assert len(scalpers) == 2
-    assert scalpers[0]["shares_code"] is False
-    assert scalpers[1]["shares_code"] is False
-    assert scalpers[0]["code_hash"] != scalpers[1]["code_hash"]
+    assert len({row["code_hash"] for row in data["strategies"]}) == 3
 
 
 @pytest.mark.anyio
@@ -285,15 +277,9 @@ async def test_ops_v13_strategy_brain_dry_run_is_readonly():
     data = response.json()
     assert data["ok"] is True
     
-    # Inserts: 19 default strategies total - 2 present in DB = 17 to insert
-    assert len(data["strategies_to_insert"]) == 17
-    # Updates: 2 present in DB
-    assert len(data["strategies_to_update_by_name"]) == 2
-    assert "NIFTY VWAP Trend Breakout" in data["strategies_to_update_by_name"]
-    assert "NIFTY Momentum Buyer" in data["strategies_to_update_by_name"]
-    
-    # Old versions map
-    assert data["old_default_versions"]["NIFTY VWAP Trend Breakout"] == "retail-balanced-v3"
+    assert len(data["strategies_to_insert"]) == 3
+    assert data["strategies_to_update_by_name"] == []
+    assert data["old_default_versions"] == {}
     
     # Exits & Metadata
     assert "NIFTY Momentum Buyer" in data["strategies_that_use_signal_only_exit"]

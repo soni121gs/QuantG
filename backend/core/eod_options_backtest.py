@@ -557,6 +557,10 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
 
     year_keys = sorted(years.keys())
     oos_year = year_keys[-1] if year_keys else None            # latest = out-of-sample
+    oos_trades = [
+        t for t in trades
+        if oos_year and str(t.get("exit_date") or "").startswith(oos_year)
+    ]
     green_months = sum(1 for b in months.values() if b["pnl"] > 0)
     pct_green = round(100 * green_months / len(months), 1) if months else 0.0
     all_years_positive = bool(year_keys) and all(years[y]["pnl"] > 0 for y in year_keys)
@@ -583,6 +587,7 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "verdict": verdict, "overall": overall,
         "oos_year": oos_year, "oos": years.get(oos_year, {}),
+        "oos_trades": oos_trades,
         "by_year": years, "pct_green_months": pct_green,
         "n_months": len(months), "green_months": green_months,
         "all_years_positive": all_years_positive,

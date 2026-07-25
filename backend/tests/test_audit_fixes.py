@@ -18,6 +18,7 @@ async def test_loss_streak_standardization():
     mock_db.strategy_loss_streaks.find_one = AsyncMock(return_value={
         "current_streak": 2,
         "paused_until": None,
+        "last_sl_at": datetime.now(timezone.utc).isoformat(),
     })
     
     # We mock update_one to capture what is being updated
@@ -29,7 +30,8 @@ async def test_loss_streak_standardization():
     mock_db.strategy_loss_streaks.update_one = mock_update
     
     # Trigger SL hit
-    await record_sl_hit(mock_db, "strat-1", "user-1")
+    with patch("trade_frequency.LOSS_STREAK_TRIGGER", 3):
+        await record_sl_hit(mock_db, "strat-1", "user-1")
     
     # Check that current_streak was incremented to 3 and paused_until is set
     assert updated_doc.get("current_streak") == 3
@@ -51,6 +53,7 @@ async def test_portfolio_ledger_sets_streak_pause():
     mock_db.strategy_loss_streaks.find_one = AsyncMock(return_value={
         "current_streak": 2,
         "paused_until": None,
+        "last_sl_at": datetime.now(timezone.utc).isoformat(),
     })
     
     # Track updates
@@ -105,7 +108,8 @@ async def test_portfolio_ledger_sets_streak_pause():
         "exit_reason": "stop_loss",
     }
     
-    res = await ledger.process_fill(fill)
+    with patch("trade_frequency.LOSS_STREAK_TRIGGER", 3):
+        res = await ledger.process_fill(fill)
     assert res["accepted"] is True
     assert res["action"] == "CLOSE"
     

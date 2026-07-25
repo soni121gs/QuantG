@@ -52,7 +52,11 @@ To make sure Hermes only alerts *your* account, get your Telegram Chat ID:
     DRAWDOWN_ALERT_FRAC=0.8
     LOSS_STREAK_N=3
     ```
-6. Keep the defaults for `QUANTG_BACKEND_URL` and `QUANTG_OPERATOR_EMAIL`/`QUANTG_OPERATOR_PASSWORD` (which login to the local container via `http://backend:8000/api`).
+6. Keep the default `QUANTG_BACKEND_URL`, but provide a dedicated read-only operator account. Hermes refuses to start when credentials are absent; there are no demo defaults.
+7. Restrict the secret file before starting the service:
+   ```bash
+   chmod 600 .env.hermes
+   ```
 7. Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
 ---

@@ -55,6 +55,21 @@ def get_wiki_dir() -> Path:
     root = Path(__file__).resolve().parent.parent.parent
     return root / "wiki"
 
+
+def _safe_topic_dir(topic: str) -> Path:
+    value = str(topic or "").strip()
+    if not value or value in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9 _-]+", value):
+        raise ValueError("Invalid wiki topic")
+    root = get_wiki_dir().resolve()
+    target = (root / value).resolve()
+    if target.parent != root:
+        raise ValueError("Wiki topic escapes the configured wiki directory")
+    return target
+
+
+def _owns_disk_wiki(user: Dict[str, Any]) -> bool:
+    return str(user.get("role") or "").lower() == "owner"
+
 def parse_markdown_links(content: str) -> List[str]:
     """Extract all outgoing double-bracket wikilinks from markdown content."""
     # Matches [[Link Target]] or [[Link Target|Alias Text]]
@@ -140,8 +155,7 @@ def serialize_markdown_with_frontmatter(title: str, topic: str, content: str, ta
 
 def save_wiki_to_disk(title: str, topic: str, content: str, tags: list, metadata: dict):
     """Write markdown file to disk in topic directory."""
-    wiki_dir = get_wiki_dir()
-    topic_dir = wiki_dir / topic
+    topic_dir = _safe_topic_dir(topic)
     topic_dir.mkdir(parents=True, exist_ok=True)
     
     # Sanitize title for filename
@@ -154,14 +168,14 @@ def save_wiki_to_disk(title: str, topic: str, content: str, tags: list, metadata
 
 def delete_wiki_from_disk(title: str, topic: str):
     """Delete markdown file from disk."""
-    wiki_dir = get_wiki_dir()
+    wiki_dir = get_wiki_dir().resolve()
     filename = "".join(c for c in title if c not in r'\/:*?"<>|') + ".md"
-    filepath = wiki_dir / topic / filename
+    topic_dir = _safe_topic_dir(topic)
+    filepath = topic_dir / filename
     if filepath.exists():
         filepath.unlink()
         
     # Clean up empty topic directories (except the default/required ones)
-    topic_dir = wiki_dir / topic
     if topic_dir.exists() and not any(topic_dir.iterdir()):
         try:
             topic_dir.rmdir()
@@ -261,6 +275,10 @@ async def get_wiki_doc(id_or_title: str, user=Depends(get_current_user)):
 async def create_wiki_doc(req: WikiDocReq, user=Depends(get_current_user)):
     """Create a new wiki note."""
     user_id = user["id"]
+    try:
+        _safe_topic_dir(req.topic)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     slug = re.sub(r'[^a-z0-9]+', '-', req.title.lower()).strip('-')
     if not slug:
         slug = str(uuid.uuid4())[:8]
@@ -292,10 +310,11 @@ async def create_wiki_doc(req: WikiDocReq, user=Depends(get_current_user)):
     doc.pop("_id", None)
     
     # Write to local disk (Obsidian sync)
-    try:
-        save_wiki_to_disk(req.title, req.topic, req.content, req.tags, req.metadata)
-    except Exception as exc:
-        logger.error("Failed to write wiki note to disk: %s", exc)
+    if _owns_disk_wiki(user):
+        try:
+            save_wiki_to_disk(req.title, req.topic, req.content, req.tags, req.metadata)
+        except Exception as exc:
+            logger.error("Failed to write wiki note to disk: %s", exc)
 
     # Rebuild graph links
     await rebuild_all_backlinks(user_id)
@@ -308,6 +327,10 @@ async def create_wiki_doc(req: WikiDocReq, user=Depends(get_current_user)):
 async def update_wiki_doc(id: str, req: WikiDocReq, user=Depends(get_current_user)):
     """Update an existing wiki note."""
     user_id = user["id"]
+    try:
+        _safe_topic_dir(req.topic)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     old_doc = await db.wiki_docs.find_one({"id": id, "user_id": user_id})
     if not old_doc:
         raise HTTPException(status_code=404, detail="Wiki document not found")
@@ -336,13 +359,13 @@ async def update_wiki_doc(id: str, req: WikiDocReq, user=Depends(get_current_use
     )
     
     # Update files on disk
-    try:
-        # Delete old file if renamed or moved to different topic folder
-        if req.title != old_doc["title"] or req.topic != old_doc["topic"]:
-            delete_wiki_from_disk(old_doc["title"], old_doc["topic"])
-        save_wiki_to_disk(req.title, req.topic, req.content, req.tags, req.metadata)
-    except Exception as exc:
-        logger.error("Failed to update wiki note on disk: %s", exc)
+    if _owns_disk_wiki(user):
+        try:
+            if req.title != old_doc["title"] or req.topic != old_doc["topic"]:
+                delete_wiki_from_disk(old_doc["title"], old_doc["topic"])
+            save_wiki_to_disk(req.title, req.topic, req.content, req.tags, req.metadata)
+        except Exception as exc:
+            logger.error("Failed to update wiki note on disk: %s", exc)
         
     # Rebuild graph links
     await rebuild_all_backlinks(user_id)
@@ -363,10 +386,11 @@ async def delete_wiki_doc(id: str, user=Depends(get_current_user)):
     await db.wiki_docs.delete_one({"id": id, "user_id": user_id})
     
     # Remove from disk
-    try:
-        delete_wiki_from_disk(doc["title"], doc["topic"])
-    except Exception as exc:
-        logger.error("Failed to delete wiki note from disk: %s", exc)
+    if _owns_disk_wiki(user):
+        try:
+            delete_wiki_from_disk(doc["title"], doc["topic"])
+        except Exception as exc:
+            logger.error("Failed to delete wiki note from disk: %s", exc)
         
     # Rebuild graph links
     await rebuild_all_backlinks(user_id)
@@ -375,6 +399,8 @@ async def delete_wiki_doc(id: str, user=Depends(get_current_user)):
 @router.post("/sync")
 async def sync_wiki_directory(user=Depends(get_current_user)):
     """Scan the local wiki folder and update the MongoDB database (Obsidian -> App Sync)."""
+    if not _owns_disk_wiki(user):
+        raise HTTPException(status_code=403, detail="Repository wiki sync is owner-only")
     user_id = user["id"]
     wiki_dir = get_wiki_dir()
     
@@ -600,16 +626,17 @@ async def link_mention(id_or_title: str, req: LinkMentionReq, user=Depends(get_c
         }}
     )
     
-    try:
-        save_wiki_to_disk(
-            source_doc["title"],
-            source_doc["topic"],
-            new_content,
-            source_doc["tags"],
-            source_doc.get("metadata") or {}
-        )
-    except Exception as exc:
-        logger.error("Failed to update synced markdown on disk during link-mention: %s", exc)
+    if _owns_disk_wiki(user):
+        try:
+            save_wiki_to_disk(
+                source_doc["title"],
+                source_doc["topic"],
+                new_content,
+                source_doc["tags"],
+                source_doc.get("metadata") or {}
+            )
+        except Exception as exc:
+            logger.error("Failed to update synced markdown on disk during link-mention: %s", exc)
         
     await rebuild_all_backlinks(user_id)
     return {"status": "ok", "message": f"Successfully linked '{term}' in note '{source_doc['title']}'."}

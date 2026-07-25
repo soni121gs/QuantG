@@ -28,37 +28,19 @@ async def test_paper_mode_never_triggers_live_broker_placements():
         assert "CORE_ENGINE_LIVE_ENABLED is set to false" in str(exc.value)
 
 @pytest.mark.anyio
-async def test_profile_live_setup_mode_allows_pre_market_upstox_connection_later():
-    from server import ProfileUpdateReq, update_profile
+async def test_profile_cannot_bypass_founder_gated_live_activation():
+    from fastapi import HTTPException
+    from routes.profile import ProfileUpdateReq, update_profile
 
     mock_db = MagicMock()
     mock_db.users.update_one = AsyncMock()
 
-    async def fake_get_profile(user):
-        return {
-            "id": user["id"],
-            "email": user["email"],
-            "paper_mode": False,
-            "allow_simulated_prices": False,
-        }
-
     user = {"id": "user-1", "email": "trader@quantg.com", "created_at": "now"}
 
-    with patch("server.db", mock_db), \
-         patch("server.get_profile", fake_get_profile), \
-         patch("server._sync_strategy_modes_to_profile", new_callable=AsyncMock) as sync_modes, \
-         patch("server.get_user_upstox_status", new_callable=AsyncMock, return_value={"token_valid": False}), \
-         patch("server._is_nse_market_open", return_value=False), \
-         patch.dict(os.environ, {"CORE_ENGINE_LIVE_ENABLED": "false"}):
-        result = await update_profile(ProfileUpdateReq(paper_mode=False), user=user)
-
-    mock_db.users.update_one.assert_awaited_once_with(
-        {"id": "user-1"},
-        {"$set": {"paper_mode": False, "allow_simulated_prices": False}},
-    )
-    sync_modes.assert_awaited_once_with("user-1", False)
-    assert result["paper_mode"] is False
-    assert result["allow_simulated_prices"] is False
+    with patch("routes.profile.db", mock_db), pytest.raises(HTTPException) as exc:
+        await update_profile(ProfileUpdateReq(paper_mode=False), user=user)
+    assert exc.value.status_code == 400
+    mock_db.users.update_one.assert_not_awaited()
 
 @pytest.mark.anyio
 async def test_stale_quote_price_yields_skips():
@@ -163,9 +145,11 @@ async def test_live_readiness_checklist():
     async def fake_get_current_user():
         return {"id": "user-1", "email": "trader@quantg.com"}
         
+    from core import get_current_user as core_get_current_user
+    server.app.dependency_overrides[core_get_current_user] = fake_get_current_user
     server.app.dependency_overrides[server.get_current_user] = fake_get_current_user
     
-    with patch("server.db", mock_db), \
+    with patch("server.db", mock_db), patch("routes.readiness.db", mock_db), \
          patch("server.get_user_upstox_status", new_callable=AsyncMock, return_value={"keys_saved": True, "connected": True, "token_valid": True}):
         response = client.get("/api/trading/live-readiness")
         

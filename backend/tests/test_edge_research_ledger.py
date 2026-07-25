@@ -1,5 +1,6 @@
 from core.edge_research_ledger import (
     deflated_sharpe, enrich_snapshot, evidence_allocation, reject_reasons, stable_hash,
+    trial_document,
 )
 
 
@@ -25,7 +26,7 @@ def test_enrichment_builds_heatmap_and_allocation():
     assert out["erl"]["allocation"][0]["auto_apply"] is False
     row = out["oos"]["rows"][0]
     assert row["trials_count"] == 3
-    assert row["deflated_sharpe"]["method"] == "edge_lab_proxy_v1"
+    assert row["deflated_sharpe"]["method"] == "insufficient_oos_returns"
     assert "warning" in row["deflated_sharpe"]
 
 
@@ -34,20 +35,34 @@ def test_deflated_sharpe_uses_return_vector_when_present():
         "n": 40,
         "oos_expectancy": 120,
         "pct_green_months": 70,
-        "trade_returns": [120, 140, 90, 160, -30, 110, 130, 100] * 5,
+        "oos_returns": [0.0012, 0.0014, 0.0009, 0.0016, -0.0003, 0.0011, 0.0013, 0.001] * 5,
     }
     dsr = deflated_sharpe(row, trials_tested=3)
-    assert dsr["method"] == "return_vector_dsr_v1"
+    assert dsr["method"] == "oos_normalized_dsr_v2"
     assert dsr["sample_n"] == 40
     assert "observed_sharpe" in dsr
 
 
 def test_deflated_sharpe_penalizes_many_trials():
-    row = {"n": 60, "oos_expectancy": 150, "pct_green_months": 70}
+    row = {
+        "n": 60, "oos_expectancy": 150, "pct_green_months": 70,
+        "oos_returns": [0.0012, 0.0014, 0.0009, 0.0016, -0.0003, 0.0011] * 10,
+    }
     one = deflated_sharpe(row, trials_tested=1)
     many = deflated_sharpe(row, trials_tested=100)
     assert many["trials_count"] == 100
     assert many["deflated_sharpe"] < one["deflated_sharpe"]
+
+
+def test_trial_identity_separates_users_and_strategy_versions():
+    snapshot = {"coverage": {"start": "2024"}, "base_rate": {"slippage_pct": 0.1}}
+    row = {"strategy_id": "s1", "name": "A", "strategy_config": {"python_code": "v1"}}
+    first = trial_document(user_id="u1", row=row, snapshot=snapshot)
+    other_user = trial_document(user_id="u2", row=row, snapshot=snapshot)
+    changed = trial_document(
+        user_id="u1", row={**row, "strategy_config": {"python_code": "v2"}}, snapshot=snapshot,
+    )
+    assert len({first["_id"], other_user["_id"], changed["_id"]}) == 3
 
 
 def test_allocation_never_auto_applies():

@@ -14,6 +14,12 @@ os.environ["TELEGRAM_CHAT_ID"] = "mock_chat_id"
 
 import agent
 
+
+def test_telegram_errors_redact_bot_token():
+    assert "mock_bot_token" not in agent._safe_error(
+        RuntimeError("https://api.telegram.org/botmock_bot_token/getUpdates")
+    )
+
 def test_is_market_hours():
     # Mocking Monday 10:00 IST = Monday 04:30 UTC
     with patch("agent.datetime") as mock_dt:
