@@ -108,7 +108,7 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
 - [ ] **P5-R4** (T1) `core/hermes_diagnostics/probes_static.py:58` imports `dte_from_expiry` inside a
   function while `core.spread_builder` is already imported at :13 — no circular-import justification,
   violates CLAUDE.md §9. Move to module scope.
-- [ ] **P5-R5** (T2) **`pytest tests/` does not hang because it is slow — it blocks on network I/O.**
+- [x] **P5-R5** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **`pytest tests/` does not hang because it is slow — it blocks on network I/O.**
   Diagnosed 2026-07-23: four attempts sat 60–90 min each at **~26 s CPU** (i.e. idle, waiting). At least
   `tests/backend_test.py` is a LIVE-SERVER integration suite (`requests` against
   `REACT_APP_BACKEND_URL`, 44 network calls); `test_iteration2-5`, `test_hermes_sidecar`,
@@ -119,7 +119,7 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   remaining offender; (c) get the offline suite green (known pre-existing red:
   `test_trade_frequency.py::…boosted_cap`).
   **Run it ON THE VPS in background, not in a session** (see P5-R7).
-- [ ] **P5-R7** (T2) **Move all long jobs to the VPS.** The box runs 24/7; nothing slow should ever block
+- [x] **P5-R7** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **Move all long jobs to the VPS.** The box runs 24/7; nothing slow should ever block
   a local session. Add a `scripts/ci_run.sh` that runs the offline suite + the diagnostics run in the
   backend container, logs to `/var/log/quantg_ci.log`, and a nightly cron for it. Same pattern for
   backfills and OOS sweeps (`nohup docker exec … &`, read the log next turn).
@@ -136,15 +136,15 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   `JUDGE_T_STAT_MIN` (default 3.0) for `CANDIDATE_EDGE`, else FRAGILE. Verified: same-sign expectancy,
   t=0.36 (noisy)→FRAGILE vs t=99 (tight)→CANDIDATE. Research-only (never in the live loop). 9 guardrail
   + 24 affected tests green. Commit pushed; real-book re-grade run in progress (feeds P5-M3).
-- [ ] **P5-J2** (T2) Replace the DSR proxy with a real Deflated Sharpe from stored per-trade returns.
+- [x] **P5-J2** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — Replace the DSR proxy with a real Deflated Sharpe from stored per-trade returns.
   `edge_research_ledger.deflated_sharpe` (:66) already declares itself the replacement point
   (*"when trade-return vectors are stored, this function is the single replacement point"*) and
   `run()` already returns `trades`. Kill the `/500.0` constant.
-- [ ] **P5-J3** (T2) `core/hermes_lessons.py`: add a **binomial test against the 36.2% book base rate** and
+- [x] **P5-J3** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — `core/hermes_lessons.py`: add a **binomial test against the 36.2% book base rate** and
   a **Šidák/BH correction across the ~19 tested hypotheses** before promotion; make `confidence` calibrated
   (or rename it `effect_size`). Re-score the 5 active lessons under the corrected bar and record how many
   survive. **Acceptance:** a lesson indistinguishable from the base rate cannot reach `active`.
-- [ ] **P5-J4** (T2) `phase4_research.calibration_summary` (:336) is a hit-rate tally, not calibration —
+- [x] **P5-J4** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — `phase4_research.calibration_summary` (:336) is a hit-rate tally, not calibration —
   no confidence bins, no Brier score, no stated prior on the cards. Either make it real (cards carry a
   numeric prior; score with Brier + reliability bins) or rename it so `get_hermes_brain_health` stops
   reporting it as calibration.
@@ -152,28 +152,28 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   so raw errors flatter the signal). Do after J1 — marginal until a t-stat exists at all.
 
 ### Track K — truthful knowledge for Hermes & the wiki (~2 days)
-- [ ] **P5-K1** (T2) **Index CLAUDE.md into the RAG.** `research_rag.reindex_all` indexes
+- [x] **P5-K1** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **Index CLAUDE.md into the RAG.** `research_rag.reindex_all` indexes
   `wiki/Research/*.md`, `db.wiki_docs`, lessons and OOS verdicts — **CLAUDE.md is not indexed**, so the
   1,000+ line canonical manual holding every law, pitfall and root cause is invisible to Hermes. Chunk by
   `##` section with `source_ref=CLAUDE.md §N`. Cheapest large knowledge gain available.
-- [ ] **P5-K2** (T2) **Kill the false-capability notes — the wiki currently teaches Hermes things that are
+- [x] **P5-K2** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **Kill the false-capability notes — the wiki currently teaches Hermes things that are
   not true.** `wiki/Research/Lopez de Prado Deflated Sharpe.md` asserts *"ERL carries … a DSR proxy"*
   (it is a scaled expectancy); `Grinold-Kahn Fundamental Law.md` asserts breadth practice while IC is
   computed nowhere (`grep information_coefficient|spearman` = **0 hits**). Add required frontmatter to
   every note — `claim_type: measured|literature|aspiration`, `verified: <date>`, `reproduction: <cmd>`
   (mandatory when `measured`) — and downgrade the false ones to `aspiration` until J1/J2 land, then flip.
   **0 of 34 notes currently carry any provenance.**
-- [ ] **P5-K3** (T2) **Write the dead-ends register** (`wiki/Research/Dead Ends.md`) — QuantG's most
+- [x] **P5-K3** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **Write the dead-ends register** (`wiki/Research/Dead Ends.md`) — QuantG's most
   valuable and completely unrecorded knowledge; without it every new agent session re-proposes what you
   already killed. Seed from existing evidence: option **buyers dead across 5 independent studies**;
   credit geometry risking 100% of credit for 50% (needs ~67% WR, runs 33–48%); iron condor FRAGILE
   (0/18 configs → do not build 4-leg infra); GEX/OI dead on NIFTY; FII/DII cash dead (9-yr test);
   BANKNIFTY impossible as an intraday theta seller at any width (monthly expiry, §21.2); 0-DTE fails the
   cost floor outright.
-- [ ] **P5-K4** (T2) Auto-generate `wiki/Measured/` **from** code/DB so it cannot drift: current book
+- [x] **P5-K4** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — Auto-generate `wiki/Measured/` **from** code/DB so it cannot drift: current book
   geometry, lot sizes + expiry cycles, book base rate, friction constant, cost-floor/reachability
   measurements, store coverage. Generated notes are `claim_type: measured` by construction.
-- [ ] **P5-K5** (T1) `wiki/Trading Rules/`, `wiki/Meeting transcripts/`, `wiki/YouTube transcripts/` are
+- [x] **P5-K5** (T1) ✅ DONE 2026-07-25 (`b337ba3`) — `wiki/Trading Rules/`, `wiki/Meeting transcripts/`, `wiki/YouTube transcripts/` are
   **empty** and `wiki/Decisions/` has **1** file. Populate Trading Rules from CLAUDE.md §21 (both geometry
   laws + their measurements), §13.5, §14.4, §20.
 - [ ] **P5-K6** (T3) **Hermes can observe but cannot research.** All 37 tools read internal state
