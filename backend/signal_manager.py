@@ -52,6 +52,38 @@ def _today_window_utc_iso() -> Tuple[str, str]:
     return start.isoformat(), (start + timedelta(days=1)).isoformat()
 
 
+def _spread_stand_down_result(declared_struct: str, veto: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the SKIPPED result for a spread strategy that has no spread to trade.
+
+    `veto` is `option_contract["spread_veto"]`, which server.py now stamps on EVERY
+    exit from the spread-build path (not just a builder veto): preconditions missing,
+    chain fetch failed/raised, empty chain, structure disabled, builder raised. Each
+    names itself via `stage`, so a quiet day is queryable:
+
+        db.signals.aggregate([{$group:{_id:"$rejection_detail.spread_veto_stage",n:{$sum:1}}}])
+
+    Only `detail` survives into `rejection_detail` (see ~line 1533), so everything
+    worth querying must live there rather than at the top level.
+    """
+    # Never name a cause we did not observe: the old fallback asserted "geometry veto"
+    # for every failure mode, including a chain that was never fetched.
+    detail_text = veto.get("reason") or "cause not recorded (no spread_veto on contract)"
+    reason = (f"{declared_struct} not buildable ({detail_text}) — "
+              "standing down, no naked single-leg fallback")
+    return {
+        "ok": False, "status": "SKIPPED", "reason": reason,
+        "reason_code": "SPREAD_BUILD_FAILED",
+        "detail": {
+            "reason_code": "SPREAD_BUILD_FAILED",
+            "human_reason": reason,
+            "status": "SKIPPED",
+            "spread_veto_stage": veto.get("stage") or "unknown",
+            "spread_veto_law": veto.get("law"),
+            "spread_veto_counts": veto.get("counts"),
+        },
+    }
+
+
 def _signal_validation_result(sig: Dict[str, Any], ok: bool, reason_code: str, human_reason: str, severity: str = "BLOCKED") -> Dict[str, Any]:
     return {
         "ok": ok,
@@ -953,6 +985,7 @@ async def _dispatch_signal_via_unified_engine(
                 "reason_code": "SPREAD_POSITION_ALREADY_OPEN",
             }
 
+    # (see _spread_stand_down_result for the reason/detail contract)
     # A strategy that DECLARES a spread structure must trade a spread or STAND DOWN —
     # it must never degrade into a naked single leg. When the spread build failed
     # upstream (a geometry veto — cost-floor / reachability — or a thin chain), the
@@ -967,18 +1000,14 @@ async def _dispatch_signal_via_unified_engine(
         ((strategy.get("visual_config") or {}).get("options") or {}).get("structure") or ""
     ).lower()
     if _declared_struct in ("credit_spread", "debit_spread") and not _oc.get("spread"):
-        _veto = _oc.get("spread_veto") or {}
-        _sd_detail = _veto.get("reason") or "geometry veto / no candidate"
-        _sd_reason = (f"{_declared_struct} not buildable ({_sd_detail}) — "
-                      "standing down, no naked single-leg fallback")
+        _sd = _spread_stand_down_result(_declared_struct, _oc.get("spread_veto") or {})
         try:
             await db.strategies.update_one(
                 {"id": strategy.get("id"), "user_id": user_id},
-                {"$set": {"last_filter_reason": _sd_reason}})
+                {"$set": {"last_filter_reason": _sd["reason"]}})
         except Exception:
             pass
-        return {"ok": False, "status": "SKIPPED", "reason": _sd_reason,
-                "reason_code": "SPREAD_BUILD_FAILED"}
+        return _sd
 
     if _oc.get("structure") == "credit_spread" and _oc.get("spread"):
         from core.spread_builder import CREDIT_SPREADS_ENABLED, lots_for_risk

@@ -17764,6 +17764,24 @@ async def startup():
             "resolver_stage": diagnostics.get("resolver_stage"),
             "resolver_reason": diagnostics.get("resolver_reason"),
         }
+        # A spread strategy that reaches signal_manager without `spread` stands down,
+        # and the SKIPPED reason quotes `spread_veto`. But the spread build sits behind
+        # a chain fetch and two swallowed `except`s, so a missing gateway, a failed or
+        # empty chain, or an exception all produced NO veto — and the stand-down then
+        # asserted "geometry veto / no candidate", a cause it had never verified. On
+        # 2026-07-24 that made 279 of 360 skips undiagnosable. Stamp a default veto
+        # here so the field is ALWAYS present for a spread strategy, then overwrite it
+        # with the real cause at each exit and clear it only on a successful build.
+        # (§21.5/§22.6 rule: a reason string must never claim a cause it did not observe.)
+        _declared_struct_early = str(
+            ((strategy or {}).get("visual_config") or {}).get("options", {}).get("structure")
+            or (strategy or {}).get("structure") or ""
+        ).lower()
+        if _declared_struct_early in ("credit_spread", "debit_spread"):
+            contract_payload["spread_veto"] = {
+                "reason": "spread build not attempted (option chain never fetched)",
+                "law": None, "stage": "not_attempted",
+            }
         # Phase 1 greeks: contract_payload is built from the InstrumentResolver +
         # QuoteService, neither of which carries greeks/OI/depth (QuoteService is
         # ltp-only), so greeks_at_signal lands null on every LIVE option signal.
@@ -17777,13 +17795,36 @@ async def startup():
                 "SENSEX": "BSE_INDEX|SENSEX",
             }
             _sk = _spot_keys.get(str(instrument.underlying or underlying).upper())
+            if not (upstox_gw and _sk and instrument.expiry and instrument.strike):
+                if "spread_veto" in contract_payload:
+                    _missing = [n for n, v in (
+                        ("upstox_gateway", upstox_gw), ("index_spot_key", _sk),
+                        ("expiry", instrument.expiry), ("strike", instrument.strike),
+                    ) if not v]
+                    contract_payload["spread_veto"] = {
+                        "reason": "spread build not attempted (missing {})".format(", ".join(_missing)),
+                        "law": None, "stage": "preconditions_missing",
+                    }
             if upstox_gw and _sk and instrument.expiry and instrument.strike:
                 _gchain = await asyncio.to_thread(
                     upstox_gw.get_option_chain, _sk, str(instrument.expiry)[:10]
                 )
+                if not (_gchain and _gchain.get("status") == "success"):
+                    if "spread_veto" in contract_payload:
+                        contract_payload["spread_veto"] = {
+                            "reason": "option chain fetch failed (status={})".format(
+                                (_gchain or {}).get("status") or "no_response"),
+                            "law": None, "stage": "chain_fetch_failed",
+                        }
                 if _gchain and _gchain.get("status") == "success":
                     _otype = str(instrument.option_type or "").upper()
                     _nodes = _gchain.get("data") or []
+                    if not _nodes and "spread_veto" in contract_payload:
+                        contract_payload["spread_veto"] = {
+                            "reason": "option chain returned 0 strikes for {} {}".format(
+                                instrument.underlying, str(instrument.expiry)[:10]),
+                            "law": None, "stage": "empty_chain",
+                        }
 
                     # Phase 2 #2: delta-based strike selection. Pick the strike whose
                     # |delta| is closest to the risk-style target from the chain we
@@ -17881,7 +17922,13 @@ async def startup():
                             _wstrikes = int(_opts_cfg.get("spread_width") or CREDIT_SPREAD_WIDTH_STRIKES)
                             _sdelta = float(_opts_cfg.get("short_delta") or (CREDIT_SPREAD_SHORT_DELTA if _struct == "credit_spread" else 0.50))
                             _direction = "bullish" if action_u == "BUY" else "bearish"
-                            
+                            if ((_struct == "credit_spread" and not CREDIT_SPREADS_ENABLED)
+                                    or (_struct == "debit_spread" and not DEBIT_SPREADS_ENABLED)):
+                                contract_payload["spread_veto"] = {
+                                    "reason": "{}s are disabled by env flag".format(_struct),
+                                    "law": None, "stage": "structure_disabled",
+                                }
+
                             if _struct == "credit_spread" and CREDIT_SPREADS_ENABLED:
                                 _previous = await db.strategy_positions.find_one(
                                     {
@@ -17952,6 +17999,7 @@ async def startup():
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"
                                     contract_payload["spread"] = _spread
+                                    contract_payload.pop("spread_veto", None)
                                     logger.info(
                                         "spread-build (credit): %s %s credit=%.2f max_loss=%.2f short=%s long=%s",
                                         _u, _direction, _spread["net_credit"], _spread["max_loss"],
@@ -17965,6 +18013,7 @@ async def startup():
                                         "reason": _spread.get("reason"),
                                         "law": _spread.get("veto_law"),
                                         "counts": _spread.get("veto_counts"),
+                                        "stage": "builder_veto",
                                     }
                                     logger.info("spread-build (credit) skipped (%s): %s", _u, _spread.get("reason"))
                             elif _struct == "debit_spread" and DEBIT_SPREADS_ENABLED:
@@ -17975,17 +18024,38 @@ async def startup():
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "debit_spread"
                                     contract_payload["spread"] = _spread
+                                    contract_payload.pop("spread_veto", None)
                                     logger.info(
                                         "spread-build (debit): %s %s debit=%.2f max_loss=%.2f short=%s long=%s",
                                         _u, _direction, _spread["net_debit"], _spread["max_loss"],
                                         _spread["short_leg"]["strike"], _spread["long_leg"]["strike"],
                                     )
                                 else:
+                                    contract_payload["spread_veto"] = {
+                                        "reason": _spread.get("reason"),
+                                        "law": _spread.get("veto_law"),
+                                        "counts": _spread.get("veto_counts"),
+                                        "stage": "builder_veto",
+                                    }
                                     logger.info("spread-build (debit) skipped (%s): %s", _u, _spread.get("reason"))
                     except Exception as _spx:
-                        logger.debug("spread build failed: %s", _spx)
+                        # Was logger.debug — invisible at INFO, so a raising builder
+                        # looked identical to a clean veto. Record it as the veto cause.
+                        if "spread_veto" in contract_payload:
+                            contract_payload["spread_veto"] = {
+                                "reason": "spread builder raised {}: {}".format(
+                                    type(_spx).__name__, str(_spx)[:200]),
+                                "law": None, "stage": "builder_exception",
+                            }
+                        logger.warning("spread build failed: %s", _spx, exc_info=True)
         except Exception as _gexc:
-            logger.debug("live greeks chain fetch failed for %s: %s", instrument.instrument_key, _gexc)
+            if "spread_veto" in contract_payload:
+                contract_payload["spread_veto"] = {
+                    "reason": "option chain fetch raised {}: {}".format(
+                        type(_gexc).__name__, str(_gexc)[:200]),
+                    "law": None, "stage": "chain_fetch_exception",
+                }
+            logger.warning("live greeks chain fetch failed for %s: %s", instrument.instrument_key, _gexc)
         contract_payload["trade_quality_score"] = option_entry_quality_score(
             contract_payload,
             spot=spot_hint,
