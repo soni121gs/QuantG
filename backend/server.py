@@ -3704,16 +3704,26 @@ DEFAULT_OPTION_STRATEGIES = [
         # WR 0.64 instead of 0.80. QG-O4 is the only keeper currently in profit
         # (+Rs1,768/19) and already had the book's highest price-exit rate (26%) —
         # this keeps its character and fixes the two settings that were off-spec.
+        # 2026-07-26: width 6 -> 8 and required_capital -> 13000. SENSEX expires
+        # THURSDAY, so a Monday entry is 3 DTE, and at width 6 NO take-profit
+        # satisfied both §21 laws at once (tp 0.50 = cost floor 2.77x FAIL; tp 0.45
+        # = 2.49x FAIL; tp 0.60 cleared the floor but made reachability permanently
+        # unreachable — which is what the 07-22 tp 0.50->0.60 patch did). A wider
+        # wing raises the credit without touching reachability, so tp returns to
+        # 0.50 and the hold (330) fixes reachability. Verified on real 3-DTE
+        # width-800 SENSEX fills: cost multiples 3.29-3.67, reachability 0.587.
+        # required_capital MUST rise with the wing (§21.4): per-lot max loss goes
+        # ~Rs9,122 -> ~Rs12,600, so the old Rs10,500 cap would size to ZERO lots.
         "underlying": "SENSEX", "strike_mode": "OTM_SELL", "otm_points": 1300, "lots": 1,
-        "structure": "credit_spread", "spread_width": 6, "target_dte_days": 2,
-        "short_otm_pct": 0.02, "wing_width": 6, "exit_mode": "", "short_delta": 0.30,
+        "structure": "credit_spread", "spread_width": 8, "target_dte_days": 2,
+        "short_otm_pct": 0.02, "wing_width": 8, "exit_mode": "", "short_delta": 0.30,
         "credit_tp_frac": 0.5, "credit_sl_mult": 0.9,
-        "strategy_type": "Option Selling", "required_capital": 7000.0, "instrument_group": "BFO",
+        "strategy_type": "Option Selling", "required_capital": 13000.0, "instrument_group": "BFO",
         "initial_status": "live",
         # 2026-07-09 (founder-directed): NO hold-to-expiry. Book intraday at 50% of
         # credit, stop at 2x credit, then re-enter when the range setup fires again.
         "risk": {"risk_style": "pullback", "strategy_category": "swing", "daily_loss_limit": 9000.0,
-                 "time_exit_minutes": 300, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
+                 "time_exit_minutes": 330, "exit_mode": "signal_or_tp_sl_trailing", "cooldown_minutes": 60,
                  "max_trades_day": 3},
         "python_code": """def run(data):
     position = "NONE"
@@ -6792,7 +6802,14 @@ for _template in DEFAULT_OPTION_STRATEGIES:
                       "max_trades_day": 3, "strategy_category": "swing"})
     if _template.get("name") == "QG-O4 SENSEX Call Spread Range Pilot":
         # 2026-07-21: 120 -> 300 for theta reachability (see template comment).
-        _risk["time_exit_minutes"] = 300
+        # 2026-07-26: 300 -> 330. SENSEX expires THURSDAY, so a Monday entry faces
+        # 3 DTE, where a 300-min hold reaches only 0.53 of a 0.50 TP (min 0.55).
+        # 330 clears it for the 09:45-10:20 window; past that the 15:30 square-off
+        # caps the hold and no setting helps. Paired with width 6->8 in the template
+        # (a wider wing raises the credit so the cost floor passes at tp 0.50 —
+        # width 6 had NO tp satisfying both laws). See §21.2 and
+        # scripts/regeometry_sensex_sellers_07_26.py.
+        _risk["time_exit_minutes"] = 330
     # QG-O11 is a credit-spread SCALP, not a theta hold: restore its validated
     # trade pacing after the blanket CREDIT_SPREAD_THETA_RISK update above.
     # time_exit_minutes 90 (was 45): live evidence 2026-07-15 showed the 45-min cut

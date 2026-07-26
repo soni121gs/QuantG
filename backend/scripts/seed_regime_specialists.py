@@ -159,8 +159,11 @@ UNDERLYINGS = [
      "cap": {"range_seller": 11000.0, "trend_delta1": 35000.0}},
     {"underlying": "BANKNIFTY", "symbol": "BANKNIFTY", "exchange": "NFO",
      "cap": {"range_seller": 10500.0, "trend_delta1": 55000.0}},
+    # SENSEX range_seller cap 10500 -> 13000 for the 2026-07-26 width 6 -> 8 re-cut:
+    # per-lot max loss rises to ~Rs12,600, and `lots_for_risk` floor-divides, so the
+    # old cap would yield 0 lots — a silent stand-down indistinguishable from a veto.
     {"underlying": "SENSEX", "symbol": "SENSEX", "exchange": "BFO",
-     "cap": {"range_seller": 10500.0, "trend_delta1": 90000.0}},
+     "cap": {"range_seller": 13000.0, "trend_delta1": 90000.0}},
 ]
 
 
@@ -202,11 +205,25 @@ def build_doc(template: dict, tpl: dict, cfg: dict, activate: bool) -> dict:
     # the richest days and silently stand down otherwise. Width 6 collects
     # materially more (measured multiple 3.94 vs 3.02) while keeping per-lot max
     # loss near Rs9,600, so the cap moves with it.
+    # 2026-07-26: width 6 -> 8 and a 330-minute hold. SENSEX expires THURSDAY, so a
+    # Monday entry faces 3 DTE, and at width 6 NO take-profit satisfied both §21 laws
+    # at once — tp 0.50 failed the cost floor (2.77x, measured on real 3-DTE fills)
+    # AND failed reachability (0.53); lowering tp fixed reachability and made the cost
+    # floor worse (0.45 -> 2.49x). The laws pull in opposite directions, so the only
+    # lever that helps both is a wider wing: it raises the credit without touching
+    # reachability. Verified on real 3-DTE width-800 SENSEX fills — cost multiples
+    # 3.29-3.67, reachability(tp 0.50, hold 330) 0.587. Cap rises with the wing
+    # (§21.4): per-lot max loss ~Rs9,122 -> ~Rs12,600, so the old Rs10,500 would size
+    # to ZERO lots. UNVALIDATED shape; owes a judge run + forward-paper (§13.5).
     if role == "range_seller" and ul == "SENSEX":
         opt.update({"target_dte_days": 2, "credit_tp_frac": 0.50,
-                    "spread_width": 6, "wing_width": 6})
+                    "spread_width": 8, "wing_width": 8})
     risk = vc.setdefault("risk", {})
     risk.update(tpl["risk"])
+    # AFTER the template risk merge above, which would otherwise clobber this back
+    # to the shared 300-minute hold.
+    if role == "range_seller" and ul == "SENSEX":
+        risk["time_exit_minutes"] = 330
     return doc
 
 
