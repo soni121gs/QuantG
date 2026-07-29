@@ -166,11 +166,20 @@ def test_edge_standdown_default_on_and_reversible(monkeypatch):
 def test_negative_expectancy_sizes_to_zero():
     """The core of #4: EdgeMath said 'stand down' on 11 of 22 trades and all 11
     traded, because paper passed floor_lots=1 and the caller applied max(1, ...)."""
-    from core.edge_sizer import EdgeStats, decide_size, payoff_ratio
+    from core.edge_sizer import RollingStats, edge_size, payoff_ratio
 
-    stats = EdgeStats(n=22, win_rate=0.5, avg_win=282.83, avg_loss=352.87)
-    d = decide_size(stats=stats, payoff_b=payoff_ratio(stats.avg_win, stats.avg_loss),
-                    equity=500000.0, per_lot_max_loss=10429.25,
-                    day_pnl=0.0, daily_risk_budget=10000.0, peak_day_pnl=0.0,
-                    floor_lots=0)
+    # The exact rolling stats stamped on the 2026-07-27 QG-O1 trade, whose own
+    # telemetry read "expectancy -35.0 <= costs 0.0 -> stand down" — and traded.
+    stats = RollingStats(n=22, win_rate=0.5, avg_win=282.83, avg_loss=352.87,
+                         expectancy=-35.02)
+    d = edge_size(stats=stats, payoff_b=payoff_ratio(stats.avg_win, stats.avg_loss),
+                  equity=500000.0, per_lot_max_loss=10429.25,
+                  day_pnl=0.0, daily_risk_budget=10000.0, peak_day_pnl=0.0,
+                  floor_lots=0)
     assert d.lots == 0, "a negative-expectancy strategy must be able to size to zero"
+
+    floored = edge_size(stats=stats, payoff_b=payoff_ratio(stats.avg_win, stats.avg_loss),
+                        equity=500000.0, per_lot_max_loss=10429.25,
+                        day_pnl=0.0, daily_risk_budget=10000.0, peak_day_pnl=0.0,
+                        floor_lots=1)
+    assert floored.lots == 1, "the old paper floor is what made stand-down unreachable"
