@@ -1004,7 +1004,8 @@ async def _dispatch_signal_via_unified_engine(
         try:
             await db.strategies.update_one(
                 {"id": strategy.get("id"), "user_id": user_id},
-                {"$set": {"last_filter_reason": _sd["reason"]}})
+                {"$set": {"last_filter_reason": _sd["reason"],
+                          "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
         except Exception:
             pass
         return _sd
@@ -1060,7 +1061,8 @@ async def _dispatch_signal_via_unified_engine(
             try:
                 await db.strategies.update_one(
                     {"id": strategy.get("id"), "user_id": user_id},
-                    {"$set": {"last_filter_reason": _rae_reason}})
+                    {"$set": {"last_filter_reason": _rae_reason,
+                              "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
             except Exception:
                 pass
             return {"ok": False, "status": "SKIPPED",
@@ -1133,7 +1135,8 @@ async def _dispatch_signal_via_unified_engine(
                 try:
                     await db.strategies.update_one(
                         {"id": strategy.get("id"), "user_id": user_id},
-                        {"$set": {"last_filter_reason": _db_reason}})
+                        {"$set": {"last_filter_reason": _db_reason,
+                                  "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
                 except Exception:
                     pass
                 return {"ok": False, "status": "SKIPPED", "reason": _db_reason,
@@ -1183,7 +1186,8 @@ async def _dispatch_signal_via_unified_engine(
             try:
                 await db.strategies.update_one(
                     {"id": strategy.get("id"), "user_id": user_id},
-                    {"$set": {"last_filter_reason": _sl_reason}})
+                    {"$set": {"last_filter_reason": _sl_reason,
+                              "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
             except Exception:
                 pass
             return {"ok": False, "status": "SKIPPED",
@@ -1592,6 +1596,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                         await db.strategies.update_one(
                                             {"id": sig["strategy_id"], "user_id": user_id},
                                             {"$set": {"last_filter_reason": str(_skip_human)[:300],
+                                                      "last_filter_reason_at": datetime.now(timezone.utc).isoformat(),
                                                       "last_skip_reason_code": signal_update.get("rejection_reason"),
                                                       "last_signal_validated": False}})
                                     except Exception:

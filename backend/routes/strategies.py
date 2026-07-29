@@ -11,6 +11,7 @@ from pydantic import BaseModel, validator
 from core import db, get_current_user, StrategyRuntimeSettingsReq
 from core.portfolio_ledger import get_strategy_pnl_today
 from core.strategy_leaderboard import build_strategy_leaderboard
+from core.strategy_audit import ACTOR_MANUAL, record_status_change
 
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
 
@@ -971,10 +972,26 @@ async def toggle_strategy(sid: str, user=Depends(get_current_user)):
             "halted": False,
             "is_halted": False,
             "last_filter_reason": "",
+            "last_filter_reason_at": "",
             "last_skip_reason_code": "",
             "last_error": "",
         })
+    update_fields["status_changed_at"] = datetime.now(timezone.utc).isoformat()
     await db.strategies.update_one({"id": sid, "user_id": user["id"]}, {"$set": update_fields})
+    # AUDIT: a manual pause/resume used to leave no trace whatsoever — not even
+    # an updated_at bump — so a mid-session toggle was unreconstructable after
+    # the fact (2026-07-29).
+    await record_status_change(
+        db,
+        user_id=user["id"],
+        strategy_id=sid,
+        name=row.get("name"),
+        old_status=row.get("status"),
+        new_status=new_status,
+        actor=ACTOR_MANUAL,
+        source="PUT /strategies/{sid}/toggle",
+        detail={"mode": strategy_mode},
+    )
     if new_status == "live":
         _sync_option_ledger_strategy({**row, **update_fields})
         option_ledger.set_kill_switch(False, strategy_id=sid)

@@ -64,6 +64,43 @@ const MAP = {
   "duplicate_exit": { label: "Duplicate exit (ignored)", tone: "neutral" },
   "duplicate_signal": { label: "Duplicate signal (ignored)", tone: "neutral" },
   "symbol_group_active_position_exists": { label: "Position already open", tone: "neutral" },
+  // ── §21 geometry laws + §18 regime router (stand-downs, NOT faults) ──
+  // These are the engine deciding correctly not to trade. Before 2026-07-29 the
+  // detail was written to db.signals and never reached the UI, so a fully
+  // explained stand-down was indistinguishable from a broken app.
+  "spread_build_failed": {
+    label: "Stood down · no fundable spread", tone: "info",
+    hint: "No strike pair cleared the cost floor (credit too thin vs friction) or theta reachability (target unreachable in the hold window). Hover for the exact numbers.",
+  },
+  "credit_spread not buildable": {
+    label: "Stood down · no fundable spread", tone: "info",
+    hint: "Every candidate strike was vetoed by a geometry law. Hover for the exact numbers.",
+  },
+  "cost_floor": {
+    label: "Stood down · credit too thin", tone: "info",
+    hint: "Bankable profit was under 3x round-trip friction — the trade pays the broker, not you.",
+  },
+  "tp_reachability": {
+    label: "Stood down · target unreachable", tone: "info",
+    hint: "Time decay cannot reach the take-profit inside the hold window, so the exit would be a coin flip.",
+  },
+  "rae_router_stand_down": {
+    label: "Stood down · wrong regime", tone: "info",
+    hint: "This specialist does not own today's market regime (e.g. a premium seller on a trending day).",
+  },
+  "rae router stand-down": { label: "Stood down · wrong regime", tone: "info" },
+  "spread_position_already_open": {
+    label: "Holding · already in position", tone: "neutral",
+    hint: "One spread per strategy per underlying — no pyramiding.",
+  },
+  "res2_gate_blocked": {
+    label: "Stood down · premium not rich", tone: "info",
+    hint: "RES-2 gate: implied vol was not expensive enough vs realized vol to sell premium.",
+  },
+  "no current setup from strategy code": {
+    label: "No setup right now", tone: "neutral",
+    hint: "The strategy evaluated the latest candles and found no entry condition.",
+  },
 };
 
 function humanize(raw) {

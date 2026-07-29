@@ -429,6 +429,45 @@ def _paper_measurement_reason(signal: Dict[str, Any], data: List[dict]) -> str:
     )
 
 
+# How long a specific dispatch-boundary veto reason (cost floor, reachability,
+# RAE router stand-down, RES-2 gate, sizing…) outranks the runner's generic
+# "no current setup" text. The runner ticks every 15s and a strategy that just
+# got vetoed usually produces no fresh signal on the very next tick, so without
+# this the good reason survives for seconds and the UI shows the useless one.
+SPECIFIC_REASON_TTL_SEC = int(os.getenv("SPECIFIC_REASON_TTL_SEC", "900"))
+
+
+def _generic_reason(strategy: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """Build the `$set` fragment for the runner's generic no-setup message.
+
+    2026-07-29: signal_manager stamps the REAL reason a trade was skipped (e.g.
+    "8 of 10 deltas vetoed by cost_floor (credit 33.10 on width 800 …)"), and
+    then this loop overwrote it with "No current setup from strategy code" on
+    the next tick. Every strategy in the book showed the generic text while the
+    specific diagnosis sat unread in db.signals — which is why a fully-explained
+    stand-down looked like a silently broken app. The dedup path was already
+    fixed this way; these two were missed.
+
+    Keep the specific reason while it is fresh; always record the generic text
+    separately so the evaluation state is still visible.
+    """
+    out: Dict[str, Any] = {"last_eval_note": text}
+    prior = strategy.get("last_filter_reason")
+    stamped = strategy.get("last_filter_reason_at")
+    if prior and stamped:
+        try:
+            when = datetime.fromisoformat(str(stamped))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - when).total_seconds()
+            if 0 <= age < SPECIFIC_REASON_TTL_SEC:
+                return out  # a fresh specific veto outranks the generic text
+        except Exception:
+            pass
+    out["last_filter_reason"] = text
+    return out
+
+
 def _contract_resolution_update(
     eval_set: Dict[str, Any],
     inc_set: Dict[str, Any],
@@ -726,10 +765,10 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {
                                                        **eval_set,
                                                        "last_signals_count": 0,
-                                                       "last_filter_reason": (
+                                                       **_generic_reason(s, (
                                                            f"No current setup from strategy code "
                                                            f"(candles={len(data)}, source={eval_set.get('last_data_source', 'unknown')})."
-                                                       ),
+                                                       )),
                                                    },
                                                     "$inc": inc_set})
                     continue
@@ -752,11 +791,11 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     await db.strategies.update_one({"id": s["id"]},
                                                    {"$set": {**eval_set,
                                                              "last_signals_count": signals_count,
-                                                             "last_filter_reason": (
+                                                             **_generic_reason(s, (
                                                                  f"No current setup from strategy code "
                                                                  f"(candles={len(data)}, source={eval_set.get('last_data_source', 'unknown')}; "
                                                                  f"last historical signal={last_historical_date!r})."
-                                                             )},
+                                                             ))},
                                                     "$inc": inc_set})
                     continue
                 last_sig_date = last_sig.get("date", "")

@@ -91,6 +91,7 @@ from core.strategy_registry import (
     registry_active_default,
     registry_purge_default,
 )
+from core.strategy_audit import ACTOR_SCHEDULER, record_status_change
 from core.instrument_resolver import InstrumentResolver
 from core.models import InstrumentSource
 from core.quote_service import QuoteService
@@ -17150,11 +17151,19 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             ):
                 _schedule_activate_done_date = today
                 try:
+                    _wake_rows = await db.strategies.find(
+                        {"status": "paused", "schedule_paused": True, "manual_paused": {"$ne": True}},
+                        {"_id": 0, "id": 1, "name": 1, "status": 1, "user_id": 1}).to_list(500)
                     result = await db.strategies.update_many(
                         {"status": "paused", "schedule_paused": True, "manual_paused": {"$ne": True}},
                         {"$set": {"status": "live", "schedule_paused": False,
                                   "schedule_resumed_at": ist.isoformat()}},
                     )
+                    for _r in _wake_rows:
+                        await record_status_change(
+                            db, user_id=_r.get("user_id", ""), strategy_id=_r.get("id", ""),
+                            name=_r.get("name"), old_status="paused", new_status="live",
+                            actor=ACTOR_SCHEDULER, source="daily_scheduler 09:15 IST wake")
                     logger.info(
                         "Market schedule: 9:00 AM — auto-activated %d strategies",
                         result.modified_count,
@@ -17171,11 +17180,18 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             ):
                 _schedule_pause_done_date = today
                 try:
+                    _sleep_rows = await db.strategies.find(
+                        {"status": "live"}, {"_id": 0, "id": 1, "name": 1, "status": 1, "user_id": 1}).to_list(500)
                     result = await db.strategies.update_many(
                         {"status": "live"},
                         {"$set": {"status": "paused", "schedule_paused": True,
                                   "schedule_paused_at": ist.isoformat()}},
                     )
+                    for _r in _sleep_rows:
+                        await record_status_change(
+                            db, user_id=_r.get("user_id", ""), strategy_id=_r.get("id", ""),
+                            name=_r.get("name"), old_status="live", new_status="paused",
+                            actor=ACTOR_SCHEDULER, source="daily_scheduler 15:35 IST close")
                     logger.info(
                         "Market schedule: 3:35 PM — auto-paused %d strategies at market close",
                         result.modified_count,

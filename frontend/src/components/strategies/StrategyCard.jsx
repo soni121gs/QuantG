@@ -19,7 +19,19 @@ const timeAgo = (iso) => {
 };
 
 const noticeFor = (s) => {
-  if (s.last_filter_reason) return { text: reasonLabel(s.last_filter_reason).label, kind: "filter" };
+  if (s.last_filter_reason) {
+    const r = reasonLabel(s.last_filter_reason);
+    // The engine's veto text carries the actual numbers (credit, width, ratio,
+    // floor) — keep the full string as the tooltip even when the badge label is
+    // a short friendly one, and tag it with the reason code so a stand-down is
+    // distinguishable from a genuine fault at a glance.
+    return {
+      text: r.label,
+      title: [s.last_skip_reason_code, s.last_filter_reason].filter(Boolean).join(" — "),
+      code: s.last_skip_reason_code,
+      kind: "filter",
+    };
+  }
   if (s.last_error?.startsWith("Signal filtered:")) return { text: s.last_error, kind: "filter" };
   if (s.last_error?.includes("entry blocked: cooldown-active")) return { text: "Entry skipped: cooldown active", kind: "filter" };
   if (s.last_error?.includes("entry blocked: duplicate-buy-dropped")) return { text: "Entry skipped: duplicate buy dropped", kind: "filter" };
@@ -189,7 +201,10 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
           notice.kind === "filter"
             ? "border-[rgba(255,159,10,0.35)] text-[var(--qd-warn)]"
             : "border-[rgba(255,59,48,0.35)] text-[var(--qd-loss)]"
-        }`}>
+        }`} title={notice.title || notice.text}>
+          {notice.code && (
+            <span className="mr-1 font-mono uppercase tracking-wider opacity-70">{notice.code}</span>
+          )}
           {notice.text}
         </div>
       )}

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from core import db, get_current_user
 from core.research_jobs import enqueue_research_job, research_job_status
+from core.strategy_audit import ACTOR_OPS, ACTOR_RISK, ACTOR_SCHEDULER, record_bulk_status_change
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
 
@@ -181,6 +182,34 @@ async def _reconciliation_break_snapshot(user_id: str) -> Dict[str, Any]:
 async def ops_diagnostics_route(user=Depends(get_current_user)):
     from server import ops_diagnostics
     return await ops_diagnostics(user=user)
+
+
+@router.get("/strategy-status-audit")
+async def strategy_status_audit(
+    days: int = 7,
+    strategy_id: str = "",
+    actor: str = "",
+    user=Depends(get_current_user),
+):
+    """Who paused/resumed what, and when. Read-only.
+
+    Covers manual toggles, ops bulk actions, the risk kill-switch and the
+    automatic 09:15/15:35 IST scheduler. Newest first.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, min(int(days or 7), 90)))).isoformat()
+    q: Dict[str, Any] = {"user_id": user["id"], "at": {"$gte": cutoff}}
+    if strategy_id:
+        q["strategy_id"] = strategy_id
+    if actor:
+        q["actor"] = actor
+    rows = await db.strategy_status_audit.find(q, {"_id": 0}).sort("at", -1).to_list(500)
+    return {
+        "ok": True,
+        "days": days,
+        "count": len(rows),
+        "events": rows,
+        "actors": sorted({str(r.get("actor") or "") for r in rows}),
+    }
 
 
 @router.get("/hermes-diagnostics")
@@ -1379,19 +1408,25 @@ async def ops_emergency_stop(req: OpsActionReq = None, user=Depends(get_current_
     for row in strategies:
         option_ledger.set_kill_switch(True, strategy_id=row["id"])
     await db.users.update_one({"id": user["id"]}, {"$set": {"paper_mode": True, "ops_last_emergency_stop_at": now}})
+    _live_rows = await db.strategies.find({"user_id": user["id"], "status": "live"}, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(500)
     res = await db.strategies.update_many(
         {"user_id": user["id"], "status": "live"},
         {"$set": {"status": "paused", "last_error": f"Emergency stop at {now}: switched to PAPER and paused automation."}},
     )
+    await record_bulk_status_change(db, user_id=user["id"], rows=_live_rows, new_status="paused",
+                                   actor=ACTOR_RISK, source="POST /ops/emergency-stop")
     return {"ok": True, "paper_mode": True, "paused_strategies": res.modified_count, "disabled_strategies": len(strategies), "at": now}
 
 
 @router.post("/strategies/pause-all")
 async def ops_pause_all(req: OpsActionReq = None, user=Depends(get_current_user)):
+    _live_rows = await db.strategies.find({"user_id": user["id"], "status": "live"}, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(500)
     res = await db.strategies.update_many(
         {"user_id": user["id"], "status": "live"},
         {"$set": {"status": "paused", "last_error": None}},
     )
+    await record_bulk_status_change(db, user_id=user["id"], rows=_live_rows, new_status="paused",
+                                   actor=ACTOR_OPS, source="POST /ops/strategies/pause-all")
     return {"ok": True, "paused_strategies": res.modified_count}
 
 
@@ -1408,6 +1443,8 @@ async def ops_enable_all_strategies(req: OpsActionReq = None, user=Depends(get_c
         {"user_id": user["id"], "status": "paused", "manual_paused": {"$ne": True}},
         {"$set": {"status": "live"}, "$unset": {"last_error": "", "last_signal_validation": ""}},
     )
+    await record_bulk_status_change(db, user_id=user["id"], rows=rows, new_status="live",
+                                   actor=ACTOR_OPS, source="POST /ops/strategies/enable-all")
     return {"ok": True, "enabled_strategies": res.modified_count, "ledger_enabled": len(rows)}
 
 
