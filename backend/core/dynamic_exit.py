@@ -79,7 +79,11 @@ def trailing_lock_levels(
 
     floor = TRAIL_MIN_ARM_RUPEES
     basis = "flat_friction"
-    if TRAIL_HONOUR_COST_FLOOR:
+    # Only bind the cost-floor law when the REAL contract is known. Without a
+    # lot size there is no friction model, and multiplying a guessed constant by
+    # 3 could push the arm out of reach — which would silently degrade every
+    # position into hold-to-SL-or-clock, the exact failure being fixed here.
+    if TRAIL_HONOUR_COST_FLOOR and lot_size:
         try:
             from core.spread_builder import min_bankable_profit
             cost_floor = min_bankable_profit(lot_size, leg_premium_sum=leg_premium_sum, lots=lots)

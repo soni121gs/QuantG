@@ -106,8 +106,12 @@ def test_arm_level_never_exceeds_the_max_achievable_profit():
 
 
 def test_no_contract_context_falls_back_to_the_flat_floor():
-    lv = trailing_lock_levels(39.55, 65, 718.25, arm_frac=0.2, giveback_frac=0.25)
-    assert lv["arm_level"] is not None
+    """Without a lot size there is no friction model, so the law must not bind —
+    behaviour stays byte-identical to before (arm_frac x credit, floor Rs300)."""
+    lv = trailing_lock_levels(20.0, 65, 650.0, arm_frac=0.4, giveback_frac=0.5)
+    assert lv["floor_basis"] == "flat_friction"
+    assert lv["arm_level"] == pytest.approx(0.4 * 20.0 * 65)
+    assert lv["armed"] and lv["lock_level"] == pytest.approx(325.0)
 
 
 def test_the_switch_reverts_to_old_behaviour(monkeypatch):
