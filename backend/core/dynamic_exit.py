@@ -41,6 +41,18 @@ TRAIL_MIN_ARM_RUPEES = float(os.environ.get("DYN_EXIT_MIN_ARM_RUPEES", "300"))
 # revert to the pre-2026-07-29 flat floor.
 TRAIL_HONOUR_COST_FLOOR = os.environ.get(
     "DYN_EXIT_TRAIL_HONOUR_COST_FLOOR", "true").strip().lower() == "true"
+# Multiple of REAL (premium-proportional) round-trip friction the trail must clear
+# before it may arm.
+#
+# NOT the cost-floor law's 3x. That 3x is an EX-ANTE criterion — "is this structure
+# worth taking at all" — and applying it per-exit is a category error: simulated
+# against the 22 real trades of 2026-07-27..29 a 3x arm floor armed on 1 of 22,
+# which does not tighten the trail, it DELETES it and sends every position to
+# TP/SL/clock (the 2026-07-10 round-trip-to-red failure). The ex-post question is
+# narrower: does this exit bank meaningfully more than it cost to place?
+# 1.5x measured as the point where the trail still fires on most winners while the
+# banked amount clears friction with margin.
+TRAIL_ARM_COST_MULT = float(os.environ.get("DYN_EXIT_TRAIL_ARM_COST_MULT", "1.5"))
 
 
 def update_peak_pnl(prev_peak: Optional[float], current_pnl: float) -> float:
@@ -85,10 +97,11 @@ def trailing_lock_levels(
     # position into hold-to-SL-or-clock, the exact failure being fixed here.
     if TRAIL_HONOUR_COST_FLOOR and lot_size:
         try:
-            from core.spread_builder import min_bankable_profit
-            cost_floor = min_bankable_profit(lot_size, leg_premium_sum=leg_premium_sum, lots=lots)
+            from core.spread_builder import round_trip_friction
+            friction = round_trip_friction(leg_premium_sum, lot_size) * max(1, int(lots or 1))
+            cost_floor = TRAIL_ARM_COST_MULT * friction
             if cost_floor > floor:
-                floor, basis = cost_floor, "cost_floor_law"
+                floor, basis = cost_floor, "real_friction"
         except Exception:
             pass  # fail OPEN to the old flat floor — never block an exit on import
 
