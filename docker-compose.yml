@@ -58,7 +58,12 @@ services:
       # a wide RANGE so range sellers trade on chop instead of standing down (the
       # NIFTY/BANKNIFTY-idle-while-SENSEX-trades case). EVENT stays a hard stand-down.
       # Set back to "true" to restore the RAE chop-protection design.
-      RAE_CHOP_STANDDOWN: "${RAE_CHOP_STANDDOWN:-false}"
+      # RE-ENABLED 2026-07-29. Measured over the 22 trades of 07-27..29: 13 were
+      # entered on a HIGH_VOL_CHOP label (8 of them at confidence 1.0) for -Rs987,
+      # including every full-width stop. That matches the 498-day study (§18.1)
+      # which says nothing wins in chop and standing down IS the strategy. The
+      # 07-16 easing traded the regime the research says to sit out.
+      RAE_CHOP_STANDDOWN: "${RAE_CHOP_STANDDOWN:-true}"
       # ── Founder-directed frequency easing 2026-07-15 (paper): more trades ──
       # Reversible via env; remove/override to restore code defaults.
       PAPER_MEASUREMENT_COOLDOWN_MINUTES: "${PAPER_MEASUREMENT_COOLDOWN_MINUTES:-0}"
@@ -68,10 +73,26 @@ services:
       # TP, so a +900 winner never armed). Lowered to ~0.20 of max credit ≈ 40% of
       # the TP target. Reversible; keep TREND arm high so trends still run.
       DYN_EXIT_TRAIL_ARM_FRAC: "${DYN_EXIT_TRAIL_ARM_FRAC:-0.2}"
-      DYN_EXIT_TRAIL_GIVEBACK_FRAC: "${DYN_EXIT_TRAIL_GIVEBACK_FRAC:-0.45}"
+      # GIVEBACK CUT 2026-07-29 (0.45/0.40 -> 0.25). With the old giveback the
+      # trail banked ~60% of a peak that was itself ~half the TP: 16 trail-locks
+      # averaged Rs284 against Rs300 of round-trip friction, while the losing side
+      # paid a full Rs1,669 stop. 82% of trades won and the book still lost because
+      # breakeven needed 84.5%. The arm floor is now the cost-floor law itself
+      # (dynamic_exit.TRAIL_HONOUR_COST_FLOOR), so these fractions only shape the
+      # trail ABOVE that floor.
+      DYN_EXIT_TRAIL_GIVEBACK_FRAC: "${DYN_EXIT_TRAIL_GIVEBACK_FRAC:-0.25}"
       RAE_EXIT_RANGE_ARM: "${RAE_EXIT_RANGE_ARM:-0.2}"
-      RAE_EXIT_RANGE_GIVEBACK: "${RAE_EXIT_RANGE_GIVEBACK:-0.4}"
+      RAE_EXIT_RANGE_GIVEBACK: "${RAE_EXIT_RANGE_GIVEBACK:-0.25}"
       RAE_EXIT_INSIDE_ARM: "${RAE_EXIT_INSIDE_ARM:-0.18}"
+      # ── 2026-07-29 law-reconciliation switches (all reversible) ──
+      # Trail may not bank below the profit the cost-floor law was promised.
+      DYN_EXIT_TRAIL_HONOUR_COST_FLOOR: "${DYN_EXIT_TRAIL_HONOUR_COST_FLOOR:-true}"
+      # Block a second strategy opening the IDENTICAL contract (3 strategies sold
+      # the same NIFTY 24000/24200 CE on 07-27 and lost -Rs6,469 as one bet).
+      CONTRACT_DEDUP_ENABLED: "${CONTRACT_DEDUP_ENABLED:-true}"
+      # A negative-expectancy EdgeMath verdict now sizes to ZERO instead of being
+      # floored to 1 lot (it said "stand down" on 11 of 22 trades and traded all 11).
+      EDGE_STANDDOWN_ENABLED: "${EDGE_STANDDOWN_ENABLED:-true}"
       FREQ_CAP_DEFAULT: "${FREQ_CAP_DEFAULT:-30}"
       FREQ_CAP_MOMENTUM: "${FREQ_CAP_MOMENTUM:-30}"
       FREQ_CAP_TREND: "${FREQ_CAP_TREND:-30}"

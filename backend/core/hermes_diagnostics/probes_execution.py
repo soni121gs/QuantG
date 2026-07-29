@@ -319,3 +319,74 @@ async def unexplained_skips(ctx: ProbeContext) -> List[Finding]:
                            "every skip path."),
         ))
     return out
+
+
+@register("exec.exit_below_cost_floor", kind="dynamic")
+async def exit_below_cost_floor(ctx: ProbeContext) -> List[Finding]:
+    """§21 law-reconciliation guard (2026-07-29).
+
+    The cost-floor law lets a spread be BUILT only when it can bank
+    SPREAD_COST_FLOOR_MULT x round-trip friction. Nothing checked that the EXIT
+    engine honoured that promise, and it did not: over 2026-07-27..29, 16 of 22
+    trades exited on `trail-lock` averaging Rs284 — below the ~Rs300 friction of
+    the trade itself — while the losing side paid a full Rs1,669 stop. 82% of
+    trades won and the book still lost money.
+
+    A winning exit that banks less than the trade cost to place is a loss wearing
+    a green label, so this probe judges REALIZED wins against the same function
+    the builder enforces. Same defect class as §22.3 and §21.5: a law encoded at
+    one end of the trade and ignored at the other.
+    """
+    from core.spread_builder import min_bankable_profit
+
+    wins = [p for p in _spreads_today(ctx)
+            if str(p.get("structure")) == "credit_spread"
+            and float(p.get("realized_pnl") or 0) > 0]
+    if len(wins) < 4:
+        return []  # thin sample → silence, never a guess (§19)
+
+    short_changed: List[Dict[str, Any]] = []
+    for p in wins:
+        legs = p.get("legs") or []
+        try:
+            prem = sum(float(l.get("entry_price") or l.get("premium") or 0) for l in legs)
+        except (TypeError, ValueError):
+            prem = 0.0
+        floor = min_bankable_profit(p.get("lot_size"),
+                                    leg_premium_sum=prem or None,
+                                    lots=int(p.get("lots") or 1))
+        pnl = float(p.get("realized_pnl") or 0)
+        if pnl < floor:
+            short_changed.append({
+                "position_id": p.get("id"), "strategy_id": p.get("strategy_id"),
+                "symbol": p.get("symbol"), "exit_reason": p.get("exit_reason"),
+                "realized_pnl": round(pnl, 2), "required_floor": round(floor, 2),
+                "peak_pnl": round(float(p.get("peak_pnl") or 0), 2),
+            })
+    if not short_changed:
+        return []
+    frac = len(short_changed) / len(wins)
+    if frac < 0.5:
+        return []
+    avg = sum(r["realized_pnl"] for r in short_changed) / len(short_changed)
+    avg_floor = sum(r["required_floor"] for r in short_changed) / len(short_changed)
+    return [Finding(
+        probe_id="exec.exit_below_cost_floor", domain=Domain.EXECUTION,
+        severity=Severity.HIGH, entity="spread-book",
+        title=(f"{len(short_changed)} of {len(wins)} winning spreads banked below the "
+               f"cost floor they were built on (avg Rs{avg:.0f} vs Rs{avg_floor:.0f})"),
+        detail=("The cost-floor law approved these trades on the basis that they could "
+                "bank 3x round-trip friction. The exit engine cashed them out below "
+                "that, so the average WIN did not cover the cost of placing it. When "
+                "wins are this small the book needs an implausible win rate to break "
+                "even — 2026-07-27..29 won 82% of trades and still lost money. Check "
+                "the trailing-lock arm/giveback against dynamic_exit.TRAIL_HONOUR_COST_FLOOR."),
+        evidence={"winners": len(wins), "below_floor": len(short_changed),
+                  "fraction": round(frac, 3), "avg_realized": round(avg, 2),
+                  "avg_required_floor": round(avg_floor, 2), "positions": short_changed[:10]},
+        reproduction=("closed credit_spread positions today WHERE realized_pnl > 0 "
+                      "AND realized_pnl < spread_builder.min_bankable_profit(lot_size, legs, lots)"),
+        suggested_fix=("Raise the trailing arm/giveback so the lock cannot trigger below "
+                       "min_bankable_profit, or lower SPREAD_COST_FLOOR_MULT if the floor "
+                       "itself is wrong. The builder and the exit must use the same number."),
+    )]

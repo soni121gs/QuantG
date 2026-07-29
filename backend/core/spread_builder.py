@@ -127,6 +127,32 @@ def round_trip_friction(leg_premium_sum: Optional[float], lot_size: Optional[int
     return max(SPREAD_ROUND_TRIP_COST_PER_LOT, modeled)
 
 
+def min_bankable_profit(
+    lot_size: Optional[int],
+    *,
+    leg_premium_sum: Optional[float] = None,
+    lots: int = 1,
+) -> float:
+    """The rupee profit the cost-floor law PROMISED when it approved the trade.
+
+    §21.1 lets a spread be built only when `tp_frac x credit x lot_size` clears
+    SPREAD_COST_FLOOR_MULT x round-trip friction. That approval is meaningless if
+    the exit engine then cashes out below it — and until 2026-07-29 it did:
+    measured over the 22 trades of that week, 16 exited on `trail-lock` averaging
+    Rs284 while the trail's own arm floor was a flat Rs300 and the cost floor had
+    demanded Rs900+. The average WINNING trade did not cover its own friction.
+
+    This is the same defect class as §22.3 (an exemption granted by one exit path
+    and ignored by another) and §21.5 (a law encoded twice with two different
+    arithmetics). There is now ONE number, defined here, that the builder demands
+    and the trailing exit refuses to bank below.
+    """
+    if not lot_size:
+        return SPREAD_COST_FLOOR_MULT * SPREAD_ROUND_TRIP_COST_PER_LOT * max(1, int(lots or 1))
+    friction = round_trip_friction(leg_premium_sum, lot_size)
+    return SPREAD_COST_FLOOR_MULT * friction * max(1, int(lots or 1))
+
+
 def credit_cost_floor(
     net_credit: float,
     width_points: float,

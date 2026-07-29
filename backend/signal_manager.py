@@ -97,6 +97,30 @@ def _signal_validation_result(sig: Dict[str, Any], ok: bool, reason_code: str, h
     }
 
 
+def _contract_dedup_enabled() -> bool:
+    """Cross-strategy identical-contract dedup (2026-07-29). On by default; set
+    CONTRACT_DEDUP_ENABLED=false to revert to position-count exposure only."""
+    return os.environ.get("CONTRACT_DEDUP_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
+
+def _edge_standdown_enabled() -> bool:
+    """Whether a negative-expectancy EdgeMath verdict actually stands the trade
+    down, instead of being floored to 1 lot.
+
+    §16 defines conviction→0 as a SOFT stand-down, but paper mode passes
+    floor_lots=1 and the sizing line applies max(1, ...), so 0 lots is
+    unreachable: on 2026-07-27..29 EdgeMath said "stand down" on 11 of 22 trades
+    and every one traded at full size. The floor existed to keep collecting
+    measurement data while the book was young; the book is no longer young.
+
+    Note this cuts both ways — those 11 trades netted -Rs1,287, but they include
+    the week's single best trade (+Rs958). n=22 is far below the §13.5 n>=30 bar,
+    so this is a defensible default, NOT a validated edge. Set
+    EDGE_STANDDOWN_ENABLED=false to restore the always-trade-1-lot behaviour.
+    """
+    return os.environ.get("EDGE_STANDDOWN_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
+
 def _strategy_mode(strategy: Dict[str, Any], sig: Dict[str, Any]) -> str:
     return str(strategy.get("mode") or sig.get("mode") or "").lower()
 
@@ -659,12 +683,19 @@ async def _edge_math_spread_size(
         day_pnl=day_pnl,
         daily_risk_budget=daily_budget,
         peak_day_pnl=peak_doc.get("peak"),
-        floor_lots=1 if str(strategy.get("mode") or "paper").lower() == "paper" else 0,
+        floor_lots=0 if _edge_standdown_enabled() else (
+            1 if str(strategy.get("mode") or "paper").lower() == "paper" else 0),
     )
     capital_cap = lots_for_risk(float(spread.get("max_loss") or 0), lot_size, risk_budget)
     contract_mult = max(0.10, min(1.0, float(spread.get("contract_size_mult") or 1.0)))
     profit_mult = max(0.10, min(1.0, float(strategy.get("day_profit_size_mult") or 1.0)))
-    lots = min(max(1, capital_cap), max(1, int(round(decision.lots * contract_mult * profit_mult))))
+    _scaled = decision.lots * contract_mult * profit_mult
+    if _edge_standdown_enabled() and decision.lots <= 0:
+        # EdgeMath's stand-down is now reachable: a strategy whose own rolling
+        # expectancy is negative sizes to ZERO instead of being floored to 1 lot.
+        lots = 0
+    else:
+        lots = min(max(1, capital_cap), max(1, int(round(_scaled))))
 
     # RAE-4 router: gate/scale by regime OWNERSHIP. A credit spread is the RANGE
     # seller (RAE-3d); the router stands it down (size_mult 0) when the regime is
@@ -985,6 +1016,61 @@ async def _dispatch_signal_via_unified_engine(
                 "reason_code": "SPREAD_POSITION_ALREADY_OPEN",
             }
 
+        # ── CROSS-STRATEGY CONTRACT DEDUP (2026-07-29) ──────────────────────
+        # The guard above is scoped to ONE strategy, and the exposure cap counts
+        # POSITIONS per underlying — so three strategies could each open a
+        # position and all three read as "diversified". On 2026-07-27 that is
+        # exactly what happened: IDX NIFTY VRP Call-Spread, QG-O11 and QG-O1 all
+        # sold the IDENTICAL NIFTY 24000/24200 CE expiring 07-28, and the rally
+        # stopped out all three for -Rs6,469 — 97% of the week's loss on what was
+        # arithmetically a single trade at 3x size.
+        #
+        # The names no longer protect you either: QG-O1 is called "NIFTY Put
+        # Spread Theta Core" and sold a CALL spread, because the dynamic contract
+        # selector (§16.4) picks the side from the live chain. Every seller reads
+        # the same chain, so they converge on the same contract by construction.
+        # Dedup on the CONTRACT, which is the thing actually at risk.
+        _sp = _oc.get("spread") or {}
+        _short = _sp.get("short_leg") or {}
+        _dedup_type = str(_sp.get("option_type") or _short.get("option_type") or "")
+        _dedup_expiry = str(_short.get("expiry") or _sp.get("expiry") or "")
+        try:
+            _dedup_strike = float(_short.get("strike")) if _short.get("strike") is not None else None
+        except (TypeError, ValueError):
+            _dedup_strike = None
+        if _dedup_type and _dedup_expiry and _dedup_strike is not None and _contract_dedup_enabled():
+            _twin = await db.strategy_positions.find_one(
+                {
+                    "user_id": user_id,
+                    "underlying": symbol,
+                    "mode": mode,
+                    "option_type": _dedup_type,
+                    "expiry": _dedup_expiry,
+                    "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+                    "legs.0.strike": _dedup_strike,
+                },
+                {"_id": 0, "id": 1, "strategy_id": 1},
+            )
+            if _twin:
+                _twin_reason = (
+                    f"Identical contract already held by another strategy "
+                    f"({_dedup_type} {_dedup_strike:.0f} exp {_dedup_expiry}) — "
+                    f"this would be the same bet at double size, not a second position."
+                )
+                try:
+                    await db.strategies.update_one(
+                        {"id": strategy.get("id"), "user_id": user_id},
+                        {"$set": {"last_filter_reason": _twin_reason,
+                                  "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
+                except Exception:
+                    pass
+                return {
+                    "ok": False,
+                    "status": "SKIPPED",
+                    "reason": _twin_reason,
+                    "reason_code": "DUPLICATE_CONTRACT_ACROSS_STRATEGIES",
+                }
+
     # (see _spread_stand_down_result for the reason/detail contract)
     # A strategy that DECLARES a spread structure must trade a spread or STAND DOWN —
     # it must never degrade into a naked single leg. When the spread build failed
@@ -1048,6 +1134,24 @@ async def _dispatch_signal_via_unified_engine(
             lot_size=lot_size, risk_budget=_risk_budget, regime=_regime_at_entry,
         )
         _spread["edge_math"] = _edge_telemetry
+        # EdgeMath soft stand-down, now actually reachable (see
+        # _edge_standdown_enabled). Zero lots means the strategy's own rolling
+        # expectancy is negative — trade nothing rather than the 1-lot floor.
+        if _edge_standdown_enabled() and int(_spread_lots or 0) <= 0:
+            _em_reason = (
+                f"EdgeMath stand-down: {_edge_telemetry.get('reason') or 'negative expectancy'} "
+                f"(rolling n={_edge_telemetry.get('rolling_n')}, "
+                f"expectancy {_edge_telemetry.get('expectancy')})"
+            )
+            try:
+                await db.strategies.update_one(
+                    {"id": strategy.get("id"), "user_id": user_id},
+                    {"$set": {"last_filter_reason": _em_reason,
+                              "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
+            except Exception:
+                pass
+            return {"ok": False, "status": "SKIPPED", "reason": _em_reason,
+                    "reason_code": "EDGE_MATH_STAND_DOWN"}
         # RAE-4: when the router is ENFORCED (founder-gated) and stands this seller
         # down for the current regime (e.g. selling into a TREND/CHOP day), skip the
         # entry. Observe-only by default → this never fires until RAE_ROUTER_ENABLED.

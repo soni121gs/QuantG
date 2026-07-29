@@ -31,6 +31,16 @@ TRAIL_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_TRAIL_GIVEBACK_FRAC", "0.5"
 # actually a net LOSS after costs. Never arm the trail until the peak clears real
 # friction. Fat-credit spreads already arm well above this, so they're unaffected.
 TRAIL_MIN_ARM_RUPEES = float(os.environ.get("DYN_EXIT_MIN_ARM_RUPEES", "300"))
+# 2026-07-29 — THE LAW RECONCILIATION. The flat ₹300 above only covers ONE round
+# trip; the cost-floor law (§21.1) approves a trade only when it can bank
+# SPREAD_COST_FLOOR_MULT (3x) that. Arming at ₹300 and then giving back 45% of the
+# peak banked ~₹284 on average across the 22 trades of 2026-07-27..29 — below the
+# friction of the trade itself, while the losing side paid a full ~₹1,669 stop.
+# 82% of trades won and the book still lost, because breakeven needed 84.5%.
+# The trail must not bank below what the entry gate was promised. Set false to
+# revert to the pre-2026-07-29 flat floor.
+TRAIL_HONOUR_COST_FLOOR = os.environ.get(
+    "DYN_EXIT_TRAIL_HONOUR_COST_FLOOR", "true").strip().lower() == "true"
 
 
 def update_peak_pnl(prev_peak: Optional[float], current_pnl: float) -> float:
@@ -49,19 +59,53 @@ def trailing_lock_levels(
     *,
     arm_frac: float = TRAIL_ARM_FRAC,
     giveback_frac: float = TRAIL_GIVEBACK_FRAC,
+    lot_size: Optional[int] = None,
+    lots: int = 1,
+    leg_premium_sum: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Return {armed, arm_level, lock_level} for diagnostics / UI.
+    """Return {armed, arm_level, lock_level, floor_basis} for diagnostics / UI.
 
-    arm_level  = arm_frac × (net_credit × qty)   — peak profit needed to arm
+    arm_level  = max(arm_frac × credit_money, cost-floor bankable profit)
     lock_level = peak_pnl × (1 − giveback_frac)   — exit if current P&L falls here
+
+    The cost-floor term is the reconciliation described at TRAIL_HONOUR_COST_FLOOR:
+    the trail may never arm below the profit the entry gate was promised, because
+    a lock below that banks less than the trade cost to place. When the caller has
+    no contract context the flat TRAIL_MIN_ARM_RUPEES remains the lower bound.
     """
     credit_money = float(net_credit) * int(qty)
-    # arm at the fraction of max credit, but never below real round-trip friction —
-    # banking a "profit" smaller than the cost of the exit is a net loss.
-    arm_level = max(arm_frac * credit_money, TRAIL_MIN_ARM_RUPEES) if credit_money > 0 else None
-    armed = (arm_level is not None and peak_pnl is not None and peak_pnl >= arm_level)
-    lock_level = (float(peak_pnl) * (1.0 - giveback_frac)) if armed else None
-    return {"armed": bool(armed), "arm_level": arm_level, "lock_level": lock_level}
+    if credit_money <= 0:
+        return {"armed": False, "arm_level": None, "lock_level": None, "floor_basis": "no_credit"}
+
+    floor = TRAIL_MIN_ARM_RUPEES
+    basis = "flat_friction"
+    if TRAIL_HONOUR_COST_FLOOR:
+        try:
+            from core.spread_builder import min_bankable_profit
+            cost_floor = min_bankable_profit(lot_size, leg_premium_sum=leg_premium_sum, lots=lots)
+            if cost_floor > floor:
+                floor, basis = cost_floor, "cost_floor_law"
+        except Exception:
+            pass  # fail OPEN to the old flat floor — never block an exit on import
+
+    # Never demand more than the position can actually produce: the whole credit is
+    # the ceiling, and a trail that can never arm silently degrades into "hold until
+    # SL or the clock", which is the failure mode this is fixing.
+    arm_level = min(max(arm_frac * credit_money, floor), credit_money)
+    if arm_level >= credit_money:
+        basis = "capped_at_max_profit"
+    armed = (peak_pnl is not None and float(peak_pnl) >= arm_level)
+    lock_level = None
+    if armed:
+        lock_level = float(peak_pnl) * (1.0 - giveback_frac)
+        # Arming above the floor is not enough on its own: giving back 45% of a
+        # peak that only just cleared the floor banks LESS than the floor again.
+        # The retrace target is clamped to the same number, so once the trail is
+        # armed the trade cannot be cashed out below what it cost to place.
+        if TRAIL_HONOUR_COST_FLOOR:
+            lock_level = max(lock_level, min(floor, float(peak_pnl)))
+    return {"armed": bool(armed), "arm_level": arm_level,
+            "lock_level": lock_level, "floor_basis": basis}
 
 
 def evaluate_spread_exit(
@@ -96,8 +140,21 @@ def evaluate_spread_exit(
     # 3) trailing lock
     net_credit = float(position.get("net_credit") or position.get("average_buy_price") or 0.0)
     qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    # Contract context so the arm floor can be the real (premium-proportional)
+    # friction rather than the flat constant — BANKNIFTY's true round trip is
+    # ~4.2x the constant, so the flat floor under-charged it worst of all.
+    legs = position.get("legs") or []
+    leg_premium_sum = None
+    try:
+        prem = [float(l.get("entry_price") or l.get("premium") or 0) for l in legs]
+        leg_premium_sum = sum(prem) if any(prem) else None
+    except Exception:
+        leg_premium_sum = None
     lv = trailing_lock_levels(net_credit, qty, peak_pnl,
-                              arm_frac=arm_frac, giveback_frac=giveback_frac)
+                              arm_frac=arm_frac, giveback_frac=giveback_frac,
+                              lot_size=position.get("lot_size"),
+                              lots=int(position.get("lots") or 1),
+                              leg_premium_sum=leg_premium_sum)
     if lv["armed"] and float(current_pnl) <= float(lv["lock_level"]):
         return "trail-lock"
     return None
