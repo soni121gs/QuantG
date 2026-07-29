@@ -77,8 +77,8 @@ services:
       # trail banked ~60% of a peak that was itself ~half the TP: 16 trail-locks
       # averaged Rs284 against Rs300 of round-trip friction, while the losing side
       # paid a full Rs1,669 stop. 82% of trades won and the book still lost because
-      # breakeven needed 84.5%. The arm floor is now the cost-floor law itself
-      # (dynamic_exit.TRAIL_HONOUR_COST_FLOOR), so these fractions only shape the
+      # breakeven needed 84.5%. The arm floor is now real premium-proportional
+      # friction (DYN_EXIT_TRAIL_ARM_COST_MULT), so these fractions only shape the
       # trail ABOVE that floor.
       DYN_EXIT_TRAIL_GIVEBACK_FRAC: "${DYN_EXIT_TRAIL_GIVEBACK_FRAC:-0.25}"
       RAE_EXIT_RANGE_ARM: "${RAE_EXIT_RANGE_ARM:-0.2}"
@@ -87,6 +87,10 @@ services:
       # ── 2026-07-29 law-reconciliation switches (all reversible) ──
       # Trail may not bank below the profit the cost-floor law was promised.
       DYN_EXIT_TRAIL_HONOUR_COST_FLOOR: "${DYN_EXIT_TRAIL_HONOUR_COST_FLOOR:-true}"
+      # 1.5x REAL (premium-proportional) friction. NOT the builder 3x — simulated
+      # on the 22 real trades of 07-27..29 a 3x arm floor armed on 1 of 22 (deletes
+      # the trail); 1.5x arms on 16 of 18 winners and banks 27% more.
+      DYN_EXIT_TRAIL_ARM_COST_MULT: "${DYN_EXIT_TRAIL_ARM_COST_MULT:-1.5}"
       # Block a second strategy opening the IDENTICAL contract (3 strategies sold
       # the same NIFTY 24000/24200 CE on 07-27 and lost -Rs6,469 as one bet).
       CONTRACT_DEDUP_ENABLED: "${CONTRACT_DEDUP_ENABLED:-true}"

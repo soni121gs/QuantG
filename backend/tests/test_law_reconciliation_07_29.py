@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from core.dynamic_exit import trailing_lock_levels
+from core.dynamic_exit import TRAIL_ARM_COST_MULT, trailing_lock_levels
 from core.spread_builder import (
     SPREAD_COST_FLOOR_MULT,
     credit_cost_floor,
@@ -61,29 +61,51 @@ def test_floor_scales_with_lots():
 # ── 1. the trail may not bank below the floor ─────────────────────────────
 
 
-def test_the_real_trade_no_longer_arms_below_its_cost_floor():
-    """Rs718 peak used to arm (flat Rs300 floor) and lock at Rs431 gross ->
-    Rs294 realized. It must not arm below what the entry gate was promised."""
+def _exit_floor(lot_size, legs, lots=1) -> float:
+    return TRAIL_ARM_COST_MULT * round_trip_friction(legs, lot_size) * lots
+
+
+def test_the_real_trade_banks_more_than_before():
+    """The 2026-07-27 trade: peak Rs718 locked at Rs431 gross -> Rs294 realized,
+    below its own Rs300 friction. Under the corrected floor it locks at Rs539."""
     lv = trailing_lock_levels(NIFTY["net_credit"], NIFTY["qty"], NIFTY["peak"],
                               arm_frac=0.2, giveback_frac=0.25,
                               lot_size=NIFTY["lot_size"], lots=1,
                               leg_premium_sum=NIFTY["legs"])
-    floor = min_bankable_profit(NIFTY["lot_size"], leg_premium_sum=NIFTY["legs"], lots=1)
-    assert lv["arm_level"] >= floor
-    assert lv["floor_basis"] == "cost_floor_law"
-    assert not lv["armed"], "Rs718 peak is below the floor — must not arm"
+    assert lv["armed"], "the trail must still fire on ordinary winners"
+    assert lv["floor_basis"] == "real_friction"
+    assert lv["lock_level"] == pytest.approx(NIFTY["peak"] * 0.75)
+    assert lv["lock_level"] > 431.0, "must bank more than the old 40% giveback"
+
+
+def test_the_exit_floor_is_NOT_the_ex_ante_cost_floor():
+    """Guard against re-making the 2026-07-29 category error. Applying the
+    builder's 3x law per-exit armed 1 of 22 real trades — that deletes the trail
+    rather than tightening it. The exit floor must stay well below it."""
+    exit_floor = _exit_floor(NIFTY["lot_size"], NIFTY["legs"])
+    build_floor = min_bankable_profit(NIFTY["lot_size"], leg_premium_sum=NIFTY["legs"], lots=1)
+    assert exit_floor < build_floor
+    assert NIFTY["peak"] >= exit_floor, "a typical real winner must still arm"
 
 
 def test_once_armed_the_lock_cannot_fall_below_the_floor():
     """Arming above the floor is not enough: a 25% giveback on a peak that only
     just cleared it would bank below it again."""
-    floor = min_bankable_profit(NIFTY["lot_size"], leg_premium_sum=NIFTY["legs"], lots=1)
+    floor = _exit_floor(NIFTY["lot_size"], NIFTY["legs"])
     lv = trailing_lock_levels(NIFTY["net_credit"], NIFTY["qty"], floor + 10.0,
                               arm_frac=0.2, giveback_frac=0.25,
                               lot_size=NIFTY["lot_size"], lots=1,
                               leg_premium_sum=NIFTY["legs"])
     assert lv["armed"]
     assert lv["lock_level"] >= floor
+
+
+def test_fat_premium_contract_demands_a_higher_floor():
+    """BANKNIFTY's real round trip is ~4x the flat constant, so its Rs555 peak on
+    2026-07-27 never covered its own friction — correctly refusing to arm is the
+    law working, not a regression."""
+    bnf_floor = _exit_floor(30, 900.0)
+    assert bnf_floor > 555.0
 
 
 def test_a_big_winner_still_trails_normally_above_the_floor():
