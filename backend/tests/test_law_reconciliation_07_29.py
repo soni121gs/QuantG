@@ -92,7 +92,14 @@ def test_once_armed_the_lock_cannot_fall_below_the_floor():
     """Arming above the floor is not enough: a 25% giveback on a peak that only
     just cleared it would bank below it again."""
     floor = _exit_floor(NIFTY["lot_size"], NIFTY["legs"])
-    lv = trailing_lock_levels(NIFTY["net_credit"], NIFTY["qty"], floor + 10.0,
+    probe = trailing_lock_levels(NIFTY["net_credit"], NIFTY["qty"], 0.0,
+                                 arm_frac=0.2, giveback_frac=0.25,
+                                 lot_size=NIFTY["lot_size"], lots=1,
+                                 leg_premium_sum=NIFTY["legs"])
+    # Arm just barely — a 25% giveback here would land under the friction floor.
+    peak = probe["arm_level"] + 1.0
+    assert peak * 0.75 < floor, "fixture must exercise the clamp"
+    lv = trailing_lock_levels(NIFTY["net_credit"], NIFTY["qty"], peak,
                               arm_frac=0.2, giveback_frac=0.25,
                               lot_size=NIFTY["lot_size"], lots=1,
                               leg_premium_sum=NIFTY["legs"])
