@@ -1036,6 +1036,60 @@ Stating a law and enforcing it are different things, and until this date only La
 
 ---
 
+### 21.6 Law 3 — the exit must honour the entry gate (2026-07-29)
+The week 07-27..29 won **81.8% of trades (18/22) and still lost ₹1,157**: avg win ₹307,
+avg loss ₹1,669, **breakeven WR 84.5%**. Nothing was wrong with the signal. Four
+independent defects let one part of the system contradict another.
+
+**The finding.** 16 of 22 trades exited on `trail-lock` averaging **₹284** — *below the
+~₹300 round-trip friction of the trade itself*. The trail armed at a flat ₹300 and gave
+back 40–45% of the peak, so it banked ~60% of a peak that was itself ~half the TP. Every
+one of those trades had been APPROVED by the §21.1 cost floor on the basis that it could
+bank `tp_frac × credit × lot` = ₹866–1,391. **The entry gate validated a promise the exit
+engine never kept** — the same defect class as §22.3 (an exemption granted by one exit
+path and ignored by another) and §21.5 (one law, two arithmetics).
+
+**Law 3:** a trailing exit may not bank less than the trade cost to place.
+`dynamic_exit.trailing_lock_levels` now takes contract context and floors the arm at
+`DYN_EXIT_TRAIL_ARM_COST_MULT × round_trip_friction(legs, lot_size) × lots`, and clamps
+`lock_level` to the same number so a giveback cannot re-cross it. Friction is the REAL
+premium-proportional figure, so BANKNIFTY (≈₹626/lot, 4.2× the flat constant) is charged
+what it actually costs.
+
+**⚠️ The multiplier is 1.5, NOT the cost floor's 3.0 — do not "unify" them.** The 3× is an
+**ex-ante** criterion ("is this structure worth taking at all"); applying it per-exit is a
+category error. Simulated against the 22 real trades it armed on **1 of 22** — that does
+not tighten the trail, it DELETES it and sends every position to TP/SL/clock, reviving the
+2026-07-10 round-trip-to-red loss. At 1.5× the trail arms on **16 of 18 winners and banks
+27% more** (+₹1,920 across the week). The ex-post question is narrower than the ex-ante
+one. The Hermes probe `exec.exit_below_cost_floor` judges realized wins against **1×**
+friction (the unambiguous "did this win cover its own cost").
+
+**The other three fixes (all env-reversible):**
+- **Contract dedup** (`CONTRACT_DEDUP_ENABLED`): the exposure cap counts POSITIONS, so on
+  07-27 three strategies each sold the **identical NIFTY 24000/24200 CE exp 07-28** and
+  all three stopped out for **−₹6,469 = 97% of the week's loss** on what was arithmetically
+  one bet at 3× size. Names do not protect you: **QG-O1 is called "NIFTY *Put* Spread Theta
+  Core" and sold a CALL spread** — the dynamic contract selector (§16.4) picks the side from
+  the live chain, and every seller reads the same chain, so they converge by construction.
+  Dedup on `(underlying, option_type, expiry, short strike)` across ALL strategies.
+- **CHOP stand-down restored** (`RAE_CHOP_STANDDOWN=true`): 13 of 22 trades were entered on
+  a HIGH_VOL_CHOP label (8 at confidence 1.0) for −₹987, including every full-width stop.
+  The 07-16 easing was trading the one regime the 498-day study (§18.1) says to sit out.
+- **EdgeMath stand-down made reachable** (`EDGE_STANDDOWN_ENABLED`): §16 defines
+  conviction→0 as a soft stand-down, but paper passed `floor_lots=1` and the caller applied
+  `max(1, …)`, so **0 lots was unreachable — EdgeMath said "stand down" on 11 of 22 trades
+  and all 11 traded at full size**, 5–7× the size it asked for. Note the router's partial
+  `size_mult` (0.8) is *also* a no-op at 1 lot: `round(1×0.8)=1`. Only a full stand-down
+  ever changed anything.
+
+**Standing caveat, unchanged and important:** none of this creates edge. It removes
+defects that made a winning-signal book lose money on arithmetic. n=22 is far below the
+§13.5 n≥30 bar and 3 trades produced 97% of the loss, so the counterfactuals above are
+**estimates, not guarantees** — removing a trade changes every subsequent state. The
+Law-3 finding is structural (visible on every trade, independent of sample); the regime
+and correlation findings are suggestive but thin. `CORE_ENGINE_LIVE_ENABLED=false`.
+
 ## 22. Full-System Audit Fixes (2026-07-24)
 
 A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
