@@ -106,6 +106,24 @@ def seller_entry_gate(
 # cluster — the return across it is spurious and must not enter realized vol. NSE's
 # longest real gap (long weekend + festival) is ~4 days; 6 gives margin.
 _MAX_CONTIGUOUS_GAP_DAYS = int(os.environ.get("RES2_RV_MAX_GAP_DAYS", "6"))
+# How stale the store's NEWEST bar may be before realized vol is refused outright.
+#
+# 2026-07-30: the gap-robustness fix above keeps the contiguous recent RUN, but says
+# nothing about WHEN that run ends. The live store was found holding only 2019-2023
+# (the 2024-2026 days were absent from the mounted path), so the "recent" run ended
+# 2023-12-29 and RV would have been computed off 2.5-year-old prices and believed as
+# current. An empty store fails open and says so; a stale one is confidently wrong —
+# strictly worse, and the same trap as the stale regime_fine label (§22.7). Refuse.
+_MAX_STORE_STALENESS_DAYS = int(os.environ.get("RES2_RV_MAX_STALENESS_DAYS", "10"))
+
+
+def _store_day_is_fresh(day: str) -> bool:
+    """Is this store day recent enough to describe the CURRENT market?"""
+    try:
+        d = datetime.strptime(str(day)[:10], "%Y-%m-%d").date()
+    except Exception:  # noqa: BLE001
+        return False
+    return (datetime.now(timezone.utc).date() - d).days <= _MAX_STORE_STALENESS_DAYS
 
 
 def _recent_daily_closes(underlying: str, lookback: int = 30) -> List[float]:
@@ -137,6 +155,17 @@ def _recent_daily_closes(underlying: str, lookback: int = 30) -> List[float]:
                 run = []  # data hole → drop everything before it, restart the run
             run.append(float(c["close"]))
             prev_d = d
+        # FRESHNESS: a run that ends weeks ago describes a different market. Refuse
+        # rather than hand back stale closes the caller will treat as current.
+        if run and prev_d is not None:
+            age = (datetime.now(timezone.utc).date() - prev_d).days
+            if age > _MAX_STORE_STALENESS_DAYS:
+                logger.warning(
+                    "entry_gate: bhavcopy store STALE for %s — newest bar %s is %d days "
+                    "old (max %d); refusing realized vol so the gate fails open instead "
+                    "of trusting old prices.", underlying, prev_d, age,
+                    _MAX_STORE_STALENESS_DAYS)
+                run = []
         closes = run
     except Exception as exc:  # noqa: BLE001 — fail-open
         logger.debug("entry_gate: daily closes unavailable for %s: %s", underlying, exc)
@@ -164,7 +193,9 @@ async def evaluate_entry_gate_live(
             from core.iv_surface import richness_zscore
             store = BhavcopyStore()
             days = store.trading_days()
-            if days:
+            # Same freshness rule as realized vol: an IV-richness z-score computed on
+            # a months-old chain is not a statement about today's premium.
+            if days and _store_day_is_fresh(days[-1]):
                 surface = richness_zscore(store, underlying.upper(), days[-1])
         except Exception as exc:  # noqa: BLE001
             logger.debug("entry_gate: IV surface unavailable for %s: %s", underlying, exc)
