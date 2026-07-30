@@ -1215,6 +1215,64 @@ spread at the same 77600 strike — an undesigned **short straddle**. Delta roug
 gamma doubles, and the risk layer sees two independent spreads. Needs a same-side or
 combined-greeks constraint; not yet built.
 
+### 21.9 The friction constant was wrong by ~12x — it was gating everything (2026-07-30)
+**Measured, not assumed.** Over **4,587 real bid/ask quotes** stored on QuantG's own signals
+(`signals.greeks_at_signal.bid/ask`):
+
+| | Measured | Modelled | Overstatement |
+|---|---|---|---|
+| bid-ask, % of mid | **0.252%** (median) | 3.000%/leg | **11.9×** |
+| half-spread actually crossed | NIFTY 0.122% · SENSEX 0.126% · BANKNIFTY 0.157% | 3.0% | ~24× |
+| brokerage + taxes, round trip | **₹14.78/lot** (n=269 real `entry_charges`) | ₹300 flat | **20×** |
+
+**One wrong constant drove three separate failures:**
+1. The **cost floor** demanded ₹900 of bankable profit where the true 3× bar is ~₹78 — this
+   is the mechanism behind **6,009 cost-floor vetoes in a single week**.
+2. **Paper fills** were charged the same 3%/leg, so every paper P&L the book was judged on
+   was understated by roughly ₹280/lot/trade.
+3. **Both OOS judges** (EOD `BACKTEST_SLIPPAGE_PCT` 3%/leg, intraday `IntradayCosts` 2%/side)
+   computed **every `NO_EDGE_NEGATIVE` verdict in QuantG's history at ~12× real friction.**
+   §15.6 recorded that the seller edge "dies above ~5–8% slippage" — at 0.25% real, that
+   entire concern evaporates. **The judges may have been killing strategies that work.**
+
+Founder-approved settings: **slippage 0.5%/leg** (≈4× the measured half-spread — a deliberate
+buffer for 0-DTE far-OTM widening and market impact at size, still 6× cheaper than the guess),
+flat floor **₹25**, both judges aligned to the same cost, **`tp_frac` 0.25**. Realized friction
+is now instrument-specific: **NIFTY ₹46 · SENSEX ₹26 · BANKNIFTY ₹270** per lot — the flat ₹300
+simultaneously over-charged NIFTY/SENSEX 6–12× and under-charged BANKNIFTY.
+
+**Take-profit was unreachable.** Over 92 closed spreads with peak P&L, as a fraction of max
+credit: **tp 0.15 reached by 55% · 0.25 by 33% · 0.35 by 20% · 0.50 by only 12%** (median peak
+**0.174**). The book was set at 0.45–0.50 — a target the market paid on ~1 trade in 8. Worse,
+`spread-time-exit` (n=35 = **38% of the sample**) had a median peak of **0.3%** — those trades
+never went green at all. Migrated all 8 live sellers to 0.25 via
+`scripts/retune_tp_frac_07_30.py` (template sync is disabled, §20.1 — code alone never reaches
+the live rows). Both halves are load-bearing: 0.25 banks *less*, so it only clears the floor
+because friction fell.
+
+**Lot size does NOT help — measured, and the answer is no.** Charges per lot by size: 1 lot
+₹7.60 · 2 ₹12.79 · 9 ₹16.08 · 10 ₹15.52. **No economy of scale** (STT/exchange fees are
+proportional to turnover, not per-order), so sizing up multiplies P&L *and* variance and does
+nothing for friction efficiency. Size is a multiplier on expectancy — fix expectancy first.
+
+**The strategies are NOT one bet.** Same-day P&L sign agreement across all pairs = **108/192
+= 56%** (50% = independent). The long-standing "all 8 are the same bet" worry is *not*
+supported; diversification is real. Each leg is individually negative — a different problem.
+
+**ONE RATIO EXPLAINS ALMOST EVERYTHING.** Per-strategy median credit/width vs lifetime record:
+QG-O4 0.089 **+₹1,768** · RAE NIFTY 0.206 **+₹1,510** · IDX SENSEX 0.162 **+₹922** ‖
+QG-O1 **0.034 −₹6,922** · QG-O11 **0.255 −₹8,075** · RAE BANKNIFTY **0.246 −₹8,667**.
+**Ratio 0.09–0.21 wins; below 0.09 loses (credit too thin); above 0.22 loses (short strike too
+near the money).** Now confirmed in three independent slices — all-DTE, DTE-0, and
+per-strategy. It is a **BAND, not a floor**, which is precisely what §21.8.1 got wrong.
+Verified post-deploy: QG-O1's morning contract (credit 11.90 / width 200) now clears the
+absolute floor (₹193 vs ₹137) but is still correctly refused on ratio 0.0595 — the two laws
+now do genuinely different jobs.
+
+**Standing caveat:** none of this creates edge either. It stops the system mis-measuring
+itself by an order of magnitude. Whether a correctly-costed seller book is profitable is what
+forward-paper and the re-run judges will say. `CORE_ENGINE_LIVE_ENABLED=false`.
+
 ## 22. Full-System Audit Fixes (2026-07-24)
 
 A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
