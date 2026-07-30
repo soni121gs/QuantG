@@ -54,6 +54,56 @@ TRAIL_HONOUR_COST_FLOOR = os.environ.get(
 # banked amount clears friction with margin.
 TRAIL_ARM_COST_MULT = float(os.environ.get("DYN_EXIT_TRAIL_ARM_COST_MULT", "1.5"))
 
+# ── "never went green" early cut (2026-07-30) ────────────────────────────────
+# Measured over 94 closed spreads: 54% of LOSERS were never meaningfully green
+# (peak <= Rs50) — they go straight against the position. And `spread-time-exit`
+# (38% of all trades) had a median peak of 0.3% of credit: dead on arrival, then
+# left to bleed to the time bell or the stop. A theta winner, by contrast, is
+# nearest its peak EARLY (winners' median peak 29% of credit). So a spread that
+# has shown NO life after a fair window is overwhelmingly a loser being held in
+# hope — cut it, free the slot, stop the bleed. This is the disciplined opposite
+# of averaging down (which nearly TRIPLES the book's loss on its own history).
+NO_PROGRESS_ENABLED = os.environ.get("DYN_EXIT_NO_PROGRESS_ENABLED", "true").strip().lower() == "true"
+NO_PROGRESS_MINUTES = float(os.environ.get("DYN_EXIT_NO_PROGRESS_MINUTES", "20"))
+# Peak must clear this fraction of max credit within the window, or the trade is
+# judged lifeless. 8% cleanly separates: winners median-peak at 29%, dead trades
+# at ~0.3%. Also floored at real friction so a thin-credit spread isn't cut for
+# failing to clear a rupee bar it never could.
+NO_PROGRESS_PEAK_FRAC = float(os.environ.get("DYN_EXIT_NO_PROGRESS_PEAK_FRAC", "0.08"))
+
+
+def no_progress_exit(
+    *,
+    peak_pnl: Optional[float],
+    held_minutes: Optional[float],
+    net_credit: float,
+    qty: int,
+    lot_size: Optional[int] = None,
+    lots: int = 1,
+    leg_premium_sum: Optional[float] = None,
+) -> Optional[str]:
+    """Return "spread-no-progress" if a spread has shown no life within the
+    window, else None. Pure. Priced exits (SL/TP/trail) must be checked FIRST by
+    the caller so a trade that is actually working is never cut."""
+    if not NO_PROGRESS_ENABLED:
+        return None
+    if held_minutes is None or held_minutes < NO_PROGRESS_MINUTES:
+        return None
+    credit_money = float(net_credit) * int(qty or 0)
+    if credit_money <= 0:
+        return None
+    # life threshold = max(fraction of credit, real round-trip friction)
+    floor = NO_PROGRESS_PEAK_FRAC * credit_money
+    if lot_size:
+        try:
+            from core.spread_builder import round_trip_friction
+            floor = max(floor, round_trip_friction(leg_premium_sum, lot_size) * max(1, int(lots or 1)))
+        except Exception:
+            pass
+    if (peak_pnl or 0.0) < floor:
+        return "spread-no-progress"
+    return None
+
 
 def update_peak_pnl(prev_peak: Optional[float], current_pnl: float) -> float:
     """Running maximum favourable P&L (money) seen on a position. The caller

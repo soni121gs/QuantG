@@ -39,7 +39,7 @@ from core.spread_lifecycle import (
     value_credit_spread, spread_exit_reason, close_credit_spread,
     value_debit_spread, debit_spread_exit_reason, close_debit_spread,
 )
-from core.dynamic_exit import update_peak_pnl, evaluate_spread_exit
+from core.dynamic_exit import update_peak_pnl, evaluate_spread_exit, no_progress_exit
 
 logger = logging.getLogger("quantg.position_monitor")
 
@@ -917,6 +917,30 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # is what makes a scalper actually turn over instead of holding one drift all day.
     if reason is None and _time_reason:
         reason = _time_reason
+
+    # "Never went green" early cut (2026-07-30): a spread that has shown no life
+    # within the window is overwhelmingly a loser being held in hope (54% of losers
+    # were never green; the time-exit pool had a median peak of 0.3% of credit).
+    # Cut it early rather than let it bleed to the bell. Priced exits above take
+    # priority, so a trade that is actually working is never touched.
+    if reason is None:
+        _entry_np = parse_iso_dt(pos.get("entry_time") or pos.get("created_at"))
+        _held_np = ((datetime.now(timezone.utc) - _entry_np).total_seconds() / 60.0
+                    if _entry_np is not None else None)
+        _legs = pos.get("legs") or []
+        try:
+            _lps = sum(float(l.get("entry_price") or l.get("premium") or 0) for l in _legs) or None
+        except Exception:
+            _lps = None
+        reason = no_progress_exit(
+            peak_pnl=peak_pnl,
+            held_minutes=_held_np,
+            net_credit=float(pos.get("net_credit") or 0.0),
+            qty=int(pos.get("open_quantity") or pos.get("quantity") or 0),
+            lot_size=pos.get("lot_size"),
+            lots=int(pos.get("lots") or 1),
+            leg_premium_sum=_lps,
+        )
 
     if reason:
         logger.info("spread monitor exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",

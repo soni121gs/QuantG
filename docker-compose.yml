@@ -110,6 +110,23 @@ services:
       # far more of them actually book, and with corrected friction a 0.25 target
       # still clears the cost floor comfortably.
       CREDIT_SPREAD_TP_FRAC: "${CREDIT_SPREAD_TP_FRAC:-0.25}"
+      # BOOK-WIDE credit/width CEILING (2026-07-30). One ratio explains almost
+      # every strategy's lifetime record: credit/width 0.09-0.21 WINS at every DTE,
+      # <0.09 loses (credit too thin), >0.22 loses (short strike too near the money).
+      #   QG-O4 0.089 +Rs1,768 · RAE-NIFTY 0.206 +Rs1,510 · IDX-SENSEX 0.162 +Rs922
+      #   QG-O11 0.255 -Rs8,075 · RAE-BANKNIFTY 0.246 -Rs8,667 · QG-O1 0.034 -Rs6,922
+      # The floor (0.12) was already book-wide; the ceiling was only applied near
+      # expiry. Making it book-wide would have blocked QG-O11 and RAE-BANKNIFTY —
+      # the two biggest loss pools — from the first trade. Off = empty string.
+      CREDIT_SPREAD_MAX_CREDIT_RATIO: "${CREDIT_SPREAD_MAX_CREDIT_RATIO:-0.22}"
+      # "Never went green" early cut: a spread that hasn't cleared 8% of its credit
+      # within 20 min is overwhelmingly a dead loser (54% of losers never went green;
+      # the time-exit pool median-peaked at 0.3%). Cut it early. Priced exits take
+      # priority, so a working trade is never touched. This is the DISCIPLINED
+      # opposite of averaging down (which ~triples the book's loss on its history).
+      DYN_EXIT_NO_PROGRESS_ENABLED: "${DYN_EXIT_NO_PROGRESS_ENABLED:-true}"
+      DYN_EXIT_NO_PROGRESS_MINUTES: "${DYN_EXIT_NO_PROGRESS_MINUTES:-20}"
+      DYN_EXIT_NO_PROGRESS_PEAK_FRAC: "${DYN_EXIT_NO_PROGRESS_PEAK_FRAC:-0.08}"
       # ── 2026-07-29 law-reconciliation switches (all reversible) ──
       # Trail may not bank below the profit the cost-floor law was promised.
       DYN_EXIT_TRAIL_HONOUR_COST_FLOOR: "${DYN_EXIT_TRAIL_HONOUR_COST_FLOOR:-true}"

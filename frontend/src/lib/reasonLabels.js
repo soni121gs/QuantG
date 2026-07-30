@@ -22,6 +22,8 @@ const MAP = {
   "theta-no-progress": { label: "Closed early · no progress", tone: "warn", hint: "Trade stalled within the no-progress window; exited before more decay." },
   "spread-tp": { label: "Spread target hit (50% credit)", tone: "profit", hint: "Captured ~50% of the credit collected." },
   "spread-sl": { label: "Spread stop (2× credit)", tone: "loss", hint: "Spread loss reached ~2× the credit collected." },
+  "spread-no-progress": { label: "Cut early · no progress", tone: "warn", hint: "Showed no life within the window (never cleared 8% of credit) — closed before it could bleed to the bell." },
+  "spread-time-exit": { label: "Time recycle", tone: "warn", hint: "Held past the strategy's time limit with no price trigger; slot freed for re-entry." },
   // ── exits (existing) ──
   "take-profit": { label: "Take profit", tone: "profit" },
   "stop-loss": { label: "Stop loss", tone: "loss" },
