@@ -15945,6 +15945,27 @@ def _attach_capture_listeners(gateway) -> None:
             logger.warning("could not attach capture listener: %s", exc)
 
 
+async def _run_ingest_subprocess(args: List[str], timeout: float = 900.0) -> Dict[str, Any]:
+    """Run a 1-minute importer script in an isolated child process and capture its
+    result. Isolation is deliberate: the importer pulls a full historical window from
+    Upstox, and doing that in-process would grow the trading process's memory (the
+    2026-07-23/24 OOM class, §22.2). Best-effort — never raises."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "python", *args,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {"rc": -1, "tail": "timeout"}
+        tail = (out or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
+        return {"rc": proc.returncode, "tail": " | ".join(tail)}
+    except Exception as exc:  # noqa: BLE001
+        return {"rc": -2, "tail": f"{type(exc).__name__}: {exc}"}
+
+
 async def _start_user_upstox_ticker(user_id: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
     status = await get_user_upstox_status(user_id)
     if not status.get("token_valid"):
@@ -16843,6 +16864,8 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _vix_last_snapshot_minute: Optional[str] = None
     _chain_last_snapshot_minute: Optional[str] = None
     _candle_backfill_done_date: Optional[str] = None
+    _minute_backfill_done_date: Optional[str] = None
+    _feed_open_check_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
     _edge_lab_rebuild_done_date: Optional[str] = None
@@ -17000,6 +17023,94 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         logger.info("Candle backfill: %s", _cres)
                 except Exception as _cb_err:
                     logger.debug("Candle backfill failed: %s", _cb_err)
+
+            # 16:05 IST — heal the 1-minute stores from Upstox historical. Live capture
+            # only holds bars from whenever the feed came up, and a late morning token
+            # reconnect loses the open (2026-07-30: feed live only at 11:58 → NIFTY had
+            # 219 bars from 11:58, not 375 from 09:15). INDEX historical is available
+            # same-day, so this heals today's index gap. OPTION historical uses the
+            # EXPIRED-instrument path, so only already-expired contract-days backfill —
+            # today's live option session is healed by live capture (incl. SENSEX now),
+            # not here; we fill a short trailing expired-contract window instead.
+            # Isolated subprocess, best-effort, once/day.
+            if hour == 16 and minute == 5 and _minute_backfill_done_date != today:
+                _minute_backfill_done_date = today
+                try:
+                    audit: Dict[str, Any] = {
+                        "_id": f"backfill:{today}", "date": today,
+                        "index": {}, "options": {},
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                    from core.index_minute_store import IndexMinuteStore
+                    _ims = IndexMinuteStore()
+                    _thin: List[str] = []
+                    for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
+                        try:
+                            _n = len(_ims.get_minutes(_u, today))
+                        except Exception:
+                            _n = 0
+                        audit["index"][_u] = {"before": _n}
+                        if _n < 360:  # ~375 session minutes; allow a small tail miss
+                            _thin.append(_u)
+                    if _thin:
+                        _ir = await _run_ingest_subprocess([
+                            "/app/scripts/index_1m_ingest_upstox.py",
+                            "--from", today, "--to", today,
+                            "--underlyings", ",".join(_thin)])
+                        audit["index"]["_result"] = _ir
+                        for _u in _thin:
+                            try:
+                                audit["index"][_u]["after"] = len(_ims.get_minutes(_u, today))
+                            except Exception:
+                                pass
+                    # Options: trailing expired-contract window (NIFTY/BANKNIFTY only;
+                    # SENSEX options are not backfillable — Upstox BSE-blocked, §14.2).
+                    # Idempotent (is_clean skips already-stored contract-days), so daily
+                    # cost is small after steady state. Skip today (not expired).
+                    _to = (ist.date() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    _from = (ist.date() - timedelta(days=4)).strftime("%Y-%m-%d")
+                    _or = await _run_ingest_subprocess([
+                        "/app/scripts/options_1m_ingest_upstox.py",
+                        "--from", _from, "--to", _to,
+                        "--underlyings", "NIFTY,BANKNIFTY", "--sleep-sec", "0.3"])
+                    audit["options"] = {"from": _from, "to": _to, "result": _or}
+                    await db.capture_backfill_runs.replace_one(
+                        {"_id": audit["_id"]}, audit, upsert=True)
+                    logger.info("1-min gap-backfill: index=%s options=%s",
+                                audit["index"], audit["options"])
+                except Exception as _bf_err:
+                    logger.warning("1-min gap-backfill failed: %s", _bf_err)
+
+            # 09:20 IST — feed-down-at-open watchdog. The daily Upstox token expires
+            # ~03:30 IST and needs a morning reconnect; a late reconnect means no feed at
+            # 09:15 and the morning 1-minute capture is silently lost (2026-07-30). Record
+            # live/false so the Hermes infra.feed_down_at_open probe flags it and the
+            # founder knows to reconnect earlier. Once/day, weekdays only.
+            if hour == 9 and minute == 20 and ist.weekday() < 5 and _feed_open_check_done_date != today:
+                _feed_open_check_done_date = today
+                try:
+                    _live = False
+                    _reason = "no_connected_gateway"
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
+                        _g = await get_user_upstox_gateway(_row["id"])
+                        if _g and getattr(_g, "connected", False):
+                            _stale, _sreason = await _is_upstox_strategy_feed_stale(_row["id"])
+                            if not _stale:
+                                _live = True
+                                _reason = "ok"
+                                break
+                            _reason = _sreason or "feed_stale"
+                    if not _live:
+                        logger.warning(
+                            "FEED DOWN AT OPEN (09:20 IST) — morning 1-min capture will be "
+                            "lost until the Upstox token is reconnected: %s", _reason)
+                    await db.feed_open_status.replace_one(
+                        {"date": today},
+                        {"date": today, "live": _live, "reason": _reason,
+                         "ts": datetime.now(timezone.utc).isoformat()},
+                        upsert=True)
+                except Exception as _fo_err:
+                    logger.debug("feed-open watchdog failed: %s", _fo_err)
 
             # 20:30 IST daily — rebuild the Edge Lab snapshot automatically, off-market
             # and after the EOD bhavcopy ingest. The Lab used to require a manual

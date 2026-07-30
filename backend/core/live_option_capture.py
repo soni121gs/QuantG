@@ -32,10 +32,15 @@ from core.options_minute_capture import OptionsMinuteCapture
 
 logger = logging.getLogger("quantg.live_option_capture")
 
-# Underlyings the intraday OOS judge (IMD-07/09) can actually grade. SENSEX/BANKEX
-# have no IMD judge and no expired-resolver support, so capturing them would only
-# pad the store with un-gradeable contract-days. NIFTY/BANKNIFTY only.
-CAPTURE_UNDERLYINGS = {"NIFTY", "BANKNIFTY"}
+# Underlyings whose live option ticks we aggregate into 1-minute bars.
+# NIFTY/BANKNIFTY are fully gradeable by the IMD judge AND historically backfillable
+# via the expired-instrument resolver. SENSEX is captured FORWARD-ONLY (added
+# 2026-07-30): it trades on the book (esp. Thursday expiry), its live WS ticks carry
+# their own instrument_key so `_build_ref` needs no resolver — but there is NO
+# historical backfill for SENSEX/BANKEX options (Upstox expired-instruments is
+# BSE-blocked, §14.2), so a missed SENSEX-option morning cannot be healed by the EOD
+# backfill. BANKEX stays excluded (not traded).
+CAPTURE_UNDERLYINGS = {"NIFTY", "BANKNIFTY", "SENSEX"}
 
 
 class LiveOptionCapture:

@@ -185,6 +185,51 @@ async def capture_flush_failed(ctx: ProbeContext) -> List[Finding]:
     return out
 
 
+@register("infra.feed_down_at_open", kind="dynamic")
+async def feed_down_at_open(ctx: ProbeContext) -> List[Finding]:
+    """The Upstox feed was not live at the market open — so the morning was never
+    captured, whatever the capture code does downstream.
+
+    Root cause found 2026-07-30: the daily Upstox token expires ~03:30 IST and needs a
+    manual morning reconnect; when it lands late (that day, 11:58 IST) there is no valid
+    token → no feed → index_1m/options_1m simply never see the 09:15–reconnect window.
+    The scheduler's 09:20 IST watchdog records live/false into db.feed_open_status; this
+    reads it so a silently-lost morning becomes a loud, on-record CRITICAL finding rather
+    than a mysteriously short store day. Auto-resolves when a later day records live/true.
+    """
+    try:
+        doc = await ctx.db.feed_open_status.find_one({"date": ctx.date_str})
+    except Exception:  # noqa: BLE001
+        return []
+    if not doc or doc.get("live") is not False:
+        return []
+    # Best-effort: how much of the morning was lost (first captured index bar time).
+    gap_note: Dict[str, Any] = {}
+    try:
+        flush = await ctx.db.capture_flush_runs.find_one({"_id": f"capture:{ctx.date_str}"})
+        if flush:
+            gap_note = {"index_bars_captured": (flush.get("index") or {}).get("bars"),
+                        "option_bars_captured": (flush.get("options") or {}).get("bars_written")}
+    except Exception:  # noqa: BLE001
+        pass
+    return [Finding(
+        probe_id="infra.feed_down_at_open", domain=Domain.INFRA,
+        severity=Severity.CRITICAL, entity="upstox-feed",
+        title=f"Upstox feed was DOWN at the open on {ctx.date_str} — morning capture lost",
+        detail=("The live feed was not connected at 09:15 IST, so the 1-minute index and "
+                "option capture recorded nothing until the feed came up (usually a late "
+                "daily token reconnect). The EOD backfill can heal NIFTY/BANKNIFTY index "
+                "and option gaps from Upstox historical, but SENSEX options are not "
+                "backfillable — that morning is gone. The fix is an earlier/automated "
+                "token reconnect; this finding exists so late reconnects stop being silent."),
+        evidence={"date": ctx.date_str, "reason": doc.get("reason"),
+                  "recorded_at": doc.get("ts"), **gap_note},
+        reproduction="db.feed_open_status.findOne({date:'%s'})" % ctx.date_str,
+        suggested_fix=("Reconnect the Upstox token before 09:15 IST (automate it); until "
+                       "then the EOD backfill heals NIFTY/BANKNIFTY but not SENSEX options."),
+    )]
+
+
 @register("data.store_writable", kind="static")
 async def store_writable(ctx: ProbeContext) -> List[Finding]:
     """Can this process actually WRITE the research stores? Catches the permission
