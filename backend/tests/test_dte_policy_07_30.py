@@ -137,3 +137,36 @@ def test_concurrency_raised_above_one():
     from signal_manager import _max_concurrent_spreads
 
     assert _max_concurrent_spreads() >= 2
+
+
+# ── the width narrowing that actually unlocks DTE 0 ───────────────────────
+
+
+def test_near_expiry_narrows_the_wing():
+    """Relaxing the cost-floor multiple alone does NOT unlock DTE 0: the
+    credit/width ratio test fails independently and correctly. Observed live
+    2026-07-30: SENSEX credit 33.10 on width 800 -> ratio 0.041 vs 0.120 min."""
+    p = dp.evaluate(expiry=_exp(0), regime="RANGE", today=TODAY, enabled=True)
+    assert p.width_strikes == dp.NEAR_EXPIRY_WIDTH_STRIKES
+    assert p.width_strikes <= 3, "a 0-DTE credit cannot fill a 6-8 strike wing"
+
+
+def test_far_expiry_keeps_the_configured_wing():
+    p = dp.evaluate(expiry=_exp(2), regime="RANGE", today=TODAY, enabled=True)
+    assert p.width_strikes is None
+
+
+def test_narrow_wing_makes_a_real_0dte_credit_lawful():
+    """The live SENSEX numbers: credit 33.10, lot 20, strike interval 100. On the
+    configured 8-strike wing the ratio law refuses it; on 2 strikes it passes."""
+    from core.spread_builder import CREDIT_SPREAD_MIN_CREDIT_RATIO, credit_cost_floor
+
+    wide = credit_cost_floor(33.10, 800.0, lot_size=20, tp_frac=0.45,
+                             leg_premium_sum=327.0)
+    assert not wide["ratio_passed"]
+    assert wide["credit_ratio"] < CREDIT_SPREAD_MIN_CREDIT_RATIO
+
+    narrow = credit_cost_floor(33.10, 200.0, lot_size=20, tp_frac=0.45,
+                               leg_premium_sum=327.0,
+                               cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT)
+    assert narrow["ratio_passed"], "2-strike wing must clear the ratio law"

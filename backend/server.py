@@ -18010,10 +18010,17 @@ async def startup():
                                 _cf_mult = None
                                 try:
                                     from core.dte_policy import evaluate as _dte_eval
-                                    _cf_mult = _dte_eval(
+                                    _pol = _dte_eval(
                                         expiry=getattr(instrument, "expiry", None)
                                         or contract_payload.get("expiry"),
-                                        regime=None).cost_floor_mult
+                                        regime=None)
+                                    _cf_mult = _pol.cost_floor_mult
+                                    # Narrow the wing at near expiry so the small
+                                    # 0-DTE credit produces a LAWFUL credit/width
+                                    # ratio instead of being vetoed on a 6-8 strike
+                                    # wing it can never fill.
+                                    if _pol.width_strikes:
+                                        _wstrikes = min(_wstrikes, int(_pol.width_strikes))
                                 except Exception:
                                     _cf_mult = None
                                 if _opts_cfg.get("dynamic_chain_selection", True):

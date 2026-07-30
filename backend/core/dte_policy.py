@@ -80,6 +80,17 @@ DISABLE_TIME_EXIT_NEAR_EXPIRY = _b("SELLER_DISABLE_TIME_EXIT_NEAR_EXPIRY", True)
 # is only safe because cross-strategy contract dedup (2026-07-29) now prevents the
 # failure it was really protecting against — three strategies in ONE contract.
 MAX_CONCURRENT_SPREADS = _i("SELLER_MAX_CONCURRENT_SPREADS", 2)
+# Wing width (in strike intervals) at near expiry.
+#
+# Relaxing the cost-floor MULTIPLE alone does not unlock DTE 0 — the credit/width
+# RATIO test fails independently, and it should: credit/width 0.12-0.16 was the only
+# positive bucket in the 259-trade study (n=32, WR 69%, avg +Rs57), while >=0.25 was
+# the worst (n=87, WR 33%, avg -Rs200). At DTE 0 the credit collapses (SENSEX 33.10
+# observed 2026-07-30), so on the configured 6-8 strike wing the ratio is ~0.04 and
+# the trade is correctly refused. The fix is not to weaken the law — it is to bring
+# the WIDTH down to where a 0-DTE credit produces a lawful ratio: 33.10 needs a
+# width near 275, i.e. 2-3 SENSEX strikes, not 6-8.
+NEAR_EXPIRY_WIDTH_STRIKES = _i("SELLER_NEAR_EXPIRY_WIDTH_STRIKES", 2)
 
 # Regimes a premium seller owns once past the near-expiry window.
 OWNED_REGIMES = {"RANGE", "INSIDE_QUIET"}
@@ -91,6 +102,7 @@ class DtePolicy:
     allow: bool
     reason: str
     cost_floor_mult: Optional[float] = None      # None = use the book-wide default
+    width_strikes: Optional[int] = None          # None = use the strategy's config
     disable_time_exit: bool = False
     near_expiry: bool = False                    # inside the measured-best window
     telemetry: Dict[str, Any] = field(default_factory=dict)
@@ -98,6 +110,7 @@ class DtePolicy:
     def as_dict(self) -> Dict[str, Any]:
         return {"dte": self.dte, "allow": self.allow, "reason": self.reason,
                 "cost_floor_mult": self.cost_floor_mult, "near_expiry": self.near_expiry,
+                "width_strikes": self.width_strikes,
                 "disable_time_exit": self.disable_time_exit, **self.telemetry}
 
 
@@ -152,6 +165,7 @@ def evaluate(
             f"near expiry ({dte}d) — best measured bucket (DTE0 n=56 WR80% +Rs123); "
             "all regimes allowed",
             cost_floor_mult=NEAR_EXPIRY_COST_FLOOR_MULT,
+            width_strikes=NEAR_EXPIRY_WIDTH_STRIKES,
             disable_time_exit=DISABLE_TIME_EXIT_NEAR_EXPIRY,
             near_expiry=True,
             telemetry=tele,
