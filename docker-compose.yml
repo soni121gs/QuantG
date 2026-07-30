@@ -84,6 +84,32 @@ services:
       RAE_EXIT_RANGE_ARM: "${RAE_EXIT_RANGE_ARM:-0.2}"
       RAE_EXIT_RANGE_GIVEBACK: "${RAE_EXIT_RANGE_GIVEBACK:-0.25}"
       RAE_EXIT_INSIDE_ARM: "${RAE_EXIT_INSIDE_ARM:-0.18}"
+      # ── 2026-07-30 FRICTION RE-MEASUREMENT (founder-approved) ──────────
+      # The 3%/leg slippage assumption was a guess and it was wrong by ~12x.
+      # Measured over 4,587 real bid/ask quotes stored on our own signals:
+      #   bid-ask   = 0.252% of mid (median)   -> 3.0% was 11.9x the FULL spread
+      #   half-spread you actually cross: NIFTY 0.122%  SENSEX 0.126%  BNF 0.157%
+      #   real brokerage+taxes round trip = Rs14.78/lot (constant said Rs300 = 20x)
+      # Consequences of the old number: the cost floor demanded Rs900 of bankable
+      # profit when the true 3x bar is ~Rs78 (6,009 candidates vetoed in one week),
+      # paper fills were charged ~Rs280/lot/trade of imaginary cost, and BOTH OOS
+      # judges computed every NO_EDGE_NEGATIVE verdict at ~12x real friction.
+      # Set to 0.5% = ~4x the measured half-spread: a deliberate safety buffer for
+      # 0-DTE far-OTM widening and market impact at size, still 6x cheaper than the
+      # old guess. Revert to 0.03 to restore the previous (over-charged) model.
+      PAPER_SPREAD_SLIPPAGE_PCT: "${PAPER_SPREAD_SLIPPAGE_PCT:-0.005}"
+      # Flat floor for the FIXED part of friction (brokerage/taxes). Measured
+      # Rs14.78 round trip per lot; 25 keeps a buffer. The proportional part is
+      # derived from PAPER_SPREAD_SLIPPAGE_PCT above, so these move together.
+      SPREAD_ROUND_TRIP_COST_PER_LOT: "${SPREAD_ROUND_TRIP_COST_PER_LOT:-25}"
+      # The EOD judge must cost trades the same way the live path does, or its
+      # verdicts describe a market that does not exist.
+      BACKTEST_SLIPPAGE_PCT: "${BACKTEST_SLIPPAGE_PCT:-0.005}"
+      # Take-profit: 0.45-0.50 of credit was reached by only 12% of 92 measured
+      # trades (median peak 17.4% of credit). 0.25 is reached by 33%. Smaller wins,
+      # far more of them actually book, and with corrected friction a 0.25 target
+      # still clears the cost floor comfortably.
+      CREDIT_SPREAD_TP_FRAC: "${CREDIT_SPREAD_TP_FRAC:-0.25}"
       # ── 2026-07-29 law-reconciliation switches (all reversible) ──
       # Trail may not bank below the profit the cost-floor law was promised.
       DYN_EXIT_TRAIL_HONOUR_COST_FLOOR: "${DYN_EXIT_TRAIL_HONOUR_COST_FLOOR:-true}"

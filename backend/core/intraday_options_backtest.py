@@ -20,6 +20,8 @@ arms once +trail_after_R*R is seen and then follows the peak down by initial_sto
 """
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -37,7 +39,10 @@ EXIT_MISSING = "missing-price"
 
 @dataclass
 class IntradayCosts:
-    slippage_pct: float = 0.02       # per side, applied to the net premium
+    # 2026-07-30: was 0.02 (2% per side). Measured real half-spread is 0.12-0.16%
+    # per leg over 4,587 stored quotes, so 2% was ~14x reality and every verdict
+    # this judge produced was computed at that cost. 0.005 keeps a ~4x buffer.
+    slippage_pct: float = float(os.environ.get("INTRADAY_SLIPPAGE_PCT", "0.005"))
     brokerage_per_leg: float = 20.0  # flat, per leg, per side
 
 
