@@ -90,7 +90,15 @@ MAX_CONCURRENT_SPREADS = _i("SELLER_MAX_CONCURRENT_SPREADS", 2)
 # the trade is correctly refused. The fix is not to weaken the law — it is to bring
 # the WIDTH down to where a 0-DTE credit produces a lawful ratio: 33.10 needs a
 # width near 275, i.e. 2-3 SENSEX strikes, not 6-8.
-NEAR_EXPIRY_WIDTH_STRIKES = _i("SELLER_NEAR_EXPIRY_WIDTH_STRIKES", 2)
+NEAR_EXPIRY_WIDTH_STRIKES = _i("SELLER_NEAR_EXPIRY_WIDTH_STRIKES", 3)
+# Upper bound on credit/width at near expiry — keeps the short strike OUT of the
+# money. 2 strikes was tried first and was wrong: SENSEX (lot 20, tp_frac 0.45)
+# needs credit >= 50 to clear a 1.5x floor of Rs450, and credit 50 on a 200-wide
+# wing IS the at-the-money strike (ratio 0.25). Three strikes puts the same credit
+# at ratio 0.167 — inside the measured 0.10-0.22 band (n=34, WR 85-86%, +Rs182..
+# +Rs210) instead of the >=0.22 band (n=4, WR 50%, -Rs206). The ceiling below is
+# the backstop that makes it structural rather than a lucky arithmetic coincidence.
+NEAR_EXPIRY_MAX_CREDIT_RATIO = _f("SELLER_NEAR_EXPIRY_MAX_CREDIT_RATIO", 0.22)
 
 # Regimes a premium seller owns once past the near-expiry window.
 OWNED_REGIMES = {"RANGE", "INSIDE_QUIET"}
@@ -103,6 +111,7 @@ class DtePolicy:
     reason: str
     cost_floor_mult: Optional[float] = None      # None = use the book-wide default
     width_strikes: Optional[int] = None          # None = use the strategy's config
+    max_credit_ratio: Optional[float] = None     # None = no ceiling (book default)
     disable_time_exit: bool = False
     near_expiry: bool = False                    # inside the measured-best window
     telemetry: Dict[str, Any] = field(default_factory=dict)
@@ -111,6 +120,7 @@ class DtePolicy:
         return {"dte": self.dte, "allow": self.allow, "reason": self.reason,
                 "cost_floor_mult": self.cost_floor_mult, "near_expiry": self.near_expiry,
                 "width_strikes": self.width_strikes,
+                "max_credit_ratio": self.max_credit_ratio,
                 "disable_time_exit": self.disable_time_exit, **self.telemetry}
 
 
@@ -166,6 +176,7 @@ def evaluate(
             "all regimes allowed",
             cost_floor_mult=NEAR_EXPIRY_COST_FLOOR_MULT,
             width_strikes=NEAR_EXPIRY_WIDTH_STRIKES,
+            max_credit_ratio=NEAR_EXPIRY_MAX_CREDIT_RATIO,
             disable_time_exit=DISABLE_TIME_EXIT_NEAR_EXPIRY,
             near_expiry=True,
             telemetry=tele,

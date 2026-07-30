@@ -55,6 +55,20 @@ SPREAD_ROUND_TRIP_COST_PER_LOT = float(os.environ.get("SPREAD_ROUND_TRIP_COST_PE
 # (open short+long, close short+long).
 SPREAD_SLIPPAGE_PCT = float(os.environ.get("PAPER_SPREAD_SLIPPAGE_PCT", "0.03"))
 SPREAD_COST_FLOOR_MULT = float(os.environ.get("SPREAD_COST_FLOOR_MULT", "3.0"))
+# UPPER bound on credit/width — "the short strike is too close to the money".
+#
+# 2026-07-30: the ratio law had a floor but no ceiling, and a ceiling is the only
+# delta-independent way to keep a 0-DTE seller out of the at-the-money strike. At
+# 0 DTE the delta curve is a CLIFF (just-OTM ~0.05, ATM ~0.5), so there is no
+# 0.30-delta strike to target and any delta-based selection snaps to ATM. Measured
+# over the 56 real DTE-0 trades:
+#     ratio 0.10-0.16  n=20  WR 85%  avg +Rs182
+#     ratio 0.16-0.22  n=14  WR 86%  avg +Rs210
+#     ratio >=0.22     n= 4  WR 50%  avg -Rs206   <- ATM, max gamma, coin flip
+# Live confirmation: three SENSEX 0-DTE spreads opened at ratio 0.241/0.252/0.258
+# with short strikes AT spot (77600 vs 77645) and all three went straight to a
+# loss. Off by default book-wide; the DTE policy sets it at near expiry.
+CREDIT_SPREAD_MAX_CREDIT_RATIO = os.environ.get("CREDIT_SPREAD_MAX_CREDIT_RATIO", "")
 
 # --- Law 2, theta reachability, enforced at BUILD time (2026-07-22) ----------
 # CLAUDE.md §21.2 states the law but nothing enforced it on the live path, and the
@@ -161,6 +175,7 @@ def credit_cost_floor(
     tp_frac: float = 1.0,
     leg_premium_sum: Optional[float] = None,
     cost_floor_mult: Optional[float] = None,
+    max_credit_ratio: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Judge a candidate credit spread against the ERP cost-floor law.
 
@@ -183,7 +198,18 @@ def credit_cost_floor(
         "min_credit_ratio": CREDIT_SPREAD_MIN_CREDIT_RATIO,
         "ratio_passed": bool(credit_ratio >= CREDIT_SPREAD_MIN_CREDIT_RATIO),
     }
-    out["passed"] = out["ratio_passed"]
+    # Upper bound: too MUCH credit for the width means the short strike is at/near
+    # the money. A floor without a ceiling was how the 0-DTE unlock walked straight
+    # into ATM gamma (2026-07-30).
+    _max_ratio = max_credit_ratio
+    if _max_ratio is None and CREDIT_SPREAD_MAX_CREDIT_RATIO:
+        try:
+            _max_ratio = float(CREDIT_SPREAD_MAX_CREDIT_RATIO)
+        except ValueError:
+            _max_ratio = None
+    out["max_credit_ratio"] = _max_ratio
+    out["ratio_max_passed"] = True if _max_ratio is None else bool(credit_ratio <= _max_ratio)
+    out["passed"] = bool(out["ratio_passed"] and out["ratio_max_passed"])
     if lot_size:
         # Proportional when the legs are known: 4 leg-transactions per round trip,
         # each crossing SPREAD_SLIPPAGE_PCT of that leg's premium. The flat constant
@@ -208,7 +234,8 @@ def credit_cost_floor(
             "cost_multiple": round(achievable / friction, 2) if friction else None,
             "floor_passed": bool(achievable >= floor),
         })
-        out["passed"] = bool(out["ratio_passed"] and out["floor_passed"])
+        out["passed"] = bool(out["ratio_passed"] and out["ratio_max_passed"]
+                             and out["floor_passed"])
     return out
 
 
@@ -305,6 +332,7 @@ def build_credit_spread(
     hold_minutes: Optional[float] = None,
     enforce_reachability: Optional[bool] = None,
     cost_floor_mult: Optional[float] = None,
+    max_credit_ratio: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Build a vertical credit spread.
 
@@ -361,9 +389,18 @@ def build_credit_spread(
     floor = credit_cost_floor(
         net_credit, actual_width, lot_size=lot_size, tp_frac=tp_frac,
         leg_premium_sum=short_leg["premium"] + long_leg["premium"],
-        cost_floor_mult=cost_floor_mult,
+        cost_floor_mult=cost_floor_mult, max_credit_ratio=max_credit_ratio,
     )
     if enforce_cost_floor and not floor["passed"]:
+        if not floor.get("ratio_max_passed", True):
+            return {
+                "ok": False,
+                "reason": ("credit_ratio_too_high: credit {:.2f} on width {:.0f} "
+                           "(ratio {:.3f} > {:.3f} max) — short strike is at/near the "
+                           "money; 0-DTE ATM measured WR 50%, avg -Rs206").format(
+                    net_credit, actual_width, floor["credit_ratio"], floor["max_credit_ratio"]),
+                "cost_floor": floor,
+            }
         _detail = ""
         if "achievable_gross_profit" in floor and not floor.get("floor_passed"):
             _detail = ", achievable Rs{:.0f} < Rs{:.0f} floor".format(

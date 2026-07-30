@@ -18008,6 +18008,7 @@ async def startup():
                                 # measured bucket (n=56, WR 80%, +Rs123) — is not
                                 # vetoed for having structurally small credit.
                                 _cf_mult = None
+                                _max_ratio = None
                                 try:
                                     from core.dte_policy import evaluate as _dte_eval
                                     _pol = _dte_eval(
@@ -18015,6 +18016,7 @@ async def startup():
                                         or contract_payload.get("expiry"),
                                         regime=None)
                                     _cf_mult = _pol.cost_floor_mult
+                                    _max_ratio = _pol.max_credit_ratio
                                     # Narrow the wing at near expiry so the small
                                     # 0-DTE credit produces a LAWFUL credit/width
                                     # ratio instead of being vetoed on a 6-8 strike
@@ -18023,6 +18025,7 @@ async def startup():
                                         _wstrikes = min(_wstrikes, int(_pol.width_strikes))
                                 except Exception:
                                     _cf_mult = None
+                                    _max_ratio = None
                                 if _opts_cfg.get("dynamic_chain_selection", True):
                                     _spread = select_dynamic_credit_spread(
                                         chain_nodes=_nodes,
@@ -18034,6 +18037,7 @@ async def startup():
                                         tp_frac=_tp_frac,
                                         hold_minutes=_hold_minutes,
                                         cost_floor_mult=_cf_mult,
+                                        max_credit_ratio=_max_ratio,
                                     )
                                 elif _opts_cfg.get("short_offset_strikes") is not None:
                                     _offset = _opts_cfg.get("short_offset_strikes")
@@ -18049,6 +18053,7 @@ async def startup():
                                         width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
                                         lot_size=_lot_size, tp_frac=_tp_frac,
                                         hold_minutes=_hold_minutes, cost_floor_mult=_cf_mult,
+                                        max_credit_ratio=_max_ratio,
                                     )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"

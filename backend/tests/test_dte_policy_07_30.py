@@ -170,3 +170,79 @@ def test_narrow_wing_makes_a_real_0dte_credit_lawful():
                                leg_premium_sum=327.0,
                                cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT)
     assert narrow["ratio_passed"], "2-strike wing must clear the ratio law"
+
+
+# ── the credit-ratio CEILING (added same day, after live evidence) ─────────
+
+
+def test_near_expiry_sets_a_credit_ratio_ceiling():
+    p = dp.evaluate(expiry=_exp(0), regime="RANGE", today=TODAY, enabled=True)
+    assert p.max_credit_ratio == dp.NEAR_EXPIRY_MAX_CREDIT_RATIO
+    assert p.max_credit_ratio <= 0.22
+    assert p.width_strikes == 3, "2 strikes forced ATM on SENSEX; 3 does not"
+
+
+def test_far_expiry_has_no_ceiling():
+    assert dp.evaluate(expiry=_exp(2), regime="RANGE", today=TODAY,
+                       enabled=True).max_credit_ratio is None
+
+
+def test_the_three_live_atm_spreads_would_now_be_vetoed():
+    """The real 2026-07-30 SENSEX spreads: credit 50.31/48.18/51.58 on width 200
+    -> ratio 0.252/0.241/0.258, short strikes AT spot. All three lost immediately.
+    DTE-0 ratio >=0.22 measured WR 50%, avg -Rs206."""
+    from core.spread_builder import credit_cost_floor
+
+    for credit in (50.31, 48.18, 51.58):
+        out = credit_cost_floor(credit, 200.0, lot_size=20, tp_frac=0.45,
+                                leg_premium_sum=129.0,
+                                cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT,
+                                max_credit_ratio=dp.NEAR_EXPIRY_MAX_CREDIT_RATIO)
+        assert not out["ratio_max_passed"], f"credit {credit} on width 200 is ATM"
+        assert not out["passed"]
+
+
+def test_the_same_credit_on_a_3_strike_wing_is_lawful():
+    """Same credit, wider wing -> ratio 0.167, inside the measured-best band, and
+    it still clears the relaxed absolute floor."""
+    from core.spread_builder import credit_cost_floor
+
+    out = credit_cost_floor(50.31, 300.0, lot_size=20, tp_frac=0.45,
+                            leg_premium_sum=129.0,
+                            cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT,
+                            max_credit_ratio=dp.NEAR_EXPIRY_MAX_CREDIT_RATIO)
+    assert out["ratio_max_passed"] and out["ratio_passed"] and out["floor_passed"]
+    assert out["passed"]
+    assert 0.10 <= out["credit_ratio"] <= 0.22
+
+
+def test_ceiling_is_off_by_default_book_wide():
+    """Only the DTE policy turns it on — a far-expiry spread must be unaffected."""
+    from core.spread_builder import credit_cost_floor
+
+    out = credit_cost_floor(50.31, 200.0, lot_size=20, tp_frac=0.45,
+                            leg_premium_sum=129.0)
+    assert out["ratio_max_passed"]
+
+
+def test_veto_reason_names_the_ATM_problem():
+    """A stand-down must be diagnosable (§22.6) — the reason has to say WHY."""
+    from core.spread_builder import build_credit_spread
+
+    nodes = [
+        {"strike": 77600, "put_options": {"market_data": {"ltp": 88.66, "oi": 2e6},
+                                          "option_greeks": {"delta": -0.50, "theta": -30, "iv": 14}},
+         "expiry": _exp(0)},
+        {"strike": 77400, "put_options": {"market_data": {"ltp": 38.35, "oi": 2e6},
+                                          "option_greeks": {"delta": -0.20, "theta": -20, "iv": 15}},
+         "expiry": _exp(0)},
+    ]
+    out = build_credit_spread(chain_nodes=nodes, direction="bullish", width_points=200,
+                              short_delta=0.50, lot_size=20, tp_frac=0.45,
+                              cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT,
+                              max_credit_ratio=dp.NEAR_EXPIRY_MAX_CREDIT_RATIO,
+                              enforce_reachability=False)
+    if not out.get("ok"):
+        assert "credit_ratio_too_high" in out["reason"] or "cost_floor" in out["reason"]
+        if "credit_ratio_too_high" in out["reason"]:
+            assert "at/near the money" in out["reason"]
