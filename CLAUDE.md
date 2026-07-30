@@ -1273,6 +1273,58 @@ now do genuinely different jobs.
 itself by an order of magnitude. Whether a correctly-costed seller book is profitable is what
 forward-paper and the re-run judges will say. `CORE_ENGINE_LIVE_ENABLED=false`.
 
+### 21.10 Averaging tested & rejected; two edge fixes; the friction sweep (2026-07-30)
+**Founder asked whether pyramiding winners + averaging down losers ("most traders do this")
+would help. Measured on the real 94-trade book — the answer is an emphatic NO for averaging
+down:**
+
+| Book | P&L |
+|---|---|
+| as-is | −₹21,934 |
+| **double size on every loser** | **−₹60,247** |
+| **triple size on every loser** | **−₹98,561** |
+
+**54% of losers were never even briefly green** (peak ≤ ₹50) — they go straight against the
+position, and a credit spread's loss is convex (gamma), so averaging adds size into an
+*accelerating* loss on exactly the trend days that already do the damage (07-17 −₹6,821, 07-10
+−₹4,910). "Most traders do this" is the argument *against* it — SEBI's 91%-of-individuals-lose
+cohort (§20) trades precisely this way. Pyramiding winners is also weak here: winners
+median-peak at 29% of credit and a theta winner is *nearest* its peak early, so there is no
+"run" to add into. **The correct axis is between trades (EdgeMath §16), never within one.**
+
+**A — "never went green" early cut** (`dynamic_exit.no_progress_exit`, wired in
+`position_monitor`): a spread that hasn't cleared 8% of its credit within 20 min (floored at
+real friction) is cut with reason `spread-no-progress`. Priced exits take priority, so a
+working trade is never touched. Rationale: the `spread-time-exit` pool (38% of all trades)
+median-peaked at **0.3%** of credit — dead on arrival, then left to bleed to the bell.
+
+**B — book-wide credit/width CEILING** (`CREDIT_SPREAD_MAX_CREDIT_RATIO=0.22`): the ratio law
+had a book-wide floor (0.12) but the ceiling was only applied near expiry. One ratio explains
+almost every strategy's lifetime record (§21.9), and the two biggest loss pools — QG-O11 (0.255,
+−₹8,075) and RAE-BANKNIFTY (0.246, −₹8,667) — are both *above* 0.22. Now blocked book-wide from
+the first trade; the winning band 0.09–0.21 is untouched.
+
+**LOTS — measured answer is NO economy of scale** (charges/lot: 1→₹7.60, 10→₹15.52; STT/exchange
+fees are turnover-proportional). Sizing up multiplies P&L *and* variance and nothing else — fix
+expectancy before size. **Strategies are NOT one bet** (same-day P&L sign agreement 56%, vs 50%
+= independent) — the old "all 8 are one bet" worry is unsupported.
+
+**The friction sweep — the decisive test of §21.9.** Re-ran the EOD validator over 1,868 days at
+slippage 3% / 1% / 0.5% / 0.2%. Verdicts are **monotonic in friction**, exactly as predicted:
+
+| Strategy | exp @ 3% | exp @ 1% | OOS @ 3% | OOS @ 1% |
+|---|---|---|---|---|
+| RAE NIFTY Range Seller | −119 (NO EDGE) | **+19 (FRAGILE)** | +153 | **+277** |
+| RAE BANKNIFTY | −351 (NO EDGE) | **+32 (FRAGILE)** | −347 | −132 |
+| QG-O1 NIFTY Put Spread | −425 (NO EDGE) | −175 | −83 | **+128** |
+
+At 1% (still 4× the measured 0.25%) two strategies flip to positive expectancy and two flip to
+positive OOS. **Every `NO_EDGE_NEGATIVE` verdict in QuantG's history was computed at ~12× real
+cost — some of them were killing strategies that clear costs at honest friction.** CAVEAT: 1%
+is FRAGILE, not `CANDIDATE_EDGE` — this says "worth forward-papering at corrected cost", NOT
+"proven edge". The 0.5%/0.2% blocks were still computing at writeup; expect further improvement.
+`CORE_ENGINE_LIVE_ENABLED=false`.
+
 ## 22. Full-System Audit Fixes (2026-07-24)
 
 A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
