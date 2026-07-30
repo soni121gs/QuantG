@@ -226,23 +226,33 @@ def test_ceiling_is_off_by_default_book_wide():
 
 
 def test_veto_reason_names_the_ATM_problem():
-    """A stand-down must be diagnosable (§22.6) — the reason has to say WHY."""
+    """A stand-down must be diagnosable (§22.6) — the reason has to say WHY, not
+    read as a generic cost_floor. Uses the real chain-node shape (instrument_key
+    is required by pick_delta_strike)."""
     from core.spread_builder import build_credit_spread
 
-    nodes = [
-        {"strike": 77600, "put_options": {"market_data": {"ltp": 88.66, "oi": 2e6},
-                                          "option_greeks": {"delta": -0.50, "theta": -30, "iv": 14}},
-         "expiry": _exp(0)},
-        {"strike": 77400, "put_options": {"market_data": {"ltp": 38.35, "oi": 2e6},
-                                          "option_greeks": {"delta": -0.20, "theta": -20, "iv": 15}},
-         "expiry": _exp(0)},
-    ]
+    def _node(strike, ltp, delta):
+        return {"strike": strike, "expiry": _exp(0),
+                "put_options": {"instrument_key": f"BSE_FO|{strike}",
+                                "market_data": {"ltp": ltp, "oi": 2_000_000},
+                                "option_greeks": {"delta": delta, "theta": -30, "iv": 14}}}
+
+    # ATM short (delta 0.50) with a 200-wide wing -> credit 50.31, ratio 0.252.
+    nodes = [_node(77600, 88.66, -0.50), _node(77400, 38.35, -0.20)]
     out = build_credit_spread(chain_nodes=nodes, direction="bullish", width_points=200,
                               short_delta=0.50, lot_size=20, tp_frac=0.45,
                               cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT,
                               max_credit_ratio=dp.NEAR_EXPIRY_MAX_CREDIT_RATIO,
                               enforce_reachability=False)
-    if not out.get("ok"):
-        assert "credit_ratio_too_high" in out["reason"] or "cost_floor" in out["reason"]
-        if "credit_ratio_too_high" in out["reason"]:
-            assert "at/near the money" in out["reason"]
+    assert not out["ok"], "an ATM 0-DTE spread must be refused"
+    assert "credit_ratio_too_high" in out["reason"]
+    assert "at/near the money" in out["reason"]
+
+    # Same short strike, 3-strike wing -> ratio 0.167, lawful.
+    nodes3 = [_node(77600, 88.66, -0.50), _node(77300, 38.35, -0.15)]
+    ok = build_credit_spread(chain_nodes=nodes3, direction="bullish", width_points=300,
+                             short_delta=0.50, lot_size=20, tp_frac=0.45,
+                             cost_floor_mult=dp.NEAR_EXPIRY_COST_FLOOR_MULT,
+                             max_credit_ratio=dp.NEAR_EXPIRY_MAX_CREDIT_RATIO,
+                             enforce_reachability=False)
+    assert ok["ok"], ok.get("reason")
