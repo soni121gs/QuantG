@@ -858,7 +858,19 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     # marks (below) so they never false-trigger on the entry-premium fallback.
     # Hold-to-expiry strategies are exempt (they hold to weekly expiry).
     _time_reason: Optional[str] = None
-    if not hold_to_expiry:
+    # NEAR-EXPIRY EXEMPTION (2026-07-30): the time recycle is actively harmful at
+    # DTE 0-1. Measured over that bucket: spread-time-exit n=8, WR 13%, avg -Rs661,
+    # while spread-tp was n=24, WR 100%, avg +Rs555. Near expiry decay is fast
+    # enough to reach the target, so clocking out mid-decay converts winners into
+    # losers. Let price decide; the 15:10/15:25 square-off still bounds the day.
+    _near_expiry_hold = False
+    try:
+        from core.dte_policy import evaluate as _dte_eval
+        _pol = _dte_eval(expiry=pos.get("expiry"), regime=pos.get("regime_fine_at_entry"))
+        _near_expiry_hold = bool(_pol.disable_time_exit and _pol.near_expiry)
+    except Exception:
+        _near_expiry_hold = False
+    if not hold_to_expiry and not _near_expiry_hold:
         _max_hold = await _strategy_time_exit_minutes(db, pos.get("strategy_id"))
         if _max_hold:
             _entry = parse_iso_dt(pos.get("entry_time") or pos.get("created_at"))

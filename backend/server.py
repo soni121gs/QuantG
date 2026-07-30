@@ -18003,6 +18003,19 @@ async def startup():
                                     _hold_minutes = min(float(_time_exit), float(_minutes_to_close))
                                 else:
                                     _hold_minutes = float(_minutes_to_close)
+                                # DTE policy (2026-07-30): relax the cost-floor
+                                # multiple at near expiry so DTE 0-1 — the best
+                                # measured bucket (n=56, WR 80%, +Rs123) — is not
+                                # vetoed for having structurally small credit.
+                                _cf_mult = None
+                                try:
+                                    from core.dte_policy import evaluate as _dte_eval
+                                    _cf_mult = _dte_eval(
+                                        expiry=getattr(instrument, "expiry", None)
+                                        or contract_payload.get("expiry"),
+                                        regime=None).cost_floor_mult
+                                except Exception:
+                                    _cf_mult = None
                                 if _opts_cfg.get("dynamic_chain_selection", True):
                                     _spread = select_dynamic_credit_spread(
                                         chain_nodes=_nodes,
@@ -18013,6 +18026,7 @@ async def startup():
                                         lot_size=_lot_size,
                                         tp_frac=_tp_frac,
                                         hold_minutes=_hold_minutes,
+                                        cost_floor_mult=_cf_mult,
                                     )
                                 elif _opts_cfg.get("short_offset_strikes") is not None:
                                     _offset = _opts_cfg.get("short_offset_strikes")
@@ -18027,7 +18041,7 @@ async def startup():
                                         chain_nodes=_nodes, direction=_direction,
                                         width_points=_intervals.get(_u, 50) * _wstrikes, short_delta=_sdelta,
                                         lot_size=_lot_size, tp_frac=_tp_frac,
-                                        hold_minutes=_hold_minutes,
+                                        hold_minutes=_hold_minutes, cost_floor_mult=_cf_mult,
                                     )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "credit_spread"

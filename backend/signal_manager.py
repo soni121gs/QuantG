@@ -97,6 +97,15 @@ def _signal_validation_result(sig: Dict[str, Any], ok: bool, reason_code: str, h
     }
 
 
+def _max_concurrent_spreads() -> int:
+    """Concurrent spreads allowed per (strategy, underlying). Was hard-coded to 1,
+    which skipped 207 signals in the week of 2026-07-27 and held one slot all day.
+    Safe to raise only because cross-strategy CONTRACT dedup now blocks the real
+    hazard (several positions expressing one bet)."""
+    from core.dte_policy import MAX_CONCURRENT_SPREADS
+    return max(1, MAX_CONCURRENT_SPREADS)
+
+
 def _contract_dedup_enabled() -> bool:
     """Cross-strategy identical-contract dedup (2026-07-29). On by default; set
     CONTRACT_DEDUP_ENABLED=false to revert to position-count exposure only."""
@@ -997,7 +1006,12 @@ async def _dispatch_signal_via_unified_engine(
     # (user, strategy, underlying, mode). Exits are owned by the monitor/guardian
     # and are unaffected.
     if _oc.get("structure") in ("credit_spread", "debit_spread") and _oc.get("spread"):
-        _existing_spread = await db.strategy_positions.find_one(
+        # 2026-07-30: this was a hard limit of ONE concurrent spread per
+        # (strategy, underlying), which cost 207 skipped signals in one week and
+        # tied up the slot all day. Raised to SELLER_MAX_CONCURRENT_SPREADS — safe
+        # only because cross-strategy CONTRACT dedup (below) now prevents the
+        # failure this was really guarding: several positions in the same bet.
+        _open_spreads = await db.strategy_positions.count_documents(
             {
                 "user_id": user_id,
                 "strategy_id": sig["strategy_id"],
@@ -1005,14 +1019,14 @@ async def _dispatch_signal_via_unified_engine(
                 "mode": mode,
                 "structure": {"$in": ["credit_spread", "debit_spread"]},
                 "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
-            },
-            {"_id": 0, "id": 1},
+            }
         )
-        if _existing_spread:
+        if _open_spreads >= _max_concurrent_spreads():
             return {
                 "ok": False,
                 "status": "SKIPPED",
-                "reason": f"Active spread already open for {symbol}; holding (no pyramiding).",
+                "reason": (f"{_open_spreads} spread(s) already open for {symbol} "
+                           f"(max {_max_concurrent_spreads()}); holding."),
                 "reason_code": "SPREAD_POSITION_ALREADY_OPEN",
             }
 
@@ -1134,10 +1148,41 @@ async def _dispatch_signal_via_unified_engine(
             lot_size=lot_size, risk_budget=_risk_budget, regime=_regime_at_entry,
         )
         _spread["edge_math"] = _edge_telemetry
-        # EdgeMath soft stand-down, now actually reachable (see
-        # _edge_standdown_enabled). Zero lots means the strategy's own rolling
-        # expectancy is negative — trade nothing rather than the 1-lot floor.
-        if _edge_standdown_enabled() and int(_spread_lots or 0) <= 0:
+        # ── DTE POLICY (2026-07-30) — the measured replacement for blanket gates ──
+        # Days-to-expiry at entry is the strongest discriminator in 259 real closed
+        # spreads: DTE0 n=56 WR80% +Rs123, DTE3+ 147 trades WR23-41% avg -Rs121..
+        # -Rs1143. Crossed with regime it shows the blanket CHOP stand-down was
+        # mis-aimed — CHOP@DTE0 is +Rs391 (n=7, 100% WR) while CHOP@DTE3+ is
+        # -Rs1143 (0% WR). So gate on DTE, and let near expiry trade EVERY regime.
+        from core.dte_policy import evaluate as _dte_evaluate
+        _dte_pol = _dte_evaluate(expiry=(_spread.get("short_leg") or {}).get("expiry")
+                                 or _spread.get("expiry"),
+                                 regime=_regime_fine_at_entry
+                                 if _regime_fine_at_entry not in ("", "UNKNOWN")
+                                 else _regime_at_entry)
+        _edge_telemetry["dte_policy"] = _dte_pol.as_dict()
+        if not _dte_pol.allow:
+            _dte_reason = f"DTE policy stand-down: {_dte_pol.reason}"
+            try:
+                await db.strategies.update_one(
+                    {"id": strategy.get("id"), "user_id": user_id},
+                    {"$set": {"last_filter_reason": _dte_reason,
+                              "last_filter_reason_at": datetime.now(timezone.utc).isoformat()}})
+            except Exception:
+                pass
+            return {"ok": False, "status": "SKIPPED", "reason": _dte_reason,
+                    "reason_code": "DTE_POLICY_STAND_DOWN"}
+        # EdgeMath soft stand-down. NOT blanket: inside the near-expiry window the
+        # DTE evidence outranks a strategy's own rolling expectancy (which is
+        # polluted by the far-DTE trades this policy now refuses), so a weak rolling
+        # number does not veto the best bucket. Past that window it still binds.
+        if _dte_pol.near_expiry and int(_spread_lots or 0) <= 0:
+            # Near expiry the DTE evidence wins, so the trade goes on at the
+            # minimum size rather than being skipped for a weak rolling number.
+            _spread_lots = 1
+            _edge_telemetry["near_expiry_size_floor"] = 1
+        if (_edge_standdown_enabled() and int(_spread_lots or 0) <= 0
+                and not _dte_pol.near_expiry):
             _em_reason = (
                 f"EdgeMath stand-down: {_edge_telemetry.get('reason') or 'negative expectancy'} "
                 f"(rolling n={_edge_telemetry.get('rolling_n')}, "

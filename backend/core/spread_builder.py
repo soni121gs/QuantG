@@ -160,6 +160,7 @@ def credit_cost_floor(
     lot_size: Optional[int] = None,
     tp_frac: float = 1.0,
     leg_premium_sum: Optional[float] = None,
+    cost_floor_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Judge a candidate credit spread against the ERP cost-floor law.
 
@@ -192,12 +193,18 @@ def credit_cost_floor(
             "premium_proportional" if friction > SPREAD_ROUND_TRIP_COST_PER_LOT
             else ("flat_floor" if leg_premium_sum else "flat_floor_no_leg_context")
         )
-        floor = SPREAD_COST_FLOOR_MULT * friction
+        # 2026-07-30: the multiple is per-trade overridable so the DTE policy can
+        # relax it at near expiry. A flat 3x vetoed DTE 0 outright — the bucket with
+        # the best realized record (n=56, WR 80%, avg +Rs123) — because 0-DTE credit
+        # is structurally small. Never below 1.0x: banking under friction is a loss.
+        _mult = SPREAD_COST_FLOOR_MULT if cost_floor_mult is None else max(1.0, float(cost_floor_mult))
+        floor = _mult * friction
         achievable = max(0.0, min(1.0, float(tp_frac or 1.0))) * credit * int(lot_size)
         out.update({
             "achievable_gross_profit": round(achievable, 2),
             "round_trip_cost_per_lot": friction,
             "required_floor": round(floor, 2),
+            "cost_floor_mult": round(_mult, 2),
             "cost_multiple": round(achievable / friction, 2) if friction else None,
             "floor_passed": bool(achievable >= floor),
         })
@@ -297,6 +304,7 @@ def build_credit_spread(
     enforce_cost_floor: bool = True,
     hold_minutes: Optional[float] = None,
     enforce_reachability: Optional[bool] = None,
+    cost_floor_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Build a vertical credit spread.
 
@@ -353,6 +361,7 @@ def build_credit_spread(
     floor = credit_cost_floor(
         net_credit, actual_width, lot_size=lot_size, tp_frac=tp_frac,
         leg_premium_sum=short_leg["premium"] + long_leg["premium"],
+        cost_floor_mult=cost_floor_mult,
     )
     if enforce_cost_floor and not floor["passed"]:
         _detail = ""

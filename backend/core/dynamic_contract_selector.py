@@ -74,6 +74,7 @@ def select_dynamic_credit_spread(
     lot_size: Optional[int] = None,
     tp_frac: float = 1.0,
     hold_minutes: Optional[float] = None,
+    cost_floor_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Rank several deltas on the requested side and return the best candidate.
 
@@ -116,6 +117,7 @@ def select_dynamic_credit_spread(
                 lot_size=lot_size,
                 tp_frac=tp_frac,
                 hold_minutes=hold_minutes,
+                cost_floor_mult=cost_floor_mult,
             )
             if spread.get("ok"):
                 out.append(_score(
