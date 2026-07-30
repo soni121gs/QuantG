@@ -1090,6 +1090,40 @@ defects that made a winning-signal book lose money on arithmetic. n=22 is far be
 Law-3 finding is structural (visible on every trade, independent of sample); the regime
 and correlation findings are suggestive but thin. `CORE_ENGINE_LIVE_ENABLED=false`.
 
+### 21.7 The judges were blind for 13 days — data one directory away (2026-07-30)
+`data.store_coverage` had been reporting `bhavcopy_fo`, `index_1m`, `options_1m`,
+`earnings_dates` and `participant_oi` as **EMPTY** since 07-17..07-27 (up to 17
+occurrences). **The probe was right every single day.** What it could not say was WHY:
+102 MB of bhavcopy (2019–2023, 1,234 days) and 1,359 participant-OI files were sitting in
+**`/opt/QuantG/backend/data/`**, while the container bind-mounts the **repo-root** `./data`
+to `/app/data`. A script run with `cwd=backend/` resolves a relative `data/` to
+`backend/data`, which nothing ever reads.
+
+**Why nobody acted for 13 days:** "store is EMPTY" reads as a backfill chore. "The data
+exists 30 cm away and the app cannot see it" reads as an emergency. Same words, wrong
+urgency. New probe **`data.store_path_mismatch`** (CRITICAL) globs the sibling roots
+(`/app/backend/data`, `/opt/QuantG/backend/data`, `backend/data`, `data`) whenever a store
+root is empty, and reports the file counts on both sides. **Standing rule: a probe that
+reports a symptom without distinguishing its causes will be triaged as the cheapest cause.**
+
+**Second half of the lesson — restoring it would have been WORSE than leaving it empty.**
+The newest bar in that store was **2023-12-29 (944 days old)**. `_recent_daily_closes`
+had gap-robustness (§ the 2026-07-09 fix) but **no check on when the contiguous run ENDS**,
+and the IV-surface path used `days[-1]` unconditionally — so RES2 would have computed
+realized vol and premium richness off 2023 prices and believed them as current. An empty
+store fails open and says so; a stale store is confidently wrong. Third instance of the
+§22.7 stale-input trap (stale `regime_fine` at confidence 1.0 was the first).
+`entry_gate._store_day_is_fresh` + `RES2_RV_MAX_STALENESS_DAYS` (10) now refuse both paths.
+
+**Ops facts:** the mounted `./data` must be owned **999:999** (container uid) — root-owned
+`./data` is the §22.5 PermissionError. Restore with
+`mv backend/data/<store> data/<store> && chown -R 999:999 data/<store>`. Long backfills run
+as a **detached `docker run`** on the VPS (never `docker exec` — a deploy kills it):
+`docker run -d --network quantg_quantg-network -v /opt/QuantG/data:/app/data -e PYTHONPATH=/app --entrypoint python quantg-backend /app/scripts/bhavcopy_ingest.py <from> <to> --source nse`.
+**Still missing after this fix: `index_1m` (was 498 days) and `options_1m` (was 204 days)
+exist NOWHERE on the box** — they need a fresh Upstox ingest, so the IMD intraday judge
+stays blind until then.
+
 ## 22. Full-System Audit Fixes (2026-07-24)
 
 A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
