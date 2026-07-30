@@ -17027,48 +17027,51 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # 16:05 IST — heal the 1-minute stores from Upstox historical. Live capture
             # only holds bars from whenever the feed came up, and a late morning token
             # reconnect loses the open (2026-07-30: feed live only at 11:58 → NIFTY had
-            # 219 bars from 11:58, not 375 from 09:15). INDEX historical is available
-            # same-day, so this heals today's index gap. OPTION historical uses the
-            # EXPIRED-instrument path, so only already-expired contract-days backfill —
-            # today's live option session is healed by live capture (incl. SENSEX now),
-            # not here; we fill a short trailing expired-contract window instead.
-            # Isolated subprocess, best-effort, once/day.
+            # 219 bars from 11:58, not 375 from 09:15).
+            #
+            # IMPORTANT (verified 2026-07-30): Upstox v3 historical minute data for a day
+            # is published the NEXT day, not same-day — a same-day fetch returns 0 rows.
+            # So we heal a TRAILING window of past days (T-1..T-5), by which point each
+            # day's clean, gap-free historical session IS available; a day is healed at
+            # most one day after its live capture. Historical is authoritative, so
+            # overwriting a partial live day with it is the intended self-heal.
+            # OPTION historical uses the EXPIRED-instrument path (also only past days) and
+            # is NIFTY/BANKNIFTY-only — SENSEX options are not backfillable (BSE-blocked,
+            # §14.2) and rely on live capture (incl. SENSEX now). Isolated subprocess,
+            # best-effort, once/day.
             if hour == 16 and minute == 5 and _minute_backfill_done_date != today:
                 _minute_backfill_done_date = today
                 try:
+                    _to = (ist.date() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    _from = (ist.date() - timedelta(days=5)).strftime("%Y-%m-%d")
                     audit: Dict[str, Any] = {
                         "_id": f"backfill:{today}", "date": today,
+                        "window": {"from": _from, "to": _to},
                         "index": {}, "options": {},
                         "ts": datetime.now(timezone.utc).isoformat(),
                     }
                     from core.index_minute_store import IndexMinuteStore
                     _ims = IndexMinuteStore()
-                    _thin: List[str] = []
+                    _before = {}
                     for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
                         try:
-                            _n = len(_ims.get_minutes(_u, today))
+                            _before[_u] = len(_ims.get_minutes(_u, _to))
                         except Exception:
-                            _n = 0
-                        audit["index"][_u] = {"before": _n}
-                        if _n < 360:  # ~375 session minutes; allow a small tail miss
-                            _thin.append(_u)
-                    if _thin:
-                        _ir = await _run_ingest_subprocess([
-                            "/app/scripts/index_1m_ingest_upstox.py",
-                            "--from", today, "--to", today,
-                            "--underlyings", ",".join(_thin)])
-                        audit["index"]["_result"] = _ir
-                        for _u in _thin:
-                            try:
-                                audit["index"][_u]["after"] = len(_ims.get_minutes(_u, today))
-                            except Exception:
-                                pass
-                    # Options: trailing expired-contract window (NIFTY/BANKNIFTY only;
-                    # SENSEX options are not backfillable — Upstox BSE-blocked, §14.2).
-                    # Idempotent (is_clean skips already-stored contract-days), so daily
-                    # cost is small after steady state. Skip today (not expired).
-                    _to = (ist.date() - timedelta(days=1)).strftime("%Y-%m-%d")
-                    _from = (ist.date() - timedelta(days=4)).strftime("%Y-%m-%d")
+                            _before[_u] = 0
+                    _ir = await _run_ingest_subprocess([
+                        "/app/scripts/index_1m_ingest_upstox.py",
+                        "--from", _from, "--to", _to,
+                        "--underlyings", "NIFTY,BANKNIFTY,SENSEX"])
+                    _after = {}
+                    for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
+                        try:
+                            _after[_u] = len(_ims.get_minutes(_u, _to))
+                        except Exception:
+                            _after[_u] = 0
+                    audit["index"] = {"result": _ir, "bars_at_T1_before": _before,
+                                      "bars_at_T1_after": _after}
+                    # Options: trailing expired-contract window. Idempotent (is_clean
+                    # skips already-stored contract-days), so daily cost is small.
                     _or = await _run_ingest_subprocess([
                         "/app/scripts/options_1m_ingest_upstox.py",
                         "--from", _from, "--to", _to,
