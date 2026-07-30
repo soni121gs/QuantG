@@ -1124,6 +1124,62 @@ as a **detached `docker run`** on the VPS (never `docker exec` — a deploy kill
 exist NOWHERE on the box** — they need a fresh Upstox ingest, so the IMD intraday judge
 stays blind until then.
 
+### 21.8 Law 4 — DTE is the discriminator; gate on it, not on regime (2026-07-30)
+Founder ask: **more trades, but good ones** — "relax both but in the right way, not
+generalized". Measured across **259 real closed credit spreads** (the whole history),
+days-to-expiry at ENTRY is by far the strongest separator and it is monotone:
+
+| DTE at entry | n | WR | avg |
+|---|---|---|---|
+| **0 (expiry day)** | 56 | **80%** | **+₹123** |
+| 1–2 | 49 | 63% | −₹75 |
+| 3–5 | 35 | 23% | −₹121 |
+| 5–7 | 31 | 35% | −₹380 |
+| ≥7 | 81 | 31% | −₹235 (−₹19,015 total) |
+
+Crossed with regime it shows **the blanket CHOP stand-down (§21.6) was mis-aimed**:
+CHOP@DTE-0 is **+₹391 (n=7, 100% WR)** while CHOP@DTE-3+ is **−₹1,143 (n=6, 0% WR)**;
+RANGE is negative at *every* DTE (−₹123…−₹204). **Chop is not the enemy — far expiry is.**
+Standing down on all of CHOP threw away its best bucket and left DTE 3+ wide open.
+
+**Law 4** (`core/dte_policy.py`, all env-tunable): trade **every regime at DTE 0–1**;
+**owned regimes only at DTE 2**; **stand down past that**. Near expiry additionally gets
+three exemptions, each measured:
+- **cost-floor multiple 3.0 → 1.5** (never below 1× friction). A flat 3× vetoed DTE 0
+  outright because 0-DTE credit is structurally small.
+- **wing narrowed to `SELLER_NEAR_EXPIRY_WIDTH_STRIKES` (2)**. Relaxing the multiple alone
+  does NOT unlock DTE 0 — the credit/width **ratio** test fails independently and rightly:
+  live SENSEX 2026-07-30 was `credit 33.10 on width 800 → ratio 0.041 vs 0.120 min`.
+  **The fix is a narrower wing, not a weaker law.**
+- **time recycle disabled.** At DTE 0–1, `spread-time-exit` was n=8, WR 13%, **−₹661**,
+  while `spread-tp` was n=24, **WR 100%, +₹555**. Clocking out mid-decay converts winners
+  into losers when decay is fast enough to reach the target.
+
+**EdgeMath's stand-down is no longer blanket** — inside the near-expiry window the DTE
+evidence outranks a rolling expectancy that is itself polluted by the far-DTE trades this
+law now refuses (lots floor to 1 there). Past DTE 1 it still binds.
+**Concurrent spreads per (strategy, underlying) 1 → 2** (`SELLER_MAX_CONCURRENT_SPREADS`):
+that limit skipped 207 signals in one week, and it is only safe to raise because the §21.6
+cross-strategy contract dedup now blocks the hazard it was really guarding.
+
+**Net effect on trade count is UP, not down:** the DTE 3+ days were already being vetoed by
+the geometry laws (6,009 cost-floor vetoes in one week), so standing down there formalises
+what already happened, while DTE 0–1 — previously vetoed outright — becomes tradeable.
+Near-expiry windows are NIFTY Mon/Tue (Tuesday weekly) and SENSEX Wed/Thu (Thursday
+weekly) ≈ **4 tradeable days/week** across the book. Verified live 2026-07-30: SENSEX 0-DTE
+PE 77600/77400 opened at **width 200 (down from 800), ratio 0.252**, and
+`DUPLICATE_CONTRACT_ACROSS_STRATEGIES` fired once — the −₹6,469 failure blocked in real time.
+
+**⚠️ Open tension, not yet resolved:** narrowing to 2 strikes pushed credit/width to
+**0.252**, which in the all-DTE study was the WORST ratio band (n=87, WR 33%, avg −₹200),
+while 0.12–0.16 was the only positive one (n=32, WR 69%). Those bands are confounded with
+DTE, so this may be an artefact — but **3 strikes would give ratio ≈0.17 and still clear
+the relaxed floor**, which is strictly closer to both measured optima. Change
+`SELLER_NEAR_EXPIRY_WIDTH_STRIKES` to 3 and watch. **Sample caveats stand:** CHOP@DTE-0 is
+n=7 (trust the gradient's direction, not the magnitude), and the 259 trades span several
+geometries and strategy generations, so this is not a controlled experiment.
+`CORE_ENGINE_LIVE_ENABLED=false`.
+
 ## 22. Full-System Audit Fixes (2026-07-24)
 
 A whole-system audit of the 2026-07-24 session (**360 signals → 1 trade**) found five
