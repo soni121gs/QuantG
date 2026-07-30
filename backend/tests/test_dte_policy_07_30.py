@@ -232,7 +232,7 @@ def test_veto_reason_names_the_ATM_problem():
     from core.spread_builder import build_credit_spread
 
     def _node(strike, ltp, delta):
-        return {"strike": strike, "expiry": _exp(0),
+        return {"strike_price": strike, "expiry": _exp(0),
                 "put_options": {"instrument_key": f"BSE_FO|{strike}",
                                 "market_data": {"ltp": ltp, "oi": 2_000_000},
                                 "option_greeks": {"delta": delta, "theta": -30, "iv": 14}}}
