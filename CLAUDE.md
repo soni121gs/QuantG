@@ -1170,15 +1170,50 @@ weekly) ≈ **4 tradeable days/week** across the book. Verified live 2026-07-30:
 PE 77600/77400 opened at **width 200 (down from 800), ratio 0.252**, and
 `DUPLICATE_CONTRACT_ACROSS_STRATEGIES` fired once — the −₹6,469 failure blocked in real time.
 
-**⚠️ Open tension, not yet resolved:** narrowing to 2 strikes pushed credit/width to
-**0.252**, which in the all-DTE study was the WORST ratio band (n=87, WR 33%, avg −₹200),
-while 0.12–0.16 was the only positive one (n=32, WR 69%). Those bands are confounded with
-DTE, so this may be an artefact — but **3 strikes would give ratio ≈0.17 and still clear
-the relaxed floor**, which is strictly closer to both measured optima. Change
-`SELLER_NEAR_EXPIRY_WIDTH_STRIKES` to 3 and watch. **Sample caveats stand:** CHOP@DTE-0 is
-n=7 (trust the gradient's direction, not the magnitude), and the 259 trades span several
-geometries and strategy generations, so this is not a controlled experiment.
-`CORE_ENGINE_LIVE_ENABLED=false`.
+#### 21.8.1 The 2-strike wing was WRONG — it forced ATM strikes (same-day correction)
+Within an hour of the DTE unlock, three SENSEX 0-DTE spreads opened at credit/width
+**0.241 / 0.252 / 0.258** with short strikes **AT spot** (77600 vs 77645) and all three went
+straight to a loss (−₹962 unrealized). The mechanism is arithmetic, not chance:
+
+```
+SENSEX lot 20, tp_frac 0.45  ->  bankable = 0.45 x credit x 20 = 9 x credit
+relaxed near-expiry floor    =  1.5 x friction = Rs450
+=> credit >= 50 REQUIRED
+   credit 50 on a 200-wide wing IS the at-the-money strike (ratio 0.25)
+```
+**Narrowing the wing left the selector no lawful choice but ATM.** Measured DTE-0 by
+credit/width: 0.10–0.16 → n=20 WR **85%** +₹182; 0.16–0.22 → n=14 WR **86%** +₹210;
+**≥0.22 → n=4 WR 50% −₹206.**
+
+**A delta cap cannot fix this.** At 0 DTE the delta curve is a **cliff** (just-OTM ~0.05,
+ATM ~0.5) — there is no 0.30-delta strike, so any delta-targeted selection snaps to ATM.
+The ladder already caps at 0.38 and still landed ATM. Confirmed by the data: **34 of the 56
+DTE-0 trades have no delta recorded** — they were built by strike OFFSET, and won at 85%.
+
+Fix (deployed 2026-07-30): **`CREDIT_SPREAD_MAX_CREDIT_RATIO`** — the ratio law had a floor
+but **no ceiling**, and a ceiling is the only delta-independent way to keep a 0-DTE seller
+out of the money. Off book-wide; the DTE policy sets **0.22** at near expiry, and
+`SELLER_NEAR_EXPIRY_WIDTH_STRIKES` is now **3** (same credit → ratio 0.168). The veto text
+says `credit_ratio_too_high: … short strike is at/near the money` so it is not mistaken for
+a generic cost-floor block. Verified live: credit 50.31 @ width 200 → **rejected**; @ width
+300 → ratio 0.168 → **passes**.
+
+**Note the legal window is narrow for SENSEX 0-DTE:** credit ≥50 (absolute floor, lot 20)
+AND ratio ≤0.22 (width ≥228) ⇒ at width 300, credit must land in **[50, 66]**. A thin-credit
+0-DTE SENSEX spread (credit 40 @ width 300, ratio 0.133) is correctly refused — good ratio,
+too few rupees. **Lesson, third instance this week: when a law blocks the bucket you want,
+check whether the surrounding arithmetic leaves any lawful geometry at all before relaxing
+the law.** Also: `dynamic_contract_selector._score` still rewards credit_ratio up to 0.35 —
+above the near-expiry legal max — so the veto, not the score, is what keeps it OTM.
+
+**Sample caveats stand:** CHOP@DTE-0 is n=7 and the ≥0.22 band is n=4 (trust the gradient's
+direction, not the magnitude); the 259 trades span several geometries and strategy
+generations, so this is not a controlled experiment. `CORE_ENGINE_LIVE_ENABLED=false`.
+
+**Emergent risk this created:** with concurrency 2, one strategy opened BOTH a PE and a CE
+spread at the same 77600 strike — an undesigned **short straddle**. Delta roughly cancels but
+gamma doubles, and the risk layer sees two independent spreads. Needs a same-side or
+combined-greeks constraint; not yet built.
 
 ## 22. Full-System Audit Fixes (2026-07-24)
 
