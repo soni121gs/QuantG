@@ -111,6 +111,10 @@ For frontend changes add: `docker-compose build frontend && docker-compose up -d
 - Write comments that explain what the code does (names do that). Only explain non-obvious WHY.
 - Claim a task is done without running verification.
 - Touch the position lifecycle or broker integration code unless the task explicitly requires it and you are Tier 3.
+- **State an edge/band/threshold from win rate alone.** A claim of edge MUST cite sample size AND P&L — high WR is the default for credit spreads and lied twice on 2026-07-30 (see CLAUDE.md §23.1). WR is not expectancy.
+- **Append a finding that contradicts an earlier one without reconciling it.** When a larger measurement narrows or overturns a prior claim, CORRECT the prior claim in place (a banner + the truth), never leave both standing. Accreted contradictions are what caused the daily-firefighting churn.
+- **"Fix" an idle strategy before reading its veto reason.** Idle is usually a correct standdown (wrong DTE/regime/expiry), not a bug — CLAUDE.md §23.4. Each index trades ~2 days/week near its own expiry.
+- **Promise the app "works on its own" / "no more errors."** It self-gates correctly, but no doc or backtest promotes anything to real money; forward-paper does. `CORE_ENGINE_LIVE_ENABLED=false`.
 
 ---
 

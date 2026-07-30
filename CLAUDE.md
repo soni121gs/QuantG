@@ -1125,6 +1125,10 @@ exist NOWHERE on the box** — they need a fresh Upstox ingest, so the IMD intra
 stays blind until then.
 
 ### 21.8 Law 4 — DTE is the discriminator; gate on it, not on regime (2026-07-30)
+> ⚠️ **See §23.3 — the "CHOP@DTE-0 +₹391" framing below was drawn from n=7 and is superseded
+> by the full P&L: CHOP is negative except a thin untradeable DTE-0 sliver, and the chop
+> standdown is CORRECT. The DTE gradient itself holds; the chop conclusion does not.**
+
 Founder ask: **more trades, but good ones** — "relax both but in the right way, not
 generalized". Measured across **259 real closed credit spreads** (the whole history),
 days-to-expiry at ENTRY is by far the strongest separator and it is monotone:
@@ -1216,6 +1220,10 @@ gamma doubles, and the risk layer sees two independent spreads. Needs a same-sid
 combined-greeks constraint; not yet built.
 
 ### 21.9 The friction constant was wrong by ~12x — it was gating everything (2026-07-30)
+> ⚠️ **See §23.2 — the "credit/width 0.09–0.21 wins" claim below is superseded by the full
+> P&L: the clear book-wide winner is 0.12–0.16 only; 0.16–0.22 loses book-wide (tolerable
+> only at DTE-0). The friction re-measurement itself is correct and stands.**
+
 **Measured, not assumed.** Over **4,587 real bid/ask quotes** stored on QuantG's own signals
 (`signals.greeks_at_signal.bid/ask`):
 
@@ -1467,3 +1475,93 @@ width/tp with a 300-min hold; Friday needs width 8 + tp 0.30. This — not a bug
 2026-07-24 (a Friday, NIFTY 4 DTE / SENSEX 6 DTE) produced 279 build vetoes. Corrections
 to §22.6: on NIFTY/BANKNIFTY the **cost floor** is the more FREQUENT veto (452 vs 308) though
 reachability is the BINDING one, and SENSEX that day was 6 DTE, not 4.
+
+---
+
+## 23. Standing Invariants & the Anti-Overclaim Discipline (2026-07-30)
+
+**This section is the truthful, consolidated reference for the seller book's laws. It
+supersedes any conflicting statement above. It was written after a full re-audit against the
+real 259-trade record that caught TWO overclaims made earlier the SAME day — proof that the
+biggest threat to this app is not a missing gate but a confidently-wrong claim in these docs.**
+
+### 23.1 THE meta-rule that would have prevented every doc-driven failure this month
+**An edge claim must cite (a) sample size and (b) P&L — never win rate alone.** High win rate
+on a credit spread is the *default* (you keep a small credit most days) and says nothing about
+expectancy; the losing shapes in this book all have 70–80% WR. Two concrete traps caught:
+- WR said "trades below 0.12 ratio win 35/21" → looked like the floor blocks winners. **P&L
+  said those same trades are net −₹1,486.** The floor is correct; WR lied.
+- WR said "CHOP DTE-0 is 100%" → looked like chop should trade. **P&L said the DTE-0 sliver is
+  n=7 (too thin) and CHOP DTE-1+ is −₹8,600.** The standdown is correct; WR lied.
+
+**When a larger measurement narrows or contradicts an earlier claim, CORRECT the earlier claim
+in place — do not leave both standing.** The §21 laws accreted contradictions precisely because
+each day's finding was appended without reconciling the last. A reader must never have to guess
+which of two conflicting statements is current.
+
+### 23.2 The credit/width ratio law — CORRECTED and final
+Measured by **P&L across 259 closed spreads** (not WR, not per-strategy medians):
+
+| ratio band | n | avg P&L | total | verdict |
+|---|---|---|---|---|
+| < 0.09 | 45 | −₹31 | −₹1,388 | thin credit, fat tail — reject |
+| 0.09–0.12 | 11 | −₹9 | −₹98 | breakeven, thin sample |
+| **0.12–0.16** | **32** | **+₹57** | **+₹1,813** | **the only clear book-wide winner** |
+| 0.16–0.22 | 44 | −₹152 | −₹6,680 | **negative book-wide; positive ONLY at DTE-0** |
+| > 0.22 | 129 | −₹197 | **−₹25,363** | at/near-money — the majority of all losses |
+
+**CORRECTION to §21.9/§21.10:** the winning band is **0.12–0.16 book-wide**, NOT "0.09–0.21".
+0.16–0.22 loses across all DTE and is tolerable only at DTE-0 (where there's no time for the
+near-money short to be run over). The deployed guards are still correct — floor 0.12, ceiling
+0.22 — because the DTE policy already stands down DTE 3+, so the residual 0.16–0.22 exposure is
+mostly DTE-0 where it's fine. **But do not claim 0.16–0.22 is an edge; it is a tolerance.**
+
+### 23.3 CHOP — CORRECTED
+**CORRECTION to §21.8:** "CHOP@DTE-0 +₹391, chop is not the enemy" was drawn from n=7. Full
+P&L: CHOP DTE-0 ≈ breakeven-to-slightly-positive (n=7, untradeable sample), CHOP DTE-1 negative,
+CHOP DTE-2+ = −₹7,681. **`RAE_CHOP_STANDDOWN=true` is CORRECT** — it forgoes a thin DTE-0 sliver
+to avoid large DTE-1+ chop losses. Do not weaken it on the strength of the n=7 number.
+
+### 23.4 Idle is usually CORRECT — the anti-firefighting rule
+**A strategy showing no trades is almost always standing down by design, not broken.** Before
+"fixing" an idle strategy, read its `last_filter_reason` / the SKIPPED signal's
+`rejection_detail.human_reason`. The book is built so each index trades only near its OWN expiry:
+
+| Index | Weekly expiry | Trades (near-expiry window) | Stands down |
+|---|---|---|---|
+| NIFTY | Tuesday | Mon–Tue (DTE 0–1) | Wed–Fri |
+| SENSEX | Thursday | Wed–Thu (DTE 0–1) | Fri–Tue |
+| BANKNIFTY | **monthly only** | ~expiry-day only (§21.2 reachability) | ~28 days/month |
+
+So NIFTY idle on a Thursday and SENSEX trading is the **designed** behaviour, not a fault. Each
+index covers ~2 days/week; the ensemble covers the week. This is the single most common thing
+misread as "the app broke again."
+
+### 23.5 The load-bearing gates — NONE are useless (verified 2026-07-30)
+Every gate below was checked against the P&L record and blocks a net-negative shape. There is
+**nothing to remove**:
+- **cost floor** (ratio ≥0.12 AND bankable ≥3× real friction) — below 0.12 is −₹1,486 net.
+- **ratio ceiling** (≤0.22 book-wide) — above 0.22 is −₹25,363, the largest loss pool.
+- **theta reachability** (≥0.55) — clock-driven exits were 86% of the −₹ book (§21.2).
+- **DTE policy** (stand down DTE 3+) — DTE 3+ is −₹35k across 147 trades.
+- **no-progress cut**, **contract dedup**, **CHOP standdown**, **EdgeMath standdown**,
+  **friction 0.5%/leg** — each measured, each reversible by env.
+
+The friction constant was the one genuinely-wrong knob (12× too high, §21.9) — that was a
+mis-measurement, not a useless gate. It is now corrected.
+
+### 23.6 Structurally-limited strategies (workable ≠ always-trading)
+- **RAE BANKNIFTY Range Seller**: BANKNIFTY is monthly-expiry only, so theta reachability
+  vetoes it at DTE 7/15/30 (ratio 0.46/0.21/0.11). It is workable ONLY at/near monthly expiry
+  (~1 day/month) and correctly self-gates otherwise. Its −₹8,667 is pre-law history. Do NOT
+  "fix" it into trading more — a wider wing does not change the expiry cycle (§21.2 corollary).
+- **RAE NIFTY/BANKNIFTY/SENSEX Trend Delta-1**: single-leg buyers configured at `short_delta
+  0.12` (far-OTM = the lottery-ticket / dead-buyer profile that failed 5 studies). A true
+  delta-1 trend rider is deep-ITM (~0.8–1.0). They fire only on rare trend days and are
+  UNVALIDATED — flag for OOS before tuning; do not enable-and-hope.
+
+### 23.7 Nothing here creates edge — the permanent caveat
+Every fix this month removed a defect or a mis-measurement. The re-run judges at honest friction
+(§21.10) show FRAGILE, not CANDIDATE_EDGE — "worth forward-papering", never "proven". No
+strategy is promoted to real money by any of this. `CORE_ENGINE_LIVE_ENABLED=false` stands until
+the RAE-7 founder ladder, on forward-paper evidence, not on a backtest or a doc claim.

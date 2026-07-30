@@ -1,3 +1,17 @@
+"""Hermes sidecar — watchdog alerts, pre-market readiness, EOD report.
+
+HERMES IS THE RESEARCHER AND DISCIPLINARIAN, NEVER THE TRADER. Code computes every
+number; the LLM only narrates CONFIRMED, deterministic findings and may never invent one.
+
+Anti-overclaim discipline (added 2026-07-30, CLAUDE.md §23 — Hermes exists to enforce it):
+  1. An edge/band/threshold claim MUST cite sample size AND P&L. Win rate alone is not
+     expectancy — high WR is the default for credit spreads and lied twice on 2026-07-30.
+  2. When a larger measurement narrows or contradicts an earlier claim, the earlier claim is
+     CORRECTED in place, never left standing beside its contradiction.
+  3. "Idle" is usually a correct standdown (wrong DTE/regime/expiry), not a breakage — read the
+     veto reason before alerting a human that a strategy "stopped working".
+  4. Nothing in a report promotes anything to real money. FRAGILE != edge. Forward-paper does.
+"""
 import os
 import sys
 import time
