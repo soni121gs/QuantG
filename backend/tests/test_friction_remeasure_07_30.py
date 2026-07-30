@@ -107,6 +107,6 @@ def test_old_friction_would_have_failed_the_same_trade(monkeypatch):
 
 
 def test_intraday_judge_slippage_default_corrected():
-    from core.intraday_options_backtest import CostModel
+    from core.intraday_options_backtest import IntradayCosts
 
-    assert CostModel().slippage_pct <= 0.01, "judge must not cost trades at 2%/side"
+    assert IntradayCosts().slippage_pct <= 0.01, "judge must not cost trades at 2%/side"
