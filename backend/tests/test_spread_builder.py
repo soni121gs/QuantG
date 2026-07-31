@@ -146,12 +146,27 @@ def test_dynamic_selector_honors_preferred_direction_hard_gate():
     assert bear["ok"] and bear["direction"] == "bearish" and bear["option_type"] == "CE"
 
 
-def test_dynamic_selector_falls_back_when_requested_side_unbuildable():
-    # Only CE strikes on the chain; a bullish (PE) request has nothing to build,
-    # so we fall back to the buildable side but flag it rather than fail silently.
+def test_dynamic_selector_directional_stands_down_when_side_unbuildable():
+    # 2026-07-31 RC-1 hardening: a DIRECTIONAL view must never be flipped to the
+    # opposite side. Only CE strikes on the chain → a bullish (PE) request has
+    # nothing to build, so the selector STANDS DOWN (ok=False) rather than selling
+    # CE — the wrong side of the thesis, an auto-loss when the market moves as the
+    # strategy expected (SENSEX −₹1,034, BANKNIFTY −₹3,810).
     chain = _ce_chain()
     out = select_dynamic_credit_spread(
         chain_nodes=chain, preferred_direction="bullish", width_points=100,
+        minutes_to_close=120,
+    )
+    assert out["ok"] is False
+    assert out.get("used_fallback_side") in (None, False)
+
+
+def test_dynamic_selector_neutral_may_fall_back_to_buildable_side():
+    # A NEUTRAL strategy (no directional preference) is a pure premium harvest, so
+    # if the first side is unbuildable it may take the other side, flagged as such.
+    chain = _ce_chain()
+    out = select_dynamic_credit_spread(
+        chain_nodes=chain, preferred_direction="neutral", width_points=100,
         minutes_to_close=120,
     )
     if out["ok"]:
