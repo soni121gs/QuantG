@@ -142,10 +142,17 @@ def select_dynamic_credit_spread(
 
     used_fallback_side = False
     candidates = _build_side(side_order[0])
-    if not candidates and len(side_order) > 1:
-        # Requested side unbuildable on this chain — fall back to the other side
-        # rather than skip the trade, but mark it so it is never mistaken for a
-        # freely-chosen side.
+    if not candidates and len(side_order) > 1 and not _valid:
+        # Neutral strategy (no directional view): the requested side is unbuildable
+        # on this chain, so try the other side rather than skip a premium-harvest.
+        #
+        # 2026-07-31 (RC-1 hardening): a DIRECTIONAL strategy must NEVER be flipped
+        # to the opposite side. Selling a bear-call when the brain chose a bull-put
+        # because the intended side was cost-floor/reachability vetoed is an
+        # automatic loss when the market moves as the strategy expected (measured:
+        # SENSEX pos_f29db7c05b3e sold CE on a PE intent, -Rs1,034; BANKNIFTY
+        # -Rs3,810 on 2026-07-17). For a directional view, standing down is the
+        # correct output — the opposite side is not a fallback, it is the wrong bet.
         candidates = _build_side(side_order[1])
         used_fallback_side = bool(candidates)
     if not candidates:
