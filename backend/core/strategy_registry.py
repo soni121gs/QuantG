@@ -88,16 +88,23 @@ _SPREAD = ("credit_spread", "debit_spread")
 ERP_KEEP_STRATEGY_NAMES: Set[str] = {
     "QG-O1 NIFTY Put Spread Theta Core",
     "QG-O4 SENSEX Call Spread Range Pilot",
-    "QG-O11 NIFTY Regime Seller Credit Scalp",
     "RAE NIFTY Range Seller (RANGE/INSIDE)",
-    "RAE BANKNIFTY Range Seller (RANGE/INSIDE)",
     "RAE SENSEX Range Seller (RANGE/INSIDE)",
     "RAE NIFTY Trend Delta-1 (TREND)",
     "RAE BANKNIFTY Trend Delta-1 (TREND)",
     "RAE SENSEX Trend Delta-1 (TREND)",
+    # founder IDX sleeves (index_alpha_sleeves; founder_forced_live) — kept, paper-forward
+    "IDX NIFTY VRP Call-Spread (RANGE+rich)",
+    "IDX SENSEX VRP Put-Spread (RANGE+rich)",
+    "IDX NIFTY Long-Gamma (HIGH_VOL debit)",
+    "IDX NIFTY Mean-Reversion Fade (debit)",
+    # 2026-08-01 book cutover: QG-O11 (ratio 0.255, −₹8,075; width-1 friction trap) and
+    # RAE BANKNIFTY Range Seller (monthly-expiry → theta unreachable, §21.2) RETIRED to PURGE.
 }
 
 ERP_PURGE_STRATEGY_NAMES: Set[str] = {
+    "QG-O11 NIFTY Regime Seller Credit Scalp",       # 2026-08-01: ratio 0.255, −₹8,075
+    "RAE BANKNIFTY Range Seller (RANGE/INSIDE)",     # 2026-08-01: monthly expiry, theta unreachable
     "AXISBANK Trend Follower",
     "BANKNIFTY Breakout Buyer",
     "BANKNIFTY HFT Momentum Scalper",
