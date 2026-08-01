@@ -33,7 +33,10 @@ logger = logging.getLogger("quantg.eod_options_backtest")
 LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 65,
              "MIDCPNIFTY": 120, "BANKEX": 30, "NIFTYNXT50": 120}
 BROKERAGE_PER_LEG = 20.0
-SLIPPAGE_PCT = float(os.environ.get("BACKTEST_SLIPPAGE_PCT", "0.03"))  # adverse, per leg, each side
+# Friction re-measured from 4,587 real quotes at ~0.25% of mid (CLAUDE.md §21.9); 0.5%/leg
+# is a ~2x buffer. The old 0.03 default was a guess wrong by ~12x and silently inflated every
+# verdict computed without the env override (e.g. a bare `docker run`). Env still wins where set.
+SLIPPAGE_PCT = float(os.environ.get("BACKTEST_SLIPPAGE_PCT", "0.005"))  # adverse, per leg, each side
 MIN_DTE_DAYS = 2   # avoid 0-DTE gamma; give theta room
 MAX_DTE_DAYS = 10  # prefer the near weekly
 # P5-J1: minimum |t-stat| for a positive expectancy to count as a CANDIDATE_EDGE.
