@@ -98,6 +98,8 @@ ERP_KEEP_STRATEGY_NAMES: Set[str] = {
     "IDX SENSEX VRP Put-Spread (RANGE+rich)",
     "IDX NIFTY Long-Gamma (HIGH_VOL debit)",
     "IDX NIFTY Mean-Reversion Fade (debit)",
+    # far-OTM put-spread tail hedge (long-vol §18; convex crash insurance, held to expiry)
+    "Tail Hedge NIFTY Far-OTM Put Spread",
     # 2026-08-01 book cutover: QG-O11 (ratio 0.255, −₹8,075; width-1 friction trap) and
     # RAE BANKNIFTY Range Seller (monthly-expiry → theta unreachable, §21.2) RETIRED to PURGE.
 }
