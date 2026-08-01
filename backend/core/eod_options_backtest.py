@@ -140,6 +140,13 @@ class EODOptionsBacktest:
         if _itm is None:
             _itm = opt.get("itm_offset_pct")
         self._itm_offset = float(_itm) if _itm is not None else 0.0
+        # long-vol / tail specialist: buy an OTM single leg (`otm_offset_pct`) — CE strike
+        # ABOVE spot / PE strike BELOW spot by that %. Mirror of itm_offset; only fires when
+        # set, so existing single_leg strategies (ATM / ITM) are untouched.
+        _otm = p.get("otm_offset_pct")
+        if _otm is None:
+            _otm = opt.get("otm_offset_pct")
+        self._otm_offset = float(_otm) if _otm is not None else 0.0
         tp_pct = float(risk.get("target_pct") or risk.get("take_profit_pct") or 11) / 100.0
         sl_pct = float(risk.get("stoploss_pct") or risk.get("stop_loss_pct") or 7) / 100.0
         max_hold_days = int(p.get("max_hold_days") or risk.get("max_hold_days") or MAX_DTE_DAYS)
@@ -310,6 +317,11 @@ class EODOptionsBacktest:
             if self._itm_offset > 0:
                 dist = max(1, round(spot * self._itm_offset / interval))
                 target = atm - dist * interval if typ == "CE" else atm + dist * interval
+                k = min(strikes, key=lambda s: abs(s - target))
+            elif self._otm_offset > 0:
+                # OTM tail leg: CE above spot, PE below spot by otm_offset_pct.
+                dist = max(1, round(spot * self._otm_offset / interval))
+                target = atm + dist * interval if typ == "CE" else atm - dist * interval
                 k = min(strikes, key=lambda s: abs(s - target))
             px = settle(k, typ)
             if not px:
