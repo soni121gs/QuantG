@@ -116,10 +116,12 @@ HTE_OPTIONS = {
     # Sized from the FIXED max loss, not from a stop distance. width 10 x 50 pts x
     # lot 65 caps the loss per lot; this budget keeps it to ~1 lot in paper.
     "required_capital": 8000.0,
-    # No take-profit race: the whole thesis is that theta gets its full remaining
-    # life. A TP here would re-introduce the early exit the shootout says loses.
-    "credit_tp_frac": 0.0,
-    "credit_sl_mult": 0.0,          # 0 = no percentage stop; the bought wing IS the stop
+    # NOTE: credit_tp_frac / credit_sl_mult are deliberately ABSENT, not zero.
+    # strategy_registry treats "present but 0" as an out-of-range intraday target
+    # AND as ambiguous exit intent; absent + exit_mode="expiry" + time_exit 0 is
+    # how it encodes "this one genuinely rides to settlement". The whole thesis is
+    # that theta gets its full remaining life, so a TP would re-introduce exactly
+    # the early exit the shootout says loses money.
 }
 HTE_RISK = {
     "exit_mode": "hold_to_expiry",
@@ -205,8 +207,9 @@ def _restore_qgo1(db, args) -> int:
               "time_exit": risk.get("time_exit_minutes")}
 
     opt["exit_mode"] = "expiry"
-    opt["credit_tp_frac"] = 0.0
-    opt["credit_sl_mult"] = 0.0
+    # Remove rather than zero — see the note on HTE_OPTIONS.
+    opt.pop("credit_tp_frac", None)
+    opt.pop("credit_sl_mult", None)
     risk["exit_mode"] = "hold_to_expiry"
     risk["time_exit_minutes"] = 0
     risk["max_hold_days"] = 20
@@ -217,6 +220,12 @@ def _restore_qgo1(db, args) -> int:
     print(f"  [{'APPLY' if args.apply else 'DRY-RUN'}] RESTORE {row.get('name')}")
     print(f"    before: {before}")
     print(f"    after : {after}")
+    if validate_strategy_doc is not None:
+        _v = validate_strategy_doc(dict(row, visual_config=vc))
+        print(f"    coherence: ok={_v.ok} errors={_v.errors} warnings={_v.warnings}")
+        if not _v.ok:
+            print("    ABORT — coherence errors on the restored QG-O1.")
+            return 1
     if args.apply:
         db.strategies.update_one({"_id": row["_id"]}, {"$set": {
             "visual_config": vc,
