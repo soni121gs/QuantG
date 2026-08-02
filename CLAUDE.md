@@ -1633,9 +1633,21 @@ exits (stop-loss −₹41,294, killswitch −₹24,859, spread-sl −₹17,712, 
   premium signal loses too (−₹247/trade). The live debit sample is 46 trades over ~37 days
   in one direction-friendly month. The transferable finding is the EXIT, not credit-vs-debit.
 
-### 25.4 Three gates that each independently made hold-to-expiry impossible
+### 25.4 The gates that made hold-to-expiry impossible
 Per §22.3 hold-to-expiry had **never executed — 0 overnight holds in 283 closed spreads.**
-The EOD-backstop exemption landed in `38be295`; two more gates still bound it:
+The EOD-backstop exemption landed in `38be295`.
+
+⚠️ **Check `backend/.env` before reasoning about which gate binds.** The founder's 07-31
+override lives there, NOT in docker-compose, and it already disables several gates:
+`SELLER_DTE_POLICY_ENABLED=false`, `SPREAD_ENFORCE_REACHABILITY=false`,
+`SPREAD_COST_FLOOR_MULT=1.0`, `CREDIT_SPREAD_MIN_CREDIT_RATIO=0.03`,
+`EDGE_STANDDOWN_ENABLED=false`. So in the CURRENT runtime the only gate still binding
+hold-to-expiry was the kill-switch. **A bare `docker run` does NOT load `backend/.env`, so
+verifying constants that way reports code defaults, not production.** Always
+`docker exec quantg-backend` to read live config.
+
+The two below are therefore **defence-in-depth** — they matter the moment those env flags
+are turned back on, which is the stated intent (the override is explicitly reversible):
 - **Kill-switch** — the book-level sweep fired 5 consecutive days, closed 29 positions for
   −₹24,859, of which **−₹20,811 (84%) were debit spreads at a 0% win rate**. The seller
   sleeve's bleed was liquidating the one structure beating its breakeven. Now **sleeve-
@@ -1666,12 +1678,21 @@ Both paper + armed. **Registry gotcha:** hold-to-expiry geometry must OMIT
 `credit_tp_frac`/`credit_sl_mult` — present-but-0 is both out-of-range and "ambiguous exit
 intent". `CORE_ENGINE_LIVE_ENABLED=false` unchanged; nothing here creates edge.
 
-**Known test debt:** the suite has pre-existing cross-file env/reload pollution around the
-`spread_builder` cost-floor constants (module-level `os.environ` reads + `importlib.reload`
-in `test_friction_remeasure_07_30.py` + `from … import CONST` value capture). 5 cost-floor
-tests pass in isolation and fail in the full suite; the same class already failed at
-baseline. Runtime values were verified correct in a clean process (mult 3.0, friction 300,
-385 min). Fix = read those constants lazily at call time.
+**Known test debt — and the mechanism, because it will bite again.** The suite carries
+`backend/.env` into the container. Modules read their constants from `os.environ` at IMPORT
+time, and `test_friction_remeasure_07_30.py` calls `importlib.reload(core.spread_builder)`.
+Whatever `.env` says therefore overwrites the code defaults mid-suite, and every later test
+written against code defaults fails. Proven: pinning
+`SPREAD_COST_FLOOR_MULT=3.0 CREDIT_SPREAD_MIN_CREDIT_RATIO=0.12 SELLER_DTE_POLICY_ENABLED=true
+SPREAD_ENFORCE_REACHABILITY=true` on the run drops failures **15 → 11** and clears 4 of the
+5; the 5th is `EDGE_STANDDOWN_ENABLED=false`, also from `.env`. **None are caused by the
+session change** — they are the founder override becoming visible to tests. Baseline at
+`f375834` is 10 failures under the same conditions.
+Real fix = read these constants lazily at call time (they are documented as
+"env-reversible", which import-time reads do not actually deliver), or run tests with an
+explicit env pin. **Establish a baseline at the previous commit before attributing any
+suite failure to your own change** — and note a baseline run needs `-e DB_NAME=quantg` or
+collection aborts and reports a misleading "0 failures".
 
 ---
 
