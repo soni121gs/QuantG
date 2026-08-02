@@ -149,19 +149,46 @@ def evaluate(
     regime: Optional[str],
     today: Optional[date] = None,
     enabled: bool = None,
+    hold_to_expiry: bool = False,
 ) -> DtePolicy:
     """The seller's DTE gate. Pure; no I/O.
 
     Returns allow=True with per-trade exemptions for near expiry, allow=False only
     for the buckets the 259-trade study shows are loss-making.
+
+    `hold_to_expiry` EXEMPTS the position from the stand-down. This is not a
+    loophole — it is the scope of the underlying measurement. Every trade in the
+    259-trade study exited EARLY (86% of the book's exits were clock-driven,
+    §21.2), so "DTE 3+ loses" is really "entering far from expiry and then being
+    force-exited on a clock loses" — the worst of both worlds, since you pay full
+    round-trip friction without ever collecting the decay you entered for.
+
+    The 1,869-day structure shootout (2019-2026) tests the other branch directly:
+    same signal, same window, HELD to expiry -> +Rs661/trade for the credit spread
+    and +Rs908 for the debit, while every early-exit variant lost Rs247-339. The
+    DTE law and the hold-to-expiry evidence are not in conflict; they measure
+    different exits.
+
+    This mirrors the exemption spread_builder already grants hold-to-expiry on the
+    §21.2 reachability law ("theta gets its full remaining life"). A gate
+    calibrated on intraday behaviour that silently binds a hold-to-expiry sleeve
+    is the §22.3 defect class: one exit engine grants an exemption and another
+    ignores it, so the strategy can never actually run.
     """
     on = _b("SELLER_DTE_POLICY_ENABLED", True) if enabled is None else enabled
     dte = dte_from_expiry(expiry, today=today)
     reg = str(regime or "").upper()
-    tele = {"regime": reg, "policy_enabled": on}
+    tele = {"regime": reg, "policy_enabled": on, "hold_to_expiry": bool(hold_to_expiry)}
 
     if not on:
         return DtePolicy(dte, True, "DTE policy disabled", telemetry=tele)
+    if hold_to_expiry and _b("DTE_POLICY_EXEMPT_HOLD_TO_EXPIRY", True):
+        # Still reject an already-expired contract below; otherwise let it ride.
+        if dte is None or dte >= 0:
+            return DtePolicy(dte, True,
+                             f"hold-to-expiry sleeve exempt from the DTE stand-down "
+                             f"({dte}d) — the DTE study measured early exits only",
+                             telemetry=tele)
     if dte is None:
         # Unknown expiry → no exemption, but do not block: the geometry laws in
         # spread_builder still judge the contract on its own numbers.

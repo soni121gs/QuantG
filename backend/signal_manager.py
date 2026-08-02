@@ -1172,12 +1172,23 @@ async def _dispatch_signal_via_unified_engine(
         # -Rs1143. Crossed with regime it shows the blanket CHOP stand-down was
         # mis-aimed — CHOP@DTE0 is +Rs391 (n=7, 100% WR) while CHOP@DTE3+ is
         # -Rs1143 (0% WR). So gate on DTE, and let near expiry trade EVERY regime.
+        # A genuine hold-to-expiry sleeve is EXEMPT: every trade in the 259-trade
+        # study exited early, so the DTE finding does not describe a position that
+        # actually rides to settlement (see core/dte_policy.evaluate). Without this
+        # the HTE sleeve would be vetoed on every entry and could never run — the
+        # §22.3 defect class where one engine's exemption is ignored by another.
+        _vc_hte = strategy.get("visual_config") or {}
+        _hold_to_expiry = (
+            str(((_vc_hte.get("options") or {}).get("exit_mode")) or "").lower() == "expiry"
+            or str(((_vc_hte.get("risk") or {}).get("exit_mode")) or "").lower() == "hold_to_expiry"
+        )
         from core.dte_policy import evaluate as _dte_evaluate
         _dte_pol = _dte_evaluate(expiry=(_spread.get("short_leg") or {}).get("expiry")
                                  or _spread.get("expiry"),
                                  regime=_regime_fine_at_entry
                                  if _regime_fine_at_entry not in ("", "UNKNOWN")
-                                 else _regime_at_entry)
+                                 else _regime_at_entry,
+                                 hold_to_expiry=_hold_to_expiry)
         _edge_telemetry["dte_policy"] = _dte_pol.as_dict()
         if not _dte_pol.allow:
             _dte_reason = f"DTE policy stand-down: {_dte_pol.reason}"
