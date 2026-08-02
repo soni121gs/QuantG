@@ -123,12 +123,12 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   a local session. Add a `scripts/ci_run.sh` that runs the offline suite + the diagnostics run in the
   backend container, logs to `/var/log/quantg_ci.log`, and a nightly cron for it. Same pattern for
   backfills and OOS sweeps (`nohup docker exec … &`, read the log next turn).
-- [ ] **P5-R6** (T1) Verify the two `options_1m` repairs actually fire — neither has run yet:
-  the 15:35 IST capture flush (window widened + failures now WARN with traceback; previously swallowed at
-  debug, which is how the store went 8 days stale) and the new ingest cron (11:15 UTC weekdays). Check
-  `docker logs | grep "minute capture flush"` and `/var/log/options_1m.log` after the first firing.
-  Minor edge case to note while there: `dte_from_expiry` returns `0.0` for a past expiry, which *passes*
-  reachability rather than flagging it.
+- [x] **P5-R6** (T1) ✅ VERIFIED ON VPS 2026-08-02 — both repairs fire. The 15:35 capture flush is
+  writing real bars (`db.capture_flush_runs`: 07-27 index 1191 bars/426k ticks + options 1990 bars;
+  07-28 options 3980 bars), with `data_quality_gaps` honestly recorded (MISSING_n_MINUTES), never
+  fabricated. The ingest cron (`/var/log/options_1m.log`, 11:15 UTC weekdays) fired 07-30 (fetched 33,000
+  rows) and 07-31 (idempotent skip); weekends don't run (expected). Note the `dte_from_expiry`==0.0 for a
+  past expiry edge case remains a minor open nuance, not blocking.
 
 ### Track J — make the instruments trustworthy (~2 days)
 - [x] **P5-J1** (T2) ✅ DONE 2026-07-23 — `_bucket_metrics` now reports `std`, per-trade `sharpe`, and
@@ -201,27 +201,29 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   (`scripts/run_earnings_iv_crush_validation.py`) under the J1 t-stat and J2 DSR. This is the flagship and
   the only sleeve with a plausible new-edge mechanism. Gate unchanged: n≥300 events, DSR pass, ≥3×
   cost floor, before any registry paper wake.
-- [~] **P5-M4** (T3) CODE DONE 2026-08-02, VPS RUN PENDING — `core/alpha_beta.py` (pure: numpy-free
-  multi-factor OLS with classical t-stats, `short_vol_benchmark` = daily ATM-straddle-sell return from
-  bhavcopy, `classify_alpha_beta` → REPLICABLE_SHORT_VOL_BETA / HAS_ALPHA / NEGATIVE_ALPHA) + CLI
-  `scripts/run_alpha_beta.py` (pulls per-strategy daily returns from `trade_fills`, regresses on
-  short_vol + nifty). 6 unit tests green (recovers known coefficients, verdict classification, benchmark).
-  **Run on VPS:** `docker exec quantg-backend python /app/scripts/run_alpha_beta.py --start 2024-01-01
-  --end 2026-07-31` — needs the live ledger + populated store.
-- [~] **P5-M5** (T3) CODE DONE 2026-08-02, VPS RUN PENDING — `core/score_ic.py` (pure Spearman IC +
-  DECORATION/PREDICTIVE/INVERTED verdict) + CLI `scripts/run_score_ic.py` joins each stored pre-trade
-  score (`contract_edge_score`, `regime_fine_confidence_at_entry`, `edge_math.conviction`) with the
-  closed position's `realized_pnl`. 5 unit tests green. **Run on VPS:**
-  `docker exec quantg-backend python /app/scripts/run_score_ic.py` — an IC ≈ 0 (DECORATION) means that
-  scoring machinery has no predictive content.
-- [~] **P5-M6** (T2) SCRIPT DONE 2026-08-02, VPS APPLY PENDING (founder-gated) — migration
-  `scripts/fix_costfloor_siblings_m6.py` (dry-run default, idempotent) raises `credit_tp_frac` 0.50→0.60
-  on IDX NIFTY VRP Call-Spread, IDX SENSEX VRP Put-Spread, RAE SENSEX Range Seller (same lever as QG-O4;
-  max-loss/lot unchanged so `required_capital` sizing is untouched, §21.4). The two IDX rows are
-  `founder_forced_live` — the script REFUSES to touch them without `--include-founder-forced` AND founder
-  confirmation. **NOTE:** §21.9 re-measured friction at ~1/12 the old 300/lot constant these vetoes used,
-  so re-run `static.cost_floor`/the judge at corrected friction on the VPS to confirm the floor is still
-  binding before applying.
+- [x] **P5-M4** (T3) ✅ DONE + RUN ON VPS 2026-08-02 — `core/alpha_beta.py` (numpy-free multi-factor OLS,
+  `short_vol_benchmark`, `classify_alpha_beta`) + `scripts/run_alpha_beta.py` (reads realized P&L from
+  CLOSED `strategy_positions` — NOT trade_fills, which carries no realized_pnl; grouped by `closed_at`).
+  Persists to `db.alpha_beta_runs`; surfaced at `GET /api/ops/alpha-beta` + Analytics `AlphaBetaPanel`.
+  **VPS verdict (2024→2026, 634 benchmark days):** the book is TOO YOUNG for a firm split — the busiest
+  strategy has only 15 distinct closed-days (gate lowered to `--min-days 12`, all flagged thin <30).
+  Most strategies INCONCLUSIVE; QG-O11 NEGATIVE_ALPHA (t −2.41); β_sv ≈ 0 across the board (the daily
+  straddle benchmark doesn't capture intraday-seller P&L, so "replicable short-vol beta" is NOT confirmable
+  on this book yet — an honest limitation, re-run once strategies accrue ≥30 daily points).
+- [x] **P5-M5** (T3) ✅ DONE + RUN ON VPS 2026-08-02 — `core/score_ic.py` (Spearman IC +
+  DECORATION/PREDICTIVE/INVERTED) + `scripts/run_score_ic.py`. Persists to `db.score_ic_runs`; surfaced at
+  `GET /api/ops/score-ic` + Analytics `ScoreIcPanel`. **VPS verdict (631 closed positions):**
+  `contract_edge_score` IC 0.017 (t 0.18) = **DECORATION**; `regime_confidence` IC −0.184 (t −2.33) =
+  **INVERTED** (higher confidence predicts WORSE P&L — a real, significant finding); `edgemath_conviction`
+  IC −0.126 (t −1.40) = **DECORATION**. None of the three scores has positive predictive content; sizing
+  that leans on them is sizing on noise. Feeds a Hermes review + the §20 breadth-law IC dependency.
+- [x] **P5-M6** (T2) ✅ OBSOLETE / NOT APPLIED 2026-08-02 — script written
+  (`scripts/fix_costfloor_siblings_m6.py`, dry-run + founder-forced-gated) but the premise is STALE.
+  VPS check: all three rows are already at `credit_tp_frac=0.25` (not 0.50) and have **no open
+  `static.cost_floor` findings**. The 07-30 friction re-measurement (§21.9) lowered TP to 0.25 (TP 0.50 was
+  reached only 12% of the time) and 07-31 set SL 0.6. Raising TP 0.25→0.60 would REVERT a measured
+  decision and make the target even less reachable — tuning on stale analysis. Left the script in place as
+  a safe dry-run tool; not applied. (Correct-in-place discipline, §23.1.)
 
 ---
 
