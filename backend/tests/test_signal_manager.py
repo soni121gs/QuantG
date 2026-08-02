@@ -840,7 +840,9 @@ async def test_edge_math_spread_size_reads_declared_specialist_role(monkeypatch)
         return SimpleNamespace(n=0, win_rate=0.0, avg_win=0.0, avg_loss=0.0)
     monkeypatch.setattr("core.edge_runtime.cached_rolling_edge_stats", fake_stats)
     monkeypatch.setattr("core.edge_sizer.edge_size",
-                        lambda **k: SimpleNamespace(lots=2))
+                        lambda **k: SimpleNamespace(lots=2, base_lots=2.0, conviction=0.5,
+                                                    day_mult=1.0, edge_score=0.5,
+                                                    expectancy=0.0, reason="test"))
     monkeypatch.setattr("core.edge_sizer.payoff_ratio", lambda *a, **k: 1.0)
     monkeypatch.setattr("core.spread_builder.lots_for_risk", lambda *a, **k: 5)
 

@@ -47,7 +47,9 @@ def test_trend_specialist_needs_high_confidence():
     assert not hi.stand_down and hi.size_mult > 0.0
 
 
-def test_trend_size_scales_with_confidence():
+def test_trend_size_scales_with_confidence(monkeypatch):
+    # magnitude scaling only when SCORE_SIZE_NEUTRAL=false (M5 disabled it by default)
+    monkeypatch.setenv("SCORE_SIZE_NEUTRAL", "false")
     a = route(tax.TREND_UP, 0.91, specialist="trend_delta1_long").size_mult
     b = route(tax.TREND_UP, 0.99, specialist="trend_delta1_long").size_mult
     assert b > a  # more confident → bigger
@@ -97,22 +99,39 @@ def test_no_fallback_supplied_preserves_old_behaviour():
     assert d.regime == tax.RANGE and not d.stand_down
 
 
-def test_range_size_scales_with_confidence():
-    """A barely-formed range earns less size than an established one."""
+def test_range_size_scales_with_confidence(monkeypatch):
+    """A barely-formed range earns less size than an established one — ONLY in the
+    legacy magnitude-scaling mode (M5 disabled it by default)."""
+    monkeypatch.setenv("SCORE_SIZE_NEUTRAL", "false")
     lo = route(tax.RANGE, 0.20, specialist="range_seller").size_mult
     hi = route(tax.RANGE, 0.90, specialist="range_seller").size_mult
     assert 0 < lo < hi
 
 
-def test_mature_range_earns_full_size():
-    """P5-R3: a mature RANGE tops out at RANGE_BASE_CONF (0.40) confidence from the
-    classifier. The seller-size scaling must reference that ceiling, not
-    FINE_MIN_CONF (0.50), so an established range earns full size instead of being
-    permanently capped at 0.8. Confidence at/above the reference => size×1.0."""
+def test_mature_range_earns_full_size(monkeypatch):
+    """P5-R3 (legacy scaling path): a mature RANGE tops out at RANGE_BASE_CONF (0.40)
+    confidence. The seller-size scaling references that ceiling, not FINE_MIN_CONF, so
+    an established range earns full size. Only meaningful with magnitude scaling on."""
+    monkeypatch.setenv("SCORE_SIZE_NEUTRAL", "false")
     from core.regime_router import SELLER_SIZE_CONF_REF, REGIME_SIZE
     d = route(tax.RANGE, SELLER_SIZE_CONF_REF, specialist="range_seller")
     assert not d.stand_down
     assert d.size_mult == REGIME_SIZE[tax.RANGE]  # unthrottled at the mature ceiling
+
+
+def test_default_neutral_size_is_flat_across_confidence():
+    """M5 default (SCORE_SIZE_NEUTRAL=true): confidence is inverted vs P&L, so size is
+    NOT scaled by its magnitude — a seller in its owned regime gets flat base size at
+    any confidence. Confidence still gates stand-down/trend precision categorically."""
+    lo = route(tax.RANGE, 0.20, specialist="range_seller")
+    hi = route(tax.RANGE, 0.90, specialist="range_seller")
+    assert not lo.stand_down and not hi.stand_down
+    assert lo.size_mult == hi.size_mult == REGIME_SIZE_FLAT_RANGE()
+
+
+def REGIME_SIZE_FLAT_RANGE():
+    from core.regime_router import REGIME_SIZE
+    return REGIME_SIZE[tax.RANGE]
 
 
 # --- P5-R1 (2026-07-23): the fallback must only ever REDUCE risk -------------

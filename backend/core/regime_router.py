@@ -38,6 +38,18 @@ def enabled() -> bool:
     return os.environ.get("RAE_ROUTER_ENABLED", "false").lower() == "true"
 
 
+def score_size_neutral() -> bool:
+    """2026-08-02 (M5): the score-IC screen (scripts/run_score_ic.py) found the RAE
+    regime CONFIDENCE has a significantly NEGATIVE information coefficient vs realized
+    P&L (IC −0.18, t −2.33) — higher confidence predicted WORSE outcomes — and the
+    contract/EdgeMath scores had ~zero IC. So scaling position size by the confidence
+    MAGNITUDE is sizing on (inverted) noise. When true (default), the router uses a
+    FLAT per-regime base and does NOT scale by confidence; confidence is still used
+    CATEGORICALLY (stand-down + the trend precision gate), which is a different, sound
+    decision. Reversible: set SCORE_SIZE_NEUTRAL=false to restore magnitude scaling."""
+    return os.environ.get("SCORE_SIZE_NEUTRAL", "true").lower() == "true"
+
+
 def chop_standdown_enabled() -> bool:
     """HIGH_VOL_CHOP veto. ON by default (sellers stand down on chop — the RAE
     design). Founder-directed 2026-07-16: set RAE_CHOP_STANDDOWN=false to turn the
@@ -234,17 +246,20 @@ def _route_one(
                            notes)
 
     base = REGIME_SIZE.get(regime, 1.0)
-    # Quiet regimes scale with conviction too. An established range earns full size;
-    # a barely-formed one earns a fraction. This is the EM "continuous size, never a
-    # hard block" philosophy applied to the seller's own home regime — previously
-    # RANGE was flat size×1.0 at any confidence, so the sellers were maximally
-    # exposed exactly when the classifier was least sure (2026-07-22).
-    if regime in SELLER_OK_REGIMES and SELLER_SIZE_CONF_REF > 0:
-        base *= max(0.25, min(1.0, confidence / SELLER_SIZE_CONF_REF))
-    # trend size scales with how far past the confidence gate we are (precision → size)
-    if regime in (tax.TREND_UP, tax.TREND_DOWN) and TREND_MIN_CONF < 1.0:
-        scale = (confidence - TREND_MIN_CONF) / (1.0 - TREND_MIN_CONF)
-        base *= max(0.0, min(1.0, 0.5 + 0.5 * scale))   # 0.5..1.0 across the confident band
+    # 2026-08-02 (M5): confidence-MAGNITUDE size scaling is disabled by default because
+    # the score-IC screen found regime confidence is inverted vs P&L (see
+    # `score_size_neutral`). The categorical gates above (off-regime stand-down, trend
+    # precision) already used confidence soundly; only the continuous magnitude scaling
+    # below is the "sizing on noise" part. Reversible via SCORE_SIZE_NEUTRAL=false.
+    if not score_size_neutral():
+        # Quiet regimes scale with conviction too. An established range earns full size;
+        # a barely-formed one earns a fraction (the pre-M5 behaviour).
+        if regime in SELLER_OK_REGIMES and SELLER_SIZE_CONF_REF > 0:
+            base *= max(0.25, min(1.0, confidence / SELLER_SIZE_CONF_REF))
+        # trend size scales with how far past the confidence gate we are (precision → size)
+        if regime in (tax.TREND_UP, tax.TREND_DOWN) and TREND_MIN_CONF < 1.0:
+            scale = (confidence - TREND_MIN_CONF) / (1.0 - TREND_MIN_CONF)
+            base *= max(0.0, min(1.0, 0.5 + 0.5 * scale))   # 0.5..1.0 across the confident band
     active = [specialist] if specialist else [owner]
     reasons = [*notes, f"{regime}: activate {active[0]} at size×{base:.2f}"]
     return RoutingDecision(regime, confidence, False, base, active, reasons)

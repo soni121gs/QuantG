@@ -696,12 +696,28 @@ async def _edge_math_spread_size(
             1 if str(strategy.get("mode") or "paper").lower() == "paper" else 0),
     )
     capital_cap = lots_for_risk(float(spread.get("max_loss") or 0), lot_size, risk_budget)
-    contract_mult = max(0.10, min(1.0, float(spread.get("contract_size_mult") or 1.0)))
+    from core.regime_router import score_size_neutral as _score_neutral
+    _neutral = _score_neutral()
+    _raw_contract_mult = max(0.10, min(1.0, float(spread.get("contract_size_mult") or 1.0)))
+    # M5 (2026-08-02): contract_edge_score has ~zero IC vs realized P&L (DECORATION),
+    # so multiplying size by it is sizing on noise → neutralise to 1.0 (still recorded
+    # in telemetry for ongoing IC monitoring). Reversible via SCORE_SIZE_NEUTRAL=false.
+    contract_mult = 1.0 if _neutral else _raw_contract_mult
     profit_mult = max(0.10, min(1.0, float(strategy.get("day_profit_size_mult") or 1.0)))
-    _scaled = decision.lots * contract_mult * profit_mult
-    if _edge_standdown_enabled() and decision.lots <= 0:
-        # EdgeMath's stand-down is now reachable: a strategy whose own rolling
-        # expectancy is negative sizes to ZERO instead of being floored to 1 lot.
+    # M5: EdgeMath conviction MAGNITUDE also has no predictive IC. In neutral mode we
+    # DROP the fine conviction multiplier (base_lots × day_governor is the evidence-based
+    # size) but KEEP the categorical stand-down — conviction ≤ 0 means the strategy's own
+    # rolling expectancy is dead, a sound reason to size to zero. day_mult (day governor)
+    # and the defined-risk capital cap are both evidence-based and stay.
+    _edge_dead = (decision.conviction <= 0) if _neutral else (decision.lots <= 0)
+    if _neutral:
+        _edge_lots = 0.0 if _edge_dead else decision.base_lots * decision.day_mult
+    else:
+        _edge_lots = float(decision.lots)
+    _scaled = _edge_lots * contract_mult * profit_mult
+    if _edge_standdown_enabled() and _edge_dead:
+        # EdgeMath's stand-down is reachable: a strategy whose own rolling expectancy is
+        # negative sizes to ZERO instead of being floored to 1 lot.
         lots = 0
     else:
         lots = min(max(1, capital_cap), max(1, int(round(_scaled))))
@@ -755,6 +771,8 @@ async def _edge_math_spread_size(
         "avg_win": stats.avg_win,
         "avg_loss": stats.avg_loss,
         "contract_mult": contract_mult,
+        "contract_mult_raw": _raw_contract_mult,
+        "score_size_neutral": _neutral,   # M5: non-predictive score magnitudes neutralised
         "profit_mult": profit_mult,
         "capital_cap_lots": capital_cap,
         "final_lots": lots,

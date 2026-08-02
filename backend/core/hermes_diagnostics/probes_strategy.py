@@ -138,3 +138,38 @@ async def thin_sample_grading(ctx: ProbeContext) -> List[Finding]:
             suggested_fix="No fix — a label. Promote only after 30+ trades AND positive OOS/forward-paper.",
         ))
     return out
+
+
+@register("strategy.score_not_predictive", kind="dynamic")
+async def score_not_predictive(ctx: ProbeContext) -> List[Finding]:
+    """M5 (2026-08-02): flag any pre-trade SCORE whose information coefficient vs
+    realized P&L is non-predictive (DECORATION) or inverted (INVERTED) — sizing that
+    leans on such a score is sizing on noise. Reads the latest db.score_ic_runs
+    written by scripts/run_score_ic.py. Silent when no run exists (thin evidence →
+    silence, §19). INVERTED is HIGH (actively harmful); DECORATION is MEDIUM."""
+    run = await ctx.db.score_ic_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
+    if not run:
+        return []
+    out: List[Finding] = []
+    for r in run.get("results", []):
+        verdict = str(r.get("verdict"))
+        if verdict not in ("DECORATION", "INVERTED"):
+            continue
+        out.append(Finding(
+            probe_id="strategy.score_not_predictive", domain=Domain.STRATEGY,
+            severity=Severity.HIGH if verdict == "INVERTED" else Severity.MEDIUM,
+            entity=str(r.get("name")),
+            title=f"Score '{r.get('name')}' is {verdict} (IC {r.get('ic')}, t {r.get('t_stat')})",
+            detail=("This pre-trade score does not positively predict realized P&L "
+                    f"(information coefficient {r.get('ic')}, t={r.get('t_stat')}, "
+                    f"n={r.get('n')}). Any position sizing that scales with its magnitude "
+                    "is sizing on noise (or, if INVERTED, backwards). Neutralised by "
+                    "SCORE_SIZE_NEUTRAL=true; keep it neutral until the score earns a "
+                    "positive, significant IC."),
+            evidence={"score": r.get("name"), "verdict": verdict, "ic": r.get("ic"),
+                      "t_stat": r.get("t_stat"), "n": r.get("n"),
+                      "generated_at": run.get("generated_at")},
+            reproduction="scripts/run_score_ic.py → db.score_ic_runs latest; IC = Spearman(score, realized_pnl)",
+            suggested_fix="Keep SCORE_SIZE_NEUTRAL=true so the score cannot scale size; investigate/repair or retire the score.",
+        ))
+    return out
