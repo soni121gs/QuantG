@@ -165,7 +165,10 @@ def test_dte_policy_stands_down_a_far_expiry_intraday_seller():
     """Unchanged behaviour for the intraday book the 259-trade study measured."""
     from core.dte_policy import evaluate
     from datetime import date
-    p = evaluate(expiry="2026-08-20", regime="RANGE", today=date(2026, 8, 3))
+    # enabled=True explicitly: another test module flips SELLER_DTE_POLICY_ENABLED
+    # via env and does not restore it, so relying on the default makes this test
+    # order-dependent.
+    p = evaluate(expiry="2026-08-20", regime="RANGE", today=date(2026, 8, 3), enabled=True)
     assert p.allow is False
     assert "past the seller's edge window" in p.reason
 
@@ -177,7 +180,7 @@ def test_dte_policy_exempts_hold_to_expiry():
     from core.dte_policy import evaluate
     from datetime import date
     p = evaluate(expiry="2026-08-20", regime="RANGE", today=date(2026, 8, 3),
-                 hold_to_expiry=True)
+                 hold_to_expiry=True, enabled=True)
     assert p.allow is True
     assert p.telemetry.get("hold_to_expiry") is True
 
@@ -186,5 +189,5 @@ def test_hold_to_expiry_exemption_still_rejects_an_expired_contract():
     from core.dte_policy import evaluate
     from datetime import date
     p = evaluate(expiry="2026-08-01", regime="RANGE", today=date(2026, 8, 3),
-                 hold_to_expiry=True)
+                 hold_to_expiry=True, enabled=True)
     assert p.allow is False

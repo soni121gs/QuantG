@@ -1568,6 +1568,113 @@ the RAE-7 founder ladder, on forward-paper evidence, not on a backtest or a doc 
 
 ---
 
+## 25. SEBI session change + the hold-to-expiry finding (2026-08-03)
+
+### 25.1 Exchange fact (verified from circular coverage 2026-08-02, NOT model memory)
+Effective **2026-08-03**: NSE **equity derivatives close 15:30 → 15:40 IST** (open
+unchanged 09:15; index futures/options, stock futures/options; trade-modification end
+stays 16:15; close-price VWAP window becomes 15:10–15:40). The **cash** segment gains a
+**Closing Auction Session 15:15–15:35** for F&O-eligible stocks, so **continuous cash
+trading ends 15:15**. Phase 2 (revised pre-open) is slated 2026-09-07 and is NOT modelled.
+**BSE was not verified to follow** — `BSE_FO` deliberately stays 15:30.
+
+**The two directions pull opposite ways and confusing them is the whole risk:** F&O got
+10 minutes LONGER (anything stopping at 15:30 silently truncates); cash got 15 minutes
+SHORTER *for continuous orders* (anything squaring off at/after 15:15 is trading into an
+auction QuantG cannot participate in).
+
+`backend/session_times.py` is the single source of truth, all env-overridable as `HHMM`.
+It is a backend-**ROOT** leaf module, not `core/`, because `core/__init__` imports
+`core_legacy` (DB client) and `config.py` must not pull that in.
+
+**What the old 15:30 assumption was load-bearing for** (each of these was a real bug):
+`core/market_clock` + `core/market_session_service` each carried their **own copy** of the
+segment-window table; three copy-pasted `(hour==15 and minute<=30)` guards in `server.py`
+gated the option-capture / VIX / chain-snapshot loops; the **15:35 capture flush** and the
+**15:30–15:45 strategy auto-pause** are now *inside* the session (both moved to
+`POST_CLOSE`); `spread_builder.MARKET_MINUTES_PER_DAY` and
+`position_lifecycle._SESSION_MINUTES` were a hardcoded **375** — that is the *divisor* in
+the §21.2 reachability law, so a stale value overstates reachable decay; the option-minute
+store's last bar 15:29→15:39 (375→**385** bars).
+
+Neat consequence: the SENSEX feasible-entry bound stays **10:20** — the square-off moving
++10 min exactly offsets the reachability denominator moving 375→385.
+
+### 25.2 The structure shootout — the exit, not the structure, is the discriminator
+1,869 real bhavcopy days (2019-01-01..2026-07-30, incl. COVID), signal held CONSTANT
+(same entry days/underlying/window, corrected friction), varying ONLY structure+exit:
+
+| structure | hold | n | WR | breakeven | expectancy |
+|---|---|---|---|---|---|
+| credit w=4 | 5 days | 221 | 61.1% | 64.4% | −₹282 |
+| credit w=10 | 5 days | 216 | 65.7% | 68.1% | −₹338 |
+| debit w=10 | 5 days | 371 | 40.4% | 42.7% | −₹247 |
+| single leg | 5 days | 374 | 37.2% | 41.1% | −₹339 |
+| **credit w=10** | **TO EXPIRY** | 337 | 70.6% | 66.8% | **+₹661** |
+| **debit w=10** | **TO EXPIRY** | 337 | 41.2% | 35.5% | **+₹908** |
+
+**Every early-exit row loses; both held-to-expiry rows beat breakeven** — and from
+opposite directions (credit on win rate, debit on payoff b=1.82). Each early exit pays
+round-trip friction and truncates the distribution before the payoff exists. Corroborated
+live: 86% of exits clock-driven (§21.2), and the four biggest loss pools are all forced
+exits (stop-loss −₹41,294, killswitch −₹24,859, spread-sl −₹17,712, spread-time-exit
+−₹17,067). **Both rows grade FRAGILE, not CANDIDATE_EDGE** (OOS −₹2,467 / −₹1,530):
+"worth forward-papering", never "proven".
+
+### 25.3 The live-book census that motivated it (631 closed trades, −₹72,234, WR 38.8%)
+- **The loss is a tail, not a drift:** worst 20 trades (3.2%) = **−₹68,044 = 94%** of the
+  total loss; ex-worst-30 the book is **+₹11,460**. (Day-level: 32% green, median day
+  −₹1,456 — so the book is *also* not winning on the median day. Both are true; do not
+  quote one without the other.)
+- **By structure** — debit n=46 WR 39.1% payoff **b=1.96** breakeven 33.8% → **+₹7,975**
+  (the ONLY positive structure); credit n=297 WR 47.5% b=0.58 breakeven **63.3%** →
+  −₹34,856; single-leg n=288 WR 29.9% → −₹45,353. Equity stocks n=153 WR 19.6% → −₹26,221.
+- ⚠️ **Do NOT read the debit row as "buy convexity".** The 1,869-day test says a dumb long-
+  premium signal loses too (−₹247/trade). The live debit sample is 46 trades over ~37 days
+  in one direction-friendly month. The transferable finding is the EXIT, not credit-vs-debit.
+
+### 25.4 Three gates that each independently made hold-to-expiry impossible
+Per §22.3 hold-to-expiry had **never executed — 0 overnight holds in 283 closed spreads.**
+The EOD-backstop exemption landed in `38be295`; two more gates still bound it:
+- **Kill-switch** — the book-level sweep fired 5 consecutive days, closed 29 positions for
+  −₹24,859, of which **−₹20,811 (84%) were debit spreads at a 0% win rate**. The seller
+  sleeve's bleed was liquidating the one structure beating its breakeven. Now **sleeve-
+  scoped** (`LOSS_KILLSWITCH_SLEEVE_SCOPED`): the floor and trigger are UNCHANGED, only the
+  blast radius is scoped. Two narrow exemptions — a strategy whose own day P&L is not
+  negative, and a **defined-risk hold-to-expiry** position whose max loss is already bounded
+  by its bought wing and reserved (`LOSS_KILLSWITCH_SKIP_HOLD_TO_EXPIRY`). Spared rows are
+  also excluded from the `day_loss_locked` sweep, which would otherwise freeze them anyway.
+  The exemption requires **both** conditions: a naked hold-to-expiry has unbounded loss and
+  is still swept.
+- **DTE policy** — `DTE_STAND_DOWN_ABOVE=2` would veto a 5–15 DTE sleeve on *every* entry.
+  Exempted (`DTE_POLICY_EXEMPT_HOLD_TO_EXPIRY`). **This is the scope of the measurement, not
+  a loophole:** every trade in the 259-trade DTE study exited EARLY, so "DTE 3+ loses" means
+  "entering far from expiry and then being force-exited on a clock loses". The shootout
+  tests the other branch. An already-expired contract is still rejected.
+
+**Standing law this generalises (third instance of the §22.3 class):** *a gate calibrated on
+intraday early-exit behaviour must exempt genuine hold-to-expiry, or the strategy exists,
+looks armed, and silently never trades.* When adding any new entry gate, ask which exit
+regime its evidence came from.
+
+### 25.5 What is deployed
+`scripts/seed_hold_to_expiry_sleeve_08_03.py` (idempotent, dry-run default) seeds **HTE
+NIFTY Defined-Risk Put Spread** (~3% OTM, width 10, 5–15 DTE, `exit_mode="expiry"`, no clock
+exit, no percentage stop — the bought wing IS the stop, sized off the fixed max loss) and
+**restores QG-O1** to the held-to-expiry form the 2026-07-09 intraday conversion discarded.
+Both paper + armed. **Registry gotcha:** hold-to-expiry geometry must OMIT
+`credit_tp_frac`/`credit_sl_mult` — present-but-0 is both out-of-range and "ambiguous exit
+intent". `CORE_ENGINE_LIVE_ENABLED=false` unchanged; nothing here creates edge.
+
+**Known test debt:** the suite has pre-existing cross-file env/reload pollution around the
+`spread_builder` cost-floor constants (module-level `os.environ` reads + `importlib.reload`
+in `test_friction_remeasure_07_30.py` + `from … import CONST` value capture). 5 cost-floor
+tests pass in isolation and fail in the full suite; the same class already failed at
+baseline. Runtime values were verified correct in a clean process (mult 3.0, friction 300,
+385 min). Fix = read those constants lazily at call time.
+
+---
+
 ## 24. Phase-5 Tracks R/J/K/M — truthful instruments & breadth (2026-08-02)
 
 Completed the remaining ERP Phase-5 tasks (TASKS.md R/J/K/M). All research-only;
