@@ -34,35 +34,41 @@ def _ist_day(ts: str) -> str:
     return str(ts or "")[:10]
 
 
-async def _strategy_daily_returns(db: Any, equity: float) -> Dict[str, List[Dict[str, Any]]]:
-    """Per-strategy [{date, ret}] from realized fill P&L, ret = day_pnl / equity."""
-    by_strat: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+async def _strategy_daily_returns(db: Any, equity: float, min_days: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Per-strategy [{date, ret}] from realized P&L on CLOSED strategy_positions
+    (realized_pnl lives here, NOT on trade_fills), ret = day_pnl / equity.
+
+    Groups by strategy_id (the closed-position docs carry no strategy_name) and
+    resolves display names from db.strategies. Only strategies with >= min_days
+    distinct closed-days are returned; the caller flags thin samples honestly."""
     names: Dict[str, str] = {}
-    cur = db.trade_fills.find(
-        {"realized_pnl": {"$exists": True}},
-        {"_id": 0, "strategy_id": 1, "strategy_name": 1, "realized_pnl": 1,
-         "created_at": 1, "closed_at": 1, "filled_at": 1},
+    async for s in db.strategies.find({}, {"_id": 0, "id": 1, "name": 1}):
+        if s.get("id"):
+            names[str(s["id"])] = s.get("name") or str(s["id"])
+    by_strat: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    cur = db.strategy_positions.find(
+        {"status": "CLOSED"},
+        {"_id": 0, "strategy_id": 1, "realized_pnl": 1, "closed_at": 1, "created_at": 1},
     )
-    async for f in cur:
-        sid = str(f.get("strategy_id") or "unknown")
-        pnl = f.get("realized_pnl")
-        if pnl in (None, 0):
+    async for p in cur:
+        pnl = p.get("realized_pnl")
+        if pnl in (None,):
             continue
-        day = _ist_day(f.get("closed_at") or f.get("filled_at") or f.get("created_at"))
+        sid = str(p.get("strategy_id") or "unknown")
+        day = _ist_day(p.get("closed_at") or p.get("created_at"))
         if not day:
             continue
         by_strat[sid][day] += float(pnl)
-        if f.get("strategy_name"):
-            names[sid] = f["strategy_name"]
     out: Dict[str, List[Dict[str, Any]]] = {}
     for sid, daymap in by_strat.items():
         rows = [{"date": d, "ret": p / equity} for d, p in sorted(daymap.items())]
-        if len(rows) >= 20:
+        if len(rows) >= min_days:
             out[names.get(sid, sid)] = rows
     return out
 
 
-async def run(start: str, end: str, underlying: str, hold_days: int, equity: float) -> Dict[str, Any]:
+async def run(start: str, end: str, underlying: str, hold_days: int, equity: float,
+              min_days: int = 12) -> Dict[str, Any]:
     mongo_url = os.environ.get("MONGO_URL") or os.environ.get("MONGO_URI") or "mongodb://mongo:27017"
     db = AsyncIOMotorClient(mongo_url)[os.environ.get("DB_NAME") or "quantg"]
 
@@ -78,12 +84,12 @@ async def run(start: str, end: str, underlying: str, hold_days: int, equity: flo
     sv_by = {r["date"]: r["ret"] for r in sv}
     mkt_by = {r["date"]: r["ret"] for r in nifty}
 
-    strat_series = await _strategy_daily_returns(db, equity)
+    strat_series = await _strategy_daily_returns(db, equity, min_days)
     rows: List[Dict[str, Any]] = []
     for name, series in strat_series.items():
         aligned = [(r["date"], r["ret"]) for r in series
                    if r["date"] in sv_by and r["date"] in mkt_by]
-        if len(aligned) < 20:
+        if len(aligned) < min_days:
             rows.append({"name": name, "verdict": "INSUFFICIENT_OVERLAP", "n": len(aligned)})
             continue
         y = [r for _, r in aligned]
@@ -95,11 +101,16 @@ async def run(start: str, end: str, underlying: str, hold_days: int, equity: flo
         reg.verdict = classify_alpha_beta(reg)
         d = reg.as_dict()
         d["name"] = name
+        # honest thin-sample flag: daily regressions on <30 points are indicative only
+        if reg.n < 30:
+            d["thin_sample"] = True
         rows.append(d)
     result = {"kind": "alpha_beta", "short_vol_days": len(sv), "nifty_days": len(nifty),
               "window": {"start": start, "end": end}, "underlying": underlying,
-              "hold_days": hold_days, "equity": equity, "strategies": rows,
-              "generated_at": datetime.now(timezone.utc).isoformat()}
+              "hold_days": hold_days, "equity": equity, "min_days": min_days,
+              "thin_sample_warning": ("regressions below 30 daily points are INDICATIVE "
+                                      "only — the book is too young for a firm alpha/beta split"),
+              "strategies": rows, "generated_at": datetime.now(timezone.utc).isoformat()}
     try:
         await db.alpha_beta_runs.insert_one(dict(result))
     except Exception as exc:  # noqa: BLE001
@@ -115,8 +126,11 @@ def main() -> None:
     ap.add_argument("--underlying", default="NIFTY")
     ap.add_argument("--hold-days", type=int, default=1)
     ap.add_argument("--equity", type=float, default=500000.0)
+    ap.add_argument("--min-days", type=int, default=12,
+                    help="min distinct closed-days per strategy (book is young; <30 is indicative)")
     args = ap.parse_args()
-    res = asyncio.run(run(args.start, args.end, args.underlying, args.hold_days, args.equity))
+    res = asyncio.run(run(args.start, args.end, args.underlying, args.hold_days,
+                          args.equity, args.min_days))
     print("ERP P5-M4 — alpha vs short-vol/market beta")
     print(f"short-vol benchmark days: {res['short_vol_days']}, nifty days: {res['nifty_days']}\n")
     print(f"{'STRATEGY':<40}{'N':>5}{'ALPHA':>10}{'t(A)':>7}{'B_sv':>7}{'B_nif':>7}{'R2':>7}  VERDICT")
