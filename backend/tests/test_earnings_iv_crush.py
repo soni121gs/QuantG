@@ -79,6 +79,18 @@ def test_grade_symbol_reports_research_only_paper_gates():
     assert out["trades"][0]["exit_reason"] == "TIME_EXIT"
 
 
+def test_grade_pooled_aggregates_and_gates_on_300():
+    from core.earnings_iv_crush import grade_pooled, grade_symbol
+    rows = [grade_symbol("RELIANCE", store=_Store(), event_loader=_events),
+            grade_symbol("TCS", store=_Store(), event_loader=_events)]
+    pooled = grade_pooled(rows)
+    # pools each name's trades into one series
+    assert pooled["n"] == sum(len(r.get("trades") or []) for r in rows if r["status"] == "ready")
+    # tiny sample can never clear the n>=300 breadth gate
+    assert pooled["sample_gate"]["passed"] is False
+    assert pooled["eligible_for_paper"] is False
+
+
 def test_cost_floor_requires_three_times_friction():
     fail = cost_floor_gate({"expectancy": 900}, structure="iron_condor")
     ok = cost_floor_gate({"expectancy": 1000}, structure="iron_condor")

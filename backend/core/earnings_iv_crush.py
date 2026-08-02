@@ -199,9 +199,50 @@ def grade_symbol(
     }
 
 
+def grade_pooled(rows: List[Dict[str, Any]], *, structure: str = "iron_condor") -> Dict[str, Any]:
+    """Grade the earnings sleeve as ONE breadth strategy: pool every name's earnings
+    trades into a single series and judge THAT (ERP §20 breadth law, IR = IC·√BR).
+
+    The per-symbol gate (n>=300 PER name) is structurally impossible — a stock has
+    ~10 earnings events over 2.5 years — so the flagship can only ever pass pooled,
+    where n>=300 = ~120 names × a few events each. This is the honest test of the
+    sleeve; the per-symbol table is only diagnostics.
+    """
+    trades: List[Dict[str, Any]] = []
+    for r in rows:
+        if r.get("status") == "ready":
+            trades.extend(r.get("trades") or [])
+    if not trades:
+        return {"n": 0, "verdict": "INSUFFICIENT_DATA", "eligible_for_paper": False,
+                "reason": "no pooled trades across the universe"}
+    wf = walk_forward({"trades": trades})
+    overall = wf.get("overall") or {}
+    dsr = deflated_sharpe({
+        "n": overall.get("n"),
+        "expectancy": overall.get("expectancy"),
+        "oos_expectancy": (wf.get("oos") or {}).get("expectancy"),
+        "pct_green_months": wf.get("pct_green_months"),
+    }, trials_tested=len(rows))     # honest multiple-testing count = names tried
+    floor = cost_floor_gate(overall, structure=structure)
+    eligible = bool(overall.get("n", 0) >= 300
+                    and wf.get("verdict") == "CANDIDATE_EDGE"
+                    and dsr.get("passed") and floor.get("passed"))
+    return {
+        "n": overall.get("n", 0), "verdict": wf.get("verdict"),
+        "expectancy": overall.get("expectancy"), "t_stat_hac": overall.get("t_stat_hac"),
+        "oos": wf.get("oos"), "pct_green_months": wf.get("pct_green_months"),
+        "deflated_sharpe": dsr, "cost_floor": floor,
+        "sample_gate": {"passed": overall.get("n", 0) >= 300, "required_n": 300},
+        "eligible_for_paper": eligible,
+    }
+
+
 def grade_universe(symbols: Optional[List[str]] = None, **kwargs: Any) -> Dict[str, Any]:
+    structure = kwargs.get("structure", "iron_condor")
     if kwargs.get("store") is None:
         kwargs["store"] = BhavcopyStore()
     rows = [grade_symbol(sym, **kwargs) for sym in (symbols or TOP30_FNO)]
     ready = [r for r in rows if (r.get("paper_gate") or {}).get("eligible_for_paper")]
-    return {"count": len(rows), "eligible_for_paper": len(ready), "rows": rows}
+    pooled = grade_pooled(rows, structure=structure)
+    return {"count": len(rows), "eligible_for_paper": len(ready),
+            "pooled": pooled, "rows": rows}
