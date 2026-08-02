@@ -1669,6 +1669,37 @@ intraday early-exit behaviour must exempt genuine hold-to-expiry, or the strateg
 looks armed, and silently never trades.* When adding any new entry gate, ask which exit
 regime its evidence came from.
 
+### 25.4b Expiry selection now honours a DTE window (2026-08-03)
+`server.py` chose the expiry by **positional index** (`expiry_offset`) and nothing ever read
+`min_dte_days` / `max_dte_days` — the same trap §21.5 recorded for `target_dte_days`. A
+sleeve configured for 5–15 DTE therefore traded whatever the chain offered: on a Monday
+that is the Tuesday weekly at **1 DTE**, a completely different structure from the one its
+evidence came from.
+
+`core.dte_policy.select_expiry()` (pure) is now the chooser. **No window configured →
+unchanged positional behaviour**, so the existing book is untouched; window configured →
+nearest expiry inside `[min,max]`; nothing qualifies → **stand down** with a reason.
+Fail-closed is deliberate: substituting a contract the strategy did not ask for produces
+P&L attributed to a geometry that never ran. Verified on the live book — 12 existing rows
+still resolve `expiry_offset=0 (nearest-first)`, HTE picks 2026-08-11 (8d) not 08-04 (1d).
+
+This is the single choke point: **spreads inherit the expiry from the same resolver**
+(`dynamic_contract_selector` picks strikes *within* an already-chosen chain, never the
+expiry), so credit and debit spreads are both covered.
+
+⚠️ **NEAR-MISS worth internalising.** The stand-down branch first returned
+`{"ok": False, …}`. Every caller of `_resolve_option_for_strategy` tests
+`if not contract:` — a truthy dict would have been forwarded straight into
+`_place_order_core` as a real contract. **When a function's failure contract is
+"falsy", a descriptive error dict is a live bug, not better diagnostics.** It returns
+`None` and writes `last_filter_reason`; a test greps the source to keep it that way.
+
+**Observation this surfaced (not yet acted on):** `Tail Hedge NIFTY Far-OTM Put Spread` is
+hold-to-expiry with **no DTE window**, so it takes the 1-DTE weekly — one night of
+protection, then expiry. Its own `risk.max_hold_days: 8` says it intends ~8 days, and crash
+insurance at 1 DTE is close to worthless. A `min_dte_days`/`max_dte_days` window is probably
+the right fix; founder call.
+
 ### 25.5 What is deployed
 `scripts/seed_hold_to_expiry_sleeve_08_03.py` (idempotent, dry-run default) seeds **HTE
 NIFTY Defined-Risk Put Spread** (~3% OTM, width 10, 5–15 DTE, `exit_mode="expiry"`, no clock
