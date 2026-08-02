@@ -191,3 +191,71 @@ def test_hold_to_expiry_exemption_still_rejects_an_expired_contract():
     p = evaluate(expiry="2026-08-01", regime="RANGE", today=date(2026, 8, 3),
                  hold_to_expiry=True, enabled=True)
     assert p.allow is False
+
+
+# ── expiry selection must honour a configured DTE window ──────────────────────
+
+_EXP = ["2026-08-04", "2026-08-11", "2026-08-18", "2026-08-25", "2026-09-29"]
+_TODAY = __import__("datetime").date(2026, 8, 3)   # Monday; nearest weekly is +1d
+
+
+def _sel(**kw):
+    from core.dte_policy import select_expiry
+    return select_expiry(_EXP, today=_TODAY, **kw)
+
+
+def test_no_window_keeps_the_legacy_positional_behaviour():
+    """Every existing strategy must get exactly the contract it gets today."""
+    assert _sel(expiry_offset=0)["expiry"] == "2026-08-04"
+    assert _sel(expiry_offset=1)["expiry"] == "2026-08-11"
+    assert _sel(expiry_offset=99)["expiry"] == "2026-09-29"   # clamped, not an error
+
+
+def test_window_picks_the_nearest_qualifying_expiry_not_the_nearest_overall():
+    """The bug: a 5-15 DTE sleeve silently traded Monday's 1-DTE Tuesday weekly."""
+    r = _sel(min_dte=5, max_dte=15)
+    assert r["expiry"] == "2026-08-11"    # 8d, not the 1d nearest
+    assert r["dte"] == 8
+
+
+def test_window_ignores_expiry_offset():
+    """A window is a stronger statement of intent than a positional index."""
+    assert _sel(expiry_offset=0, min_dte=5, max_dte=15)["expiry"] == "2026-08-11"
+
+
+def test_half_open_windows_work():
+    assert _sel(min_dte=20)["expiry"] == "2026-09-29"          # >=20d only
+    assert _sel(max_dte=2)["expiry"] == "2026-08-04"           # <=2d only
+
+
+def test_no_qualifying_expiry_stands_down_rather_than_substituting():
+    """Fail CLOSED. Substituting a contract the strategy did not ask for produces
+    P&L attributed to a geometry that never ran."""
+    r = _sel(min_dte=100, max_dte=120)
+    assert r["expiry"] is None
+    assert "standing down" in r["reason"]
+    assert "[100,120]" in r["reason"]
+
+
+def test_empty_expiry_list_is_handled():
+    from core.dte_policy import select_expiry
+    r = select_expiry([], expiry_offset=0, today=_TODAY)
+    assert r["expiry"] is None
+
+
+def test_unparseable_expiry_never_satisfies_an_explicit_window():
+    from core.dte_policy import select_expiry
+    r = select_expiry(["not-a-date"], min_dte=5, max_dte=15, today=_TODAY)
+    assert r["expiry"] is None
+
+
+def test_resolver_returns_None_not_a_falsy_looking_dict_on_standdown():
+    """Contract guard: EVERY caller of _resolve_option_for_strategy tests
+    `if not contract:`, so returning a truthy {"ok": False} dict would forward a
+    garbage payload straight into _place_order_core."""
+    import inspect
+    import server
+    src = inspect.getsource(server._resolve_option_for_strategy)
+    assert "EXPIRY_WINDOW_NO_MATCH" not in src, (
+        "stand-down must return None, never a dict — callers test falsiness")
+    assert "_select_expiry" in src, "expiry selection must go through select_expiry"

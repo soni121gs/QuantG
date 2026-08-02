@@ -143,6 +143,73 @@ def dte_from_expiry(expiry: Any, *, today: Optional[date] = None) -> Optional[in
     return None
 
 
+def select_expiry(
+    expiries: Any,
+    *,
+    expiry_offset: int = 0,
+    min_dte: Optional[int] = None,
+    max_dte: Optional[int] = None,
+    today: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Choose WHICH expiry to trade. Pure; no I/O.
+
+    Two modes, and which one applies depends only on whether the strategy configured
+    a DTE window:
+
+    * **No window** -> legacy behaviour, unchanged: positional `expiry_offset` into
+      the ascending expiry list (0 = nearest). Every existing strategy keeps exactly
+      the contract it gets today.
+    * **Window configured** -> the NEAREST expiry whose DTE falls inside
+      [min_dte, max_dte]. If nothing qualifies, return `expiry=None` with a reason
+      and let the caller STAND DOWN.
+
+    The fail-closed branch is the whole point. `target_dte_days`, `min_dte_days` and
+    `max_dte_days` were read by NOTHING (CLAUDE.md §21.5 flagged the first; the other
+    two were the same trap), so a sleeve configured for 5-15 DTE silently traded
+    whatever the chain offered — on a Monday that is the Tuesday weekly at 1 DTE, a
+    completely different structure from the one its evidence came from. Substituting
+    a contract the strategy did not ask for is worse than not trading: it produces
+    P&L that gets attributed to a geometry that never ran.
+
+    Returns {"expiry", "reason", "dte", "candidates"} — `expiry` None means stand down.
+    """
+    ordered = sorted({e for e in (expiries or []) if e})
+    if not ordered:
+        return {"expiry": None, "reason": "no expiries available", "dte": None,
+                "candidates": 0}
+
+    has_window = min_dte is not None or max_dte is not None
+    if not has_window:
+        idx = min(max(int(expiry_offset or 0), 0), len(ordered) - 1)
+        pick = ordered[idx]
+        return {"expiry": pick, "reason": f"expiry_offset={idx} (nearest-first)",
+                "dte": dte_from_expiry(pick, today=today), "candidates": len(ordered)}
+
+    lo = int(min_dte) if min_dte is not None else -(10 ** 6)
+    hi = int(max_dte) if max_dte is not None else (10 ** 6)
+    scored = []
+    for e in ordered:
+        d = dte_from_expiry(e, today=today)
+        if d is None:
+            continue          # unknown expiry never satisfies an explicit window
+        scored.append((d, e))
+    inside = [(d, e) for d, e in scored if lo <= d <= hi]
+    if inside:
+        d, e = min(inside, key=lambda t: t[0])   # nearest qualifying expiry
+        return {"expiry": e, "reason": f"DTE window [{lo},{hi}] matched at {d}d",
+                "dte": d, "candidates": len(ordered)}
+
+    avail = ", ".join(f"{d}d" for d, _ in scored[:8]) or "none parseable"
+    return {
+        "expiry": None,
+        "reason": (f"no expiry in the configured DTE window [{lo},{hi}] "
+                   f"(available: {avail}) — standing down rather than substituting "
+                   f"a contract this strategy did not ask for"),
+        "dte": None,
+        "candidates": len(ordered),
+    }
+
+
 def evaluate(
     *,
     expiry: Any,

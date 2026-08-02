@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+import session_times
 from core import db, get_current_user
 
 router = APIRouter(tags=["Readiness"])
@@ -149,8 +150,8 @@ async def pre_open_readiness(user=Depends(get_current_user)):
     now_ist = _ist_now()
     minutes_now = now_ist.hour * 60 + now_ist.minute
     is_weekday = now_ist.weekday() < 5
-    market_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
-    pre_open_window = is_weekday and (8 * 60 + 45) <= minutes_now < (9 * 60 + 15)
+    market_open = is_weekday and session_times.OPEN_MINUTE <= minutes_now <= session_times.LAST_CLOSE_MINUTE
+    pre_open_window = is_weekday and (8 * 60 + 45) <= minutes_now < session_times.OPEN_MINUTE
     start, end = get_trading_day_window_ist()
 
     settings = await get_user_settings(user_id)
@@ -373,13 +374,16 @@ async def live_readiness(user=Depends(get_current_user)):
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
     minutes_now = ist_now.hour * 60 + ist_now.minute
-    nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    nse_open = is_weekday and session_times.OPEN_MINUTE <= minutes_now <= session_times.LAST_CLOSE_MINUTE
     checks.append({
         "id": "market_hours",
         "label": "NSE/BSE market open",
         "ok": nse_open,
         "detail": ist_now.strftime("%a %H:%M IST"),
-        "hint": "Market trades 09:15 - 15:30 IST, Mon-Fri" if not nse_open else None,
+        "hint": (f"NSE F&O {session_times.hhmm_str(session_times.OPEN_MINUTE)}-"
+                 f"{session_times.hhmm_str(session_times.NSE_FO_CLOSE_MINUTE)} IST, "
+                 f"cash continuous to {session_times.hhmm_str(session_times.EQ_CONTINUOUS_CLOSE_MINUTE)}, "
+                 f"Mon-Fri") if not nse_open else None,
     })
     gateway_status = upstox_status.get("gateway") or {}
     feed_status = gateway_status.get("feed_status") or upstox_status.get("feed_status") or {}

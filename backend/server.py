@@ -608,8 +608,11 @@ SYMBOLS = [
 # Mock ticks should move during market hours, then freeze. This keeps paper PnL
 # from changing on nights/weekends when the user is not trading.
 IST_OFFSET = timedelta(hours=5, minutes=30)
-NSE_OPEN_MINUTE = 9 * 60 + 15
-NSE_CLOSE_MINUTE = 15 * 60 + 30
+# Owned by session_times.py — this was a THIRD copy of the window table (after
+# core/market_clock and core/market_session_service). NSE F&O closes 15:40 from
+# 2026-08-03; cash continuous ends 15:15 (Closing Auction Session 15:15-15:35).
+NSE_OPEN_MINUTE = session_times.OPEN_MINUTE
+NSE_CLOSE_MINUTE = session_times.NSE_FO_CLOSE_MINUTE
 SUPPORTED_ORDER_EXCHANGES = {"NSE", "BSE", "NFO", "BFO"}
 ACTIVE_STRATEGY_POSITION_STATUSES = {"RESERVED", "PENDING_OPEN", "PENDING_BROKER", "FILLED", "OPEN", "EXITING"}
 STALE_ORDER_STATUSES = {"STALE", "BROKER_NOT_FOUND", "UNKNOWN_NEEDS_REVIEW"}
@@ -619,10 +622,10 @@ MARKET_HOLIDAYS_IST = {
     if item.strip()
 }
 SEGMENT_MARKET_WINDOWS = {
-    "NSE_EQ": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE equity"),
-    "BSE_EQ": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE equity"),
-    "NSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
-    "BSE_FO": (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
+    "NSE_EQ": (*session_times.segment_window("NSE_EQ"), "NSE equity"),
+    "BSE_EQ": (*session_times.segment_window("BSE_EQ"), "BSE equity"),
+    "NSE_FO": (*session_times.segment_window("NSE_FO"), "NSE F&O"),
+    "BSE_FO": (*session_times.segment_window("BSE_FO"), "BSE F&O"),
 }
 
 
@@ -15068,7 +15071,53 @@ async def _resolve_option_for_strategy(
                         if c.get("expiry")
                     })
                     if _expiries:
-                        chain_expiry = _expiries[min(max(int(expiry_offset or 0), 0), len(_expiries) - 1)]
+                        # Honour a configured DTE window instead of always taking the
+                        # positional nearest. min_dte_days/max_dte_days were read by
+                        # NOTHING (same trap as target_dte_days, §21.5), so a sleeve
+                        # configured for 5-15 DTE silently traded the Monday chain's
+                        # 1-DTE Tuesday weekly — a different structure from the one its
+                        # evidence came from. No window configured => unchanged
+                        # positional behaviour, so existing strategies are untouched.
+                        from core.dte_policy import select_expiry as _select_expiry
+                        _sel_opts = ((strategy_row or {}).get("visual_config") or {}).get("options") or {}
+
+                        def _cfg_dte(_key):
+                            _v = _sel_opts.get(_key)
+                            try:
+                                return int(_v) if _v not in (None, "") else None
+                            except (TypeError, ValueError):
+                                return None
+
+                        _pick = _select_expiry(
+                            _expiries,
+                            expiry_offset=int(expiry_offset or 0),
+                            min_dte=_cfg_dte("min_dte_days"),
+                            max_dte=_cfg_dte("max_dte_days"),
+                        )
+                        chain_expiry = _pick.get("expiry")
+                        if chain_expiry is None:
+                            # Fail closed: substituting an expiry the strategy did not
+                            # ask for produces P&L attributed to a geometry that never
+                            # ran. Stand down instead.
+                            #
+                            # MUST return None, not a {"ok": False} dict — every caller
+                            # of this function tests `if not contract:`, so any truthy
+                            # value is forwarded to _place_order_core as a real
+                            # contract. Record the reason so the skip is diagnosable
+                            # (§22.6: a veto with no reason is undiagnosable).
+                            _why = f"EXPIRY_WINDOW: {_pick.get('reason')}"
+                            logger.info(
+                                "Option resolution stand-down strategy=%s underlying=%s: %s",
+                                strategy_row.get("id"), underlying, _pick.get("reason"))
+                            try:
+                                await db.strategies.update_one(
+                                    {"id": strategy_row.get("id")},
+                                    {"$set": {"last_filter_reason": _why,
+                                              "last_filter_reason_at":
+                                                  datetime.now(timezone.utc).isoformat()}})
+                            except Exception:
+                                pass
+                            return None
                 except Exception as _exp_exc:
                     logger.warning("Upstox option expiry lookup failed for %s: %s", underlying, _exp_exc)
                 chain = await asyncio.to_thread(upstox_gw.get_option_chain, spot_key, chain_expiry)
@@ -15495,7 +15544,7 @@ def _in_market_hours() -> bool:
     if ist_now.weekday() >= 5:
         return False
     m = ist_now.hour * 60 + ist_now.minute
-    return 9 * 60 + 15 <= m <= 15 * 60 + 30
+    return session_times.OPEN_MINUTE <= m <= session_times.LAST_CLOSE_MINUTE
 
 
 async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
@@ -15824,11 +15873,13 @@ def _build_recovery_plan(
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     is_weekday = ist_now.weekday() < 5
     minutes_now = ist_now.hour * 60 + ist_now.minute
-    nse_open = is_weekday and (9 * 60 + 15) <= minutes_now <= (15 * 60 + 30)
+    nse_open = is_weekday and session_times.OPEN_MINUTE <= minutes_now <= session_times.LAST_CLOSE_MINUTE
 
     if mode_live:
         if not nse_open:
-            add("info", "Market is closed", "Live MARKET orders are blocked outside NSE/BSE hours.", "Wait for 09:15-15:30 IST or use PAPER.")
+            add("info", "Market is closed", "Live MARKET orders are blocked outside NSE/BSE hours.",
+                f"Wait for {session_times.hhmm_str(session_times.OPEN_MINUTE)}-"
+                f"{session_times.hhmm_str(session_times.NSE_FO_CLOSE_MINUTE)} IST or use PAPER.")
 
     if execution_broker == "upstox":
         upstox = readiness.get("upstox") or {}
@@ -18105,7 +18156,13 @@ async def startup():
                                     sort=[("closed_at", -1), ("created_at", -1)],
                                 )
                                 _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
-                                _minutes_to_close = max(0, (15 * 60 + 30) - (_now_ist.hour * 60 + _now_ist.minute))
+                                # Close is segment-specific from 2026-08-03 (NSE F&O
+                                # 15:40, BSE 15:30) — a hardcoded 15:30 understated the
+                                # hold available to an NSE spread by 10 minutes, which
+                                # feeds straight into the §21.2 reachability veto.
+                                _close_seg = "BSE_FO" if _u in ("SENSEX", "BANKEX") else "NSE_FO"
+                                _minutes_to_close = max(0, session_times.close_minute_for(_close_seg)
+                                                        - (_now_ist.hour * 60 + _now_ist.minute))
                                 # ERP cost-floor context: the builder needs the contract
                                 # lot size and the strategy's booking fraction to judge
                                 # whether the profit this spread can actually bank clears
