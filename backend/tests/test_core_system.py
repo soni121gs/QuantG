@@ -39,11 +39,14 @@ def test_market_clock_schedules():
 
 
 def test_strategy_runner_uses_strict_exchange_hours():
-    assert is_trading_session_active(datetime(2026, 7, 6, 3, 44, tzinfo=timezone.utc)) is False
-    assert is_trading_session_active(datetime(2026, 7, 6, 3, 45, tzinfo=timezone.utc)) is True
-    assert is_trading_session_active(datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)) is True
-    assert is_trading_session_active(datetime(2026, 7, 6, 10, 1, tzinfo=timezone.utc)) is False
-    assert is_trading_session_active(datetime(2026, 7, 5, 6, 0, tzinfo=timezone.utc)) is False
+    # UTC times; IST = UTC+5:30. NSE F&O close moved 15:30 -> 15:40 IST on
+    # 2026-08-03, so the runner window now ends at 10:10 UTC, not 10:00.
+    assert is_trading_session_active(datetime(2026, 7, 6, 3, 44, tzinfo=timezone.utc)) is False  # 09:14
+    assert is_trading_session_active(datetime(2026, 7, 6, 3, 45, tzinfo=timezone.utc)) is True   # 09:15
+    assert is_trading_session_active(datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)) is True   # 15:30
+    assert is_trading_session_active(datetime(2026, 7, 6, 10, 10, tzinfo=timezone.utc)) is True  # 15:40
+    assert is_trading_session_active(datetime(2026, 7, 6, 10, 11, tzinfo=timezone.utc)) is False # 15:41
+    assert is_trading_session_active(datetime(2026, 7, 5, 6, 0, tzinfo=timezone.utc)) is False   # Sunday
 
 @pytest.mark.asyncio
 async def test_price_service_live_blocks_simulation():

@@ -23,7 +23,7 @@ SENSEX_LOT = 20
 MONDAY_DTE = 3          # Mon -> Thu expiry
 DEPLOYED_TP = 0.50
 DEPLOYED_HOLD = 330     # minutes
-SQUARE_OFF_MIN = 15 * 60 + 30
+SQUARE_OFF_MIN = 15 * 60 + 40   # NSE F&O close from 2026-08-03 (was 15:30)
 ENTRY_OPEN_MIN = 9 * 60 + 45
 
 # REAL SENSEX fills, entered 2026-07-20 (3 DTE, expiry 2026-07-23), width 800.
@@ -71,10 +71,14 @@ def test_the_old_300_minute_hold_did_not_and_qg_o4_tp_060_never_could():
 
 
 def test_monday_entry_window_is_bounded_by_the_square_off_not_by_time_exit():
-    """Documents the real constraint: past ~10:20 the hold left before the 15:30
+    """Documents the real constraint: past ~10:20 the hold left before the
     square-off is shorter than reachability needs, so raising time_exit further buys
-    nothing. If the SENSEX sellers look idle after 10:20 on a Monday, that is the
-    law, not a bug."""
+    nothing. If the SENSEX sellers look idle after that, that is the law, not a bug.
+
+    The bound moved when the session lengthened (2026-08-03): a 385-minute day
+    contains MORE decay-minutes per DTE, so a fixed hold captures a smaller
+    FRACTION of the total decay and the reachability law tightens slightly. The
+    extra 10 minutes of session do not extend the feasible entry window."""
     feasible = [
         m for m in range(ENTRY_OPEN_MIN, 15 * 60 + 1, 5)
         if tp_reachability(DEPLOYED_TP, MONDAY_DTE,

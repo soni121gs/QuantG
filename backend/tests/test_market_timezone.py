@@ -18,11 +18,24 @@ from core.market_session_service import MarketSessionService
 
 class TestMarketTimezoneCorrectness(unittest.TestCase):
 
-    def test_nse_closed_after_1530_ist(self):
-        # 15:30 IST is 10:00 UTC. 15:31 IST is 10:01 UTC.
-        # Let's verify NSE is closed at 15:31 IST on Monday (June 8, 2026).
+    def test_nse_fo_still_open_at_1531_ist(self):
+        # SEBI/NSE 2026-08-03: equity-derivatives close moved 15:30 -> 15:40, so
+        # 15:31 IST (10:01 UTC) is now INSIDE the session. This test previously
+        # asserted the opposite; the exchange rule changed, not the code.
         now_utc = datetime(2026, 6, 8, 10, 1, 0, tzinfo=timezone.utc)
+        self.assertTrue(MarketSessionService.is_segment_open(DomainType.NSE_FO, now_utc))
+
+    def test_nse_fo_closed_after_1540_ist(self):
+        # 15:40 IST is 10:10 UTC — the new close. 15:41 IST is 10:11 UTC.
+        now_utc = datetime(2026, 6, 8, 10, 11, 0, tzinfo=timezone.utc)
         self.assertFalse(MarketSessionService.is_segment_open(DomainType.NSE_FO, now_utc))
+
+    def test_nse_cash_closed_at_1531_ist_because_of_the_auction(self):
+        # Cash moves the OTHER way: continuous trading ends 15:15 when the
+        # Closing Auction Session opens, so the same wall-clock minute is open
+        # for F&O and closed for equity.
+        now_utc = datetime(2026, 6, 8, 10, 1, 0, tzinfo=timezone.utc)
+        self.assertFalse(MarketSessionService.is_segment_open(DomainType.NSE_EQ, now_utc))
 
     def test_nse_closed_before_0915_ist(self):
         # 09:15 IST is 03:45 UTC. 09:14 IST is 03:44 UTC.

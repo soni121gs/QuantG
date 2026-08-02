@@ -77,8 +77,9 @@ def test_missing_minutes_report(store):
     res = _rows(n=3)
     store.write_contract_day(res.candles, _manifest(res))
     missing = store.missing_minutes("upstox", "NIFTY", "2025-01-09", "2025-01-09", 24200.0, "CE")
-    assert len(expected_minutes("2025-01-09")) == 375
-    assert len(missing) == 375 - 3
+    # 385 bars from 2026-08-03 (NSE F&O 09:15-15:40); was 375 (09:15-15:30).
+    assert len(expected_minutes("2025-01-09")) == 385
+    assert len(missing) == 385 - 3
     assert "2025-01-09T09:15:00+05:30" not in missing
     assert "2025-01-09T09:18:00+05:30" in missing
 

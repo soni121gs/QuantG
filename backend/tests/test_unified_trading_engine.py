@@ -142,7 +142,8 @@ class TestMarketSessionService:
         assert "segment" in status
         assert "open" in status
         assert "trading_hours" in status
-        assert "09:15 - 15:30" in status["trading_hours"]
+        # NSE equity derivatives close moved 15:30 -> 15:40 on 2026-08-03.
+        assert "09:15 - 15:40" in status["trading_hours"]
 
 
 class TestQuoteService:
