@@ -87,8 +87,9 @@ Do not `grep` the entire codebase. Do not open `server.py` unless this document 
 ## Symptom: "Wrong lot size in order / quantity looks wrong"
 
 - **Root cause file**: `backend/core/market_domains.py` → `NSE_FO_DOMAIN.lot_sizes`
-- **Current values**: NIFTY=65, BANKNIFTY=30, SENSEX=20
-- **Config reference**: `backend/config.py` → `MARKET.NIFTY_LOT_SIZE`
+- **Current values**: NIFTY=65, BANKNIFTY=30, SENSEX=20 (verified Jan-2026, NSE circ FAOP70616)
+- **There is no config.py copy** — `MARKET.*_LOT_SIZE` was deleted 2026-08-03 (dead code, and
+  SENSEX had drifted to 10). `market_domains.py` is the only source.
 - **Never hardcode**: always use `resolve_domain_by_underlying(underlying).get_lot_size(underlying)`
 - **Test**: `python -m pytest tests/test_core_logic.py::test_nifty_lot_size -v`
 - **Tier**: 1
@@ -190,7 +191,7 @@ Do not `grep` the entire codebase. Do not open `server.py` unless this document 
 
 | What you want to change | File | Class/field |
 |---|---|---|
-| NIFTY/BANKNIFTY lot sizes | `backend/config.py` | `MARKET.NIFTY_LOT_SIZE` |
+| Lot sizes / strike intervals | `backend/core/market_domains.py` | `NSE_FO_DOMAIN.lot_sizes` / `.strike_intervals` (NOT config.py) |
 | Default cooldown minutes | `backend/config.py` | `RISK.DEFAULT_COOLDOWN_MINUTES` |
 | Option quality thresholds | `backend/config.py` | `OPTION_QUALITY.LIVE_MIN_SCORE` |
 | Paper starting balance | `backend/config.py` | `PAPER_TRADING.STARTING_BALANCE` |

@@ -13,12 +13,15 @@ import session_times as _session_times
 
 
 class MARKET:
-    NIFTY_LOT_SIZE = 65          # shares per lot
-    BANKNIFTY_LOT_SIZE = 30      # shares per lot
-    SENSEX_LOT_SIZE = 10         # shares per lot
-    NIFTY_STRIKE_INTERVAL = 50   # points between strikes
-    BANKNIFTY_STRIKE_INTERVAL = 100
-    SENSEX_STRIKE_INTERVAL = 100
+    # Lot sizes and strike intervals are NOT here. They live in
+    # `core/market_domains.py` and are read via
+    #     resolve_domain_by_underlying(underlying).get_lot_size(underlying)
+    #     resolve_domain_by_underlying(underlying).get_strike_interval(underlying)
+    # which is what CLAUDE.md §6 mandates and what every real consumer already
+    # calls. Duplicates lived here until 2026-08-03 with no readers at all, and
+    # SENSEX had drifted to 10 against the verified Jan-2026 value of 20 — a
+    # wrong number sitting in a file titled "single source of truth" is worse
+    # than no number, because the next reader trusts it. Do not re-add them.
 
     # Market hours IST (24h). Canonical values live in session_times.py —
     # NSE derivatives close moved 15:30 -> 15:40 on 2026-08-03 and cash
