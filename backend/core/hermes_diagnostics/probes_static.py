@@ -10,7 +10,11 @@ import os
 from typing import Any, Dict, List
 
 from core.market_domains import contract_spec_for_underlying
-from core.spread_builder import tp_reachability, round_trip_friction as _round_trip_friction
+from core.spread_builder import (
+    dte_from_expiry,
+    round_trip_friction as _round_trip_friction,
+    tp_reachability,
+)
 from core.hermes_diagnostics.contract import Finding, Domain, Severity
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
@@ -54,8 +58,6 @@ def _realized_dte(strat: Dict[str, Any], ctx: ProbeContext) -> Any:
     the trade really had rather than the DTE the config wishes for.
     """
     from datetime import datetime as _dt
-
-    from core.spread_builder import dte_from_expiry
 
     sid = strat.get("id")
     seen: List[float] = []

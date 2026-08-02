@@ -793,6 +793,106 @@ function RegimeOOS({ data, onRefresh }) {
 
 // IMD-09: intraday 1-minute OOS for QG-O5..QG-O10 — clearly labelled
 // separate from the EOD theta OOS above so users never mix the two judges.
+// P5-M4: alpha vs short-vol/market beta. REPLICABLE_SHORT_VOL_BETA = the strategy
+// is just the premium-selling risk factor the book pays costs to reproduce.
+function AlphaBetaPanel({ data }) {
+  if (!data) return null;
+  const latest = data.latest_run || null;
+  const rows = latest?.strategies || [];
+  const tone = (v) => v === "HAS_ALPHA" ? "var(--qd-good)"
+    : v === "REPLICABLE_SHORT_VOL_BETA" || v === "NEGATIVE_ALPHA" ? "var(--qd-warn)"
+    : "var(--qd-text-3)";
+  return (
+    <section className="qd-card p-5" data-testid="alpha-beta-panel">
+      <div className="qd-section-title flex items-center gap-2"><TrendingUp size={14} /> Alpha vs short-vol beta (P5-M4)</div>
+      <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+        Each strategy's daily returns regressed on a short-vol benchmark + NIFTY.
+        <span className="text-[var(--qd-warn)]"> REPLICABLE_SHORT_VOL_BETA</span> means it is replicable premium, not alpha.
+      </p>
+      {!latest ? (
+        <div className="mt-3 text-xs text-[var(--qd-text-3)]">No run yet — run <code>scripts/run_alpha_beta.py</code> on the VPS.</div>
+      ) : !rows.length ? (
+        <div className="mt-3 text-xs text-[var(--qd-text-3)]">Run found but no strategies had ≥20 aligned days.</div>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[var(--qd-text-3)]">
+              <tr className="text-left">
+                <th className="px-2 py-1">Strategy</th><th className="px-2 py-1 text-right">n</th>
+                <th className="px-2 py-1 text-right">α</th><th className="px-2 py-1 text-right">t(α)</th>
+                <th className="px-2 py-1 text-right">β_sv</th><th className="px-2 py-1 text-right">β_nifty</th>
+                <th className="px-2 py-1 text-right">R²</th><th className="px-2 py-1">Verdict</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t border-[var(--qd-border)]">
+                  <td className="px-2 py-1 font-sans text-[var(--qd-text)]">{r.name}</td>
+                  <td className="px-2 py-1 text-right">{r.n ?? "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.alpha != null ? r.alpha.toFixed(4) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.alpha_t != null ? r.alpha_t.toFixed(2) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.betas?.short_vol != null ? r.betas.short_vol.toFixed(2) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.betas?.nifty != null ? r.betas.nifty.toFixed(2) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.r_squared != null ? r.r_squared.toFixed(2) : "-"}</td>
+                  <td className="px-2 py-1" style={{ color: tone(r.verdict) }}>{r.verdict}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 text-[10px] text-[var(--qd-text-3)]">Generated {latest.generated_at?.slice(0, 19)?.replace("T", " ")} · sv days {latest.short_vol_days}</div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// P5-M5: information coefficient of the scores the app computes. DECORATION = no
+// predictive content, so any sizing leaning on it is sizing on noise.
+function ScoreIcPanel({ data }) {
+  if (!data) return null;
+  const latest = data.latest_run || null;
+  const rows = latest?.results || [];
+  const tone = (v) => v === "PREDICTIVE" ? "var(--qd-good)"
+    : v === "INVERTED" ? "var(--qd-bad)"
+    : v === "DECORATION" ? "var(--qd-warn)" : "var(--qd-text-3)";
+  return (
+    <section className="qd-card p-5" data-testid="score-ic-panel">
+      <div className="qd-section-title flex items-center gap-2"><ShieldCheck size={14} /> Score information coefficient (P5-M5)</div>
+      <p className="mt-0.5 text-xs text-[var(--qd-text-2)]">
+        Spearman IC of each pre-trade score vs realized forward P&amp;L.
+        <span className="text-[var(--qd-warn)]"> DECORATION</span> means the score does not predict P&amp;L.
+      </p>
+      {!latest ? (
+        <div className="mt-3 text-xs text-[var(--qd-text-3)]">No run yet — run <code>scripts/run_score_ic.py</code> on the VPS.</div>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[var(--qd-text-3)]">
+              <tr className="text-left">
+                <th className="px-2 py-1">Score</th><th className="px-2 py-1 text-right">n</th>
+                <th className="px-2 py-1 text-right">IC</th><th className="px-2 py-1 text-right">t</th>
+                <th className="px-2 py-1">Verdict</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t border-[var(--qd-border)]">
+                  <td className="px-2 py-1 font-sans text-[var(--qd-text)]">{r.name}</td>
+                  <td className="px-2 py-1 text-right">{r.n ?? "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.ic != null ? r.ic.toFixed(3) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.t_stat != null ? r.t_stat.toFixed(2) : "-"}</td>
+                  <td className="px-2 py-1" style={{ color: tone(r.verdict) }}>{r.verdict}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 text-[10px] text-[var(--qd-text-3)]">Generated {latest.generated_at?.slice(0, 19)?.replace("T", " ")} · scanned {latest.closed_positions_scanned} closed positions</div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function IntradayOOS({ data, onRefresh }) {
   if (!data) return null;
   const cov = data.coverage || {};
@@ -871,6 +971,8 @@ export default function Analytics() {
   const [regimeOos, setRegimeOos] = useState(null);
   const [regimeStatus, setRegimeStatus] = useState(null);
   const [researchSignals, setResearchSignals] = useState(null);
+  const [alphaBeta, setAlphaBeta] = useState(null);
+  const [scoreIc, setScoreIc] = useState(null);
   const [edgeMath, setEdgeMath] = useState(null);
   const [loading, setLoading] = useState(false);
   const [elLoading, setElLoading] = useState(false);
@@ -949,6 +1051,17 @@ export default function Analytics() {
     } catch (e) {
       // non-fatal
     }
+  }, []);
+
+  const loadAlphaBetaAndIc = useCallback(async () => {
+    try {
+      const [ab, ic] = await Promise.all([
+        api.get("/ops/alpha-beta").catch(() => ({ data: null })),
+        api.get("/ops/score-ic").catch(() => ({ data: null })),
+      ]);
+      setAlphaBeta(ab.data);
+      setScoreIc(ic.data);
+    } catch (e) { /* non-fatal */ }
   }, []);
 
   const refreshRegimeOos = useCallback(async () => {
@@ -1051,7 +1164,7 @@ export default function Analytics() {
           <button
             key={t.id}
             type="button"
-            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); if (!regimeOos) loadRegimeOos(); if (!regimeStatus) loadRegimeLive(); } }}
+            onClick={() => { setTab(t.id); if (t.id === "edgelab") { if (!edgeLab) loadEdgeLab(); if (!intradayOos) loadIntradayOos(); if (!regimeOos) loadRegimeOos(); if (!regimeStatus) loadRegimeLive(); if (!alphaBeta && !scoreIc) loadAlphaBetaAndIc(); } }}
             className={`px-4 py-2.5 font-head text-xs font-semibold uppercase tracking-widest border-b-2 transition-colors ${
               tab === t.id ? "border-[var(--qd-accent)] text-[var(--qd-text)]" : "border-transparent text-[var(--qd-text-3)] hover:text-[var(--qd-text)]"
             }`}
@@ -1210,6 +1323,8 @@ export default function Analytics() {
           <ResearchSignals data={researchSignals} />
           <RegimeOOS data={regimeOos} onRefresh={refreshRegimeOos} />
           <IntradayOOS data={intradayOos} onRefresh={refreshIntradayOos} />
+          <AlphaBetaPanel data={alphaBeta} />
+          <ScoreIcPanel data={scoreIc} />
         </div>
       )}
     </div>

@@ -89,6 +89,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_intraday_oos",
     "get_regime_status",
     "get_edge_math_advice",
+    "query_data_store",
 ]
 
 
@@ -212,6 +213,101 @@ async def _load_current_market_context(user: Dict[str, Any]) -> Dict[str, Any]:
             }
         },
     }
+
+
+# ── P5-K6: bounded, read-only, deterministic query over the research stores ──
+# Hermes can OBSERVE internal state but, until this tool, could not ASK A NEW
+# QUESTION of the bhavcopy store — so every hypothesis card needed a human to run
+# the query, which is the research engine's rate limit. This tool is the narrow,
+# deterministic exception: FIXED verbs (coverage/daily/chain), an underlying
+# allowlist derived from the store itself, capped rows, NO free-form code. It
+# reads the same bhavcopy store the OOS judges read; "LLM narrates, code computes"
+# is preserved because the LLM only picks the tool and reads the numbers back.
+_QDS_MAX_ROWS = 90
+_QDS_MAX_STRIKES = 40
+
+
+def _query_data_store_sync(query: str) -> Dict[str, Any]:
+    """Deterministic bhavcopy-store query. Verb + underlying + dates are parsed from
+    the natural-language `query` against fixed allowlists; nothing is eval'd."""
+    import re
+    import math
+
+    from core.bhavcopy_store import BhavcopyStore
+
+    q = str(query or "")
+    qu = q.upper()
+    store = BhavcopyStore()
+    days = store.trading_days()
+    if not days:
+        return {"verb": "coverage", "error": "bhavcopy store is empty on this host",
+                "trading_days": 0}
+    first, last = days[0], days[-1]
+
+    dates = re.findall(r"\d{4}-\d{2}-\d{2}", q)
+    # underlying allowlist from the LATEST day (bounded: one cached day-load)
+    universe = sorted({str(r.get("underlying") or "").upper()
+                       for r in store.load_day(last)
+                       if r.get("underlying")})
+    # longest-name-first so 'BANKNIFTY' wins over a 'NIFTY' substring
+    detected = next((u for u in sorted(universe, key=len, reverse=True)
+                     if u and u in qu), None)
+
+    wants_chain = any(w in qu for w in ("CHAIN", "STRIKE", "OPTION CHAIN"))
+    wants_daily = any(w in qu for w in ("DAILY", "OHLC", "CLOSE", "PRICE", "TREND",
+                                        "RETURN", "VOL", "MOVE", "CANDLE"))
+
+    if wants_chain and detected:
+        day = next((d for d in reversed(days) if d in (dates or [])), None) or last
+        chain = store.option_chain(detected, day)
+        expiries = sorted(chain.keys())[:8]
+        exp = expiries[0] if expiries else None
+        strikes = sorted(chain.get(exp, {}).keys())[:_QDS_MAX_STRIKES] if exp else []
+        rows = []
+        for k in strikes:
+            cell = chain[exp][k]
+            rows.append({"strike": k,
+                         "CE_close": (cell.get("CE") or {}).get("close"),
+                         "PE_close": (cell.get("PE") or {}).get("close")})
+        return {"verb": "chain", "underlying": detected, "day": day,
+                "expiries_available": expiries, "expiry_shown": exp,
+                "strikes_shown": len(rows), "chain": rows,
+                "note": f"capped at {_QDS_MAX_STRIKES} strikes / nearest expiry"}
+
+    if detected and (wants_daily or dates):
+        end = max(dates) if dates else last
+        start = min(dates) if len(dates) > 1 else None
+        bars = store.underlying_daily(detected, start, end)
+        bars = bars[-_QDS_MAX_ROWS:]
+        closes = [b["close"] for b in bars]
+        realized_vol = None
+        if len(closes) > 2:
+            rets = [math.log(closes[i] / closes[i - 1])
+                    for i in range(1, len(closes)) if closes[i - 1] > 0]
+            if len(rets) > 1:
+                mu = sum(rets) / len(rets)
+                var = sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)
+                realized_vol = round(math.sqrt(var) * math.sqrt(252) * 100, 2)
+        return {"verb": "daily", "underlying": detected,
+                "window": {"start": bars[0]["date"][:10] if bars else start,
+                           "end": bars[-1]["date"][:10] if bars else end},
+                "n_bars": len(bars),
+                "first_close": closes[0] if closes else None,
+                "last_close": closes[-1] if closes else None,
+                "min_close": min(closes) if closes else None,
+                "max_close": max(closes) if closes else None,
+                "realized_vol_pct_annualized": realized_vol,
+                "bars": bars,
+                "note": f"capped at last {_QDS_MAX_ROWS} daily bars"}
+
+    # default: coverage
+    return {"verb": "coverage", "trading_days": len(days),
+            "first_day": first, "last_day": last,
+            "underlyings_on_last_day": len(universe),
+            "underlyings_sample": universe[:60],
+            "detected_underlying": detected,
+            "hint": ("Name an underlying (e.g. NIFTY, RELIANCE) plus 'daily'/'close'/"
+                     "'vol' for OHLC, or 'chain' + a date for an option chain.")}
 
 
 async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] = None, **kwargs) -> Dict[str, Any]:
@@ -971,6 +1067,14 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 data = advice
                 warnings.append("EdgeMath advice is OBSERVE-ONLY (enabled=false); suggested_risk_mult is a sizing suggestion, not applied to the live book.")
             source = "db.edge_math_advice"
+        elif name == "query_data_store":
+            # P5-K6: bounded deterministic read of the bhavcopy research store.
+            data = await asyncio.to_thread(_query_data_store_sync, query or "")
+            source = "core.bhavcopy_store"
+            if data.get("error"):
+                stale = True
+                confidence = 0.5
+                warnings.append(str(data["error"]))
         else:
             raise ValueError(f"Unknown read-only tool: {name}")
 
@@ -1265,6 +1369,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_intraday_oos": "Intraday 1-minute OOS verdicts for option BUYERS/scalps (QG-O5..O10).",
     "get_regime_status": "RAE ensemble watch: current market regime per index, which live strategy the router would ACTIVATE vs STAND DOWN now, and realized P&L by entry-regime.",
     "get_edge_math_advice": "EdgeMath observe-only sizing advice: per-strategy rolling expectancy and suggested risk multiplier (never applied automatically).",
+    "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
 
 
@@ -1701,6 +1806,15 @@ def classify_playbook_by_query(query: str) -> List[str]:
     if any(w in q for w in ["edgemath", "edge math", "sizing", "size up", "size down",
                             "risk multiplier", "kelly", "position size", "ratchet"]):
         matched_tools.add("get_edge_math_advice")
+        has_matches = True
+
+    # P5-K6: raw research-store questions — realized vol, option chains, daily OHLC,
+    # store coverage over the historical bhavcopy F&O data.
+    if any(w in q for w in ["realized vol", "realised vol", "option chain", "daily ohlc",
+                            "daily close", "price history", "how many days", "how many trading days",
+                            "what data do we have", "query the store", "raw data",
+                            "historical vol", "which underlyings", "strikes on"]):
+        matched_tools.add("query_data_store")
         has_matches = True
 
     if any(w in q for w in ["vps", "deploy", "deployment", "container", "docker", "health", "restart"]):

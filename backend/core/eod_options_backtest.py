@@ -524,6 +524,41 @@ class EODOptionsBacktest:
 
 # ---- walk-forward / OOS verdict --------------------------------------------
 
+def _hac_se(pnls: List[float], mean: float, lag: Optional[int] = None) -> Optional[float]:
+    """Newey-West / HAC standard error of the sample MEAN (P5-J5, 2026-08-02).
+
+    The iid standard error `sd/sqrt(n)` assumes trades are independent. Option-seller
+    P&L is NOT independent: volatility clusters and holds overlap, so consecutive
+    trades are positively autocorrelated. Positive autocorrelation makes the iid SE
+    too small and the t-stat too large — it flatters the signal, which is exactly the
+    failure mode the §20 overfitting law warns about. Newey-West corrects the
+    long-run variance with Bartlett-weighted autocovariances:
+
+        σ²_LR = γ₀ + 2·Σ_{k=1}^{L} (1 − k/(L+1))·γ_k
+        SE_HAC(mean) = sqrt(σ²_LR / n)
+
+    `pnls` MUST be in chronological order for the autocovariance to mean anything.
+    Lag truncation defaults to the standard L = floor(4·(n/100)^(2/9)) rule.
+    Returns None when there is too little data to estimate it (n < 2).
+    """
+    n = len(pnls)
+    if n < 2:
+        return None
+    if lag is None:
+        lag = int(4 * (n / 100.0) ** (2.0 / 9.0))
+    lag = max(0, min(lag, n - 1))
+    dev = [p - mean for p in pnls]
+    gamma0 = sum(d * d for d in dev) / n
+    lr_var = gamma0
+    for k in range(1, lag + 1):
+        w = 1.0 - k / (lag + 1.0)                       # Bartlett kernel
+        gamma_k = sum(dev[t] * dev[t - k] for t in range(k, n)) / n
+        lr_var += 2.0 * w * gamma_k
+    if lr_var <= 0:                                     # negative autocov can zero it out
+        return None
+    return (lr_var / n) ** 0.5
+
+
 def _bucket_metrics(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Per-bucket P&L stats INCLUDING dispersion (P5-J1, 2026-07-23).
 
@@ -533,23 +568,34 @@ def _bucket_metrics(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     (`expectancy / standard_error`, H0: expectancy=0) is the honest test of whether
     a positive expectancy is signal or noise; a per-trade Sharpe is reported too.
     A single trade has no dispersion, so std/t_stat/sharpe are None then.
+
+    P5-J5 (2026-08-02): also reports a Newey-West/HAC t-stat (`t_stat_hac`) that
+    accounts for autocorrelated, vol-clustered returns; `walk_forward` gates on it
+    because it is the honest (conservative) one. `t_stat` remains the iid value for
+    comparison.
     """
+    # chronological order for the autocovariance terms (HAC is order-dependent)
+    trades = sorted(trades, key=lambda t: (str(t.get("exit_date") or ""),
+                                           str(t.get("entry_date") or "")))
     pnls = [float(t["pnl"]) for t in trades]
     n = len(pnls)
     if not n:
         return {"n": 0, "pnl": 0.0, "expectancy": 0.0, "win_rate": 0.0,
-                "std": 0.0, "t_stat": None, "sharpe": None}
+                "std": 0.0, "t_stat": None, "t_stat_hac": None, "sharpe": None}
     wins = [p for p in pnls if p > 0]
     mean = sum(pnls) / n
     sd = statistics.stdev(pnls) if n > 1 else 0.0          # sample std (ddof=1)
     se = sd / (n ** 0.5) if (sd > 0 and n > 1) else 0.0
     t_stat = (mean / se) if se > 0 else None
+    se_hac = _hac_se(pnls, mean)
+    t_stat_hac = (mean / se_hac) if se_hac else None
     sharpe = (mean / sd) if sd > 0 else None
     return {"n": n, "pnl": round(sum(pnls), 0),
             "expectancy": round(mean, 1),
             "win_rate": round(100 * len(wins) / n, 1),
             "std": round(sd, 1),
             "t_stat": round(t_stat, 2) if t_stat is not None else None,
+            "t_stat_hac": round(t_stat_hac, 2) if t_stat_hac is not None else None,
             "sharpe": round(sharpe, 3) if sharpe is not None else None}
 
 
@@ -587,7 +633,13 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
     # requires the overall t-stat to clear JUDGE_T_STAT_MIN on top of the persistence
     # checks. A positive-but-insignificant result is FRAGILE, not a candidate — this is
     # the fix for "the winning theta cluster was small-sample illusion".
-    t_overall = overall.get("t_stat")
+    # P5-J5: gate on the Newey-West/HAC t-stat, not the iid one. Vol-clustered,
+    # overlapping-hold returns are positively autocorrelated, so the iid t-stat
+    # overstates significance; the HAC value is the honest test. Fall back to the
+    # iid t-stat only if HAC could not be estimated.
+    t_iid = overall.get("t_stat")
+    t_hac = overall.get("t_stat_hac")
+    t_overall = t_hac if t_hac is not None else t_iid
     if overall["n"] < 30:
         verdict = "INSUFFICIENT_DATA"
     elif overall["expectancy"] <= 0:
@@ -606,5 +658,6 @@ def walk_forward(result: Dict[str, Any]) -> Dict[str, Any]:
         "by_year": years, "pct_green_months": pct_green,
         "n_months": len(months), "green_months": green_months,
         "all_years_positive": all_years_positive,
-        "t_stat": t_overall, "t_stat_min": T_STAT_MIN,
+        "t_stat": t_overall, "t_stat_iid": t_iid, "t_stat_hac": t_hac,
+        "t_stat_min": T_STAT_MIN,
     }

@@ -340,3 +340,22 @@ def test_walk_forward_rejects_high_variance_positive_expectancy():
 
     tight = walk_forward({"trades": _mk([200, 180, 220, 210, 190] * 10)})
     assert tight["verdict"] == "CANDIDATE_EDGE"       # low variance, persistent -> real
+
+
+def test_hac_se_inflates_error_for_autocorrelated_returns():
+    """P5-J5: option P&L is positively autocorrelated (vol clusters, holds overlap),
+    so the iid SE understates the true error. The Newey-West/HAC t-stat must be
+    smaller (less significant) than the iid one on a positively autocorrelated
+    series — otherwise the judge flatters clustered noise."""
+    from core.eod_options_backtest import _bucket_metrics, _hac_se
+    # long positively-autocorrelated run: two regimes back to back
+    series = [100] * 30 + [140] * 30      # slow drift => strong positive autocorr
+    m = _bucket_metrics([{"pnl": p} for p in series])
+    assert m["t_stat_hac"] is not None and m["t_stat"] is not None
+    assert abs(m["t_stat_hac"]) < abs(m["t_stat"])   # HAC is the conservative one
+    # HAC SE strictly exceeds the iid SE on this series
+    mean = sum(series) / len(series)
+    sd = (sum((p - mean) ** 2 for p in series) / (len(series) - 1)) ** 0.5
+    assert _hac_se(series, mean) > sd / len(series) ** 0.5
+    # an i.i.d.-looking alternating series should NOT be inflated much
+    assert _hac_se([100, -100] * 30, 0.0) is not None

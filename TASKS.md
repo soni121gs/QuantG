@@ -100,14 +100,14 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   finding reading *"1 of them since the re-cut"*). This is precisely the sample-laundering the epoch split
   was built to prevent. Fix the constant (and prefer stamping apply-time), re-apply, re-run diagnostics.
   **Acceptance:** `trades_since_change == 0` for QG-O1/QG-O4/QG-O11 until they trade again.
-- [~] **P5-R3** (T2) mostly settled by R1 (FINE_MIN_CONF no longer gates the defer; it only scales seller size) — `RAE_ROUTER_FINE_MIN_CONF` (0.50) **exceeds** `RANGE_BASE_CONF` (0.40), so the RANGE
-  branch can never clear the maturity test — a 200-bar established range defers exactly like a 10-bar one
-  (verified). The gate I documented does not exist; only the size scaling works. Decide deliberately:
-  lower the threshold (~0.30) or raise `RANGE_BASE_CONF`. **Depends on R1** — once the fallback is
-  conservative-only, an always-on fallback is safe, so this is correctness, not urgency.
-- [ ] **P5-R4** (T1) `core/hermes_diagnostics/probes_static.py:58` imports `dte_from_expiry` inside a
-  function while `core.spread_builder` is already imported at :13 — no circular-import justification,
-  violates CLAUDE.md §9. Move to module scope.
+- [x] **P5-R3** (T2) ✅ DONE 2026-08-02 — decoupled the seller-size scaling from `FINE_MIN_CONF`.
+  A mature RANGE tops out at `RANGE_BASE_CONF` (0.40), so scaling by `FINE_MIN_CONF` (0.50) capped a
+  fully-established range at 0.8 size forever. New `SELLER_SIZE_CONF_REF` (default 0.40, env
+  `RAE_SELLER_SIZE_CONF_REF`) references the RANGE confidence ceiling instead, so a mature range earns
+  full size while an immature one stays throttled by maturity. `FINE_MIN_CONF` retains its trend-noise
+  role. New test `test_mature_range_earns_full_size`; all 23 router tests green.
+- [x] **P5-R4** (T1) ✅ DONE 2026-08-02 — moved `dte_from_expiry` to the module-scope
+  `from core.spread_builder import ...` in `probes_static.py`; removed the in-function import.
 - [x] **P5-R5** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **`pytest tests/` does not hang because it is slow — it blocks on network I/O.**
   Diagnosed 2026-07-23: four attempts sat 60–90 min each at **~26 s CPU** (i.e. idle, waiting). At least
   `tests/backend_test.py` is a LIVE-SERVER integration suite (`requests` against
@@ -148,8 +148,12 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   no confidence bins, no Brier score, no stated prior on the cards. Either make it real (cards carry a
   numeric prior; score with Brier + reliability bins) or rename it so `get_hermes_brain_health` stops
   reporting it as calibration.
-- [ ] **P5-J5** (T3) Newey-West / HAC standard errors on the significance tests (returns and vol cluster,
-  so raw errors flatter the signal). Do after J1 — marginal until a t-stat exists at all.
+- [x] **P5-J5** (T3) ✅ DONE 2026-08-02 — `eod_options_backtest._hac_se` computes a Newey-West/HAC
+  standard error of the mean (Bartlett kernel, lag L=⌊4·(n/100)^(2/9)⌋) on chronologically-sorted trade
+  P&L; `_bucket_metrics` reports `t_stat_hac` alongside the iid `t_stat`, and `walk_forward` now gates
+  `CANDIDATE_EDGE` on the HAC t-stat (the honest, conservative one). Positively autocorrelated (vol-
+  clustered, overlapping-hold) returns no longer flatter significance. New test
+  `test_hac_se_inflates_error_for_autocorrelated_returns`; existing J1 walk-forward tests green.
 
 ### Track K — truthful knowledge for Hermes & the wiki (~2 days)
 - [x] **P5-K1** (T2) ✅ DONE 2026-07-25 (`b337ba3`) — **Index CLAUDE.md into the RAG.** `research_rag.reindex_all` indexes
@@ -176,12 +180,13 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
 - [x] **P5-K5** (T1) ✅ DONE 2026-07-25 (`b337ba3`) — `wiki/Trading Rules/`, `wiki/Meeting transcripts/`, `wiki/YouTube transcripts/` are
   **empty** and `wiki/Decisions/` has **1** file. Populate Trading Rules from CLAUDE.md §21 (both geometry
   laws + their measurements), §13.5, §14.4, §20.
-- [ ] **P5-K6** (T3) **Hermes can observe but cannot research.** All 37 tools read internal state
-  (`get_external_context` is Google news; `get_historical_context` is past sessions) — there is **no tool
-  to ask a new question of the bhavcopy / index_1m / options_1m stores**, so every hypothesis card needs a
-  human or an agent to run it. That human bottleneck is the research engine's rate limit. Add ONE bounded,
-  read-only, deterministic query tool (fixed verbs, capped rows, no free-form code) and route it through
-  `agent_tool_audit`. **LLM narrates, code computes** stays intact.
+- [x] **P5-K6** (T3) ✅ DONE 2026-08-02 — added `query_data_store` read-only Hermes tool
+  (`routes/ai.py`). FIXED verbs only (`coverage` / `daily` / `chain`), underlying allowlist derived from
+  the store's own latest day, capped rows (90 bars / 40 strikes), NO free-form code. Reads the bhavcopy
+  store the OOS judges use; computes realized vol / OHLC / chain snapshots deterministically. Registered in
+  `READ_ONLY_AGENT_TOOLS`, `TOOL_SPECS`, the planner declarations and the keyword router; runs through the
+  existing `agent_tool_audit` wrapper. LLM only picks the tool and reads numbers back (§ code computes).
+  5 unit tests with a fake store; verified locally against the real 1,234-day index store.
 
 ### Track M — breadth & money (the only track that can generate P&L)
 - [x] **P5-M1** (T1) ✅ DONE 2026-07-23 — the `nse` F&O source no longer whitelists 10 stock names (empty
@@ -196,21 +201,27 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   (`scripts/run_earnings_iv_crush_validation.py`) under the J1 t-stat and J2 DSR. This is the flagship and
   the only sleeve with a plausible new-edge mechanism. Gate unchanged: n≥300 events, DSR pass, ≥3×
   cost floor, before any registry paper wake.
-- [ ] **P5-M4** (T3) **Alpha-vs-beta separation — the unanswered question about the whole book.** Build a
-  daily short-vol benchmark from bhavcopy (sell ATM straddle/strangle, held per the book's horizon) and
-  regress each strategy's daily returns on it (plus NIFTY return). Report α, β, t(α). **If β≈1 and α≈0 the
-  seller book is a risk premium you are paying costs to replicate — that finding redirects the entire
-  program.** Ties directly to the §20 census ("one bet expressed 11 ways") and to `IR = IC·√BR`.
-- [ ] **P5-M5** (T3) **Validate the three scoring systems you already built and never checked** — compute
-  IC (rank correlation vs realized forward P&L) for `contract_edge_score`
-  (`core/dynamic_contract_selector.py`), RAE regime confidence, and EdgeMath conviction. An IC ≈ 0 means
-  that machinery is decoration. Also closes the §20 breadth law's dependency on an IC that is computed
-  nowhere.
-- [ ] **P5-M6** (T2) Cost-floor siblings left unfixed on 2026-07-22 (all contained — the build-time floor
-  vetoes them, so this is hygiene not urgency): `idx-nifty-callspread-0001` at **787/lot** (surfaced only
-  after the probe was corrected to measure bankable rather than gross), and RAE SENSEX + IDX SENSEX at
-  **894 < 900**. Same measured lever as QG-O4 (tp 0.50→0.60). ⚠️ The IDX rows are founder-created
-  (`founder_forced_live`) — §21.4 says registry-scoped fixes miss them; confirm before touching.
+- [~] **P5-M4** (T3) CODE DONE 2026-08-02, VPS RUN PENDING — `core/alpha_beta.py` (pure: numpy-free
+  multi-factor OLS with classical t-stats, `short_vol_benchmark` = daily ATM-straddle-sell return from
+  bhavcopy, `classify_alpha_beta` → REPLICABLE_SHORT_VOL_BETA / HAS_ALPHA / NEGATIVE_ALPHA) + CLI
+  `scripts/run_alpha_beta.py` (pulls per-strategy daily returns from `trade_fills`, regresses on
+  short_vol + nifty). 6 unit tests green (recovers known coefficients, verdict classification, benchmark).
+  **Run on VPS:** `docker exec quantg-backend python /app/scripts/run_alpha_beta.py --start 2024-01-01
+  --end 2026-07-31` — needs the live ledger + populated store.
+- [~] **P5-M5** (T3) CODE DONE 2026-08-02, VPS RUN PENDING — `core/score_ic.py` (pure Spearman IC +
+  DECORATION/PREDICTIVE/INVERTED verdict) + CLI `scripts/run_score_ic.py` joins each stored pre-trade
+  score (`contract_edge_score`, `regime_fine_confidence_at_entry`, `edge_math.conviction`) with the
+  closed position's `realized_pnl`. 5 unit tests green. **Run on VPS:**
+  `docker exec quantg-backend python /app/scripts/run_score_ic.py` — an IC ≈ 0 (DECORATION) means that
+  scoring machinery has no predictive content.
+- [~] **P5-M6** (T2) SCRIPT DONE 2026-08-02, VPS APPLY PENDING (founder-gated) — migration
+  `scripts/fix_costfloor_siblings_m6.py` (dry-run default, idempotent) raises `credit_tp_frac` 0.50→0.60
+  on IDX NIFTY VRP Call-Spread, IDX SENSEX VRP Put-Spread, RAE SENSEX Range Seller (same lever as QG-O4;
+  max-loss/lot unchanged so `required_capital` sizing is untouched, §21.4). The two IDX rows are
+  `founder_forced_live` — the script REFUSES to touch them without `--include-founder-forced` AND founder
+  confirmation. **NOTE:** §21.9 re-measured friction at ~1/12 the old 300/lot constant these vetoes used,
+  so re-run `static.cost_floor`/the judge at corrected friction on the VPS to confirm the floor is still
+  binding before applying.
 
 ---
 

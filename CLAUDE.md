@@ -1565,3 +1565,38 @@ Every fix this month removed a defect or a mis-measurement. The re-run judges at
 (§21.10) show FRAGILE, not CANDIDATE_EDGE — "worth forward-papering", never "proven". No
 strategy is promoted to real money by any of this. `CORE_ENGINE_LIVE_ENABLED=false` stands until
 the RAE-7 founder ladder, on forward-paper evidence, not on a backtest or a doc claim.
+
+---
+
+## 24. Phase-5 Tracks R/J/K/M — truthful instruments & breadth (2026-08-02)
+
+Completed the remaining ERP Phase-5 tasks (TASKS.md R/J/K/M). All research-only;
+`CORE_ENGINE_LIVE_ENABLED=false` unchanged. None creates edge — they make the book's
+self-measurement honest and give Hermes a way to ask new questions.
+
+- **R3** (`core/regime_router.py`): seller-size scaling now references `SELLER_SIZE_CONF_REF`
+  (0.40, the RANGE confidence ceiling) not `FINE_MIN_CONF` (0.50) — a mature range earns full
+  size instead of a permanent 0.8 cap. **R4**: `dte_from_expiry` moved to module scope in
+  `probes_static.py`.
+- **J5** (`core/eod_options_backtest.py`): Newey-West/HAC standard error (`_hac_se`, Bartlett
+  kernel) on chronologically-sorted trade P&L; `walk_forward` gates `CANDIDATE_EDGE` on the HAC
+  t-stat (`t_stat_hac`), the honest one for vol-clustered/overlapping-hold returns. iid `t_stat`
+  still reported.
+- **K6** (`routes/ai.py`): new read-only Hermes tool `query_data_store` — FIXED verbs
+  (`coverage`/`daily`/`chain`) over the bhavcopy store, store-derived underlying allowlist, capped
+  rows (90 bars / 40 strikes), no free-form code; audited via `agent_tool_audit`. Lets Hermes ask
+  a NEW question of the data (realized vol, OHLC, chains) without a human.
+- **M4** (`core/alpha_beta.py` + `scripts/run_alpha_beta.py`): regresses each strategy's daily
+  returns on a short-vol benchmark + NIFTY. `REPLICABLE_SHORT_VOL_BETA` = the strategy is
+  replicable premium, not alpha (tests the §20 "one bet" thesis). Persists to `db.alpha_beta_runs`.
+- **M5** (`core/score_ic.py` + `scripts/run_score_ic.py`): Spearman IC of `contract_edge_score`,
+  RAE regime confidence and EdgeMath conviction vs realized forward P&L. `DECORATION` = no
+  predictive content. Persists to `db.score_ic_runs`.
+- **M6** (`scripts/fix_costfloor_siblings_m6.py`): dry-run-default migration raising
+  `credit_tp_frac` 0.50→0.60 on the three sub-cost-floor sellers; refuses `founder_forced_live`
+  rows without `--include-founder-forced`. NOTE §21.9 re-measured friction ~12× lower, so confirm
+  the floor is still binding before applying.
+- **Surfaces**: `GET /api/ops/alpha-beta` and `GET /api/ops/score-ic` (read latest run docs);
+  Analytics → Edge Lab tab shows the `AlphaBetaPanel` + `ScoreIcPanel`. Scripts run on the VPS
+  (`docker exec quantg-backend python /app/scripts/<name>.py`), write the run docs, and the UI
+  reads them. **R6/M3 and M4/M5 runs + M6 apply happen on the VPS** (live ledger + populated store).

@@ -1007,6 +1007,37 @@ async def ops_intraday_oos(user=Depends(get_current_user)):
     })
 
 
+@router.get("/alpha-beta")
+async def ops_alpha_beta(user=Depends(get_current_user)):
+    """P5-M4: latest alpha-vs-beta separation run. Each strategy's daily returns
+    regressed on a short-vol benchmark + NIFTY. REPLICABLE_SHORT_VOL_BETA means the
+    strategy is the premium-selling risk factor the book pays costs to reproduce
+    (the §20 'one bet' thesis). Read-only; produced by scripts/run_alpha_beta.py."""
+    latest = await db.alpha_beta_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
+    return _json_safe({
+        "kind": "alpha_beta",
+        "latest_run": latest,
+        "note": ("REPLICABLE_SHORT_VOL_BETA = beta_sv≈1 and alpha not significant → the "
+                 "strategy is replicable short-vol premium, not alpha. Run "
+                 "scripts/run_alpha_beta.py on the VPS to (re)compute."),
+    })
+
+
+@router.get("/score-ic")
+async def ops_score_ic(user=Depends(get_current_user)):
+    """P5-M5: latest information-coefficient screen. Spearman IC of each stored
+    pre-trade score (contract_edge_score, RAE regime confidence, EdgeMath conviction)
+    vs realized forward P&L. DECORATION = no predictive content. Read-only; produced
+    by scripts/run_score_ic.py."""
+    latest = await db.score_ic_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
+    return _json_safe({
+        "kind": "score_ic",
+        "latest_run": latest,
+        "note": ("IC ≈ 0 (DECORATION) = the score does not predict P&L. PREDICTIVE = "
+                 "significant positive IC. INVERTED = the score is backwards."),
+    })
+
+
 @router.post("/intraday-oos/refresh")
 async def ops_intraday_oos_refresh(start: str = "2025-01-01", end: str = "2025-12-31",
                                    user=Depends(get_current_user)):

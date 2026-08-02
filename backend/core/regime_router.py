@@ -61,6 +61,16 @@ TREND_MIN_CONF = _f("RAE_ROUTER_TREND_CONF", 0.90)   # trend needs high confiden
 # call, and we defer to the coarse (VWAP/whole-session) regime, which is mature
 # from the open. See the 2026-07-22 note in `route()`.
 FINE_MIN_CONF = _f("RAE_ROUTER_FINE_MIN_CONF", 0.50)
+# 2026-08-02 (P5-R3): the seller-size scaling reference. It MUST be the ceiling a
+# mature RANGE can actually reach, not FINE_MIN_CONF. `regime_classifier` returns
+# RANGE confidence = RANGE_BASE_CONF (0.40) × maturity, so an established 200-bar
+# range tops out at 0.40. Scaling that by FINE_MIN_CONF (0.50) meant a fully-mature
+# range was permanently capped at 0.40/0.50 = 0.8 size — it deferred exactly like a
+# 10-bar one, the gap R3 was filed for. Referencing the RANGE ceiling instead lets a
+# mature range earn full size while an immature one is still throttled by maturity.
+# Kept a hair below RANGE_BASE_CONF's 0.40 default so rounding never starves a mature
+# range; env-overridable to track RAE_RANGE_BASE_CONF if that is retuned.
+SELLER_SIZE_CONF_REF = _f("RAE_SELLER_SIZE_CONF_REF", 0.40)
 # sellers co-own the quiet regimes with the mean-revert specialist
 SELLER_OK_REGIMES = {tax.RANGE, tax.INSIDE_QUIET}
 # a single delta-1 trend specialist owns BOTH trend directions (its code picks CE vs
@@ -229,8 +239,8 @@ def _route_one(
     # hard block" philosophy applied to the seller's own home regime — previously
     # RANGE was flat size×1.0 at any confidence, so the sellers were maximally
     # exposed exactly when the classifier was least sure (2026-07-22).
-    if regime in SELLER_OK_REGIMES and FINE_MIN_CONF > 0:
-        base *= max(0.25, min(1.0, confidence / FINE_MIN_CONF))
+    if regime in SELLER_OK_REGIMES and SELLER_SIZE_CONF_REF > 0:
+        base *= max(0.25, min(1.0, confidence / SELLER_SIZE_CONF_REF))
     # trend size scales with how far past the confidence gate we are (precision → size)
     if regime in (tax.TREND_UP, tax.TREND_DOWN) and TREND_MIN_CONF < 1.0:
         scale = (confidence - TREND_MIN_CONF) / (1.0 - TREND_MIN_CONF)

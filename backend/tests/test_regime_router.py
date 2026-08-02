@@ -104,6 +104,17 @@ def test_range_size_scales_with_confidence():
     assert 0 < lo < hi
 
 
+def test_mature_range_earns_full_size():
+    """P5-R3: a mature RANGE tops out at RANGE_BASE_CONF (0.40) confidence from the
+    classifier. The seller-size scaling must reference that ceiling, not
+    FINE_MIN_CONF (0.50), so an established range earns full size instead of being
+    permanently capped at 0.8. Confidence at/above the reference => size×1.0."""
+    from core.regime_router import SELLER_SIZE_CONF_REF, REGIME_SIZE
+    d = route(tax.RANGE, SELLER_SIZE_CONF_REF, specialist="range_seller")
+    assert not d.stand_down
+    assert d.size_mult == REGIME_SIZE[tax.RANGE]  # unthrottled at the mature ceiling
+
+
 # --- P5-R1 (2026-07-23): the fallback must only ever REDUCE risk -------------
 # The first version of the cross-check rewrote the regime label at the top of
 # route(), above every protective guard, and broke three things at once.
