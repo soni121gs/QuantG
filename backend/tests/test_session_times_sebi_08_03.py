@@ -224,8 +224,10 @@ def test_window_ignores_expiry_offset():
 
 
 def test_half_open_windows_work():
-    assert _sel(min_dte=20)["expiry"] == "2026-09-29"          # >=20d only
-    assert _sel(max_dte=2)["expiry"] == "2026-08-04"           # <=2d only
+    # min only: nearest expiry at or beyond the floor (08-25 is 22d, 09-29 is 57d).
+    assert _sel(min_dte=20)["expiry"] == "2026-08-25"
+    # max only: nearest expiry at or below the ceiling.
+    assert _sel(max_dte=2)["expiry"] == "2026-08-04"
 
 
 def test_no_qualifying_expiry_stands_down_rather_than_substituting():
