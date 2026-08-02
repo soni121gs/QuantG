@@ -197,10 +197,15 @@ in this file to an edge that isn't a re-parameterisation of the one bet the cens
   stocks that actually have options in the bhavcopy store (not a hand-maintained top-30), wired into the CLI
   default + Saturday scheduler. Backfill complete: **211 symbols / 3,062 events** (was 30 / 309). The
   earnings sleeve's n≥300 gate is now reachable.
-- [ ] **P5-M3** (T3) Re-run the P3-1 earnings IV-crush validator on real breadth
-  (`scripts/run_earnings_iv_crush_validation.py`) under the J1 t-stat and J2 DSR. This is the flagship and
-  the only sleeve with a plausible new-edge mechanism. Gate unchanged: n≥300 events, DSR pass, ≥3×
-  cost floor, before any registry paper wake.
+- [x] **P5-M3** (T3) ✅ RUN ON VPS 2026-08-03 — VERDICT: **NO EDGE.** Added pooled breadth grading
+  (`earnings_iv_crush.grade_pooled`) because the per-symbol n≥300 gate is structurally impossible
+  (~10 events/name); fixed a results-printer crash; wired the full store universe (P5-M2, 211 names).
+  **Pooled top-30 liquid names:** n=184, expectancy **−₹157/trade**, HAC t −1.23, DSR fail, cost-floor
+  −0.49× — `NO_EDGE_NEGATIVE`, eligible_for_paper=NO. Per-symbol all INSUFFICIENT_DATA (3–10 trades each).
+  The flagship earnings iron-condor sleeve does not show an edge; do NOT wake it. **Perf caveat:** the
+  validator backtests each name over the full history single-threaded (~1 min/name), so the 211-name run
+  is impractically slow (>2.5 h) with no progress output — a follow-up optimization if a formal n≥300 run
+  is ever needed, but the liquid core is already clearly negative.
 - [x] **P5-M4** (T3) ✅ DONE + RUN ON VPS 2026-08-02 — `core/alpha_beta.py` (numpy-free multi-factor OLS,
   `short_vol_benchmark`, `classify_alpha_beta`) + `scripts/run_alpha_beta.py` (reads realized P&L from
   CLOSED `strategy_positions` — NOT trade_fills, which carries no realized_pnl; grouped by `closed_at`).
