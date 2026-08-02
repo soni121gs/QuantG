@@ -1600,3 +1600,20 @@ self-measurement honest and give Hermes a way to ask new questions.
   Analytics → Edge Lab tab shows the `AlphaBetaPanel` + `ScoreIcPanel`. Scripts run on the VPS
   (`docker exec quantg-backend python /app/scripts/<name>.py`), write the run docs, and the UI
   reads them. **R6/M3 and M4/M5 runs + M6 apply happen on the VPS** (live ledger + populated store).
+
+### 24.1 M5 remediation — stop sizing on non-predictive scores (2026-08-02)
+The M5 run (631 closed positions) found the pre-trade scores don't predict realized P&L:
+`regime_confidence` **INVERTED** (IC −0.18, t −2.33 — higher confidence → worse P&L),
+`contract_edge_score` and `edgemath_conviction` ~zero IC (DECORATION). Fix, env-gated
+`SCORE_SIZE_NEUTRAL` (default **true**, reversible):
+- `regime_router`: no confidence-MAGNITUDE size scaling (flat per-regime base). Confidence
+  still gates stand-down + trend precision (categorical, sound). This deliberately walks back
+  the P5-R3 magnitude scaling — M5 proved confidence magnitude is not predictive.
+- `signal_manager._edge_math_spread_size`: `contract_mult` forced to 1.0; the fine EdgeMath
+  conviction multiplier is dropped (size = vol-target `base_lots` × day-governor) while the
+  categorical stand-down (dead expectancy → 0 lots) and the defined-risk capital cap are KEPT.
+- New Hermes probe `strategy.score_not_predictive` reads `db.score_ic_runs` and flags
+  DECORATION/INVERTED scores (INVERTED = HIGH) so the condition is self-monitoring.
+Principle: keep the evidence-based CATEGORICAL gates (regime ownership, dead-expectancy
+stand-down, day governor, cost-floor, DTE, kill-switch); remove the continuous score
+MAGNITUDES that have no predictive IC. No edge created; noise removed from sizing.
