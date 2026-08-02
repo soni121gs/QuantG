@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, Dict, Optional
 
 from ltp_resolver import resolve_position_ltp
+import session_times
 from core.position_lifecycle import (
     exit_reason,
     normalize_strategy_risk,
@@ -41,7 +42,9 @@ logger = logging.getLogger("quantg.position_guardian")
 # ── Config (all overridable via env) ──────────────────────────────────────────
 
 GUARDIAN_POLL_SECONDS       = int(os.environ.get("GUARDIAN_POLL_SECONDS", "5"))
-SQUAREOFF_MINUTE_IST        = int(os.environ.get("GUARDIAN_SQUAREOFF_MINUTE", str(15 * 60 + 10)))
+# Must complete BEFORE the 15:15 cash Closing Auction Session (2026-08-03).
+SQUAREOFF_MINUTE_IST        = int(os.environ.get(
+    "GUARDIAN_SQUAREOFF_MINUTE", str(session_times.EQUITY_SQUAREOFF_MINUTE)))
 MAX_UNMONITORED_SECONDS     = int(os.environ.get("GUARDIAN_MAX_UNMONITORED_SEC", "120"))
 # Widened to 15/25 — option premiums need room; 8/12 triggered on noise.
 # Phase 4 ExitPolicy replaces these with ATR-based absolute values at entry.
@@ -71,7 +74,7 @@ def _in_market_hours() -> bool:
     if ist.weekday() >= 5:
         return False
     m = ist.hour * 60 + ist.minute
-    return 9 * 60 + 15 <= m <= 15 * 60 + 30
+    return session_times.OPEN_MINUTE <= m <= session_times.LAST_CLOSE_MINUTE
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────

@@ -29,7 +29,44 @@ ENABLED = os.environ.get("LOSS_KILLSWITCH_ENABLED", "true").lower() == "true"
 # below the kind of −24k bug-day that motivated the campaign. Env-overridable.
 PORTFOLIO_DAILY_LOSS_LIMIT = float(os.environ.get("PORTFOLIO_DAILY_LOSS_LIMIT", "20000"))
 
+# ── 2026-08-03: scope the BOOK sweep so one sleeve cannot liquidate another ──
+# Measured on the real book (631 closed trades): the book-level sweep fired on 5
+# consecutive days and force-closed 29 positions for −₹24,859, of which
+# −₹20,811 (84%) were DEBIT spreads closed at a 0% win rate. The seller sleeve's
+# bleed was arming a trigger that liquidated the long-premium sleeve — the only
+# structure in the book that beat its own breakeven (n=46, +₹7,975).
+#
+# Two narrow exemptions, both reversible by env:
+#   1. A strategy whose OWN day P&L is not negative is not part of the problem;
+#      closing it converts someone else's loss into its realized loss.
+#   2. A DEFINED-RISK hold-to-expiry position has a max loss that is already
+#      bounded by its bought wing and already capital-reserved. Force-closing it
+#      on an unrealized-P&L trigger does not reduce risk — the worst case was
+#      known at entry — it just realizes the loss at peak fear and forfeits the
+#      decay/convexity the structure exists to capture. This is the same
+#      exemption position_monitor and the EOD backstop already grant (§22.3);
+#      the kill-switch was the remaining path that ignored it.
+#
+# The floor itself is UNCHANGED and still fires. This only narrows WHICH
+# strategies the book sweep closes, never whether it triggers.
+SLEEVE_SCOPED = os.environ.get("LOSS_KILLSWITCH_SLEEVE_SCOPED", "true").lower() == "true"
+SKIP_HOLD_TO_EXPIRY = os.environ.get("LOSS_KILLSWITCH_SKIP_HOLD_TO_EXPIRY", "true").lower() == "true"
+
 _OPEN_STATUSES = ["PENDING_BROKER", "OPEN", "FILLED"]
+_DEFINED_RISK_STRUCTURES = {"credit_spread", "debit_spread", "iron_condor"}
+
+
+def _is_hold_to_expiry(strategy: Dict) -> bool:
+    vc = strategy.get("visual_config") or {}
+    opt = vc.get("options") or {}
+    risk = vc.get("risk") or {}
+    return (str(opt.get("exit_mode") or "").lower() == "expiry"
+            or str(risk.get("exit_mode") or "").lower() == "hold_to_expiry")
+
+
+def _is_defined_risk(strategy: Dict) -> bool:
+    opt = (strategy.get("visual_config") or {}).get("options") or {}
+    return str(opt.get("structure") or "") in _DEFINED_RISK_STRUCTURES
 
 
 def _ist_date() -> str:
@@ -105,12 +142,28 @@ async def evaluate_loss_killswitch(db, close_fn: Callable[..., Coroutine]) -> No
 
     for uid, slist in by_user.items():
         book_pnl = 0.0
+        day_pnl_by_sid: Dict[str, float] = {}
+        strat_by_sid: Dict[str, Dict] = {}
         # ── Per-strategy layer ──────────────────────────────────────────────
         for s in slist:
             sid = s.get("id")
             day_pnl = float(s.get("today_pnl") or 0.0) + unreal.get((uid, sid), 0.0)
             book_pnl += day_pnl
+            day_pnl_by_sid[sid] = day_pnl
+            strat_by_sid[sid] = s
             if s.get("day_loss_locked") and s.get("day_loss_locked_date") == date:
+                continue
+            # A defined-risk hold-to-expiry position's worst case is bounded by
+            # its bought wing and already reserved, so an unrealized drawdown is
+            # not new risk information — see the module header. Its REALIZED
+            # today_pnl still counts, so a strategy that has actually banked
+            # losses is still stood down.
+            if SKIP_HOLD_TO_EXPIRY and _is_hold_to_expiry(s) and _is_defined_risk(s):
+                realized_only = float(s.get("today_pnl") or 0.0)
+                limit = _strategy_loss_limit((s.get("visual_config") or {}).get("risk") or {})
+                if limit > 0 and realized_only <= -abs(limit):
+                    await _stand_down(db, close_fn, uid, sid, s.get("name"),
+                                      realized_only, limit, "strat")
                 continue
             limit = _strategy_loss_limit((s.get("visual_config") or {}).get("risk") or {})
             if limit > 0 and day_pnl <= -abs(limit):
@@ -122,14 +175,36 @@ async def evaluate_loss_killswitch(db, close_fn: Callable[..., Coroutine]) -> No
             bdoc = await db.loss_killswitch_state.find_one({"_id": bkey})
             if bdoc and bdoc.get("locked"):
                 continue
-            logger.error(
-                "LOSS KILL-SWITCH [book] user=%s book_pnl=%.0f limit=%.0f → squaring off ENTIRE book",
-                uid, book_pnl, PORTFOLIO_DAILY_LOSS_LIMIT,
-            )
+            # Decide WHICH strategies this sweep closes. The trigger itself is
+            # unchanged; only the blast radius is scoped.
+            sweep, spared = [], []
             for sid in open_sids.get(uid, set()):
+                s = strat_by_sid.get(sid) or {}
+                sid_pnl = day_pnl_by_sid.get(sid, 0.0)
+                if SLEEVE_SCOPED and sid_pnl >= 0:
+                    spared.append((sid, "not_losing", sid_pnl))
+                elif SKIP_HOLD_TO_EXPIRY and _is_hold_to_expiry(s) and _is_defined_risk(s):
+                    spared.append((sid, "defined_risk_hold_to_expiry", sid_pnl))
+                else:
+                    sweep.append(sid)
+            logger.error(
+                "LOSS KILL-SWITCH [book] user=%s book_pnl=%.0f limit=%.0f → squaring off %d strategies "
+                "(sparing %d: %s)",
+                uid, book_pnl, PORTFOLIO_DAILY_LOSS_LIMIT, len(sweep), len(spared),
+                ", ".join(f"{s}:{r}" for s, r, _ in spared) or "none",
+            )
+            for sid in sweep:
                 await _stand_down(db, close_fn, uid, sid, None, book_pnl, PORTFOLIO_DAILY_LOSS_LIMIT, "book")
+            # Lock re-entry for the day. Strategies the sweep deliberately spared
+            # must NOT be locked here — locking them would achieve by the back door
+            # exactly what sparing them was meant to avoid (an untouched, still-open
+            # sleeve that can no longer manage or re-enter its own position).
+            _lock_filter: Dict = {"user_id": uid, "status": "live"}
+            _spared_ids = [s for s, _, _ in spared]
+            if _spared_ids:
+                _lock_filter["id"] = {"$nin": _spared_ids}
             await db.strategies.update_many(
-                {"user_id": uid, "status": "live"},
+                _lock_filter,
                 {"$set": {
                     "day_loss_locked": True,
                     "day_loss_locked_date": date,
@@ -140,6 +215,9 @@ async def evaluate_loss_killswitch(db, close_fn: Callable[..., Coroutine]) -> No
             await db.loss_killswitch_state.update_one(
                 {"_id": bkey},
                 {"$set": {"date": date, "scope": "book", "user_id": uid, "locked": True,
-                          "book_pnl": round(book_pnl, 2), "updated_at": _now()}},
+                          "book_pnl": round(book_pnl, 2), "updated_at": _now(),
+                          "swept": sweep,
+                          "spared": [{"strategy_id": s, "reason": r, "day_pnl": round(p, 2)}
+                                     for s, r, p in spared]}},
                 upsert=True,
             )

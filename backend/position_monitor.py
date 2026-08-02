@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine, Dict, Optional
 
 from ltp_resolver import resolve_position_ltp
+import session_times
 from core.position_lifecycle import (
     exit_reason,
     normalize_strategy_risk,
@@ -62,17 +63,21 @@ _POLL_INTERVAL_OUT_HOURS = 30
 # this from entry and skip the exit/mark this cycle rather than act on bad data.
 _EQUITY_LTP_MAX_DEV = float(os.environ.get("EQUITY_LTP_MAX_DEV", "0.35"))
 
-# Force-close all positions at this IST minute-of-day (15:10 = 910 minutes)
-_SQUAREOFF_MINUTE_IST = 15 * 60 + 10
+# Force-close single-leg/equity at this IST minute-of-day. From 2026-08-03 this
+# must land BEFORE the 15:15 cash Closing Auction Session — we place continuous
+# market orders and cannot trade into an auction.
+_SQUAREOFF_MINUTE_IST = session_times.EQUITY_SQUAREOFF_MINUTE
 
-# Spreads square off later (15:25) than single-leg/equity (15:10) so they ride
-# nearer to expiry and collect theta instead of being cut mid-trajectory. A 15:26
-# server-side backstop (_eod_square_off_all_users spread_phase) guarantees nothing
-# is left open. Env-overridable.
-_SPREAD_SQUAREOFF_MINUTE_IST = int(os.environ.get("SPREAD_SQUAREOFF_MINUTE_IST", str(15 * 60 + 25)))
+# Spreads square off later than single-leg/equity so they ride nearer to expiry
+# and collect theta instead of being cut mid-trajectory. Tracks the derivatives
+# close (15:40 from 2026-08-03) minus a lead, so it moves with the close instead
+# of drifting into it. A server-side backstop guarantees nothing is left open.
+_SPREAD_SQUAREOFF_MINUTE_IST = int(
+    os.environ.get("SPREAD_SQUAREOFF_MINUTE_IST", str(session_times.SPREAD_SQUAREOFF_MINUTE)))
 
-# EOD aggregation fires once per day at 15:35 IST (market settled, squareoff done)
-_EOD_AGGREGATION_MINUTE_IST = 15 * 60 + 35
+# EOD aggregation fires once per day AFTER the last close (was 15:35, which is
+# now mid-session for NSE F&O).
+_EOD_AGGREGATION_MINUTE_IST = session_times.POST_CLOSE_MINUTE
 _eod_aggregation_done_date: str | None = None  # tracks which calendar date was already run
 
 
@@ -87,11 +92,11 @@ def _in_market_hours() -> bool:
     if ist.weekday() >= 5:
         return False
     minutes = ist.hour * 60 + ist.minute
-    return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
+    return session_times.OPEN_MINUTE <= minutes <= session_times.LAST_CLOSE_MINUTE
 
 
 def _squareoff_due() -> bool:
-    """True when IST time has reached or passed 15:10 on a weekday."""
+    """True when IST time has reached the single-leg/equity square-off minute."""
     ist = _ist_now()
     if ist.weekday() >= 5:
         return False
@@ -99,7 +104,7 @@ def _squareoff_due() -> bool:
 
 
 def _spread_squareoff_due() -> bool:
-    """True when IST time has reached or passed the spread square-off minute (15:25)."""
+    """True when IST time has reached or passed the spread square-off minute."""
     ist = _ist_now()
     if ist.weekday() >= 5:
         return False

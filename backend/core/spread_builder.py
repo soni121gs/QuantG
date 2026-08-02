@@ -21,6 +21,8 @@ if _BACKEND_DIR not in sys.path:
 
 from options_delta import pick_delta_strike, _to_float  # noqa: E402
 
+import session_times  # noqa: E402
+
 CREDIT_SPREADS_ENABLED = os.environ.get("CREDIT_SPREADS_ENABLED", "false").strip().lower() == "true"
 CREDIT_SPREAD_SHORT_DELTA = float(os.environ.get("CREDIT_SPREAD_SHORT_DELTA", "0.30"))
 # Default distance between short and long strikes, in number of strike intervals.
@@ -83,7 +85,11 @@ SPREAD_ENFORCE_REACHABILITY = os.environ.get(
     "SPREAD_ENFORCE_REACHABILITY", "true").strip().lower() == "true"
 
 
-MARKET_MINUTES_PER_DAY = 375.0
+# Tradeable minutes in one session. Was a hardcoded 375 (09:15-15:30); NSE F&O
+# runs 09:15-15:40 = 385 from 2026-08-03. This is a DIVISOR in the §21.2
+# reachability law, so a stale value overstates how much decay a hold can reach
+# and lets through spreads the law is meant to veto.
+MARKET_MINUTES_PER_DAY = float(session_times.session_minutes("NSE_FO"))
 
 
 def theta_reachable_tp_frac(dte_days: float, hold_minutes: float) -> float:
@@ -92,7 +98,7 @@ def theta_reachable_tp_frac(dte_days: float, hold_minutes: float) -> float:
 
     A credit spread's extrinsic value bleeds toward zero over its remaining life,
     so over `hold_minutes` of a `dte_days` contract roughly
-    `hold_minutes / (dte_days * 375)` of the credit decays away (linear
+    `hold_minutes / (dte_days * MARKET_MINUTES_PER_DAY)` of the credit decays away (linear
     approximation; decay is convex and faster near expiry, so this is
     conservative for short DTE).
 

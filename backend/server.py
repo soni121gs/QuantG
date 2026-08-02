@@ -61,6 +61,7 @@ from market_protection import MarketTrendAnalyzer, FakeSignalFilter, OrderExecut
 from daily_strategy_reporter import DailyStrategyReporter
 from realtime_ticks import RealtimeTickManager
 from safe_exec import safe_run_strategy
+import session_times
 from order_lifecycle import (
     ORDER_NEW,
     ORDER_PLACED,
@@ -16889,7 +16890,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             _opt_reg_bucket = f"{today}:{hour}:{minute}"
             if (
                 ist.weekday() < 5
-                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and session_times.in_session(hour, minute)
                 and _opt_capture_reg_minute != _opt_reg_bucket
             ):
                 _opt_capture_reg_minute = _opt_reg_bucket
@@ -16939,7 +16940,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             _vix_bucket = f"{today}:{hour}:{minute // 5}"
             if (
                 ist.weekday() < 5
-                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and session_times.in_session(hour, minute)
                 and _vix_last_snapshot_minute != _vix_bucket
             ):
                 _vix_last_snapshot_minute = _vix_bucket
@@ -16994,7 +16995,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             _chain_bucket = f"{today}:{hour}:{minute // 5}"
             if (
                 ist.weekday() < 5
-                and ((hour == 9 and minute >= 15) or 10 <= hour < 15 or (hour == 15 and minute <= 30))
+                and session_times.in_session(hour, minute)
                 and _chain_last_snapshot_minute != _chain_bucket
             ):
                 _chain_last_snapshot_minute = _chain_bucket
@@ -17185,7 +17186,10 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # window is strictly safer. Failures log at WARNING with the traceback —
             # they used to be swallowed at debug, which is how the options_1m store
             # went 8 days stale (2026-07-14 → 07-22) with nothing in the logs.
-            if hour == 15 and minute >= 35 and _index_flush_done_date != today:
+            # 2026-08-03: this used to fire at 15:35, which is now DURING the NSE
+            # F&O session (close 15:40) — flushing then would truncate the last
+            # five minutes of every capture day. It now waits for POST_CLOSE.
+            if (hour * 60 + minute) >= session_times.POST_CLOSE_MINUTE and _index_flush_done_date != today:
                 _index_flush_done_date = today
                 # Outcomes are PERSISTED, not just logged: a WARNING in a rotating
                 # container log is invisible to the daily audit, which is how these
@@ -17285,12 +17289,14 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 except Exception as _act_err:
                     logger.warning("Market schedule activate failed: %s", _act_err)
 
-            # 3:35 PM IST Mon–Fri — auto-pause all live strategies at market close.
+            # Post-close Mon–Fri — auto-pause all live strategies at market close.
             # Sets schedule_paused=True so 9:00 AM restore can distinguish from manual pauses.
+            # Was 15:30-15:45; the lower bound is now inside the F&O session, which
+            # would have paused every strategy 10 minutes before the close.
             if (
                 ist.weekday() < 5
                 and _schedule_pause_done_date != today
-                and hour == 15 and 30 <= minute < 45
+                and session_times.POST_CLOSE_MINUTE <= (hour * 60 + minute) < session_times.POST_CLOSE_MINUTE + 15
             ):
                 _schedule_pause_done_date = today
                 try:
@@ -17313,30 +17319,41 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 except Exception as _pause_err:
                     logger.warning("Market schedule pause failed: %s", _pause_err)
 
-            # 15:15 IST — unconditional EOD square-off (exit guarantee, weekdays only).
-            # Window check (>= 15:15, before 15:30) instead of exact-minute so a slow
-            # tick can never skip it. _squareoff_done_date makes it once per day.
+            # EOD square-off for single-leg/equity (exit guarantee, weekdays only).
+            # From 2026-08-03 this MUST complete before the 15:15 cash Closing
+            # Auction Session — QuantG places continuous market orders and cannot
+            # trade into an auction, so the old 15:15-15:30 window now straddles
+            # exactly the period where a cash order no longer behaves normally.
+            # Window (not exact-minute) so a slow tick can never skip it;
+            # _squareoff_done_date makes it once per day.
             if (
                 ist.weekday() < 5
                 and _squareoff_done_date != today
-                and (hour == 15 and 15 <= minute < 30)
+                and session_times.EQUITY_SQUAREOFF_MINUTE <= (hour * 60 + minute) < session_times.CAS_START_MINUTE
             ):
                 _squareoff_done_date = today
-                logger.info("Daily scheduler: 15:15 IST — EOD square-off (single-leg/equity; spreads ride to 15:25)")
+                logger.info(
+                    "Daily scheduler: %s IST — EOD square-off (single-leg/equity, before %s cash auction; spreads ride to %s)",
+                    session_times.hhmm_str(session_times.EQUITY_SQUAREOFF_MINUTE),
+                    session_times.hhmm_str(session_times.CAS_START_MINUTE),
+                    session_times.hhmm_str(session_times.SPREAD_SQUAREOFF_MINUTE))
                 try:
                     await _eod_square_off_all_users(spread_phase=False)
                 except Exception as _sq_err:
                     logger.error("EOD square-off run failed: %s", _sq_err)
 
-            # 15:26 IST — spread backstop sweep. Spreads square off at 15:25 via
-            # position_monitor; this guarantees any straggler is closed before close.
+            # Spread backstop sweep, one minute after the monitor's own spread
+            # square-off; guarantees any straggler is closed before the close.
+            # Tracks the derivatives close (15:40 from 2026-08-03) rather than the
+            # old hardcoded 15:26.
             if (
                 ist.weekday() < 5
                 and _spread_squareoff_done_date != today
-                and (hour == 15 and 26 <= minute < 30)
+                and session_times.SPREAD_SQUAREOFF_MINUTE + 1 <= (hour * 60 + minute) < session_times.NSE_FO_CLOSE_MINUTE
             ):
                 _spread_squareoff_done_date = today
-                logger.info("Daily scheduler: 15:26 IST — spread backstop square-off starting")
+                logger.info("Daily scheduler: %s IST — spread backstop square-off starting",
+                            session_times.hhmm_str(session_times.SPREAD_SQUAREOFF_MINUTE + 1))
                 try:
                     await _eod_square_off_all_users(spread_phase=True)
                 except Exception as _sq_err:

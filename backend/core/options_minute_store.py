@@ -28,6 +28,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import session_times
 from core.options_minute_schema import (
     OptionContractRef,
     build_manifest,
@@ -43,9 +44,13 @@ STORE_ROOT = os.environ.get(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "options_1m"),
 )
 
-# NSE index-option session: 1-minute bars stamped 09:15 .. 15:29 (375 bars).
-SESSION_START = (9, 15)
-SESSION_END = (15, 29)
+# NSE index-option session: 1-minute bars stamped 09:15 .. close-1.
+# 2026-08-03: derivatives close moved 15:30 -> 15:40, so the last bar is 15:39
+# and a full day is 385 bars (was 15:29 / 375). Pinning the old value would make
+# every post-change day look permanently incomplete to the coverage probes.
+SESSION_START = (session_times.OPEN_MINUTE // 60, session_times.OPEN_MINUTE % 60)
+_LAST_BAR = session_times.NSE_FO_CLOSE_MINUTE - 1
+SESSION_END = (_LAST_BAR // 60, _LAST_BAR % 60)
 
 _CSV_FIELDS = (
     "timestamp_ist", "instrument_key", "expired_instrument_key", "underlying",
@@ -61,7 +66,7 @@ def _expiry_tag(expiry: str) -> str:
 
 
 def expected_minutes(date: str) -> List[str]:
-    """The 375 canonical IST bar timestamps for one trading date."""
+    """The canonical IST bar timestamps for one trading date (385 from 2026-08-03)."""
     d = datetime.strptime(str(date)[:10], "%Y-%m-%d").date()
     start = datetime(d.year, d.month, d.day, SESSION_START[0], SESSION_START[1], tzinfo=IST)
     end = datetime(d.year, d.month, d.day, SESSION_END[0], SESSION_END[1], tzinfo=IST)

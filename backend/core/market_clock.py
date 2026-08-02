@@ -7,16 +7,16 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 from core.market_domains import DomainType
 
-IST_OFFSET = timedelta(hours=5, minutes=30)
-NSE_OPEN_MINUTE = 9 * 60 + 15   # 9:15 AM — actual NSE market open
-NSE_CLOSE_MINUTE = 15 * 60 + 30  # 3:30 PM — actual NSE market close
+import session_times
 
-# Strategy runner window — broader than market hours to cover pre-market setup
-RUNNER_OPEN_MINUTE = 9 * 60        # 9:00 AM IST — runner activates strategies
-RUNNER_CLOSE_MINUTE = 15 * 60 + 35 # 3:35 PM IST — runner pauses strategies
+IST_OFFSET = timedelta(hours=5, minutes=30)
+NSE_OPEN_MINUTE = session_times.OPEN_MINUTE   # 9:15 AM — actual NSE market open
+# 2026-08-03: NSE derivatives close moved 15:30 -> 15:40. Owned by
+# core.session_times so the two session modules cannot drift apart again.
+NSE_CLOSE_MINUTE = session_times.NSE_FO_CLOSE_MINUTE
 
 # Keep strategy evaluation aligned with real exchange order hours. Pre-market
-# readiness can run separately, but scans should not advance outside 09:15-15:30.
+# readiness can run separately, but scans should not advance outside the session.
 RUNNER_OPEN_MINUTE = NSE_OPEN_MINUTE
 RUNNER_CLOSE_MINUTE = NSE_CLOSE_MINUTE
 
@@ -26,14 +26,15 @@ MARKET_HOLIDAYS_IST = {
     if item.strip()
 }
 
+# Per-segment windows now differ: NSE F&O closes 15:40, BSE F&O stays 15:30
+# (unverified), and cash CONTINUOUS trading ends 15:15 because the Closing
+# Auction Session owns 15:15-15:35. Cash entries must exist or every NSE_EQ/
+# BSE_EQ strategy resolves to "Unsupported segment domain" and is skipped.
 SEGMENT_WINDOWS = {
-    DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
-    DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
-    # Cash equity trades the same 9:15–15:30 IST session as F&O. Without these
-    # entries every NSE_EQ/BSE_EQ strategy (the UPSTOX <STOCK> cash strategies)
-    # resolves to "Unsupported segment domain" and the runner skips it every tick.
-    DomainType.NSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE Equity"),
-    DomainType.BSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE Equity"),
+    DomainType.NSE_FO: (*session_times.segment_window("NSE_FO"), "NSE F&O"),
+    DomainType.BSE_FO: (*session_times.segment_window("BSE_FO"), "BSE F&O"),
+    DomainType.NSE_EQ: (*session_times.segment_window("NSE_EQ"), "NSE Equity"),
+    DomainType.BSE_EQ: (*session_times.segment_window("BSE_EQ"), "BSE Equity"),
 }
 
 def get_ist_now(now_utc: Optional[datetime] = None) -> datetime:

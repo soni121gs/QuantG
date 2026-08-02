@@ -12,6 +12,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+import session_times
+
 logger = logging.getLogger("quantg.position_lifecycle")
 
 # ── Phase 2 #4: theta-aware exits ───────────────────────────────────────────────
@@ -26,8 +28,9 @@ EXIT_THETA_NOPROGRESS_MIN = float(os.environ.get("EXIT_THETA_NOPROGRESS_MIN", "8
 EXIT_THETA_MIN_PROGRESS_R = float(os.environ.get("EXIT_THETA_MIN_PROGRESS_R", "0.3"))
 # Hard floor on the (theta-scaled) window so we never exit absurdly early.
 EXIT_THETA_MIN_WINDOW = float(os.environ.get("EXIT_THETA_MIN_WINDOW", "3"))
-# Trading minutes per session (NSE 09:15–15:30) — converts per-day theta to per-minute.
-_SESSION_MINUTES = 375.0
+# Trading minutes per session — converts per-day theta to per-minute. NSE F&O
+# moved to 09:15–15:40 (385 min) on 2026-08-03; owned by session_times.
+_SESSION_MINUTES = float(session_times.session_minutes("NSE_FO"))
 # "Normal" theta burn (fraction of premium per minute) below which the window is
 # not shortened. Steeper decay shrinks the window proportionally.
 _THETA_REF_PCT_PER_MIN = 0.001

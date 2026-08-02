@@ -4,19 +4,24 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import logging
 
+import session_times
 from core.market_domains import DomainType
 
 logger = logging.getLogger("quantg.market_session_service")
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
-NSE_OPEN_MINUTE = 9 * 60 + 15  # 09:15 IST
-NSE_CLOSE_MINUTE = 15 * 60 + 30  # 15:30 IST
+NSE_OPEN_MINUTE = session_times.OPEN_MINUTE      # 09:15 IST
+NSE_CLOSE_MINUTE = session_times.NSE_FO_CLOSE_MINUTE  # 15:40 IST from 2026-08-03
 
+# Windows are per-segment from 2026-08-03 — see core/session_times.py. This
+# module and core/market_clock.py used to each carry their own copy of this
+# table; both now read the one source so they cannot disagree about when the
+# market shuts.
 SEGMENT_WINDOWS = {
-    DomainType.NSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE F&O"),
-    DomainType.BSE_FO: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE F&O"),
-    DomainType.NSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "NSE Equity"),
-    DomainType.BSE_EQ: (NSE_OPEN_MINUTE, NSE_CLOSE_MINUTE, "BSE Equity"),
+    DomainType.NSE_FO: (*session_times.segment_window("NSE_FO"), "NSE F&O"),
+    DomainType.BSE_FO: (*session_times.segment_window("BSE_FO"), "BSE F&O"),
+    DomainType.NSE_EQ: (*session_times.segment_window("NSE_EQ"), "NSE Equity"),
+    DomainType.BSE_EQ: (*session_times.segment_window("BSE_EQ"), "BSE Equity"),
 }
 
 

@@ -9,6 +9,8 @@ Usage:
 """
 import os
 
+import session_times as _session_times
+
 
 class MARKET:
     NIFTY_LOT_SIZE = 65          # shares per lot
@@ -18,13 +20,17 @@ class MARKET:
     BANKNIFTY_STRIKE_INTERVAL = 100
     SENSEX_STRIKE_INTERVAL = 100
 
-    # Market hours IST (24h)
-    MARKET_OPEN_HOUR = 9
-    MARKET_OPEN_MINUTE = 15
-    MARKET_CLOSE_HOUR = 15
-    MARKET_CLOSE_MINUTE = 30
-    SQUAREOFF_HOUR = 15          # intraday squareoff trigger hour
-    SQUAREOFF_MINUTE = 10        # intraday squareoff trigger minute
+    # Market hours IST (24h). Canonical values live in session_times.py —
+    # NSE derivatives close moved 15:30 -> 15:40 on 2026-08-03 and cash
+    # continuous trading now ends 15:15 (Closing Auction Session 15:15-15:35).
+    MARKET_OPEN_HOUR = _session_times.OPEN_MINUTE // 60
+    MARKET_OPEN_MINUTE = _session_times.OPEN_MINUTE % 60
+    MARKET_CLOSE_HOUR = _session_times.NSE_FO_CLOSE_MINUTE // 60
+    MARKET_CLOSE_MINUTE = _session_times.NSE_FO_CLOSE_MINUTE % 60
+    # Intraday squareoff for single-leg/equity — must land BEFORE the 15:15 cash
+    # auction, so it leads the continuous-cash close, not the derivatives close.
+    SQUAREOFF_HOUR = _session_times.EQUITY_SQUAREOFF_MINUTE // 60
+    SQUAREOFF_MINUTE = _session_times.EQUITY_SQUAREOFF_MINUTE % 60
 
 
 class RISK:
