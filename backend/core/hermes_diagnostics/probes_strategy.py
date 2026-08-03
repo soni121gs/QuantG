@@ -1,6 +1,7 @@
 """Strategy & edge-integrity probes — persistent loss and sample-size honesty."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -136,6 +137,103 @@ async def thin_sample_grading(ctx: ProbeContext) -> List[Finding]:
             evidence={"strategy_id": sid, "name": strat.get("name"), "closed_trades": n},
             reproduction="count CLOSED strategy_positions per strategy_id",
             suggested_fix="No fix — a label. Promote only after 30+ trades AND positive OOS/forward-paper.",
+        ))
+    return out
+
+
+_GEOM_WR_MIN_SAMPLE = int(os.environ.get("HERMES_GEOMETRY_WR_MIN_SAMPLE", "20"))
+_GEOM_WR_GAP_WARN = float(os.environ.get("HERMES_GEOMETRY_WR_GAP", "0.05"))
+
+
+@register("strategy.geometry_vs_realized_wr", kind="dynamic")
+async def geometry_vs_realized_wr(ctx: ProbeContext) -> List[Finding]:
+    """Does this seller actually win as often as its OWN exit geometry requires?
+
+    `static.reward_risk_geometry` asks the same question against a FIXED constant
+    (`HERMES_GEOMETRY_BE_WR_WARN`, 0.75) — and that is exactly why it stayed silent
+    through the losing run measured on 2026-08-03. Every live credit seller sat at
+    tp 0.25 / sl 0.60, a break-even win rate of 70.6%, just under the 75% alarm,
+    while realising 50-62%. Structurally negative, and no probe said a word.
+
+    A fixed threshold cannot answer the question: 71% break-even is comfortable for
+    a strategy that wins 80% and fatal for one that wins 55%. The only honest test
+    compares the REQUIRED win rate to the strategy's OWN realised one. This probe is
+    therefore the evidence-based sibling, not a replacement — keep both: the static
+    one can fire on day zero with no trades, this one needs a sample.
+
+    Scoped to the current geometry epoch (`geometry_changed_at`) so a re-cut is not
+    judged on the shape it replaced (§21.5), and silent under
+    `HERMES_GEOMETRY_WR_MIN_SAMPLE` trades (§19: thin evidence -> silence).
+    """
+    out: List[Finding] = []
+    for strat in ctx.strategies:
+        o = (strat.get("visual_config") or {}).get("options") or {}
+        if str(o.get("structure")) != "credit_spread":
+            continue
+        if str(strat.get("status")) not in ("live", "active"):
+            continue
+        tp, sl = o.get("credit_tp_frac"), o.get("credit_sl_mult")
+        if tp is None or sl is None:
+            continue                      # hold-to-expiry omits both by design (§25.5)
+        try:
+            tp, sl = float(tp), float(sl)
+        except (TypeError, ValueError):
+            continue
+        if tp <= 0 or sl <= 0:
+            continue
+        be_wr = sl / (sl + tp)
+
+        sid = str(strat.get("id"))
+        match: Dict[str, Any] = {"user_id": ctx.user_id, "status": "CLOSED",
+                                 "strategy_id": sid, "realized_pnl": {"$ne": None}}
+        epoch = strat.get("geometry_changed_at")
+        if epoch:
+            match["created_at"] = {"$gte": str(epoch)}
+        rows = await ctx.db.strategy_positions.aggregate([
+            {"$match": match},
+            {"$group": {"_id": None, "n": {"$sum": 1},
+                        "wins": {"$sum": {"$cond": [{"$gt": ["$realized_pnl", 0]}, 1, 0]}},
+                        "pnl": {"$sum": "$realized_pnl"}}},
+        ]).to_list(1)
+        if not rows:
+            continue
+        n = int(rows[0].get("n") or 0)
+        if n < _GEOM_WR_MIN_SAMPLE:
+            continue
+        wins = int(rows[0].get("wins") or 0)
+        realized_wr = wins / n
+        gap = be_wr - realized_wr
+        if gap < _GEOM_WR_GAP_WARN:
+            continue
+        pnl = round(float(rows[0].get("pnl") or 0.0), 2)
+        out.append(Finding(
+            probe_id="strategy.geometry_vs_realized_wr", domain=Domain.STRATEGY,
+            severity=Severity.HIGH if gap >= 0.10 else Severity.MEDIUM,
+            entity=sid,
+            title=(f"Geometry needs {be_wr*100:.0f}% wins, strategy delivers "
+                   f"{realized_wr*100:.0f}% over {n} trades"),
+            detail=(f"TP {tp:.2f}xcredit against SL {sl:.2f}xcredit requires a "
+                    f"{be_wr*100:.1f}% win rate to break even before costs. Over "
+                    f"{n} closed trades{' since the last re-cut' if epoch else ''} "
+                    f"this strategy has won {realized_wr*100:.1f}% "
+                    f"(realised P&L Rs{pnl:,.0f}). The shortfall is structural: no "
+                    f"signal improvement fixes a geometry the strategy cannot hit. "
+                    f"Either the stop must come in, the target must go out, or the "
+                    f"strategy needs a win rate it has not shown."),
+            evidence={"strategy_id": sid, "name": strat.get("name"),
+                      "credit_tp_frac": tp, "credit_sl_mult": sl,
+                      "breakeven_win_rate": round(be_wr, 3),
+                      "realized_win_rate": round(realized_wr, 3),
+                      "gap": round(gap, 3), "sample": n, "realized_pnl": pnl,
+                      "geometry_changed_at": str(epoch) if epoch else None},
+            reproduction=(f"db.strategy_positions.aggregate: match status=CLOSED, "
+                          f"strategy_id={sid}"
+                          + (f", created_at>={epoch}" if epoch else "")
+                          + " -> wins/n vs sl/(sl+tp) from visual_config.options"),
+            suggested_fix=("Re-derive TP/SL jointly — lowering the target WITHOUT "
+                           "lowering the stop raises the break-even win rate, which is "
+                           "how tp 0.50/sl 0.90 (64%) became tp 0.25/sl 0.60 (71%). "
+                           "Any new geometry owes a judge run + forward-paper (§13.5)."),
         ))
     return out
 

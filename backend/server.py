@@ -16734,7 +16734,8 @@ async def _hold_to_expiry_positions_due(user_id: str, strategy_id: str) -> bool:
     return any(_spread_past_expiry(r) for r in rows)
 
 
-async def _eod_square_off_all_users(spread_phase: bool = False) -> Dict[str, Any]:
+async def _eod_square_off_all_users(spread_phase: bool = False,
+                                    segment: Optional[str] = None) -> Dict[str, Any]:
     """EXIT GUARANTEE: unconditional EOD square-off of open positions.
 
     Runs in two phases so spreads can ride nearer to expiry:
@@ -16778,6 +16779,14 @@ async def _eod_square_off_all_users(spread_phase: bool = False) -> Dict[str, Any
                               "open_quantity": {"$gt": 0}}
     if not spread_phase:
         _match["structure"] = {"$nin": _spread_types}
+    # Segment scoping (2026-08-03): NSE F&O now closes 15:40 but BSE stays 15:30, so a
+    # single global backstop derived from the NSE close would sweep SENSEX SIX minutes
+    # after BSE had shut — closing against a stale mark in paper, rejected in live.
+    # Each segment gets its own pass at its own close.
+    if segment:
+        _bse = sorted(session_times._BSE_UNDERLYINGS)
+        _match["underlying"] = ({"$in": _bse} if str(segment).upper() == "BSE_FO"
+                                else {"$nin": _bse})
     pairs = await db.strategy_positions.aggregate([
         {"$match": _match},
         {"$group": {"_id": {"user_id": "$user_id", "strategy_id": "$strategy_id"}}},
@@ -16913,6 +16922,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _lifecycle_reset_done_date: Optional[str] = None
     _squareoff_done_date: Optional[str] = None
     _spread_squareoff_done_date: Optional[str] = None
+    _bse_spread_squareoff_done_date: Optional[str] = None
     _vix_last_snapshot_minute: Optional[str] = None
     _chain_last_snapshot_minute: Optional[str] = None
     _candle_backfill_done_date: Optional[str] = None
@@ -17397,18 +17407,35 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # square-off; guarantees any straggler is closed before the close.
             # Tracks the derivatives close (15:40 from 2026-08-03) rather than the
             # old hardcoded 15:26.
+            # BSE pass first — BSE F&O closes 15:30, so its backstop must run at 15:26,
+            # a full ten minutes before NSE's. One global pass off the NSE close swept
+            # SENSEX after BSE had already shut.
+            _bse_backstop = session_times.spread_squareoff_minute_for("BSE_FO") + 1
+            if (
+                ist.weekday() < 5
+                and _bse_spread_squareoff_done_date != today
+                and _bse_backstop <= (hour * 60 + minute) < session_times.BSE_FO_CLOSE_MINUTE
+            ):
+                _bse_spread_squareoff_done_date = today
+                logger.info("Daily scheduler: %s IST — BSE spread backstop square-off starting",
+                            session_times.hhmm_str(_bse_backstop))
+                try:
+                    await _eod_square_off_all_users(spread_phase=True, segment="BSE_FO")
+                except Exception as _sq_err:
+                    logger.error("BSE spread backstop square-off run failed: %s", _sq_err)
+
             if (
                 ist.weekday() < 5
                 and _spread_squareoff_done_date != today
                 and session_times.SPREAD_SQUAREOFF_MINUTE + 1 <= (hour * 60 + minute) < session_times.NSE_FO_CLOSE_MINUTE
             ):
                 _spread_squareoff_done_date = today
-                logger.info("Daily scheduler: %s IST — spread backstop square-off starting",
+                logger.info("Daily scheduler: %s IST — NSE spread backstop square-off starting",
                             session_times.hhmm_str(session_times.SPREAD_SQUAREOFF_MINUTE + 1))
                 try:
-                    await _eod_square_off_all_users(spread_phase=True)
+                    await _eod_square_off_all_users(spread_phase=True, segment="NSE_FO")
                 except Exception as _sq_err:
-                    logger.error("Spread backstop square-off run failed: %s", _sq_err)
+                    logger.error("NSE spread backstop square-off run failed: %s", _sq_err)
         except Exception as e:
             logger.warning("Daily scheduler error: %s", e)
         # Sleep in 10-second slices for responsive shutdown

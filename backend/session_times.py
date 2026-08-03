@@ -132,6 +132,31 @@ def expected_bar_count(segment: str = "NSE_FO") -> int:
     return session_minutes(segment)
 
 
+def spread_squareoff_minute_for(segment: str) -> int:
+    """Spread square-off for ONE segment: that segment's own close minus the lead.
+
+    `SPREAD_SQUAREOFF_MINUTE` above is derived from the NSE close and was the single
+    global value every caller used. From 2026-08-03 the two derivatives closes DIVERGE
+    (NSE 15:40, BSE 15:30 — see the module docstring), so one global 15:35 square-off
+    is five minutes AFTER the BSE close: a SENSEX/BANKEX spread would be closed against
+    a stale mark in paper and rejected outright in live. Anything squaring off a
+    position must ask for that position's own segment.
+    """
+    s = (segment or "").upper()
+    if s == "BSE_FO":
+        return _hhmm("BSE_SPREAD_SQUAREOFF_IST", BSE_FO_CLOSE_MINUTE - _SPREAD_SQUAREOFF_LEAD)
+    return SPREAD_SQUAREOFF_MINUTE
+
+
+# Underlyings that trade on BSE. Everything else is assumed NSE.
+_BSE_UNDERLYINGS = {"SENSEX", "BANKEX", "SENSEX50"}
+
+
+def segment_for_underlying(underlying: str) -> str:
+    """'SENSEX' -> 'BSE_FO', 'NIFTY' -> 'NSE_FO'. Derivatives segment only."""
+    return "BSE_FO" if str(underlying or "").strip().upper() in _BSE_UNDERLYINGS else "NSE_FO"
+
+
 def in_session(hour: int, minute: int, segment: str = "NSE_FO") -> bool:
     """Is this IST wall-clock time inside the tradeable session?
 

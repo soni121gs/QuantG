@@ -70,6 +70,14 @@ NO_PROGRESS_MINUTES = float(os.environ.get("DYN_EXIT_NO_PROGRESS_MINUTES", "20")
 # at ~0.3%. Also floored at real friction so a thin-credit spread isn't cut for
 # failing to clear a rupee bar it never could.
 NO_PROGRESS_PEAK_FRAC = float(os.environ.get("DYN_EXIT_NO_PROGRESS_PEAK_FRAC", "0.08"))
+# Only apply the bar once decay could plausibly have cleared it — see the long
+# note in no_progress_exit(). Env-reversible to restore the flat-window behaviour.
+NO_PROGRESS_REQUIRE_REACHABLE = (
+    os.environ.get("DYN_EXIT_NO_PROGRESS_REQUIRE_REACHABLE", "true").strip().lower() == "true")
+try:
+    from core.spread_builder import MARKET_MINUTES_PER_DAY
+except Exception:  # pragma: no cover - keeps this module import-safe standalone
+    MARKET_MINUTES_PER_DAY = float(os.environ.get("MARKET_MINUTES_PER_DAY", "385"))
 
 
 def no_progress_exit(
@@ -81,10 +89,33 @@ def no_progress_exit(
     lot_size: Optional[int] = None,
     lots: int = 1,
     leg_premium_sum: Optional[float] = None,
+    dte_days: Optional[float] = None,
+    session_minutes: Optional[float] = None,
 ) -> Optional[str]:
     """Return "spread-no-progress" if a spread has shown no life within the
     window, else None. Pure. Priced exits (SL/TP/trail) must be checked FIRST by
-    the caller so a trade that is actually working is never cut."""
+    the caller so a trade that is actually working is never cut.
+
+    2026-08-03 — THE BAR MUST BE REACHABLE BEFORE IT IS APPLIED.
+    The 8%-of-credit bar was calibrated against the peak distribution of trades
+    measured over their WHOLE hold (winners median-peak 29%, dead trades ~0.3%),
+    then applied inside a flat 20-minute window. Those are different questions.
+    Theta can only deliver `held / (dte x session)` of the position's remaining
+    time value, so in 20 minutes it supplies ~5.2% at 0-1 DTE but only 1.3% at
+    4 DTE and 0.87% at 6 DTE — while the bar asks for 8%.
+
+    Measured on the 30 post-re-cut trades this rule closed: entries sat mostly at
+    DTE 4/6/25, mean peak was 3.40% of credit, and ZERO of 30 ever cleared 8%.
+    The rule was not separating dead trades from live ones — it was cutting
+    everything that had not been directionally lucky in its first 20 minutes, at
+    an average of -Rs127 a trade. Same defect class as §21.5/§22.3: a threshold
+    measured in one regime applied to another.
+
+    Fix: keep the bar, but do not JUDGE until enough decay has been available for
+    the bar to be clearable. A trade is then cut for failing a test it could have
+    passed. Near expiry that is still ~20-30 minutes; at 6 DTE it waits hours,
+    which is the correct answer for a position whose theta has not arrived yet.
+    """
     if not NO_PROGRESS_ENABLED:
         return None
     if held_minutes is None or held_minutes < NO_PROGRESS_MINUTES:
@@ -99,6 +130,19 @@ def no_progress_exit(
             from core.spread_builder import round_trip_friction
             floor = max(floor, round_trip_friction(leg_premium_sum, lot_size) * max(1, int(lots or 1)))
         except Exception:
+            pass
+    # Reachability gate: how much of the position's time value could decay
+    # plausibly have returned by now? Below the bar, the trade has not yet been
+    # given the chance to pass, so judging it is judging noise.
+    if NO_PROGRESS_REQUIRE_REACHABLE and dte_days is not None:
+        try:
+            _dte = max(0.0, float(dte_days))
+            _sess = float(session_minutes or MARKET_MINUTES_PER_DAY)
+            _life = max(_sess, (_dte if _dte > 0 else 1.0) * _sess)
+            available = min(1.0, float(held_minutes) / _life) * credit_money
+            if available < floor:
+                return None
+        except (TypeError, ValueError, ZeroDivisionError):
             pass
     if (peak_pnl or 0.0) < floor:
         return "spread-no-progress"

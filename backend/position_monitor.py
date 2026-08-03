@@ -103,12 +103,22 @@ def _squareoff_due() -> bool:
     return ist.hour * 60 + ist.minute >= _SQUAREOFF_MINUTE_IST
 
 
-def _spread_squareoff_due() -> bool:
-    """True when IST time has reached or passed the spread square-off minute."""
+def _spread_squareoff_due(underlying: str | None = None) -> bool:
+    """True when IST time has reached this underlying's OWN spread square-off minute.
+
+    2026-08-03: the two derivatives closes diverged (NSE 15:40, BSE 15:30), but this
+    was a single global 15:35 derived from the NSE close — five minutes AFTER the BSE
+    close. A SENSEX spread would have been squared off against a stale mark in paper
+    and rejected in live. The previous 15:25 value hid it because it preceded both
+    closes; the SEBI change made it live the day it shipped. Ask per segment.
+    """
     ist = _ist_now()
     if ist.weekday() >= 5:
         return False
-    return ist.hour * 60 + ist.minute >= _SPREAD_SQUAREOFF_MINUTE_IST
+    due = session_times.spread_squareoff_minute_for(
+        session_times.segment_for_underlying(underlying)
+    ) if underlying else _SPREAD_SQUAREOFF_MINUTE_IST
+    return ist.hour * 60 + ist.minute >= due
 
 
 # EDR-11: hold-to-expiry spreads (the OOS-validated put spread) keep the position
@@ -834,15 +844,26 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     )
 
     # EDR-11: hold-to-expiry spreads keep the position across days and only settle on
-    # the option's actual expiry day; everything else squares off intraday at 15:25.
+    # the option's actual expiry day; everything else squares off intraday.
     hold_to_expiry = await _strategy_holds_to_expiry(db, pos.get("strategy_id"))
 
-    # Spreads ride later than single-leg (15:25 vs 15:10) so theta is collected
-    # nearer to expiry instead of cutting them mid-trajectory at 15:10.
-    if _spread_squareoff_due():
+    # Spreads ride later than single-leg so theta is collected nearer to the close
+    # instead of cutting them mid-trajectory. The minute is now taken from the
+    # position's OWN segment — NSE F&O closes 15:40 (square-off 15:35), BSE 15:30
+    # (square-off 15:25) — because one global time derived from the NSE close would
+    # square a SENSEX spread off five minutes after BSE had shut.
+    _sq_underlying = pos.get("underlying") or str(pos.get("target_symbol") or "").split(" ")[0]
+    if _spread_squareoff_due(_sq_underlying):
         if hold_to_expiry and not _spread_past_expiry(pos):
-            return  # keep holding to weekly expiry — skip the daily 15:25 squareoff
-        reason = "expiry-settlement" if hold_to_expiry else "intraday-squareoff-1525"
+            return  # keep holding to weekly expiry — skip the daily squareoff
+        # Reason string carries the ACTUAL minute; the old literal "1525" kept
+        # appearing in the ledger after the square-off moved, which made every
+        # exit-timing question unanswerable from the data.
+        _sq_at = session_times.hhmm_str(
+            session_times.spread_squareoff_minute_for(
+                session_times.segment_for_underlying(_sq_underlying)))
+        reason = ("expiry-settlement" if hold_to_expiry
+                  else f"intraday-squareoff-{_sq_at.replace(':', '')}")
         logger.info("spread monitor: %s closing pos=%s", reason, pos.get("id"))
         if structure == "debit_spread":
             await close_debit_spread(db, pos, reason=reason,
@@ -937,6 +958,16 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
             _lps = sum(float(l.get("entry_price") or l.get("premium") or 0) for l in _legs) or None
         except Exception:
             _lps = None
+        # DTE at THIS moment decides how much decay could have arrived so far —
+        # without it the bar is applied in a window theta cannot fill (see
+        # dynamic_exit.no_progress_exit).
+        _dte_np: float | None = None
+        try:
+            _exp = parse_iso_dt(pos.get("expiry")) if pos.get("expiry") else None
+            if _exp is not None:
+                _dte_np = max(0.0, (_exp - datetime.now(timezone.utc)).total_seconds() / 86400.0)
+        except Exception:
+            _dte_np = None
         reason = no_progress_exit(
             peak_pnl=peak_pnl,
             held_minutes=_held_np,
@@ -945,6 +976,10 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
             lot_size=pos.get("lot_size"),
             lots=int(pos.get("lots") or 1),
             leg_premium_sum=_lps,
+            dte_days=_dte_np,
+            session_minutes=float(session_times.session_minutes(
+                session_times.segment_for_underlying(
+                    pos.get("underlying") or str(pos.get("target_symbol") or "").split(" ")[0]))),
         )
 
     if reason:

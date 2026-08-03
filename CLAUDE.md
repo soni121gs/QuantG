@@ -1944,3 +1944,108 @@ owes forward-paper evidence. `CORE_ENGINE_LIVE_ENABLED=false`.
 - **NOT a bug (checked):** the VRP strategies' `direction` is the DIRECTIONAL VIEW, not
   the leg — `BUY/CE` (bullish) means *sell a put spread*, which is why the strategy named
   "Put-Spread" correctly opened a PE credit spread. Do not "fix" this.
+
+---
+
+## 27. Why the sellers lose — the exit engine, not the signal (2026-08-03)
+
+Audit of the loss-making strategies. **Judged on the current geometry epoch only**
+(every seller was re-cut 2026-07-30, so blending in older trades grades a shape that
+no longer exists — §21.5). Post-re-cut: **n=28, WR 43%, −₹3,001.**
+
+### 27.1 The finding — one rule closes 77% of all trades
+Post-re-cut exit mix for the whole credit book:
+
+| exit | n | avg | total |
+|---|---|---|---|
+| **spread-no-progress** | **30** | −₹127 | **−₹3,824** |
+| spread-sl | 1 | −₹987 | −₹987 |
+| intraday-squareoff | 5 | −₹113 | −₹564 |
+| spread-tp | 2 | +₹269 | +₹539 |
+| trail-lock | 1 | +₹329 | +₹329 |
+
+**30 of 39 exits are `no_progress`, and only 3 trades in the entire sample ever reached
+a profit exit.** The TP/SL geometry is nearly irrelevant — almost nothing survives long
+enough to be judged by it.
+
+### 27.2 The wrong logic — a bar that could not be cleared
+`no_progress_exit` requires the peak to reach **8% of credit within 20 minutes**. That
+8% was calibrated (§21.10) against the peak distribution of trades measured over their
+**whole hold** — winners median-peak 29%, dead trades ~0.3%. It was then applied inside
+a flat 20-minute window. **Those are different questions.**
+
+Theta can only return `held / (dte × session)` of remaining time value:
+
+| DTE at entry | decay available in 20 min | bar asked |
+|---|---|---|
+| 0–1 | 5.19% | 8% |
+| 2 | 2.60% | 8% |
+| 4 (n=10 real trades) | **1.30%** | 8% |
+| 6 (n=9) | **0.87%** | 8% |
+
+Measured on the 30 trades the rule actually closed: mean peak **3.40%** of credit and
+**ZERO of 30 ever cleared 8%**. The rule was not separating dead trades from live ones
+— it was cutting everything that had not been *directionally* lucky in its first 20
+minutes. Note the mean peak (3.40%) was already **above** what decay could supply at
+DTE 4–6, so these trades were outperforming pure theta and were cut anyway.
+
+**Fix:** keep the bar, but do not JUDGE until enough decay has been available for the
+bar to be clearable (`DYN_EXIT_NO_PROGRESS_REQUIRE_REACHABLE`, env-reversible). Replayed
+against the 30 real trades at the 20-minute mark: **old rule cut 30/30, new rule cuts
+0/30** — they are held and judged later (~109 min at 4 DTE, ~164 min at 6 DTE), near
+expiry still ~20–30 min. Same defect class as §21.5/§22.3: a threshold measured under
+one regime applied to another.
+
+⚠️ **NOT claimed:** that holding these trades makes them profitable. The counterfactual
+is unknowable — they will be judged later on evidence that can exist, and many will
+still be cut. What is proven is that the bar was unreachable by construction.
+
+### 27.3 The geometry needs a win rate the book has never shown
+Every live seller runs **tp 0.25 / sl 0.60 → break-even WR 70.6%**; realised is 43%
+post-re-cut (50–62% lifetime). Note the 07-30 retune (§21.9) made this **worse**: TP was
+halved (0.50→0.25) while SL fell only a third (0.90→0.60), so break-even went
+**64% → 71%**. Lowering the target without lowering the stop by at least the same ratio
+mechanically raises the required win rate — the reachability argument for the TP change
+was sound, but it was applied to one side of the ratio only.
+
+**Left as a founder decision, not silently re-tuned** — n=28 is below the §13.5 floor and
+re-cutting geometry on a thin sample is the treadmill (§13.4).
+
+### 27.4 A latent bug the SEBI change armed
+The spread square-off was a **single global minute derived from the NSE close** — 15:35,
+which from 2026-08-03 is **five minutes AFTER the BSE close (15:30)**. A SENSEX spread
+would have been closed against a stale mark in paper and rejected outright in live. The
+old 15:25 value hid it because it preceded *both* closes; it armed itself the day the
+session changed and had never yet fired. Square-off, force-close and the backstop sweep
+are now all **per segment** (`session_times.spread_squareoff_minute_for`,
+`segment_for_underlying`), and the backstop runs a BSE pass at 15:26 before the NSE pass
+at 15:36. The reason string carries the real minute — the literal `intraday-squareoff-1525`
+kept appearing long after the time moved, which made every exit-timing question
+unanswerable from the ledger.
+
+**Rule: any time derived from one exchange's close must be asked for per segment.**
+
+### 27.5 Two new permanent probes (§19 — a bug caught once is caught forever)
+- **`strategy.geometry_vs_realized_wr`** — compares break-even WR to the strategy's OWN
+  realised WR, scoped to the geometry epoch, silent under 20 trades. The existing
+  `static.reward_risk_geometry` compares against a FIXED 0.75 constant, which is exactly
+  why it stayed silent: 70.6% sits just under the alarm. **A fixed threshold cannot know
+  whether 71% is achievable — only the strategy's own record can.** Keep both: the static
+  one fires on day zero with no trades, this one needs a sample.
+- **`exec.squareoff_after_segment_close`** — flags any position closed after its own
+  segment's close, so a future divergence (BSE following NSE, a muhurat session, SEBI
+  phase 2) is caught by measurement rather than by someone remembering a constant.
+
+### 27.6 Corrections made during this audit
+- I first reported `spread-sl` overshooting its stop by up to 3.7×. **Wrong** — I had
+  computed the stop as `sl_mult × credit` while the code uses `credit × (1+sl_mult)` as a
+  spread VALUE, and I queried `sl_value` when the field is `spread_sl_value`. Measured
+  correctly the overshoot is **1.0–1.2×**, i.e. normal close slippage, not a defect.
+- The headline "break-even 71% vs achieved 50–62%" mixed geometry epochs. The
+  epoch-correct number is **43% over n=28**. Both are stated above; the epoch-scoped one
+  is the one that grades the current machine.
+- **The new probe correctly finds nothing today** — every seller's post-re-cut sample is
+  8–11 trades, under its 20-trade floor. That is §19 working (thin evidence → silence),
+  not a broken probe.
+
+`CORE_ENGINE_LIVE_ENABLED=false`. Nothing here creates edge.

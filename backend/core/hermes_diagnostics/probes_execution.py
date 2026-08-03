@@ -392,3 +392,72 @@ async def exit_below_cost_floor(ctx: ProbeContext) -> List[Finding]:
                        "cannot trigger below real friction. If winners genuinely cannot reach "
                        "it, the GEOMETRY is wrong (credit too thin for the width), not the exit."),
     )]
+
+
+@register("exec.squareoff_after_segment_close", kind="dynamic")
+async def squareoff_after_segment_close(ctx: ProbeContext) -> List[Finding]:
+    """A position must never be squared off AFTER its own exchange has closed.
+
+    2026-08-03 (SEBI session change, §25.1): NSE derivatives moved to a 15:40 close
+    while BSE stayed at 15:30, but the spread square-off was a SINGLE global minute
+    derived from the NSE close — 15:35, five minutes after BSE had shut. A SENSEX
+    spread would have been closed against a stale mark in paper and rejected outright
+    in live. The previous 15:25 value hid it because it preceded BOTH closes, so the
+    bug shipped and armed itself on the day the session changed.
+
+    That is the general hazard: a single global time is correct only while every
+    segment shares a close. This probe reads the REALISED close timestamp against the
+    position's OWN segment window, so any future divergence (BSE following NSE, a
+    muhurat session, another SEBI phase) is caught by measurement rather than by
+    someone remembering to update a constant.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    import session_times
+
+    late: List[Dict[str, Any]] = []
+    for p in ctx.closed_today:
+        closed_at = p.get("closed_at") or p.get("exit_time")
+        if not closed_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(closed_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ist = dt.astimezone(timezone.utc) + timedelta(hours=5, minutes=30)
+        minute = ist.hour * 60 + ist.minute
+        underlying = p.get("underlying") or str(p.get("target_symbol") or "").split(" ")[0]
+        segment = session_times.segment_for_underlying(underlying)
+        close_m = session_times.close_minute_for(segment)
+        if minute <= close_m:
+            continue
+        late.append({
+            "position_id": p.get("id"), "strategy_id": p.get("strategy_id"),
+            "underlying": underlying, "segment": segment,
+            "closed_at_ist": f"{ist.hour:02d}:{ist.minute:02d}",
+            "segment_close": session_times.hhmm_str(close_m),
+            "exit_reason": p.get("exit_reason"),
+            "realized_pnl": round(float(p.get("realized_pnl") or 0), 2),
+        })
+    if not late:
+        return []
+    return [Finding(
+        probe_id="exec.squareoff_after_segment_close", domain=Domain.EXECUTION,
+        severity=Severity.HIGH, entity="session-times",
+        title=(f"{len(late)} position(s) closed AFTER their exchange had shut "
+               f"({late[0]['underlying']} {late[0]['closed_at_ist']} vs "
+               f"{late[0]['segment']} close {late[0]['segment_close']})"),
+        detail=("The exit ran past the segment close, so its mark came from a market "
+                "that was no longer trading — the P&L booked against it is stale in "
+                "paper and the order would be rejected in live. NSE F&O and BSE F&O no "
+                "longer share a close (15:40 vs 15:30), so any square-off, force-close "
+                "or backstop sweep must take its minute from the position's OWN segment."),
+        evidence={"count": len(late), "positions": late[:10]},
+        reproduction=("closed positions today WHERE closed_at (IST) > "
+                      "session_times.close_minute_for(segment_for_underlying(underlying))"),
+        suggested_fix=("Use session_times.spread_squareoff_minute_for(segment) / "
+                       "close_minute_for(segment) — never a single global constant "
+                       "derived from one exchange's close."),
+    )]
