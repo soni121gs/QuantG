@@ -1880,6 +1880,28 @@ price sits on its VWAP — SENSEX flipped TREND_UP/RANGE **16 times in 20 minute
 almost entirely the gap. That is the correct read *for an intraday entry decision*; a
 gap hurts positions already held, which is a different problem from whether to open one.
 
+### 26.4b Bug 4 — the regime only refreshed when a strategy liked the setup
+`update_regime` sat in the strategy-runner loop **below** the `not signals` /
+`not last_sig` / duplicate / low-confidence `continue`s, so an underlying's regime was
+recomputed only when one of its strategies emitted a VALID signal.
+
+BANKNIFTY's only live strategy is the trend rider, which needs a fresh 30-bar breakout.
+It fired at 10:05 IST, went quiet, and `market_regime_state.BANKNIFTY` stayed **frozen at
+its 10:05 value for the rest of the session** (three hours stale) while NIFTY/SENSEX —
+whose sellers signal every tick — refreshed every ~2 minutes. It was visible as
+`session_return_pct: undefined` on BANKNIFTY alone after the §26.4 deploy: the new code
+had never once run for it.
+
+**Not cosmetic.** The same block detects a mid-session regime FLIP and tightens
+against-regime positions, and the CRASH/MELTUP entry blocks read the cached label — so
+both depended on the underlying's strategies being chatty. **A genuine intraday crash on
+a quiet underlying would not have tightened its open positions.**
+
+The regime is a property of the MARKET, not of whether a strategy liked it. It now runs
+immediately after the candles are in hand (no extra broker round-trip), before every
+gate. Pinned by a source-order test, the §25.4b approach — the invariant is positional
+and the loop is not unit-testable in isolation.
+
 ### 26.5 Standing rules this produced
 - **Diff the regime against real broker bars before believing it** (§26.1). Three of the
   last four regime incidents were bad input, not bad logic.

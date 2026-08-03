@@ -758,6 +758,37 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
                 data = _enrich_tod_ratios(data)
+
+                # ── Regime refresh (MUST run before any signal gate) ──────────
+                # 2026-08-03: this used to live below, AFTER the `not signals` /
+                # `not last_sig` / duplicate / low-confidence `continue`s — so an
+                # underlying's regime was only recomputed when one of its strategies
+                # happened to emit a VALID signal. BANKNIFTY's only live strategy is
+                # the trend rider, which needs a fresh 30-bar breakout: it fired at
+                # 10:05 IST and then went quiet, and BANKNIFTY's regime stayed frozen
+                # at its 10:05 value for the rest of the session while NIFTY/SENSEX
+                # (whose sellers signal every tick) refreshed every ~2 minutes.
+                # That stale label is what the RAE router consumes as "the mature
+                # coarse regime" cross-check and what the CRASH/MELTUP entry blocks
+                # read — the §22.7 stale-label trap in a different organ. The regime
+                # is a property of the MARKET, not of whether a strategy liked it, so
+                # it must be refreshed from the candles we already have, every tick.
+                _underlying = str(
+                    ((vc or {}).get("options") or {}).get("underlying") or symbol
+                ).upper()
+                try:
+                    _regime = await update_regime(db, _underlying, data)
+                except Exception:
+                    _regime = get_cached_regime(_underlying) or {}
+                _prev_regime = _last_regime_per_index.get(_underlying)
+                _curr_regime = _regime.get("regime", "RANGE")
+                if _prev_regime and _prev_regime != _curr_regime:
+                    _all_uids = list({_s.get("user_id") for _s in strategies if _s.get("user_id")})
+                    asyncio.ensure_future(
+                        _tighten_positions_on_regime_flip(db, _regime, _all_uids)
+                    )
+                _last_regime_per_index[_underlying] = _curr_regime
+
                 signals = _safe_run(code, data, strategy_id=s.get("id", ""), strategy_name=s.get("name", ""))
                 signals_count = len(signals)
                 if not signals:
@@ -837,25 +868,9 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                     )
                     continue
                 # ── Regime Gate ───────────────────────────────────────────────
-                # Update regime from latest candles (CRASH/MELTUP checked every
-                # tick; full bias refresh every 15 min inside update_regime).
-                _underlying = str(
-                    ((vc or {}).get("options") or {}).get("underlying") or symbol
-                ).upper()
-                try:
-                    _regime = await update_regime(db, _underlying, data)
-                except Exception:
-                    _regime = get_cached_regime(_underlying) or {}
-
-                # Detect mid-session regime flip and tighten against-regime positions
-                _prev_regime = _last_regime_per_index.get(_underlying)
-                _curr_regime = _regime.get("regime", "RANGE")
-                if _prev_regime and _prev_regime != _curr_regime:
-                    _all_uids = list({_s.get("user_id") for _s in strategies if _s.get("user_id")})
-                    asyncio.ensure_future(
-                        _tighten_positions_on_regime_flip(db, _regime, _all_uids)
-                    )
-                _last_regime_per_index[_underlying] = _curr_regime
+                # `_regime` / `_underlying` are computed ABOVE, before the signal
+                # gates, so an underlying whose strategies are quiet still gets a
+                # fresh label. Everything below consumes that value.
 
                 _long_ok  = _regime.get("long_entries_allowed", True)
                 _short_ok = _regime.get("short_entries_allowed", True)
