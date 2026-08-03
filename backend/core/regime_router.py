@@ -85,6 +85,12 @@ FINE_MIN_CONF = _f("RAE_ROUTER_FINE_MIN_CONF", 0.50)
 SELLER_SIZE_CONF_REF = _f("RAE_SELLER_SIZE_CONF_REF", 0.40)
 # sellers co-own the quiet regimes with the mean-revert specialist
 SELLER_OK_REGIMES = {tax.RANGE, tax.INSIDE_QUIET}
+# Structures that COLLECT premium. They are the ones the chop/EVENT veto exists for:
+# a fat tail is against them. A defined-risk BUYER (debit spread / long vol / tail
+# hedge) has the opposite payoff — expansion is what it is bought for — so a
+# declared owner that is not a seller may trade those regimes. This generalises the
+# hardcoded `long_vol` carve-out below, which was the only structure ever exempted.
+PREMIUM_SELLING_STRUCTURES = {"credit_spread"}
 # a single delta-1 trend specialist owns BOTH trend directions (its code picks CE vs
 # PE by the day's direction); accept the generic role name for either trend owner.
 TREND_OK_REGIMES = {tax.TREND_UP, tax.TREND_DOWN}
@@ -124,6 +130,8 @@ def route(
     *,
     specialist: Optional[str] = None,
     fallback_regime: Optional[str] = None,
+    owned_regimes: Optional[Any] = None,
+    structure: Optional[str] = None,
 ) -> RoutingDecision:
     """Decide whether/how much to trade in `regime_label` for a strategy playing the
     `specialist` role (from `regime_taxonomy.REGIME_OWNER` values, e.g. 'range_seller').
@@ -152,7 +160,9 @@ def route(
     fallback can only ever reduce risk, never authorize a trade the fine read refused.
     """
     fine_label = str(regime_label or "").upper()
-    decision = _route_one(fine_label, confidence, specialist, notes=[])
+    owned = _normalize_owned(owned_regimes)
+    decision = _route_one(fine_label, confidence, specialist, notes=[],
+                          owned=owned, structure=structure)
     coarse = str(fallback_regime or "").upper()
 
     # (a) R1: the fine read RESOLVED to RANGE (its no-signature default). Cross-check
@@ -163,7 +173,8 @@ def route(
         note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to RANGE (the "
                 f"no-signature default, confidence {confidence:.2f}) — cross-checking "
                 f"the mature coarse regime {coarse}")
-        alt = _route_one(coarse, confidence, specialist, notes=[note])
+        alt = _route_one(coarse, confidence, specialist, notes=[note],
+                         owned=owned, structure=structure)
         return _more_conservative(alt, decision)
 
     # (b) 2026-07-23 symmetric rescue: the fine read is a LOW-CONFIDENCE TREND that
@@ -181,10 +192,39 @@ def route(
             and coarse in tax.REGIME_LABELS and coarse != fine_label):
         note = (f"fine regime {fine_label} confidence {confidence:.2f} < {FINE_MIN_CONF} "
                 f"(noise) stood {specialist} down; deferring to the mature coarse regime {coarse}")
-        alt = _route_one(coarse, confidence, specialist, notes=[note])
+        alt = _route_one(coarse, confidence, specialist, notes=[note],
+                         owned=owned, structure=structure)
         if not alt.stand_down:
             return alt
     return decision
+
+
+def _normalize_owned(owned_regimes: Optional[Any]) -> Optional[frozenset]:
+    """The strategy's DECLARED `visual_config.options.owned_regimes`, uppercased and
+    restricted to real labels. Returns None when nothing usable was declared, which
+    is what keeps every untagged/legacy strategy on the hardcoded role rules below.
+
+    2026-08-03: this field existed on every seeded specialist and NOTHING read it —
+    the same decorative-config trap as `target_dte_days` (§21.5). Ownership was
+    decided solely by matching the role name against `REGIME_OWNER`, so two live
+    strategies whose roles are not in that map — `slow_premium_hte` (the
+    hold-to-expiry sleeve) and `tail_hedge` — stood down in ALL SIX regimes and
+    could never trade at all, while their config claimed they owned them.
+    """
+    if owned_regimes is None:
+        return None
+    if isinstance(owned_regimes, str):
+        owned_regimes = [owned_regimes]
+    try:
+        labels = {str(r).strip().upper() for r in owned_regimes}
+    except TypeError:
+        return None
+    labels &= set(tax.REGIME_LABELS)
+    return frozenset(labels) or None
+
+
+def _is_premium_seller(structure: Optional[str]) -> bool:
+    return str(structure or "").strip().lower() in PREMIUM_SELLING_STRUCTURES
 
 
 def _route_one(
@@ -193,6 +233,8 @@ def _route_one(
     specialist: Optional[str],
     *,
     notes: List[str],
+    owned: Optional[frozenset] = None,
+    structure: Optional[str] = None,
 ) -> RoutingDecision:
     """Route a SINGLE regime label. All the ownership/veto/sizing logic lives here so
     `route()` can evaluate the fine and coarse labels through identical rules."""
@@ -210,11 +252,26 @@ def _route_one(
     # remap below. Otherwise RAE_CHOP_STANDDOWN=false rewrites the day to RANGE and
     # the long-gamma sleeve — the one structure that wants expansion — is stood down
     # for not owning RANGE. (2026-07-21: this was the IDX Long-Gamma inversion.)
-    if regime == tax.HIGH_VOL_CHOP and specialist == tax.LONG_VOL_ROLE:
+    # A structure that BUYS defined risk may own the fat-tail regimes: expansion is
+    # what it is bought for. `long_vol` keeps its explicit name check (proven, and it
+    # must survive even if the role is left untagged); a strategy that DECLARES the
+    # regime and is not a premium seller now qualifies on the same economics — which
+    # is what lets a tail hedge be on during the chop/EVENT it exists to cover.
+    _declared_fat_tail = owned is not None and regime in owned and not _is_premium_seller(structure)
+    if regime == tax.HIGH_VOL_CHOP and (specialist == tax.LONG_VOL_ROLE or _declared_fat_tail):
+        base = _f("RAE_SIZE_LONGVOL", 1.0)
+        who = specialist or tax.LONG_VOL_ROLE
+        why = "long-vol owns chop" if specialist == tax.LONG_VOL_ROLE else "declared owner, defined-risk buyer"
+        return RoutingDecision(
+            regime, confidence, False, base, [who],
+            [*notes, f"{regime}: activate {who} at size×{base:.2f} ({why})"],
+        )
+    if regime == tax.EVENT and _declared_fat_tail:
         base = _f("RAE_SIZE_LONGVOL", 1.0)
         return RoutingDecision(
             regime, confidence, False, base, [specialist],
-            [*notes, f"{regime}: activate {specialist} at size×{base:.2f} (long-vol owns chop)"],
+            [*notes, f"{regime}: activate {specialist} at size×{base:.2f} "
+                     f"(declared owner, defined-risk buyer — a hedge belongs on an event day)"],
         )
 
     if regime == tax.HIGH_VOL_CHOP and not chop_standdown_enabled():
@@ -227,17 +284,24 @@ def _route_one(
         return _stand_down(regime, confidence,
                            f"{regime}: stand down (no edge / fat-tail)", notes)
 
-    # 2) specialist ownership — a strategy only trades the regime(s) it owns
-    if specialist is not None:
-        owns = (
-            (specialist == owner)
-            or (specialist == "range_seller" and regime in SELLER_OK_REGIMES)
-            or (specialist in TREND_ROLES and regime in TREND_OK_REGIMES)
-        )
+    # 2) specialist ownership — a strategy only trades the regime(s) it owns.
+    # The strategy's DECLARED owned_regimes is authoritative when present; the role
+    # map is the fallback for untagged/legacy strategies. Declaring a regime is not a
+    # bypass — the hard vetoes (1) and the trend-confidence gate (3) still apply.
+    if specialist is not None or owned is not None:
+        if owned is not None:
+            owns = regime in owned
+            why = (f"{specialist or 'strategy'} does not own {regime} "
+                   f"(declared: {', '.join(sorted(owned))}) — stand down")
+        else:
+            owns = (
+                (specialist == owner)
+                or (specialist == "range_seller" and regime in SELLER_OK_REGIMES)
+                or (specialist in TREND_ROLES and regime in TREND_OK_REGIMES)
+            )
+            why = f"{specialist} does not own {regime} (owner={owner}) — stand down"
         if not owns:
-            return _stand_down(regime, confidence,
-                               f"{specialist} does not own {regime} (owner={owner}) — stand down",
-                               notes)
+            return _stand_down(regime, confidence, why, notes)
 
     # 3) trend needs high confidence (the 498-day study: bare trend calls are 16% precise)
     if regime in (tax.TREND_UP, tax.TREND_DOWN) and confidence < TREND_MIN_CONF:

@@ -30,6 +30,26 @@ MELTUP_THRESHOLD_PCT  = float(os.environ.get("REGIME_MELTUP_PCT",  "1.5"))
 TREND_THRESHOLD_PCT   = float(os.environ.get("REGIME_TREND_PCT",   "0.5"))
 REGIME_REFRESH_MINUTES = int(os.environ.get("REGIME_REFRESH_MIN",  "15"))
 
+# 2026-08-03. The TREND magnitude gate used the return from the PREVIOUS CLOSE, so an
+# overnight GAP alone satisfied it for the whole day: NIFTY gapped +0.85% and then went
+# nowhere (session move +0.13%, range 0.38%) and the coarse regime read TREND_UP all
+# session. That label is the conservative cross-check the RAE router applies to a RANGE
+# fine-read, so a gap-and-flat day vetoed every premium seller on what is, intraday,
+# a textbook range day.
+# The gap is a COMPLETED overnight event, not an intraday trend. So:
+#   * TREND_UP/TREND_DOWN now gate on the SESSION move (today's open -> now),
+#   * CRASH/MELTUP keep the gap-inclusive number — a -1.5% gap-down IS a crash day
+#     regardless of what price does afterwards, and that guard must stay conservative.
+# `intraday_return_pct` keeps its prev-close meaning for every existing consumer;
+# `session_return_pct` is reported alongside it. Reversible via env.
+REGIME_TREND_USES_SESSION_MOVE = (
+    os.environ.get("REGIME_TREND_USES_SESSION_MOVE", "true").lower() == "true")
+# Hysteresis. The four TREND conditions include three price-vs-VWAP/EMA crossings with
+# no deadband, so a price sitting on its VWAP flips the label every tick: SENSEX flipped
+# TREND_UP<->RANGE 16 times in 20 minutes on 2026-08-03. Leaving an established trend
+# now needs the move to fall this far BELOW the entry threshold.
+REGIME_TREND_EXIT_BUFFER_PCT = float(os.environ.get("REGIME_TREND_EXIT_BUFFER_PCT", "0.15"))
+
 VALID_INDICES = {"NIFTY", "BANKNIFTY", "SENSEX"}
 
 # Upstox instrument keys for index spot data (used by strategy_runner candle fetch).
@@ -58,12 +78,17 @@ def _make_regime(
     vwap: float = 0.0,
     vwap_slope: float = 0.0,
     computed_at: Optional[str] = None,
+    session_return_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     return {
         "index": index,
         "regime": regime,
         "bias": bias,
         "intraday_return_pct": round(intraday_return_pct, 3),
+        # Gap-EXCLUSIVE move (today's open → now). `intraday_return_pct` above keeps
+        # its prev-close meaning so existing consumers/probes are untouched.
+        "session_return_pct": round(
+            intraday_return_pct if session_return_pct is None else session_return_pct, 3),
         "long_entries_allowed": long_entries_allowed,
         "short_entries_allowed": short_entries_allowed,
         "hold_multiplier": hold_multiplier,
@@ -74,11 +99,18 @@ def _make_regime(
     }
 
 
-def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+def compute_regime_from_data(
+    index: str,
+    candles: List[Dict[str, Any]],
+    previous_regime: Optional[str] = None,
+) -> Dict[str, Any]:
     """Pure function — no DB, no I/O. Returns regime dict.
 
     candles: list of {date, open, high, low, close, volume} dicts,
              5-minute bars newest-last, may span multiple days.
+    previous_regime: the last label for this index. Only used for TREND hysteresis
+             (see REGIME_TREND_EXIT_BUFFER_PCT); the function stays deterministic in
+             its inputs, so the OOS/backtest path can replay it exactly.
     """
     if not candles:
         return _make_regime(index, "RANGE", "NEUTRAL", 0.0, True, True, 1.0, 1.0)
@@ -103,10 +135,16 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
     today_open = float(candles[today_start].get("open") or closes[today_start])
     current_price = closes[-1]
 
-    # ── Intraday return from prev close ──────────────────────────────────────
+    # ── Intraday return from prev close (gap-INCLUSIVE; fat-tail guards use this) ──
     intraday_ret_pct = 0.0
     if prev_close > 0:
         intraday_ret_pct = (current_price - prev_close) / prev_close * 100.0
+
+    # ── Session move (today's OPEN → now; gap-EXCLUSIVE; the trend gate uses this) ──
+    session_ret_pct = intraday_ret_pct
+    if today_open > 0:
+        session_ret_pct = (current_price - today_open) / today_open * 100.0
+    trend_ret_pct = session_ret_pct if REGIME_TREND_USES_SESSION_MOVE else intraday_ret_pct
 
     # ── Day-anchored VWAP (today only) ────────────────────────────────────────
     w_sum = 0.0
@@ -138,7 +176,7 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
             short_entries_allowed=True,
             hold_multiplier=1.5,
             freq_multiplier=1.0,
-            vwap=vwap, vwap_slope=vwap_slope,
+            vwap=vwap, vwap_slope=vwap_slope, session_return_pct=session_ret_pct,
         )
 
     if intraday_ret_pct >= MELTUP_THRESHOLD_PCT:
@@ -148,11 +186,17 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
             short_entries_allowed=False,
             hold_multiplier=1.5,
             freq_multiplier=1.0,
-            vwap=vwap, vwap_slope=vwap_slope,
+            vwap=vwap, vwap_slope=vwap_slope, session_return_pct=session_ret_pct,
         )
 
     # ── TREND_UP ──────────────────────────────────────────────────────────────
-    if (intraday_ret_pct >= TREND_THRESHOLD_PCT
+    # Hysteresis: an ESTABLISHED trend keeps the label until the move falls a buffer
+    # below the entry threshold, so price oscillating on its VWAP cannot flip it.
+    _up_floor = TREND_THRESHOLD_PCT - (REGIME_TREND_EXIT_BUFFER_PCT
+                                       if previous_regime == "TREND_UP" else 0.0)
+    _dn_floor = TREND_THRESHOLD_PCT - (REGIME_TREND_EXIT_BUFFER_PCT
+                                       if previous_regime == "TREND_DOWN" else 0.0)
+    if (trend_ret_pct >= _up_floor
             and current_price > vwap
             and vwap_slope > 0
             and current_price > ema20):
@@ -162,11 +206,11 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
             short_entries_allowed=True,
             hold_multiplier=2.0,
             freq_multiplier=1.0,
-            vwap=vwap, vwap_slope=vwap_slope,
+            vwap=vwap, vwap_slope=vwap_slope, session_return_pct=session_ret_pct,
         )
 
     # ── TREND_DOWN ────────────────────────────────────────────────────────────
-    if (intraday_ret_pct <= -TREND_THRESHOLD_PCT
+    if (trend_ret_pct <= -_dn_floor
             and current_price < vwap
             and vwap_slope < 0
             and current_price < ema20):
@@ -176,7 +220,7 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
             short_entries_allowed=True,
             hold_multiplier=2.0,
             freq_multiplier=1.0,
-            vwap=vwap, vwap_slope=vwap_slope,
+            vwap=vwap, vwap_slope=vwap_slope, session_return_pct=session_ret_pct,
         )
 
     # ── RANGE (default) ───────────────────────────────────────────────────────
@@ -187,7 +231,7 @@ def compute_regime_from_data(index: str, candles: List[Dict[str, Any]]) -> Dict[
         short_entries_allowed=True,
         hold_multiplier=0.8,
         freq_multiplier=0.5,
-        vwap=vwap, vwap_slope=vwap_slope,
+        vwap=vwap, vwap_slope=vwap_slope, session_return_pct=session_ret_pct,
     )
 
 
@@ -204,7 +248,8 @@ async def update_regime(
     if index not in VALID_INDICES:
         return _make_regime(index, "RANGE", "NEUTRAL", 0.0, True, True, 1.0, 1.0)
 
-    regime = compute_regime_from_data(index, candles)
+    _prev = (_state.get(index, {}).get("regime") or {}).get("regime")
+    regime = compute_regime_from_data(index, candles, previous_regime=_prev)
 
     async with _lock:
         cached = _state.get(index, {})

@@ -100,23 +100,35 @@ class LiveIndexCapture:
         rows = 0
         failed: Dict[str, str] = {}
         for u, bars in self._bars.items():
-            candles = [{
-                "timestamp_ist": b.minute_ts, "underlying": u,
-                "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume,
-            } for b in bars]
-            if not candles:
+            if not bars:
                 continue
-            # Per-underlying isolation: one store failure (e.g. a root-owned ./data
-            # giving the container user EPERM) must not abort the other underlyings
-            # OR leave the buffer unflushed — stale bars carried into the next
-            # session would mix two days and corrupt the regime classifier.
-            try:
-                self.store.write_day(u, date, candles)
-                written += 1
-                rows += len(candles)
-            except Exception as exc:  # noqa: BLE001
-                failed[u] = f"{type(exc).__name__}: {exc}"
-                logger.error("LiveIndexCapture write failed %s %s: %s", u, date, exc, exc_info=True)
+            # File each bar under ITS OWN date, not the flush date. Ticks arriving
+            # after a flush used to accumulate and land in the NEXT flush's file:
+            # data/index_1m/underlying=NIFTY/date=2026-08-01.csv.gz (a SATURDAY) held
+            # 29 bars stamped 2026-07-31T15:35..16:03 at a frozen post-close price.
+            # That silently corrupts the store the OOS judges read, and a wrong-dated
+            # day is worse than a missing one (§21.7: stale data is confidently wrong).
+            by_date: Dict[str, list] = {}
+            for b in bars:
+                by_date.setdefault(str(b.minute_ts)[:10] or date, []).append(b)
+            for bar_date, day_bars in sorted(by_date.items()):
+                candles = [{
+                    "timestamp_ist": b.minute_ts, "underlying": u,
+                    "open": b.open, "high": b.high, "low": b.low,
+                    "close": b.close, "volume": b.volume,
+                } for b in day_bars]
+                # Per-underlying isolation: one store failure (e.g. a root-owned
+                # ./data giving the container user EPERM) must not abort the other
+                # underlyings OR leave the buffer unflushed — stale bars carried into
+                # the next session would mix two days and corrupt the classifier.
+                try:
+                    self.store.write_day(u, bar_date, candles)
+                    written += 1
+                    rows += len(candles)
+                except Exception as exc:  # noqa: BLE001
+                    failed[f"{u}:{bar_date}"] = f"{type(exc).__name__}: {exc}"
+                    logger.error("LiveIndexCapture write failed %s %s: %s",
+                                 u, bar_date, exc, exc_info=True)
         self._bars = {}
         logger.info("LiveIndexCapture flushed %s index-days (%s bars) for %s (failed=%s)",
                     written, rows, date, len(failed))

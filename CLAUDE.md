@@ -1776,3 +1776,149 @@ The M5 run (631 closed positions) found the pre-trade scores don't predict reali
 Principle: keep the evidence-based CATEGORICAL gates (regime ownership, dead-expectancy
 stand-down, day governor, cost-floor, DTE, kill-switch); remove the continuous score
 MAGNITUDES that have no predictive IC. No edge created; noise removed from sizing.
+
+---
+
+## 26. The Regime Organ — audit, three real bugs, and the standing rules (2026-08-03)
+
+Triggered by a live check during market hours: **210 of 213 signals skipped
+`RAE_ROUTER_STAND_DOWN`** on a day that was, in reality, quiet and rangebound — the
+premium sellers' own regime. Nothing was at a trade cap, nothing was loss-locked, and
+there were no errors in the log. Three independent defects, all now fixed and deployed.
+
+### 26.1 The diagnostic method that found it (use this one)
+Run the SAME `classify_intraday()` on **freshly-fetched real broker bars** and diff it
+against what `market_regime_state` holds:
+
+| Index | TRUTH (real bars) | APP believed |
+|---|---|---|
+| NIFTY | +0.13%, range 0.38% → **INSIDE_QUIET** | TREND_UP 0.90 |
+| BANKNIFTY | +0.40%, range 0.67% → **RANGE** | TREND_UP 0.84 |
+| SENSEX | **−0.14%**, range 0.50% → **INSIDE_QUIET** | HIGH_VOL_CHOP **1.0** |
+
+**The classifier was correct every time; its INPUT was corrupt.** Do this diff BEFORE
+touching any regime logic — the pure functions are not usually where the bug is.
+
+The tell was **confidence 1.0**. Solving the confidence formula backwards gives
+"range >= 2.8%" = ~2,200 SENSEX points on a 0.5% day. **An implausibly confident label
+is evidence about the input, not about the market.**
+
+### 26.2 Bug 1 — the capture aggregated ticks it should never have seen
+`LiveIndexCapture.on_tick` had **no session filter and no price sanity check**.
+- The feed connects whenever the token is refreshed — **08:32 IST that day, 43 min
+  before the open**. Pre-open prints carry the PREVIOUS close, so `bars[0].open` became
+  Friday's close and `ret_pct` turned **gap-inclusive**: a flat +0.13% session read
+  +0.98% and classified TREND_UP at confidence 0.90.
+- **`ltp in (None, "")` admits `0.0`.** One zero print — SENSEX, which BSE publishes
+  before it starts computing the index — sets the day's low to zero, so `rng_pct` hits
+  ~100% and the classifier returns **HIGH_VOL_CHOP at confidence 1.0**, the router's
+  explicit stand-down.
+
+Both were reproduced numerically *before* any code changed (sim 0.954 vs stored 0.904;
+BANKNIFTY 0.858 vs 0.835; SENSEX 1.000 vs 1.0). `on_tick` now rejects non-positive
+prices and anything outside the underlying's OWN segment window (SENSEX → BSE_FO 15:30,
+not NSE's 15:40); `health()` counts both rejects.
+
+**Why it hid:** the EOD store looked perfect — Friday's file was 375 clean rows starting
+exactly 09:15 — because on earlier days the feed happened to connect AFTER 09:15. Only
+the LIVE path reads the raw buffer. **A clean store does not prove a clean live path;
+they read different things.**
+
+**Related, same root:** the flush wrote every bar under the FLUSH date, so post-close
+ticks accumulating after the EOD flush landed in the next file —
+`index_1m/underlying=NIFTY/date=2026-08-01.csv.gz` (a **Saturday**) held 29 bars stamped
+`2026-07-31T15:35..16:03` at a frozen price. Bars are now filed under their OWN date.
+
+### 26.3 Bug 2 — `owned_regimes` was decorative; two live strategies could never trade
+Ownership was decided **solely** by matching the role name against
+`regime_taxonomy.REGIME_OWNER`. Two live strategies whose roles are absent from that map
+therefore stood down in **ALL SIX** regimes:
+- **`slow_premium_hte`** — the hold-to-expiry sleeve seeded 2026-08-03 (§25.5). Seeded,
+  armed, and incapable of trading.
+- **`tail_hedge`** — which *declared* it owned all six.
+
+`visual_config.options.owned_regimes` was set on every seeded specialist and **nothing
+read it** — the third instance of the decorative-config trap (`target_dte_days` §21.5,
+`short_delta` for single-leg). `route()` now takes `owned_regimes=` and `structure=`, and
+the declared set is authoritative when present; the role map remains the fallback for
+untagged/legacy rows. Junk (empty list, unknown labels, non-iterable) falls back rather
+than opening or closing everything.
+
+**Declaring a regime is NOT a bypass.** The hard vetoes still run first, and the
+chop/EVENT veto is now decided on **economics rather than a hardcoded role name**: a
+structure that COLLECTS premium (`credit_spread`) can never trade HIGH_VOL_CHOP/EVENT —
+the fat tail is against it — while a defined-risk BUYER that declares ownership may,
+because expansion is what it is bought for. That generalises the `long_vol` carve-out
+(which keeps its explicit name check) and is what lets a tail hedge be on during the
+chop/EVENT it exists to cover.
+
+Verified with a full before/after matrix: **the seller rows are byte-identical**; only
+the two dead strategies changed, plus `inside_mean_revert` gaining its declared RANGE.
+
+### 26.4 Bug 3 — the coarse regime called an overnight GAP an intraday TREND
+`compute_regime_from_data` gated TREND on the return from the **previous close**, so a
+gap alone satisfied it for the whole day. NIFTY gapped +0.85% and then went nowhere:
+**37 of 41 ticks that session were labelled TREND_UP** (BANKNIFTY 33/41, SENSEX 34/41)
+on session moves of +0.04% / +0.20% / **−0.23%**. That label is the conservative
+cross-check the router applies to a RANGE fine-read, so a gap-and-flat day vetoed every
+seller a second time.
+
+TREND now gates on the **session move** (today's open → now); **CRASH/MELTUP keep the
+gap-inclusive number** — a −1.5% gap-down IS a crash day regardless of what happens
+next, and that fat-tail guard must stay conservative. `intraday_return_pct` keeps its
+prev-close meaning for every existing consumer; `session_return_pct` is reported beside
+it. Hysteresis (`REGIME_TREND_EXIT_BUFFER_PCT`, 0.15) stops the label flipping while
+price sits on its VWAP — SENSEX flipped TREND_UP/RANGE **16 times in 20 minutes**.
+
+**Validated on 18 real trading days — it is not "fewer trends", it is correct ones:**
+- removes false trends on gap-then-flat days (07-10, 07-14, 07-27, 07-28),
+- **adds true trends it was blind to** (07-09, 07-13, 07-24) — days that gapped AGAINST
+  the eventual move and then genuinely trended intraday, which the old net-of-gap number
+  read as RANGE.
+
+⚠️ Note 2026-07-10 — the day §18 was written around — now reads RANGE: its move was
+almost entirely the gap. That is the correct read *for an intraday entry decision*; a
+gap hurts positions already held, which is a different problem from whether to open one.
+
+### 26.5 Standing rules this produced
+- **Diff the regime against real broker bars before believing it** (§26.1). Three of the
+  last four regime incidents were bad input, not bad logic.
+- **A guard written `x in (None, "")` does not exclude `0.0`.** Range/low/high fields are
+  where a single zero does maximum damage.
+- **A filter must be applied on every branch that appends to the same result** (§22.1)
+  AND re-applied wherever the underlying object is rebuilt (§22.7).
+- **Config that no code reads is a bug, not documentation.** When adding a field to a
+  strategy template, add the reader in the same commit or do not add the field.
+- **Ask which regime a gate's evidence came from** before applying it elsewhere (§25.4) —
+  and ask whether a threshold measured gap-inclusive means what you think intraday.
+- **Idle is still usually correct** (§23.4) — but "idle" and "structurally incapable of
+  trading" look identical from outside. The role x regime matrix is how you tell them
+  apart; regenerate it whenever a specialist role or `owned_regimes` changes.
+
+### 26.6 Verified, and what is NOT claimed
+Deployed and confirmed live: all three indices flipped to `INSIDE_QUIET`,
+`RAE_ROUTER_STAND_DOWN` fell **210/213 → 2/9** (the remainder a legitimately off-regime
+tail hedge), and two credit spreads opened. Test suite: **105 failed / 1022 passed vs a
+105 / 1003 baseline** — the same 105 pre-existing failures, +19 new tests, zero
+regressions.
+
+**None of this creates edge.** It removes defects that made the book stand down on its
+own regime and mis-measure the market. Every strategy still owes the §13.5 ladder, and
+§26.4 in particular changes which days the trend riders fire — that is UNVALIDATED and
+owes forward-paper evidence. `CORE_ENGINE_LIVE_ENABLED=false`.
+
+### 26.7 Open items found in this audit, NOT fixed (founder call)
+- **`RAE * Range Seller` requires `close > ma20 > ma50`** (an uptrend) while the router
+  gates it to RANGE. The two filters pull opposite ways: on a true range the MA stack is
+  near-random, so it fires on roughly half its own regime. Design tension, not a bug —
+  changing it is an alpha change and needs evidence.
+- **`IDX NIFTY VRP Call-Spread` has no rally guard** while its sibling QG-O4 explicitly
+  refuses to sell calls into a rally (`close <= ma20`). Same structure, same risk, one
+  protected. (Mitigated in practice: the dynamic selector picks the side from the chain.)
+- **`bhavcopy_fo` is missing 2026-07-31** — the ingest cron skipped Friday. Newest is
+  07-30, inside the 10-day RES2 staleness guard, so it fails open rather than lying.
+- **Hermes `infra.process_restarts::backend` is HIGH at 14 occurrences** — worth its own
+  look; the OOM / Edge-Lab class of §22.2.
+- **NOT a bug (checked):** the VRP strategies' `direction` is the DIRECTIONAL VIEW, not
+  the leg — `BUY/CE` (bullish) means *sell a put spread*, which is why the strategy named
+  "Put-Spread" correctly opened a PE credit spread. Do not "fix" this.

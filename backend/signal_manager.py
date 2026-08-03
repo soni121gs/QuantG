@@ -741,7 +741,9 @@ async def _edge_math_spread_size(
     _routing = _rae_route(str(spread.get("router_regime") or regime or "UNKNOWN"),
                           float(spread.get("regime_confidence") or 0.5),
                           specialist=_specialist,
-                          fallback_regime=str(regime) if regime else None)
+                          fallback_regime=str(regime) if regime else None,
+                          owned_regimes=_opts.get("owned_regimes"),
+                          structure=_opts.get("structure"))
     if _router_on:
         lots = int(round(lots * _routing.size_mult))
 
@@ -1306,7 +1308,9 @@ async def _dispatch_signal_via_unified_engine(
             _db_routing = _rae_route_db(str(_db_regime or "UNKNOWN"),
                                         float(_regime_fine_conf or 0.5),
                                         specialist=_db_specialist,
-                                        fallback_regime=str(_regime_at_entry) if _regime_at_entry else None)
+                                        fallback_regime=str(_regime_at_entry) if _regime_at_entry else None,
+                                        owned_regimes=_db_opts.get("owned_regimes"),
+                                        structure=_db_opts.get("structure"))
             _spread["rae_router"] = {**_db_routing.as_dict(), "enforced": _rae_enabled_db()}
             if _rae_enabled_db() and _db_routing.stand_down:
                 _db_reason = f"RAE router stand-down: {(_db_routing.reasons or ['off-regime'])[0]}"
@@ -1355,7 +1359,9 @@ async def _dispatch_signal_via_unified_engine(
         _sl_routing = _rae_route_sl(str(_sl_regime or "UNKNOWN"),
                                     float(_regime_fine_conf or 0.5),
                                     specialist=_sl_specialist,
-                                    fallback_regime=str(_regime_at_entry) if _regime_at_entry else None)
+                                    fallback_regime=str(_regime_at_entry) if _regime_at_entry else None,
+                                    owned_regimes=_sl_opts.get("owned_regimes"),
+                                    structure=_sl_opts.get("structure"))
         _sl_router_on = _rae_enabled_sl()
         if option_contract is not None:
             option_contract["rae_router"] = {**_sl_routing.as_dict(), "enforced": _sl_router_on}
