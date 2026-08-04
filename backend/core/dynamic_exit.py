@@ -146,7 +146,13 @@ def no_progress_exit(
     # An input we cannot resolve must disable the RULE, never the SAFEGUARD: if we
     # cannot tell whether the bar was reachable, we have no business judging the
     # trade against it.
-    if NO_PROGRESS_REQUIRE_REACHABLE:
+    # A floor at or above the ENTIRE credit can never be cleared by decay at any
+    # hold — the spread cannot pay for its own round trip even if it goes to zero.
+    # That is not "not yet judgeable", it is hopeless by construction, so the
+    # reachability gate does not apply and the cut stands. (Such a spread should
+    # never have been opened; that is the §21.1 cost floor's job at entry.)
+    _unpayable = floor >= credit_money
+    if NO_PROGRESS_REQUIRE_REACHABLE and not _unpayable:
         if dte_days is None:
             return None
         try:

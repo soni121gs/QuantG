@@ -33,9 +33,10 @@ def test_dead_trade_is_cut_after_the_window():
     gate fails closed, because an unresolvable DTE used to skip it entirely and
     silently restore the flat 20-minute window.
     """
-    # held 60 min at 0 DTE = 15.6% of the session, comfortably past the 8% bar,
-    # so the reachability gate permits the judgement (25 min delivers only 6.5%).
-    r = de.no_progress_exit(peak_pnl=20.0, held_minutes=60.0,
+    # The binding bar here is the friction floor, not the 8% fraction, so the hold
+    # has to be long enough for decay to have delivered THAT: 150 min at 0 DTE is
+    # 39% of the session = Rs506 of the Rs1,300 credit, past the floor either way.
+    r = de.no_progress_exit(peak_pnl=20.0, held_minutes=150.0,
                             net_credit=20.0, qty=65, lot_size=65, lots=1,
                             leg_premium_sum=70.0, dte_days=0)
     assert r == "spread-no-progress"
@@ -59,14 +60,14 @@ def test_not_cut_before_the_window():
 def test_threshold_is_floored_at_real_friction():
     """A thin-credit spread must not be cut for failing a rupee bar it never could
     clear — the fraction floors at real round-trip friction, not below."""
-    # credit_money = 2*65 = 130; 8% = Rs10.4, but friction floor is higher.
-    # A thin credit makes the FRICTION floor (~Rs46) the binding bar, and decay has
-    # to have delivered at least that much before the trade can be judged against
-    # it: 150 min at 0 DTE = 39% of the session = Rs50 of the Rs130 credit.
-    r = de.no_progress_exit(peak_pnl=30.0, held_minutes=150.0,
+    # credit_money = 2*65 = 130; 8% = Rs10.4, but the friction floor is higher.
+    # Here the floor EXCEEDS the whole credit, so no amount of decay could ever
+    # clear it — the spread cannot pay for its own round trip. The reachability
+    # gate deliberately does not exempt that case: it is hopeless by construction,
+    # not merely un-judged yet, so the cut stands immediately.
+    r = de.no_progress_exit(peak_pnl=30.0, held_minutes=30.0,
                             net_credit=2.0, qty=65, lot_size=65, lots=1,
                             leg_premium_sum=70.0, dte_days=0)
-    # NIFTY friction ~Rs46 > Rs30 peak -> still judged lifeless
     assert r == "spread-no-progress"
 
 
