@@ -444,6 +444,95 @@ async def upstox_login(request: Request, user=Depends(get_current_user)):
     return {"url": url, "redirect_uri": redirect_uri, "api_key": _mask_secret(api_key, 6, 0)}
 
 
+async def apply_upstox_access_token(
+    user_id: str,
+    access_token: str,
+    *,
+    token_meta: Optional[Dict[str, Any]] = None,
+    refresh_token: Optional[str] = None,
+    source: str = "oauth",
+) -> Dict[str, Any]:
+    """Store a fresh Upstox access token and bring the live feed back up.
+
+    THE single place a new token is applied, so the interactive OAuth callback and
+    the scheduled-approval notifier webhook cannot drift apart. That matters more
+    than it looks: restarting the ticker is what re-attaches the 1-minute capture
+    tick listeners, and a path that stores a token WITHOUT doing so leaves the
+    capture permanently orphaned — the §22.7 root cause, where the live capture
+    had never written a file in its life.
+
+    Returns {"ok", "feed_started", "position_tokens"}; never raises on feed
+    trouble (the token is still stored and usable for REST).
+    """
+    from server import (
+        _UPSTOX_GATEWAYS,
+        _UPSTOX_TOKEN_VALIDATION_CACHE,
+        _start_user_upstox_ticker,
+        encrypt_secret,
+        get_user_upstox_gateway,
+        logger,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_fields: Dict[str, Any] = {
+        "access_token": encrypt_secret(str(access_token)),
+        "access_token_obtained_at": now_iso,
+        "access_token_source": source,
+        "updated_at": now_iso,
+    }
+    meta = dict(token_meta or {})
+    if meta.get("upstox_user_id"):
+        set_fields["upstox_user_id"] = meta.get("upstox_user_id")
+    # Never persist the token inside the metadata blob.
+    set_fields["token_response_meta"] = {
+        k: v for k, v in meta.items()
+        if k not in {"access_token", "refresh_token", "extended_token"}
+    }
+    if refresh_token:
+        set_fields["refresh_token"] = encrypt_secret(str(refresh_token))
+
+    prior_feed_gateway = _UPSTOX_GATEWAYS.get(user_id)
+    await db.broker_keys.update_one(
+        {"user_id": user_id, "broker": "upstox"},
+        {"$set": set_fields,
+         "$setOnInsert": {"id": str(uuid.uuid4()), "user_id": user_id,
+                          "broker": "upstox", "created_at": now_iso}},
+        upsert=True,
+    )
+    _UPSTOX_GATEWAYS.pop(user_id, None)
+    _UPSTOX_TOKEN_VALIDATION_CACHE.pop(user_id, None)
+
+    if prior_feed_gateway is not None:
+        try:
+            await asyncio.to_thread(prior_feed_gateway.stop_market_data_ws)
+        except Exception as stop_err:  # noqa: BLE001
+            logger.warning("Upstox token apply (%s): stopping prior feed failed user=%s: %s",
+                           source, user_id, stop_err)
+
+    started, position_tokens = False, []
+    try:
+        ticker_result = await _start_user_upstox_ticker(user_id)
+        started = bool(ticker_result.get("started"))
+        open_positions = await db.strategy_positions.find(
+            {"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "EXITING"]}},
+            {"instrument_key": 1, "_id": 0},
+        ).to_list(200)
+        position_tokens = [
+            p["instrument_key"] for p in open_positions
+            if p.get("instrument_key") and "|" in str(p.get("instrument_key", ""))
+        ]
+        if position_tokens:
+            gw = await get_user_upstox_gateway(user_id)
+            if gw:
+                await asyncio.to_thread(gw.start_market_data_ws, position_tokens, "full")
+        logger.info("Upstox token applied (%s) user=%s feed_started=%s pos_tokens=%d",
+                    source, user_id, started, len(position_tokens))
+    except Exception as feed_err:  # noqa: BLE001
+        logger.warning("Upstox token apply (%s): feed restart failed user=%s: %s",
+                       source, user_id, feed_err)
+    return {"ok": True, "feed_started": started, "position_tokens": len(position_tokens)}
+
+
 @router.get("/broker/upstox/callback", name="upstox_callback")
 async def upstox_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
     from server import (
@@ -537,6 +626,176 @@ async def upstox_callback(code: Optional[str] = None, state: Optional[str] = Non
         logger.warning("Upstox OAuth: feed restart after token store failed user=%s: %s", user_id, feed_err)
     base = _public_base_url(None)
     return RedirectResponse(url=f"{base}/broker-keys?upstox=connected", status_code=303)
+
+
+@router.post("/broker/upstox/auth-request")
+async def upstox_auth_request(user=Depends(get_current_user)):
+    """Fire Upstox's SCHEDULED-APPROVAL auth request (step 1 of the sanctioned flow).
+
+    Upstox pushes an in-app / WhatsApp prompt to the account holder; on approval it
+    POSTs the access token to our notifier webhook below. This is the compliant
+    answer to the daily 03:30 IST expiry: no password or TOTP seed is stored
+    anywhere, the human approval SEBI requires still happens, and the scheduler can
+    fire this at 08:45 so the token is live before the 09:15 open.
+    """
+    import requests as _requests
+    from server import decrypt_secret, logger
+    from core.upstox_auth_request import build_auth_request_url, parse_auth_request_response
+
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "upstox"})
+    if not keys:
+        raise HTTPException(status_code=400, detail="Upstox API key/secret are not configured.")
+    api_key = os.environ.get("UPSTOX_API_KEY") or decrypt_secret(keys.get("api_key"))
+    api_secret = os.environ.get("UPSTOX_API_SECRET") or decrypt_secret(keys.get("api_secret"))
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=400, detail="Upstox api_key/api_secret could not be read.")
+
+    url = build_auth_request_url(api_key)
+    try:
+        resp = await asyncio.to_thread(
+            _requests.post, url,
+            headers={"accept": "application/json", "Content-Type": "application/json"},
+            json={"client_secret": api_secret}, timeout=20,
+        )
+        body = resp.json() if resp.content else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Upstox auth-request failed user=%s: %s", user["id"], exc)
+        raise HTTPException(status_code=502, detail=f"Upstox auth request failed: {exc}")
+
+    parsed = parse_auth_request_response(body)
+    await db.upstox_auth_requests.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "http_status": resp.status_code,
+        "ok": bool(parsed["ok"]),
+        "notifier_url": parsed["notifier_url"],
+        "authorization_expiry": parsed["authorization_expiry"],
+        "source": "manual",
+    })
+    if not parsed["ok"]:
+        raise HTTPException(status_code=502,
+                            detail=f"Upstox did not accept the auth request: {body}")
+    return {
+        "ok": True,
+        "message": "Approve the prompt in the Upstox app (or WhatsApp). "
+                   "The token will arrive here automatically.",
+        "notifier_url": parsed["notifier_url"],
+        "authorization_expiry": parsed["authorization_expiry"],
+    }
+
+
+@router.post("/broker/upstox/notifier")
+async def upstox_token_notifier(request: Request):
+    """PUBLIC, UNAUTHENTICATED webhook that receives the approved access token.
+
+    Upstox requires this endpoint to be unauthenticated and does not sign the
+    payload, so anyone on the internet can POST here. It is therefore treated as
+    fully untrusted:
+
+      1. structural validation + constant-time client_id match against OUR api_key
+         (core.upstox_auth_request.validate_notifier_payload, pure/tested);
+      2. the token is then VERIFIED against Upstox's own profile endpoint before
+         it is stored - a forged token cannot get past this, so the worst a bogus
+         POST achieves is one wasted API call;
+      3. only then is it applied via the shared apply_upstox_access_token(), which
+         also restarts the ticker and re-attaches the capture listeners.
+
+    Always answers 200 with a short body: a webhook that 500s invites retries, and
+    Upstox only needs an acknowledgement. The token is never logged.
+    """
+    from server import UpstoxGateway, decrypt_secret, logger
+    from core.upstox_auth_request import NotifierRejected, validate_notifier_payload
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "reason": "invalid json"}
+
+    client_id = ""
+    if isinstance(payload, dict):
+        client_id = str(payload.get("client_id") or "").strip()
+    keys = None
+    if client_id:
+        # Find the account whose api_key equals this client_id. Keys are encrypted
+        # at rest, so this decrypts candidates rather than querying by value.
+        async for doc in db.broker_keys.find({"broker": "upstox"}):
+            try:
+                if str(decrypt_secret(doc.get("api_key")) or "") == client_id:
+                    keys = doc
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+    expected_client_id = None
+    if keys is not None:
+        expected_client_id = os.environ.get("UPSTOX_API_KEY") or decrypt_secret(keys.get("api_key"))
+
+    try:
+        access_token, meta = validate_notifier_payload(
+            payload, expected_client_id=expected_client_id)
+    except NotifierRejected as exc:
+        logger.warning("Upstox notifier rejected: %s", exc)
+        return {"ok": False, "reason": str(exc)}
+
+    user_id = keys.get("user_id")
+    # Independent proof the token is real before it touches the store.
+    try:
+        probe = UpstoxGateway(
+            api_key=expected_client_id,
+            api_secret=os.environ.get("UPSTOX_API_SECRET") or decrypt_secret(keys.get("api_secret")),
+            access_token=access_token,
+        )
+        profile = await asyncio.to_thread(probe.get_profile)
+        verified_user = ((profile or {}).get("data") or {}).get("user_id") or (profile or {}).get("user_id")
+        if not verified_user:
+            logger.warning("Upstox notifier: token failed profile verification - not stored")
+            return {"ok": False, "reason": "token failed verification"}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Upstox notifier: token verification error - not stored: %s", exc)
+        return {"ok": False, "reason": "token verification error"}
+
+    meta["verified_upstox_user_id"] = verified_user
+    result = await apply_upstox_access_token(
+        user_id, access_token, token_meta=meta, source="notifier")
+    await db.upstox_auth_requests.update_one(
+        {"user_id": user_id},
+        {"$set": {"token_received_at": datetime.now(timezone.utc).isoformat(),
+                  "token_feed_started": result.get("feed_started")}},
+        upsert=True,
+    )
+    logger.info("Upstox notifier: token applied for user=%s feed_started=%s",
+                user_id, result.get("feed_started"))
+    return {"ok": True}
+
+
+@router.get("/broker/upstox/token-status")
+async def upstox_token_status(user=Depends(get_current_user)):
+    """Is the stored token valid for TODAY's session? Drives the pre-open check."""
+    from datetime import timedelta
+    from core.upstox_auth_request import (
+        AUTH_ALARM_MINUTE_IST, AUTH_REQUEST_MINUTE_IST, token_is_fresh)
+
+    keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "upstox"}) or {}
+    obtained = keys.get("access_token_obtained_at")
+    now_ist = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30)))
+    fresh = token_is_fresh(obtained, now_ist=now_ist)
+    last_req = await db.upstox_auth_requests.find_one(
+        {"user_id": user["id"]}, sort=[("requested_at", -1)])
+    return {
+        "token_fresh_for_today": fresh,
+        "access_token_obtained_at": obtained,
+        "access_token_source": keys.get("access_token_source"),
+        "expires_at_ist": "03:30 next day (Upstox fixed boundary)",
+        "now_ist": now_ist.isoformat(),
+        "auto_request_at_ist": f"{AUTH_REQUEST_MINUTE_IST // 60:02d}:{AUTH_REQUEST_MINUTE_IST % 60:02d}",
+        "alarm_at_ist": f"{AUTH_ALARM_MINUTE_IST // 60:02d}:{AUTH_ALARM_MINUTE_IST % 60:02d}",
+        "last_auth_request": {
+            "requested_at": (last_req or {}).get("requested_at"),
+            "ok": (last_req or {}).get("ok"),
+            "source": (last_req or {}).get("source"),
+            "token_received_at": (last_req or {}).get("token_received_at"),
+        } if last_req else None,
+    }
 
 
 @router.post("/broker/upstox/order/test")

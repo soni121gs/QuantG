@@ -16935,6 +16935,8 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _candle_backfill_done_date: Optional[str] = None
     _minute_backfill_done_date: Optional[str] = None
     _feed_open_check_done_date: Optional[str] = None
+    _auth_request_done_date: Optional[str] = None
+    _auth_alarm_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
     _edge_lab_rebuild_done_date: Optional[str] = None
@@ -17182,6 +17184,105 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                                 audit["index"], audit["options"])
                 except Exception as _bf_err:
                     logger.warning("1-min gap-backfill failed: %s", _bf_err)
+
+            # 08:45 IST — fire Upstox's SCHEDULED-APPROVAL auth request so the
+            # daily token is live BEFORE the 09:15 open.
+            #
+            # The Upstox access token dies at 03:30 IST every day and Upstox issues
+            # no refresh token to this app, so it must be re-obtained daily. On
+            # 2026-08-04 that happened at 09:34 — 19 minutes into the session — and
+            # because every intraday regime feature is anchored on the FIRST
+            # captured bar, the whole day's regime read was anchored late (§28.3).
+            #
+            # This uses the flow Upstox documents for exactly this case: we POST the
+            # request, Upstox pushes an in-app/WhatsApp prompt, the founder taps
+            # approve, and the token arrives at our notifier webhook. No password or
+            # TOTP seed is stored anywhere and the human approval SEBI requires still
+            # happens — it just happens at 08:45 from a phone instead of at 09:34
+            # from a desktop. Skipped when the stored token is already fresh for
+            # today, so an early manual login is never disturbed.
+            _mod_ist = hour * 60 + minute
+            try:
+                from core.upstox_auth_request import (
+                    AUTH_ALARM_MINUTE_IST as _AUTH_ALARM_MIN,
+                    AUTH_REQUEST_ENABLED as _AUTH_REQ_ON,
+                    AUTH_REQUEST_MINUTE_IST as _AUTH_REQ_MIN,
+                    build_auth_request_url as _build_auth_url,
+                    parse_auth_request_response as _parse_auth_resp,
+                    token_is_fresh as _tok_fresh,
+                )
+            except Exception:  # noqa: BLE001 — never let this break the scheduler
+                _AUTH_REQ_ON = False
+                _AUTH_REQ_MIN = _AUTH_ALARM_MIN = -1
+
+            if (_AUTH_REQ_ON and ist.weekday() < 5 and _mod_ist == _AUTH_REQ_MIN
+                    and _auth_request_done_date != today):
+                _auth_request_done_date = today
+                try:
+                    import requests as _rq
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
+                        _uid = _row["id"]
+                        _keys = await db.broker_keys.find_one(
+                            {"user_id": _uid, "broker": "upstox"})
+                        if not _keys:
+                            continue
+                        if _tok_fresh(_keys.get("access_token_obtained_at"), now_ist=ist):
+                            logger.info("Upstox auth-request skipped user=%s: token already fresh", _uid)
+                            continue
+                        _ak = os.environ.get("UPSTOX_API_KEY") or decrypt_secret(_keys.get("api_key"))
+                        _as = os.environ.get("UPSTOX_API_SECRET") or decrypt_secret(_keys.get("api_secret"))
+                        if not _ak or not _as:
+                            logger.warning("Upstox auth-request skipped user=%s: no api key/secret", _uid)
+                            continue
+                        _resp = await asyncio.to_thread(
+                            _rq.post, _build_auth_url(_ak),
+                            headers={"accept": "application/json",
+                                     "Content-Type": "application/json"},
+                            json={"client_secret": _as}, timeout=20)
+                        _body = _resp.json() if _resp.content else {}
+                        _parsed = _parse_auth_resp(_body)
+                        await db.upstox_auth_requests.insert_one({
+                            "id": str(uuid.uuid4()), "user_id": _uid,
+                            "requested_at": datetime.now(timezone.utc).isoformat(),
+                            "http_status": _resp.status_code, "ok": bool(_parsed["ok"]),
+                            "notifier_url": _parsed["notifier_url"],
+                            "authorization_expiry": _parsed["authorization_expiry"],
+                            "source": "scheduler",
+                        })
+                        logger.info(
+                            "Upstox auth-request sent user=%s ok=%s — APPROVE THE PROMPT "
+                            "IN THE UPSTOX APP to have the token before the open",
+                            _uid, _parsed["ok"])
+                except Exception as _auth_err:  # noqa: BLE001
+                    logger.warning("Upstox scheduled auth-request failed: %s", _auth_err)
+
+            # 09:05 IST — the approval has plainly not happened. Say so loudly while
+            # there is still time to act, rather than discovering it from a silent
+            # capture gap after the open.
+            if (ist.weekday() < 5 and _mod_ist == _AUTH_ALARM_MIN
+                    and _auth_alarm_done_date != today):
+                _auth_alarm_done_date = today
+                try:
+                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
+                        _keys = await db.broker_keys.find_one(
+                            {"user_id": _row["id"], "broker": "upstox"}) or {}
+                        if _tok_fresh(_keys.get("access_token_obtained_at"), now_ist=ist):
+                            continue
+                        logger.critical(
+                            "UPSTOX TOKEN NOT REFRESHED — 10 minutes to the open. user=%s "
+                            "last_obtained=%s. Approve the Upstox prompt now, or POST "
+                            "/api/broker/upstox/auth-request to re-send it. Without it the "
+                            "feed is down at 09:15 and the morning capture is lost.",
+                            _row["id"], _keys.get("access_token_obtained_at"))
+                        await db.app_alerts.insert_one({
+                            "id": str(uuid.uuid4()), "user_id": _row["id"],
+                            "kind": "upstox_token_missing_pre_open",
+                            "severity": "critical",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "detail": {"last_obtained": _keys.get("access_token_obtained_at")},
+                        })
+                except Exception as _alarm_err:  # noqa: BLE001
+                    logger.warning("Upstox pre-open token alarm failed: %s", _alarm_err)
 
             # 09:20 IST — feed-down-at-open watchdog. The daily Upstox token expires
             # ~03:30 IST and needs a morning reconnect; a late reconnect means no feed at
