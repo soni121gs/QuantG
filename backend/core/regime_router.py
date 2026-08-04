@@ -185,8 +185,26 @@ def route(
     # cross-check. This can only ever REDUCE risk: _more_conservative picks the
     # stricter of the two decisions, so the coarse read can never authorise a trade
     # the fine read refused.
-    if (decision.regime in SELLER_OK_REGIMES and coarse in tax.REGIME_LABELS
-            and coarse != decision.regime):
+    #
+    # Scoped to premium-COLLECTING structures, on the same economic test §26.3 uses
+    # for the chop/EVENT veto. The hazard here is specifically a seller being
+    # green-lit into a trend by a permissive label. A defined-risk BUYER (debit
+    # spread, long vol, tail hedge) has the opposite payoff — a trend is what it is
+    # bought for — and routing it through this check subjects it to the trend
+    # PRECISION gate, whose "confidence < 0.9, likely fakeout, stand down" rule
+    # exists to stop trend FOLLOWERS chasing noise. Applied to a hedge that would
+    # turn "the coarse organ suspects a downtrend" into a reason to switch the
+    # crash insurance OFF, which is exactly backwards.
+    #
+    # The RANGE branch keeps its original unscoped behaviour so nothing that
+    # stands down today starts trading; only the INSIDE_QUIET extension is new,
+    # and it is additive.
+    _cross_check = (
+        decision.regime == tax.RANGE                       # original R1, any structure
+        or (decision.regime in SELLER_OK_REGIMES           # 2026-08-04 extension
+            and str(structure or "") in PREMIUM_SELLING_STRUCTURES)
+    )
+    if _cross_check and coarse in tax.REGIME_LABELS and coarse != decision.regime:
         note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to {decision.regime} "
                 f"(a seller-permissive label, confidence {confidence:.2f}) — "
                 f"cross-checking the mature coarse regime {coarse}")
