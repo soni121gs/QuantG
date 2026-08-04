@@ -34,7 +34,9 @@ def test_dead_trade_is_cut_after_the_window():
     silently restore the flat 20-minute window. 0 DTE here keeps this test's
     original intent — near expiry, 25 minutes IS enough decay to judge on.
     """
-    r = de.no_progress_exit(peak_pnl=20.0, held_minutes=25.0,
+    # held 60 min at 0 DTE = 15.6% of the session, comfortably past the 8% bar,
+    # so the reachability gate permits the judgement (25 min delivers only 6.5%).
+    r = de.no_progress_exit(peak_pnl=20.0, held_minutes=60.0,
                             net_credit=20.0, qty=65, lot_size=65, lots=1,
                             leg_premium_sum=70.0, dte_days=0)
     assert r == "spread-no-progress"
@@ -61,7 +63,10 @@ def test_threshold_is_floored_at_real_friction():
     # credit_money = 2*65 = 130; 8% = Rs10.4, but friction floor is higher.
     # dte_days=0 (near expiry) so the reachability gate lets the rule be applied —
     # see test_dead_trade_is_cut_after_the_window.
-    r = de.no_progress_exit(peak_pnl=30.0, held_minutes=30.0,
+    # A thin credit makes the FRICTION floor (~Rs46) the binding bar, and decay has
+    # to have delivered at least that much before the trade can be judged against
+    # it: 150 min at 0 DTE = 39% of the session = Rs50 of the Rs130 credit.
+    r = de.no_progress_exit(peak_pnl=30.0, held_minutes=150.0,
                             net_credit=2.0, qty=65, lot_size=65, lots=1,
                             leg_premium_sum=70.0, dte_days=0)
     # NIFTY friction ~Rs46 > Rs30 peak -> still judged lifeless
