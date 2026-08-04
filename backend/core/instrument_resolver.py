@@ -59,12 +59,18 @@ class InstrumentResolver:
         mode: str = "paper",
         allow_simulated: bool = True,
         itm_offset_pct: float = 0.0,
+        min_dte: Optional[int] = None,
+        max_dte: Optional[int] = None,
         **_ignored: Any,
     ) -> Optional[Instrument]:
         """Resolve a tradable Upstox instrument with source tracking.
 
         LIVE never returns simulated instruments. PAPER can return a clearly
         marked simulated instrument when the real Upstox master path is absent.
+
+        `min_dte`/`max_dte` are the strategy's configured DTE window
+        (`visual_config.options.min_dte_days` / `max_dte_days`). None = no window,
+        which keeps the positional `expiry_rule` behaviour untouched.
         """
         und = str(underlying or "").upper()
         inst_type = str(instrument_type or "").upper()
@@ -77,7 +83,8 @@ class InstrumentResolver:
         domain = resolve_domain_by_underlying(und)
         if inst_type == "INDEX_OPTION":
             return await self._resolve_index_option(und, side, strike, expiry_rule, spot_price_hint,
-                                                    mode, allow_simulated, float(itm_offset_pct or 0.0))
+                                                    mode, allow_simulated, float(itm_offset_pct or 0.0),
+                                                    min_dte=min_dte, max_dte=max_dte)
 
         self._diag(stage="unsupported_domain", reason=f"{domain.name}/{inst_type} is unsupported")
         return None
@@ -92,6 +99,8 @@ class InstrumentResolver:
         mode: str,
         allow_simulated: bool,
         itm_offset_pct: float = 0.0,
+        min_dte: Optional[int] = None,
+        max_dte: Optional[int] = None,
     ) -> Optional[Instrument]:
         gw = self.upstox_gateway
         domain = resolve_domain_by_underlying(underlying)
@@ -125,10 +134,44 @@ class InstrumentResolver:
             target_strike += (interval if is_pe else -interval)
         target_strike = _round_to_strike(target_strike, interval)
 
+        has_window = min_dte is not None or max_dte is not None
+        target_expiry: Optional[str] = None
         if gw and getattr(gw, "connected", True):
-            inst = await self._lookup_index_option_chain(gw, underlying, option_side, target_strike, domain)
+            # Resolve the target expiry ONCE, before any fallback runs.
+            #
+            # FAIL CLOSED (§28.1). A configured DTE window that matches nothing must
+            # stand the whole resolution DOWN. Letting it fall through to
+            # `_search_index_option` (whose candidates start at "current_week") or to
+            # the paper simulator would hand back precisely the near-expiry contract
+            # the window exists to refuse — the fix would look applied and change
+            # nothing, which is how the original bug survived.
+            spot_key = INDEX_SPOT_KEYS.get(underlying)
+            if spot_key:
+                target = self._target_expiry(gw, underlying, spot_key, expiry_rule, min_dte, max_dte)
+                if target.get("stand_down"):
+                    self._diag(stage="index_option_lookup",
+                               reason=f"DTE_WINDOW [{min_dte},{max_dte}]: {target.get('reason')}",
+                               underlying=underlying, dte_window=[min_dte, max_dte])
+                    return None
+                target_expiry = target.get("expiry")
+                if target_expiry:
+                    self._diag(stage="index_option_expiry", reason=target.get("reason"),
+                               underlying=underlying, expiry=target_expiry, dte=target.get("dte"))
+            inst = await self._lookup_index_option_chain(
+                gw, underlying, option_side, target_strike, domain,
+                target_expiry=target_expiry)
             if inst:
                 return inst
+            if has_window:
+                # Neither the search fallback nor the simulator can honour a DTE
+                # window, so with one configured they are not usable substitutes.
+                self._diag(
+                    stage="index_option_lookup",
+                    reason=(f"DTE_WINDOW [{min_dte},{max_dte}]: no contract found on expiry "
+                            f"{target_expiry}; the search/simulated fallbacks cannot honour a "
+                            f"DTE window so they are not used"),
+                    underlying=underlying, dte_window=[min_dte, max_dte], expiry=target_expiry)
+                return None
             inst = await self._search_index_option(gw, underlying, option_side, target_strike, domain)
             if inst:
                 return inst
@@ -143,15 +186,96 @@ class InstrumentResolver:
         )
         if mode == "live" or not allow_simulated:
             return None
+        if has_window:
+            # The simulator invents a nearest-expiry contract, so it cannot satisfy
+            # a DTE window either. Standing down beats papering a geometry the
+            # strategy never asked for and then grading it as if it had.
+            self._diag(
+                stage="index_option_lookup",
+                reason=(f"DTE_WINDOW [{min_dte},{max_dte}]: a simulated contract is always "
+                        f"nearest-expiry and cannot satisfy the window"),
+                underlying=underlying, dte_window=[min_dte, max_dte])
+            return None
         return await self._paper_simulated_index_option(underlying, option_side, target_strike)
 
-    async def _lookup_index_option_chain(self, gw: Any, underlying: str, option_side: str, target_strike: int, domain: Any) -> Optional[Instrument]:
+    def _target_expiry(
+        self,
+        gw: Any,
+        underlying: str,
+        spot_key: str,
+        expiry_rule: int,
+        min_dte: Optional[int],
+        max_dte: Optional[int],
+    ) -> Dict[str, Any]:
+        """Which expiry should this resolution use? {"expiry", "reason", "stand_down"}.
+
+        THE BUG THIS FIXES (2026-08-05). This resolver used to call
+        `get_option_chain(spot_key, None)` — i.e. take whatever expiry Upstox
+        returns by default — and `expiry_rule` was passed only into a diagnostic.
+        So on the LIVE runner path both `expiry_offset` AND the configured
+        `min_dte_days`/`max_dte_days` window were decorative.
+
+        §25.4b added `select_expiry` to `_resolve_option_for_strategy`, but that
+        function is only reached by MANUAL routes (server.py:18168 says so
+        outright). The runner resolves through here, so the window never applied to
+        a real trade: the HTE sleeve was configured 5-15 DTE and opened 0-DTE
+        spreads on 2026-08-04 — a same-session trade wearing a hold-to-expiry label,
+        with OOS evidence drawn from multi-day holds. Third instance of the
+        decorative-config trap after `target_dte_days` (§21.5) and `owned_regimes`
+        (§26.3).
+
+        No window configured -> positional `expiry_rule` against the ascending
+        expiry list, which is the historical behaviour. Window configured and
+        nothing qualifies -> stand_down, never a substitute: trading a contract the
+        strategy did not ask for produces P&L attributed to a geometry that never
+        ran.
+        """
+        from core.dte_policy import select_expiry
+
+        contracts_fn = getattr(gw, "get_option_contracts", None)
+        if not callable(contracts_fn):
+            # Can't enumerate expiries. Honour a window by refusing rather than
+            # silently taking the default chain — that silence is the whole bug.
+            if min_dte is not None or max_dte is not None:
+                return {"expiry": None, "stand_down": True,
+                        "reason": "cannot enumerate expiries to honour the configured DTE window"}
+            return {"expiry": None, "stand_down": False, "reason": "no expiry enumeration; broker default chain"}
+        try:
+            contracts = contracts_fn(spot_key)
+            expiries = sorted({
+                str(c.get("expiry"))[:10]
+                for c in ((contracts or {}).get("data") or []) if c.get("expiry")
+            })
+        except Exception as exc:  # noqa: BLE001
+            if min_dte is not None or max_dte is not None:
+                return {"expiry": None, "stand_down": True,
+                        "reason": f"expiry list unavailable ({exc}); refusing to guess under a DTE window"}
+            return {"expiry": None, "stand_down": False, "reason": f"expiry list unavailable ({exc})"}
+        if not expiries:
+            if min_dte is not None or max_dte is not None:
+                return {"expiry": None, "stand_down": True,
+                        "reason": "broker returned no expiries; cannot honour the DTE window"}
+            return {"expiry": None, "stand_down": False, "reason": "broker returned no expiries"}
+
+        pick = select_expiry(expiries, expiry_offset=int(expiry_rule or 0),
+                             min_dte=min_dte, max_dte=max_dte)
+        if pick.get("expiry") is None:
+            return {"expiry": None, "stand_down": True, "reason": pick.get("reason")}
+        return {"expiry": pick["expiry"], "stand_down": False,
+                "reason": pick.get("reason"), "dte": pick.get("dte")}
+
+    async def _lookup_index_option_chain(
+        self, gw: Any, underlying: str, option_side: str, target_strike: int, domain: Any,
+        target_expiry: Optional[str] = None,
+    ) -> Optional[Instrument]:
+        """`target_expiry` is resolved by the caller (see `_target_expiry`); None
+        keeps the broker's default chain, which is the no-window behaviour."""
         spot_key = INDEX_SPOT_KEYS.get(underlying)
         if not spot_key or not hasattr(gw, "get_option_chain"):
             self._diag(stage="index_option_lookup", reason="upstox_option_chain_unavailable", spot_key=spot_key)
             return None
         try:
-            chain = gw.get_option_chain(spot_key, None)
+            chain = gw.get_option_chain(spot_key, target_expiry)
             rows = (chain or {}).get("data") or []
             for row in rows:
                 try:

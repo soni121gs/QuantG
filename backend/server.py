@@ -18014,6 +18014,18 @@ async def startup():
         upstox_gw = await get_user_upstox_gateway(user_id)
         spot_hint = None
 
+        # DTE window (2026-08-05). This is the runner's REAL resolver; the
+        # select_expiry fix of §25.4b landed on _resolve_option_for_strategy, which
+        # only manual routes reach — so min_dte_days/max_dte_days never applied to a
+        # live trade and the HTE sleeve, configured 5-15 DTE, opened 0-DTE spreads.
+        def _cfg_dte(_key):
+            _v = _opt_cfg.get(_key)
+            try:
+                return int(_v) if _v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        _min_dte, _max_dte = _cfg_dte("min_dte_days"), _cfg_dte("max_dte_days")
         resolver = InstrumentResolver(db, upstox_gateway=upstox_gw)
         instrument = await resolver.resolve_instrument_with_source(
             underlying=underlying,
@@ -18024,6 +18036,8 @@ async def startup():
             spot_price_hint=float(spot_hint or 0) if spot_hint else None,
             itm_offset_pct=itm_offset_pct,
             mode=mode,
+            min_dte=_min_dte,
+            max_dte=_max_dte,
         )
         diagnostics.update({
             "resolver_stage": resolver.last_diagnostics.get("stage"),
