@@ -29,13 +29,11 @@ class FakeGateway:
 
     connected = True
 
-    def __init__(self, expiries, *, strike=24600, contracts_raises=False, no_contracts_fn=False):
+    def __init__(self, expiries, *, strike=24600, contracts_raises=False):
         self._expiries = expiries
         self._strike = strike
         self._contracts_raises = contracts_raises
         self.chain_called_with = "__never__"
-        if no_contracts_fn:
-            del self.get_option_contracts
 
     def get_option_contracts(self, spot_key, expiry_date=None):
         if self._contracts_raises:
@@ -126,15 +124,19 @@ async def test_no_window_still_resolves_when_expiries_cannot_be_listed():
     assert gw.chain_called_with is None       # broker default chain, as before
 
 
+class LegacyGateway(FakeGateway):
+    """An adapter that cannot enumerate expiries at all (no get_option_contracts).
+    A real possibility for any future broker adapter, so both branches are pinned."""
+    get_option_contracts = None                 # attribute exists but is not callable
+
+
 @pytest.mark.asyncio
 async def test_gateway_without_contract_enumeration_is_handled_both_ways():
-    gw = FakeGateway([_iso(0)], no_contracts_fn=True)
-    inst, _ = await _resolve(gw)
-    assert inst is not None                    # no window -> default chain
-    gw2 = FakeGateway([_iso(0)], no_contracts_fn=True)
-    inst2, diag2 = await _resolve(gw2, min_dte=5, max_dte=15)
-    assert inst2 is None                       # window -> refuse
-    assert "DTE_WINDOW" in str(diag2.get("reason"))
+    inst, _ = await _resolve(LegacyGateway([_iso(0)]))
+    assert inst is not None                     # no window -> broker default chain
+    inst2, diag2 = await _resolve(LegacyGateway([_iso(0)]), min_dte=5, max_dte=15)
+    assert inst2 is None                        # window -> refuse rather than guess
+    assert "DTE_WINDOW" in str(diag2.get("reason")), diag2
 
 
 @pytest.mark.asyncio
