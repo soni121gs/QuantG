@@ -325,7 +325,13 @@ def test_reachability_vetoes_a_far_expiry_intraday_seller():
                             enforce_cost_floor=False)
     assert not r["ok"]
     assert "tp_reachability" in r["reason"]
-    assert r["tp_reachability"]["dte_days"] == 6
+    # TIME-OF-DAY FLAKE, fixed 2026-08-05. This asserted `== 6`, but the test adds
+    # six WHOLE days to today's date while the builder measures FRACTIONAL days from
+    # `now` to that expiry. So it read 6 just after 00:00 UTC and 5 for most of the
+    # day — the suite passed in the morning and failed in the afternoon, for reasons
+    # having nothing to do with any code change. The veto is what this test is
+    # about; the exact integer is incidental.
+    assert 5 <= r["tp_reachability"]["dte_days"] <= 6
 
 
 def test_reachability_passes_near_expiry():
