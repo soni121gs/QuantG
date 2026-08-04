@@ -2186,3 +2186,86 @@ restores both reloaded modules in an autouse fixture so it adds nothing to that 
   `edgemath_conviction` DECORATION — already neutralised for sizing by `SCORE_SIZE_NEUTRAL`
   (§24.1); they remain as monitoring signals.
 - **Directional concentration** (§28.4) and the `blocked_margin` float residue (6.2e-11).
+
+---
+
+## 29. Upstox daily token — the scheduled-approval flow (2026-08-04)
+
+Closes the CRITICAL `infra.feed_down_at_open` leak (§28.6). The Upstox access token
+**expires at 03:30 IST every day regardless of when it was issued**, and Upstox
+issues **no refresh token** to this app — the code exchange is a token-only grant,
+and `db.broker_keys` has never held a `refresh_token`. So it must be re-obtained
+daily. On 2026-08-04 that landed at 09:34, and because every intraday regime
+feature is anchored on the FIRST captured bar, the whole day's regime read was
+anchored 19 minutes late.
+
+### 29.1 Why NOT automated TOTP login
+Upstox staff state plainly: *"login shouldn't be automatically done and user must
+login daily manually"*, citing SEBI; and *"There is no option for that... You need
+to do it daily as per SEBI's instructions."* There is no extended/long-lived token
+(unlike some competitors). Storing the account password + TOTP seed on an
+internet-facing VPS to save one tap would violate the broker's terms, put the real
+brokerage account at risk, and cut directly against the SEBI PMS/AIF registration
+path in §10. Third-party packages exist (`upstox-totp`); they are not used here.
+
+### 29.2 The sanctioned flow (implemented)
+```
+08:45 IST  scheduler POSTs /v3/login/auth/token/request/{client_id}
+           body {"client_secret": ...}   [skipped if the token is already fresh]
+   ->      Upstox pushes an in-app / WhatsApp approval prompt
+   ->      founder taps approve on their phone
+   ->      Upstox POSTs the token to our notifier webhook, which applies it
+09:05 IST  CRITICAL log + db.app_alerts row if it still has not arrived
+```
+No credential is stored anywhere, the human approval SEBI asks for still happens,
+and it happens 30 minutes BEFORE the open instead of 19 minutes after it.
+
+| Piece | Where |
+|---|---|
+| Pure helpers + constants | `core/upstox_auth_request.py` |
+| Trigger (auth'd) | `POST /api/broker/upstox/auth-request` |
+| Webhook (PUBLIC) | `POST /api/broker/upstox/notifier` |
+| Status / diagnosis | `GET /api/broker/upstox/token-status` |
+| Scheduler blocks | `server.py` `_daily_scheduler_loop` (08:45 + 09:05) |
+| Env | `UPSTOX_AUTH_REQUEST_ENABLED`, `UPSTOX_AUTH_REQUEST_MINUTE_IST` (525), `UPSTOX_AUTH_ALARM_MINUTE_IST` (545) |
+
+### 29.3 The webhook is public and unauthenticated — by Upstox's requirement
+Upstox mandates that the notifier endpoint not require authentication, and it does
+**not sign the payload**. Anyone on the internet can POST to it. Two layers:
+1. **Structural** (`validate_notifier_payload`, pure + 20 tests): `message_type`
+   must be the access-token delivery, `client_id` must equal OUR api_key compared
+   **constant-time**, token must be a plausible non-empty string. A missing
+   `expected_client_id` **rejects** — "we could not determine who we are" must
+   never mean "accept anything" (§28.1).
+2. **Live verification**: the token is checked against Upstox's own profile
+   endpoint *before* it is stored. A forged POST wastes one API call.
+Verified live: an attacker `client_id` and a `{}` body are both refused, and a
+payload carrying the REAL `client_id` with a forged token was rejected at layer 2
+with the stored token left untouched. The token is never logged. The endpoint
+always answers 200 — a webhook that 500s invites retries.
+
+### 29.4 `apply_upstox_access_token()` is now THE single token-apply path
+Shared by the OAuth callback and the webhook. This is load-bearing: **restarting
+the ticker is what re-attaches the 1-minute capture tick listeners**, and a path
+that stored a token without doing so is exactly the §22.7 root cause (the live
+capture had never written a file in its life). Any future token source must go
+through this function.
+
+### 29.5 `token_is_fresh()` reasons about the 03:30 boundary, not elapsed hours
+A token issued at 20:00 yesterday is **dead** at 09:15 today; one issued at 03:31
+today is alive. Anything that measures age in hours gets this wrong twice a day.
+Unparseable timestamp → stale (fail closed).
+
+### 29.6 Operational
+- **The notifier URL must be registered in the Upstox developer dashboard** as
+  `https://quantgtrade.com/api/broker/upstox/notifier`. Upstox echoes the URL it
+  has on file in the step-1 response; `token-status` reports it as
+  `last_auth_request.notifier_url_on_file_at_upstox` next to
+  `expected_notifier_url`. **That comparison is the only thing that distinguishes
+  "approval not given" from "delivery had nowhere to go"** — check it first when a
+  token does not arrive.
+- Deployed 2026-08-04 armed but **UNTESTED end-to-end** (founder chose not to fire
+  a test prompt at midnight). Worst case is strictly no worse than before: the
+  request fails or the token never arrives, the 09:05 alarm fires, and the manual
+  OAuth login path is completely unchanged.
+- Manual re-send any time: `POST /api/broker/upstox/auth-request`.
