@@ -27,12 +27,11 @@ from core import dynamic_exit as de
 
 
 def test_dead_trade_is_cut_after_the_window():
-    """Held 25 min, peak never cleared 8% of a 1300-rupee credit (Rs104) -> cut.
+    """Peak never cleared 8% of a 1300-rupee credit (Rs104) -> cut.
 
     dte_days is now REQUIRED for the rule to fire (2026-08-04): the reachability
     gate fails closed, because an unresolvable DTE used to skip it entirely and
-    silently restore the flat 20-minute window. 0 DTE here keeps this test's
-    original intent — near expiry, 25 minutes IS enough decay to judge on.
+    silently restore the flat 20-minute window.
     """
     # held 60 min at 0 DTE = 15.6% of the session, comfortably past the 8% bar,
     # so the reachability gate permits the judgement (25 min delivers only 6.5%).
@@ -61,8 +60,6 @@ def test_threshold_is_floored_at_real_friction():
     """A thin-credit spread must not be cut for failing a rupee bar it never could
     clear — the fraction floors at real round-trip friction, not below."""
     # credit_money = 2*65 = 130; 8% = Rs10.4, but friction floor is higher.
-    # dte_days=0 (near expiry) so the reachability gate lets the rule be applied —
-    # see test_dead_trade_is_cut_after_the_window.
     # A thin credit makes the FRICTION floor (~Rs46) the binding bar, and decay has
     # to have delivered at least that much before the trade can be judged against
     # it: 150 min at 0 DTE = 39% of the session = Rs50 of the Rs130 credit.
