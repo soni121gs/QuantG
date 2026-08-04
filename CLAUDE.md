@@ -2264,8 +2264,20 @@ Unparseable timestamp → stale (fail closed).
   `expected_notifier_url`. **That comparison is the only thing that distinguishes
   "approval not given" from "delivery had nowhere to go"** — check it first when a
   token does not arrive.
-- Deployed 2026-08-04 armed but **UNTESTED end-to-end** (founder chose not to fire
-  a test prompt at midnight). Worst case is strictly no worse than before: the
-  request fails or the token never arrives, the 09:05 alarm fires, and the manual
-  OAuth login path is completely unchanged.
+- **PROVEN END-TO-END 2026-08-04 23:35 IST.** Full chain exercised against
+  production: request accepted (HTTP 200), Upstox echoed back exactly the
+  registered notifier URL, founder approved on the phone, and the token arrived at
+  the webhook 
+  → `access_token_source="notifier"`, `verified_upstox_user_id=5RCA6V`,
+  `feed_started=True`, V3 handshake + live tick (India VIX 12.19) one second later.
+  `_attach_capture_listeners` runs on the same branch that logs *"Upstox ticker
+  startup successful"*, and that line is in the trail — so the §22.7 capture
+  re-attach is covered on this path too.
+- Worst case remains strictly no worse than before: if a request fails or an
+  approval is never given, the 09:05 alarm fires and the manual OAuth login path is
+  completely unchanged.
 - Manual re-send any time: `POST /api/broker/upstox/auth-request`.
+- **Diagnostic gotcha:** checking `server._UPSTOX_GATEWAYS` via
+  `docker exec ... python -c` reports an EMPTY cache — that spawns a NEW process,
+  not the running uvicorn. In-process state must be read through an HTTP endpoint
+  or inferred from the log trail, never from a separate interpreter.
