@@ -2281,3 +2281,43 @@ Unparseable timestamp → stale (fail closed).
   `docker exec ... python -c` reports an EMPTY cache — that spawns a NEW process,
   not the running uvicorn. In-process state must be read through an HTTP endpoint
   or inferred from the log trail, never from a separate interpreter.
+
+### 29.7 The ORDER-UPDATE postback is a different webhook — and it was wide open
+Upstox's app config has **three** URLs and they are easy to conflate:
+
+| Field | Purpose | QuantG path |
+|---|---|---|
+| Redirect URL | OAuth return after interactive login | `/api/broker/upstox/callback` |
+| **Notifier Webhook** | delivers the **access token** after approval (§29.2) | `/api/broker/upstox/notifier` |
+| **Postback URL** | pushes **order / GTT updates** while trading | `/api/upstox/webhook/<secret>` |
+
+The Postback path feeds `apply_broker_truth_event`, which writes broker TRUTH —
+canonical status and fill price — onto `db.orders` keyed by `broker_order_id`.
+It was **publicly reachable and unauthenticated**: an anonymous POST of
+`{"order_id": …, "status": "COMPLETE", "average_price": …}` was accepted and
+returned `status=FILLED` (verified against production 2026-08-04).
+
+**Blast radius was 0 *only* because paper orders carry no `broker_order_id` and
+`mode=live` count is 0.** It becomes real the day live trading is enabled — which
+is exactly when the postback is wanted. Note also that the hole was open
+**regardless of whether the Postback URL was configured in the dashboard**;
+leaving that field blank never closed it, which is the kind of thing that reads as
+"not enabled yet" and is really "exposed and unused".
+
+Fix: a **secret path segment** (`UPSTOX_POSTBACK_SECRET`, in `backend/.env`, which
+`docker-compose.yml` already passes via `env_file`). Upstox neither signs postbacks
+nor allows auth headers, so an unguessable path is the standard defence. Once the
+secret is set the **bare path is refused**, so enabling it CLOSES the old door
+rather than adding a second one. With no secret configured the previous behaviour
+is preserved (no silent breakage) but every hit logs a warning. Non-dict payloads
+are rejected and processing errors return 200 with a reason — a 500 makes Upstox
+retry a bad event forever.
+
+Verified live: bare path → `unauthorized`; wrong secret → `unauthorized`; correct
+secret → accepted; malformed body → HTTP 200, no 500. Rejected payloads are not
+even written to `upstox_broker_events`, so the audit collection cannot be flooded.
+
+**Standing rule: every unauthenticated inbound webhook needs a stated defence.**
+The notifier has two layers (constant-time `client_id` + live token verification,
+§29.3); the postback has the path secret. A webhook that "only Upstox knows about"
+is not a defence — the URL is in a dashboard, a config file and this document.
