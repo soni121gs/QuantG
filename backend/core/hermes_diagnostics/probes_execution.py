@@ -167,8 +167,20 @@ async def specialist_regime_fit(ctx: ProbeContext) -> List[Finding]:
                  or [])
         if not owned:
             continue
-        entry_regime = (pos.get("regime_at_entry")
-                        or (pos.get("regime_snapshot") or {}).get("regime"))
+        # Judge against the FINE regime — that is the label the router actually
+        # gates on, and the one `owned_regimes` is written in.
+        #
+        # 2026-08-04: this read `regime_at_entry`, which is the COARSE regime
+        # (market_regime_state.regime — RANGE/TREND_UP/TREND_DOWN/CRASH/MELTUP).
+        # `owned_regimes` is the RAE fine taxonomy, which has INSIDE_QUIET and
+        # HIGH_VOL_CHOP and no CRASH/MELTUP. Comparing one to the other is a
+        # category error: it fired on every coarse TREND_DOWN even when the router
+        # had legitimately allowed the trade on a fine INSIDE_QUIET, and it could
+        # never see a genuine fine-regime violation. 14 occurrences, all noise.
+        fine = str(pos.get("regime_fine_at_entry") or "").upper()
+        coarse = str(pos.get("regime_at_entry")
+                     or (pos.get("regime_snapshot") or {}).get("regime") or "").upper()
+        entry_regime = fine if fine and fine != "UNKNOWN" else ""
         if not entry_regime or entry_regime in owned:
             continue
         if sid in reported:
@@ -183,9 +195,10 @@ async def specialist_regime_fit(ctx: ProbeContext) -> List[Finding]:
                     "entry filter fires off-regime or the classifier/router mislabelled "
                     "the day. Off-regime entries are the ensemble's blind spot."),
             evidence={"strategy_id": sid, "entry_regime": entry_regime,
+                      "fine_regime_at_entry": fine, "coarse_regime_at_entry": coarse,
                       "owned_regimes": owned, "symbol": pos.get("symbol"),
                       "realized_pnl": pos.get("realized_pnl")},
-            reproduction="compare position.regime_at_entry vs strategy.owned_regimes",
+            reproduction="compare position.regime_fine_at_entry vs strategy.owned_regimes",
             suggested_fix="Router/classifier regime gating, or the strategy's entry filter (seed_regime_specialists).",
         ))
     return out
@@ -460,4 +473,102 @@ async def squareoff_after_segment_close(ctx: ProbeContext) -> List[Finding]:
         suggested_fix=("Use session_times.spread_squareoff_minute_for(segment) / "
                        "close_minute_for(segment) — never a single global constant "
                        "derived from one exchange's close."),
+    )]
+
+
+@register("exec.expiry_settlement_integrity", kind="dynamic")
+async def expiry_settlement_integrity(ctx: ProbeContext) -> List[Finding]:
+    """Every expiry settlement must be priced at INTRINSIC against a recorded
+    underlying price — never at a leg's last traded premium.
+
+    2026-08-04, the day hold-to-expiry first ran: seven positions settled against
+    an index tick that the feed had frozen for 13 minutes either side of. Nothing
+    about the settlement was recorded, so the exposure (Rs12,659 — twice the whole
+    reported day loss) was invisible in the ledger. This probe makes the
+    settlement price a first-class, checkable fact.
+    """
+    settled = [p for p in ctx.closed_today
+               if str(p.get("exit_reason") or "") == "expiry-settlement"]
+    if not settled:
+        return []
+    fallback = [p for p in settled if str(p.get("settlement_source") or "") != "intrinsic"]
+    if not fallback:
+        return []
+    rows = [{
+        "position_id": p.get("id"), "strategy_id": p.get("strategy_id"),
+        "underlying": p.get("underlying"), "target_symbol": p.get("target_symbol"),
+        "settlement_source": p.get("settlement_source") or "MISSING",
+        "settlement_underlying": p.get("settlement_underlying"),
+        "reason": p.get("settlement_fallback_reason"),
+        "realized_pnl": round(float(p.get("realized_pnl") or 0), 2),
+    } for p in fallback]
+    exposure = round(sum(abs(float(p.get("realized_pnl") or 0)) for p in fallback), 2)
+    return [Finding(
+        probe_id="exec.expiry_settlement_integrity", domain=Domain.EXECUTION,
+        severity=Severity.HIGH, entity="expiry-settlement",
+        title=(f"{len(fallback)} of {len(settled)} expiry settlement(s) did not price at "
+               f"intrinsic (Rs{exposure:,.0f} booked)"),
+        detail=("At expiry an option is worth its intrinsic value and nothing else, so a "
+                "settled leg closed at its last traded premium carries phantom time value "
+                "AND inherits whatever the feed last printed. A settlement that fell back "
+                "to leg LTPs booked real money against an unverified price. Check whether "
+                "the underlying quote was available at the settlement minute."),
+        evidence={"settled": len(settled), "fallback": len(fallback),
+                  "abs_pnl_booked": exposure, "positions": rows[:10]},
+        reproduction=("closed positions today WHERE exit_reason='expiry-settlement' "
+                      "AND settlement_source != 'intrinsic'"),
+        suggested_fix=("position_monitor._expiry_settlement_marks — the underlying spot "
+                       "could not be resolved, or a leg lacked strike/option_type."),
+    )]
+
+
+@register("exec.regime_organ_disagreement", kind="dynamic")
+async def regime_organ_disagreement(ctx: ProbeContext) -> List[Finding]:
+    """The coarse regime (market_regime_state.regime, VWAP over the session) and the
+    fine regime (regime_classifier.classify_intraday) are two independent organs
+    reading the same market. Sustained disagreement means one of them is wrong.
+
+    2026-08-04: coarse read TREND_DOWN through the midday slide while fine read
+    INSIDE_QUIET on 19 of 21 entries. The router only cross-checked the coarse read
+    when the fine one resolved to RANGE, so six seller entries went through on a
+    label that authorised them and a label that did not. The router now
+    cross-checks every seller-permissive label, but a persistent disagreement is
+    still evidence that a classifier needs looking at (cf. the 2026-08-03 finding
+    that the coarse organ was calling an overnight GAP an intraday TREND).
+    """
+    pairs = []
+    for p in ctx.closed_today:
+        fine = str(p.get("regime_fine_at_entry") or "").upper()
+        coarse = str(p.get("regime_at_entry") or "").upper()
+        if not fine or not coarse or fine == "UNKNOWN" or coarse == "UNKNOWN":
+            continue
+        pairs.append((coarse, fine, float(p.get("realized_pnl") or 0)))
+    if len(pairs) < 5:
+        return []                      # thin evidence -> silence (§19)
+    disagreed = [x for x in pairs if x[0] != x[1]]
+    frac = len(disagreed) / len(pairs)
+    if frac < 0.5:
+        return []
+    pnl = round(sum(x[2] for x in disagreed), 2)
+    combos: Dict[str, int] = {}
+    for c, f, _ in disagreed:
+        combos[f"coarse={c} fine={f}"] = combos.get(f"coarse={c} fine={f}", 0) + 1
+    return [Finding(
+        probe_id="exec.regime_organ_disagreement", domain=Domain.EXECUTION,
+        severity=Severity.MEDIUM, entity="regime-organs",
+        title=(f"Coarse and fine regime disagreed on {len(disagreed)}/{len(pairs)} entries "
+               f"({frac:.0%}), Rs{pnl:,.0f} booked on those"),
+        detail=("Two regime organs read the same market and reached different answers on "
+                "most of the day's entries. One of them is mis-reading. The router takes "
+                "the more conservative of the two whenever the fine read is "
+                "seller-permissive, so this is not necessarily a live loss — but a "
+                "sustained split is how a classifier bug hides."),
+        evidence={"entries": len(pairs), "disagreed": len(disagreed),
+                  "disagreement_rate": round(frac, 3), "realized_pnl_on_disagreed": pnl,
+                  "combinations": combos},
+        reproduction=("closed positions today: compare regime_at_entry (coarse) with "
+                      "regime_fine_at_entry (fine)"),
+        suggested_fix=("Diff classify_intraday against freshly-fetched broker bars "
+                       "(§26.1) before touching either classifier — three of the last "
+                       "four regime incidents were bad INPUT, not bad logic."),
     )]

@@ -84,6 +84,21 @@ SPREAD_MIN_TP_REACHABILITY = float(os.environ.get("SPREAD_MIN_TP_REACHABILITY", 
 SPREAD_ENFORCE_REACHABILITY = os.environ.get(
     "SPREAD_ENFORCE_REACHABILITY", "true").strip().lower() == "true"
 
+# Book-wide ceiling on the risk budget any ONE trade may size against, in rupees.
+# See lots_for_risk(). 8,000 is chosen from the live book: it is above every
+# strategy's per-LOT defined risk that already trades at 1 lot (SENSEX sellers
+# ~12.9k/lot, QG-O1 ~10.7k/lot, HTE ~30.7k/lot all size to 1 lot and are
+# unaffected because the caller floors at 1), and below the 20,000 that let the
+# mean-reversion sleeve take FIVE lots and Rs15,811 of risk on one 0-DTE spread.
+# 0 disables.
+#
+# LIMITATION, stated because someone will assume otherwise: callers floor lots at
+# 1 (`min(max(1, capital_cap), ...)`), so this bounds MULTI-LOT scaling, not the
+# absolute risk of a single lot. A one-lot spread with a very wide wing can still
+# exceed it. Capping that requires refusing the trade outright, which is a
+# different decision from sizing it.
+MAX_RISK_PER_TRADE_RUPEES = float(os.environ.get("MAX_RISK_PER_TRADE_RUPEES", "8000"))
+
 
 # Tradeable minutes in one session. Was a hardcoded 375 (09:15-15:30); NSE F&O
 # runs 09:15-15:40 = 385 from 2026-08-03. This is a DIVISOR in the §21.2
@@ -614,9 +629,73 @@ def build_debit_spread(
     }
 
 
+def option_intrinsic(strike: Any, option_type: Any, underlying: Any) -> Optional[float]:
+    """Intrinsic value of ONE option at expiry, or None if the inputs are unusable.
+
+    At expiry an option is worth exactly its intrinsic value — every rupee of time
+    value is gone by definition. This is therefore what a settled leg is worth,
+    and the last traded premium is not: that number carries phantom time value and
+    inherits whatever the feed happened to print last.
+    """
+    try:
+        k = float(strike)
+        s = float(underlying)
+    except (TypeError, ValueError):
+        return None
+    if k <= 0 or s <= 0:
+        return None
+    t = str(option_type or "").strip().upper()
+    if t.startswith("C"):
+        return max(s - k, 0.0)
+    if t.startswith("P"):
+        return max(k - s, 0.0)
+    return None
+
+
+def settle_legs_at_intrinsic(
+    short_leg: Optional[Dict[str, Any]],
+    long_leg: Optional[Dict[str, Any]],
+    underlying: Any,
+) -> Optional[Dict[str, float]]:
+    """{"short": x, "long": y} — both legs of an expiring spread priced at
+    intrinsic against the underlying's settlement price.
+
+    Returns None when either leg lacks a usable strike/option_type or the
+    underlying price is not positive. That is deliberate: the caller must then
+    fall back to its normal marks rather than settle real money against a
+    fabricated number. Fail-closed, per §22.3 — a settlement path that invents a
+    price is worse than one that admits it does not have one.
+    """
+    if not short_leg or not long_leg:
+        return None
+    s = option_intrinsic(short_leg.get("strike"), short_leg.get("option_type"), underlying)
+    l = option_intrinsic(long_leg.get("strike"), long_leg.get("option_type"), underlying)
+    if s is None or l is None:
+        return None
+    return {"short": round(s, 2), "long": round(l, 2)}
+
+
 def lots_for_risk(max_loss_per_unit: float, lot_size: int, risk_budget: float) -> int:
-    """Number of lots whose total defined risk stays within risk_budget."""
+    """Number of lots whose total defined risk stays within risk_budget.
+
+    Also enforces the BOOK-WIDE absolute ceiling on rupee risk per trade
+    (MAX_RISK_PER_TRADE_RUPEES). `risk_budget` is the strategy's own
+    `required_capital`, which is per-strategy config with no upper bound — so a
+    single row can quietly take many times the book's normal per-trade risk. On
+    2026-08-04 `IDX NIFTY Mean-Reversion Fade` carried required_capital 20,000
+    against 4,000-13,000 everywhere else, put Rs15,811 of defined risk on ONE
+    0-DTE debit spread, and lost Rs8,077 — 129% of that day's entire loss.
+
+    The cap belongs here because this is the single choke point every sized
+    structure passes through (credit and debit, EdgeMath and plain capital cap),
+    so no strategy config and no future caller can route around it. Set
+    MAX_RISK_PER_TRADE_RUPEES=0 to disable.
+    """
     per_lot = float(max_loss_per_unit) * int(lot_size)
     if per_lot <= 0 or risk_budget <= 0:
         return 0
-    return max(0, int(risk_budget // per_lot))
+    budget = float(risk_budget)
+    cap = MAX_RISK_PER_TRADE_RUPEES
+    if cap > 0:
+        budget = min(budget, cap)
+    return max(0, int(budget // per_lot))

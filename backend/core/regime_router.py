@@ -165,14 +165,31 @@ def route(
                           owned=owned, structure=structure)
     coarse = str(fallback_regime or "").upper()
 
-    # (a) R1: the fine read RESOLVED to RANGE (its no-signature default). Cross-check
-    # the mature coarse regime and take the MORE CONSERVATIVE — this stands a seller
-    # down when coarse says TREND but the fine defaulted to RANGE (the 2026-07-22 loss).
-    if (decision.regime == tax.RANGE and coarse in tax.REGIME_LABELS
-            and coarse != tax.RANGE):
-        note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to RANGE (the "
-                f"no-signature default, confidence {confidence:.2f}) — cross-checking "
-                f"the mature coarse regime {coarse}")
+    # (a) R1: the fine read landed on a PERMISSIVE label — one that hands a premium
+    # seller a green light. Cross-check the mature coarse regime and take the MORE
+    # CONSERVATIVE, which stands a seller down when coarse says TREND (the
+    # 2026-07-22 loss).
+    #
+    # 2026-08-04 — this originally fired only on RANGE, on the reasoning that an
+    # affirmative classification (TREND/CHOP/INSIDE) is a real detection and can be
+    # trusted as-is. INSIDE_QUIET breaks that reasoning: it is affirmative, but it
+    # is ALSO a seller-home regime, so trusting it green-lights exactly the trade
+    # the cross-check exists to stop. That day the fine read was INSIDE_QUIET on 19
+    # of 21 entries while the coarse organ read TREND_DOWN through the whole
+    # midday slide, and six SENSEX put-spread entries went through for -Rs3,454 —
+    # 85% of that strategy's loss — selling puts into the drop.
+    #
+    # The test is not "is the label affirmative" but "does this label authorise a
+    # seller". RANGE and INSIDE_QUIET both do; TREND/CHOP/EVENT do not (they gate
+    # or stand down on their own), so those keep being trusted without a
+    # cross-check. This can only ever REDUCE risk: _more_conservative picks the
+    # stricter of the two decisions, so the coarse read can never authorise a trade
+    # the fine read refused.
+    if (decision.regime in SELLER_OK_REGIMES and coarse in tax.REGIME_LABELS
+            and coarse != decision.regime):
+        note = (f"fine regime {fine_label or 'UNKNOWN'} resolved to {decision.regime} "
+                f"(a seller-permissive label, confidence {confidence:.2f}) — "
+                f"cross-checking the mature coarse regime {coarse}")
         alt = _route_one(coarse, confidence, specialist, notes=[note],
                          owned=owned, structure=structure)
         return _more_conservative(alt, decision)

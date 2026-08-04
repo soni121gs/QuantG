@@ -134,7 +134,21 @@ def no_progress_exit(
     # Reachability gate: how much of the position's time value could decay
     # plausibly have returned by now? Below the bar, the trade has not yet been
     # given the chance to pass, so judging it is judging noise.
-    if NO_PROGRESS_REQUIRE_REACHABLE and dte_days is not None:
+    #
+    # FAILS CLOSED (2026-08-04). This gate previously read
+    # `... and dte_days is not None`, so an unresolvable DTE skipped the gate and
+    # restored the flat 20-minute window this fix exists to remove. That is what
+    # happened the day after it shipped: the caller parsed a bare-date expiry into
+    # a NAIVE datetime, subtracting it from an aware utcnow raised TypeError, a
+    # bare `except` swallowed it, `dte_days` arrived as None — and all 8 spreads
+    # that day were cut at exactly 20 minutes for -Rs2,337, with the guard
+    # deployed, enabled and completely inert.
+    # An input we cannot resolve must disable the RULE, never the SAFEGUARD: if we
+    # cannot tell whether the bar was reachable, we have no business judging the
+    # trade against it.
+    if NO_PROGRESS_REQUIRE_REACHABLE:
+        if dte_days is None:
+            return None
         try:
             _dte = max(0.0, float(dte_days))
             _sess = float(session_minutes or MARKET_MINUTES_PER_DAY)
@@ -143,7 +157,7 @@ def no_progress_exit(
             if available < floor:
                 return None
         except (TypeError, ValueError, ZeroDivisionError):
-            pass
+            return None
     if (peak_pnl or 0.0) < floor:
         return "spread-no-progress"
     return None

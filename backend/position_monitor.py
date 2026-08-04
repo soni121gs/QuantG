@@ -791,6 +791,69 @@ async def _leg_ltp(user_id, leg, quote_ltp_fn) -> Optional[float]:
         return None
 
 
+async def _underlying_spot(user_id, underlying, quote_ltp_fn) -> Optional[float]:
+    """Live index spot for an underlying, or None."""
+    try:
+        from core.instrument_resolver import INDEX_SPOT_KEYS
+        key = INDEX_SPOT_KEYS.get(str(underlying or "").upper())
+        if not key:
+            return None
+        v = await quote_ltp_fn(user_id, key)
+        return float(v) if v is not None and float(v) > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _expiry_settlement_marks(
+    db, user_id, pos, short_leg, long_leg, quote_ltp_fn,
+) -> Dict[str, Any]:
+    """Leg marks for a spread being SETTLED at expiry, priced at intrinsic value
+    against the underlying — plus the audit trail of what price was used.
+
+    Why not the last option LTP (2026-08-04). At expiry an option is worth its
+    intrinsic value and nothing else, so a settled leg closed at its last traded
+    premium is wrong on principle. It is also wrong in practice: that premium is
+    whatever the feed last printed, and on 2026-08-04 the NIFTY feed was frozen
+    for 13 minutes either side of the print the book settled against — o=h=l=c on
+    every bar from 15:15, one jump at 15:28, then frozen again to the close.
+    SEVEN positions settled off that single tick. Re-pricing them 150 points lower
+    (where the feed had sat) moves the day by Rs12,659 — twice the whole reported
+    loss. Nothing was recorded, so none of it was visible afterwards.
+
+    Returns {"short","long","meta"}; "short"/"long" are absent when settlement
+    could not be priced at intrinsic, and the caller then keeps its existing
+    marks. `meta` is always populated and always persisted, so a settlement can
+    be audited even when it fell back.
+
+    NOTE this does NOT make the settlement price correct — it makes it correct in
+    KIND (intrinsic, not premium) and auditable. A frozen index feed still yields
+    a wrong intrinsic; that is what the `exec.expiry_settlement_integrity` probe
+    is for.
+    """
+    from core.spread_builder import settle_legs_at_intrinsic
+    underlying = pos.get("underlying") or str(pos.get("target_symbol") or "").split(" ")[0]
+    spot = await _underlying_spot(user_id, underlying, quote_ltp_fn)
+    meta: Dict[str, Any] = {
+        "settlement_underlying": spot,
+        "settlement_symbol": underlying,
+        "settlement_at": datetime.now(timezone.utc).isoformat(),
+    }
+    marks = settle_legs_at_intrinsic(short_leg, long_leg, spot) if spot else None
+    if not marks:
+        meta["settlement_source"] = "leg_ltp_fallback"
+        meta["settlement_fallback_reason"] = (
+            "underlying spot unavailable" if not spot else "leg strike/option_type unusable")
+        logger.warning(
+            "spread monitor: pos=%s settling at LEG LTP — %s (underlying=%s spot=%s)",
+            pos.get("id"), meta["settlement_fallback_reason"], underlying, spot)
+        return {"meta": meta}
+    meta["settlement_source"] = "intrinsic"
+    meta["settlement_legs"] = {"short": marks["short"], "long": marks["long"]}
+    logger.info("spread monitor: pos=%s settling at INTRINSIC vs %s=%.2f (short=%.2f long=%.2f)",
+                pos.get("id"), underlying, spot, marks["short"], marks["long"])
+    return {"short": marks["short"], "long": marks["long"], "meta": meta}
+
+
 async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -> None:
     """Value and exit a credit/debit spread position (two legs, one doc). Closes both
     legs atomically via spread_lifecycle. Falls back to entry premiums for the
@@ -864,6 +927,25 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
                 session_times.segment_for_underlying(_sq_underlying)))
         reason = ("expiry-settlement" if hold_to_expiry
                   else f"intraday-squareoff-{_sq_at.replace(':', '')}")
+        # At EXPIRY the legs are worth their intrinsic value, not their last
+        # traded premium — see _expiry_settlement_marks. Persist the settlement
+        # audit trail (price, source, per-leg intrinsics) BEFORE closing, so the
+        # number the money was booked against survives on the position even if
+        # the close itself fails.
+        if hold_to_expiry:
+            _settle = await _expiry_settlement_marks(
+                db, user_id, pos, short_leg, long_leg, quote_ltp_fn)
+            try:
+                from core.portfolio_ledger import PortfolioLedger
+                await PortfolioLedger(db).update_position_mark(
+                    position_id=pos["id"], user_id=user_id, fields=dict(_settle["meta"]),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("spread monitor: pos=%s settlement metadata write failed",
+                                 pos.get("id"))
+            if "short" in _settle and "long" in _settle:
+                short_ltp = _settle["short"]
+                long_ltp = _settle["long"]
         logger.info("spread monitor: %s closing pos=%s", reason, pos.get("id"))
         if structure == "debit_spread":
             await close_debit_spread(db, pos, reason=reason,
@@ -961,13 +1043,32 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
         # DTE at THIS moment decides how much decay could have arrived so far —
         # without it the bar is applied in a window theta cannot fill (see
         # dynamic_exit.no_progress_exit).
+        #
+        # Uses dte_policy.dte_from_expiry, NOT parse_iso_dt (2026-08-04). Expiry is
+        # persisted as a bare date string ("2026-08-06"); parse_iso_dt returns a
+        # NAIVE datetime for that, and subtracting it from an aware utcnow raises
+        # TypeError. The bare `except` below turned that into dte=None, which the
+        # gate then read as "skip the gate" — so the reachability fix shipped and
+        # was inert from day one. dte_from_expiry parses date-only formats and is
+        # the shared DTE definition used by the entry policy, so the exit and the
+        # entry now agree on what DTE means. Dated in IST (the trading day), not
+        # container-local UTC.
         _dte_np: float | None = None
         try:
-            _exp = parse_iso_dt(pos.get("expiry")) if pos.get("expiry") else None
-            if _exp is not None:
-                _dte_np = max(0.0, (_exp - datetime.now(timezone.utc)).total_seconds() / 86400.0)
-        except Exception:
+            from core.dte_policy import dte_from_expiry as _dte_from_expiry
+            _exp_raw = pos.get("expiry") or next(
+                (l.get("expiry") for l in _legs if l.get("expiry")), None)
+            _d = _dte_from_expiry(_exp_raw, today=_ist_now().date())
+            if _d is not None:
+                _dte_np = float(max(0, _d))
+        except Exception:  # noqa: BLE001
             _dte_np = None
+        if _dte_np is None:
+            # Not fatal — no_progress_exit fails closed on an unknown DTE — but it
+            # means this position is invisible to the rule, so say so out loud
+            # rather than let it be silently exempt forever.
+            logger.warning("spread monitor: pos=%s unresolvable expiry %r — "
+                           "no-progress rule suppressed", pos.get("id"), pos.get("expiry"))
         reason = no_progress_exit(
             peak_pnl=peak_pnl,
             held_minutes=_held_np,

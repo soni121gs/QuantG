@@ -61,11 +61,24 @@ HEDGE_OPTIONS = {
     "spread_width": 4, "wing_width": 4,
     "exit_mode": "expiry",                            # hold OVERNIGHT, roll at expiry
     "lots": 1, "expiry_offset": 0, "product": "NRML", "candle_interval": "5minute",
+    # DTE WINDOW (2026-08-04). `expiry_offset: 0` alone means "nearest expiry",
+    # which on a Monday or Tuesday is the SAME-WEEK NIFTY weekly — so on
+    # 2026-08-04 this hedge bought a 0-DTE put spread. Crash insurance that
+    # expires in a few hours is not insurance; it is a lottery ticket, and it
+    # contradicts this sleeve's own risk.max_hold_days of 8. select_expiry
+    # (§25.4b) honours this window and STANDS DOWN when nothing qualifies rather
+    # than substituting a tenor the strategy never asked for.
+    "min_dte_days": 5, "max_dte_days": 15,
     "specialist_role": "tail_hedge",
     "owned_regimes": ["RANGE", "INSIDE_QUIET", "HIGH_VOL_CHOP", "EVENT", "TREND_UP", "TREND_DOWN"],
     "required_capital": 4000.0,
 }
-HEDGE_RISK = {"exit_mode": "hold_to_expiry", "max_hold_days": 8}
+# max_trades_day 1: this is a HELD hedge, not an intraday trader. The cloned
+# template carried 3, and on 2026-08-04 it used all three — it was +Rs7,176 on
+# the morning slide, then re-entered twice more near the day's LOW (12:03, 13:12)
+# and gave back Rs6,187 when the market snapped back, finishing +Rs989. One
+# position, established and held, is the whole design.
+HEDGE_RISK = {"exit_mode": "hold_to_expiry", "max_hold_days": 8, "max_trades_day": 1}
 
 
 def main() -> int:
