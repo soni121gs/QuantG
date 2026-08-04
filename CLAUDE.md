@@ -2049,3 +2049,140 @@ unanswerable from the ledger.
   not a broken probe.
 
 `CORE_ENGINE_LIVE_ENABLED=false`. Nothing here creates edge.
+
+---
+
+## 28. The 2026-08-04 session — five defects, and a fix that shipped inert (2026-08-04)
+
+Day: **−₹6,269.73 over 21 closed trades, WR 38.1%.** NIFTY expiry Tuesday; the tape ran
+24591 (09:34, first captured bar) → 24648 high @09:52 → a five-hour grind to 24428 @13:58
+→ 24615 close. **Three trades produced 94% of the loss.** Everything below is a defect
+removed, not edge created. `CORE_ENGINE_LIVE_ENABLED=false` throughout.
+
+### 28.1 THE ONE TO INTERNALISE — a fix can ship, be enabled, and do nothing
+`9ba74e6` (the §27 no-progress reachability guard) was **inert from the moment it shipped.**
+`expiry` is persisted as a bare date string (`"2026-08-06"`); `parse_iso_dt` returns a
+NAIVE datetime for that; subtracting it from an aware `utcnow()` raises TypeError; a bare
+`except` swallowed it; `dte_days` arrived as `None`; and the gate read
+`if NO_PROGRESS_REQUIRE_REACHABLE and dte_days is not None` — so **None skipped the gate**
+and restored the exact flat 20-minute window the fix existed to remove. All 8 spreads the
+next day were cut at exactly 20 minutes for −₹2,337.
+
+**It shipped WITH a test that guaranteed this**: `test_missing_dte_preserves_the_old_behaviour`
+asserted that a missing DTE keeps the flat-window cut. Reasonable in the abstract —
+catastrophic here, because in production the DTE was *always* missing. The test passed
+every single day the guard did nothing.
+
+Three standing rules from this:
+- **An unresolvable input must disable the RULE, not the SAFEGUARD.** `x is not None` as a
+  gate precondition is fail-OPEN; it is almost always the wrong default around a guard.
+- **A bare `except` on a parse turns a type bug into a silent behaviour change.** The caller
+  now uses `dte_policy.dte_from_expiry` (date-robust, IST) and logs a WARNING when DTE is
+  still unresolvable, so the case is loud.
+- **Before writing a test for the "input missing" branch, ask how often that branch fires in
+  production.** If the answer is "always", the test is pinning the bug.
+
+### 28.2 The five defects
+1. **Expiry settled at a leg's last premium, not intrinsic.** The day hold-to-expiry first
+   ran (§22.3: 0 of 283 ever had), 7 positions settled against a NIFTY tick the feed had
+   frozen for 13 minutes either side of — o=h=l=c from 15:15, one print at 15:28, frozen
+   again to the close. Re-pricing them where the feed had sat moves the day by **₹12,659**,
+   twice the reported loss, and **nothing about the settlement was recorded** (`close_value`,
+   leg `exit_price`, settlement price all null), so none of it was visible afterwards. At
+   expiry an option IS its intrinsic value; a last premium carries phantom time value AND
+   whatever the feed last printed. `position_monitor._expiry_settlement_marks` now prices
+   both legs at intrinsic vs the underlying and persists `settlement_underlying` /
+   `settlement_source` / per-leg intrinsics; falls back to leg marks and says so.
+   *A later fresh WS connect reported `ltp=24614.9`, corroborating that today's settlement
+   number was in fact right — the fix stands on structure and auditability, not on today's
+   P&L being wrong.* NSE settles index options on the 15:10–15:40 VWAP, so an LTP is still
+   the wrong instrument even with a healthy feed.
+2. **No-progress guard inert** — §28.1.
+3. **No book-wide per-trade rupee ceiling.** `IDX NIFTY Mean-Reversion Fade` carried
+   `required_capital` 20,000 against 4,000–13,000 everywhere else, sized to FIVE lots, put
+   **₹15,811** of defined risk on one 0-DTE debit spread and lost **₹8,077 = 129% of the
+   day's entire loss**. `spread_builder.cap_lots_by_risk` (`MAX_RISK_PER_TRADE_RUPEES`,
+   default 8,000) now trims at both sizing call sites; the row's own budget was also
+   migrated to 8,000.
+   **It is NOT inside `lots_for_risk`** — that is a pure budget→lots function allowed to
+   return 0 (callers floor at 1), and a ceiling that can return 0 would have stood the
+   SENSEX sellers (₹12.9k/lot) and the HTE sleeve (₹30.7k/lot) down entirely. An existing
+   invariant asserts exactly that. **It floors at 1 lot: it bounds multi-lot SCALING, not
+   the absolute risk of one wide-winged lot** — refusing that is the cost-floor's job.
+4. **The regime cross-check only fired on RANGE.** The fine read was **INSIDE_QUIET on 19 of
+   21 entries** while the coarse organ read TREND_DOWN through the whole midday slide, and
+   INSIDE_QUIET was treated as an "affirmative detection" and trusted. Six SENSEX put-spread
+   entries went through for **−₹3,454 = 85% of that strategy's loss**, selling puts into the
+   drop. The test is not *is the label affirmative* but **does this label authorise a
+   seller** — RANGE and INSIDE_QUIET both do. Extended to every seller-permissive label,
+   **scoped to premium-COLLECTING structures**: routing a defined-risk BUYER through it
+   subjects it to the trend PRECISION gate (`confidence < 0.9 → likely fakeout, stand
+   down`), which would turn "the coarse organ suspects a downtrend" into a reason to switch
+   the crash insurance OFF. The original RANGE branch keeps its unscoped behaviour.
+5. **The tail hedge was a 0-DTE day-trader.** `expiry_offset: 0` and no DTE window meant
+   "nearest expiry" = same-week weekly, so it bought **0-DTE crash insurance** at a 0.5%-OTM
+   strike (not "far-OTM"), contradicting its own `max_hold_days: 8`. It used all three daily
+   entries: +₹7,176 on the slide (profit-lock trailing out of a +₹10,107 peak — worth
+   ₹10,181 vs holding), then two re-entries near the LOW giving back ₹6,187. Now
+   `min/max_dte_days 5–15` (honoured by `select_expiry`, §25.4b) and `max_trades_day: 1`.
+   Note its `daily_loss_limit: 650` never bound because **hold-to-expiry losses do not
+   realise until settlement** — any daily-loss governor is structurally blind to such a
+   sleeve.
+
+### 28.3 Two more found re-auditing the Hermes findings (24 open → 10)
+- **`static.reward_risk_geometry` filed HIGH against both hold-to-expiry sleeves** (QG-O1
+  ×12, HTE ×6) claiming they need an 88.9% win rate. They have **no TP/SL** — both correctly
+  OMIT `credit_tp_frac`/`credit_sl_mult` (§25.5) — and the probe substituted the global env
+  defaults for the missing fields, inventing a reward:risk that does not exist, on the two
+  strategies that were the day's only clean winners. Now skips `exit_mode="expiry"` /
+  `hold_to_expiry`.
+- **`exec.specialist_regime_fit` compared the COARSE `regime_at_entry` against FINE
+  `owned_regimes`** — different taxonomies (coarse has no INSIDE_QUIET; fine has no
+  CRASH/MELTUP). 14 occurrences of pure noise, and it could never see a real fine-regime
+  violation. Now judged on `regime_fine_at_entry`.
+- **This is the THIRD instance of one class** (after `static.cost_floor` measuring gross
+  credit against a bankable-profit law, §21.5). **Standing rule: a probe and the thing it
+  judges must share a taxonomy AND an arithmetic — check which field the enforcement point
+  actually gates on before writing the comparison.**
+- **Fine-regime confidence is now damped when the capture missed the open.** Every intraday
+  feature is anchored on `bars[0]` — `ret_pct`, `efficiency`, the opening range — so a late
+  feed silently re-anchors the whole day, and `maturity` cannot detect it because it counts
+  bars: **26 bars from 09:34 look exactly as mature as 26 bars from 09:15.** The token
+  expired ~03:35 IST and the feed returned at 09:34, so 19 minutes including the true open
+  were missing from every regime read of the day. Bars cannot be recovered after the fact,
+  so the honest response is to be less sure; the router already gates on confidence.
+  `REGIME_TRUNCATED_OPEN_TOLERANCE_MIN` (3), raw confidence and lost-minute count persisted.
+- New probes: **`exec.expiry_settlement_integrity`** (a settlement that did not price at
+  intrinsic) and **`exec.regime_organ_disagreement`** (it measured 19/21 = 90% on 08-04
+  automatically — the thing that took manual digging to find).
+
+### 28.4 The day, per strategy (for the record)
+Winners: QG-O1 +₹3,884 (3, 100%), HTE +₹2,664 (2, 100%) — **both hold-to-expiry, the day's
+only clean performers, and together the reason the day was not −₹12.8k**; tail hedge +₹989
+(3, 33%); IDX NIFTY VRP call-spread +₹42.
+Losers: IDX NIFTY Mean-Reversion Fade −₹8,077 (1 trade); IDX SENSEX VRP put-spread −₹4,068
+(10, 10% WR); RAE SENSEX Range Seller −₹1,704 (1).
+Exits: `spread-sl` 3 (−₹11,464) · `spread-no-progress` 8 (−₹2,337) · `expiry-settlement` 7
+(+₹361) · `profit-lock-trail` 1 (+₹7,176) · squareoff 2 (−₹5).
+**All 12 SENSEX trades were PE credit spreads.** The §21.6 contract dedup blocked 63 signals
+correctly, but it keys on `(underlying, option_type, expiry, strike)` — it stops the
+identical contract and **permits the same directional bet one strike over**. On a trending
+day that is one position at 8× size wearing eight names. Not yet fixed; founder call.
+
+### 28.5 Test-suite note
+Full suite 9 failed → 10 failed / +17 passing. Verified NOT a regression: baseline and HEAD
+are **identical** run per-file and with env pinned (both clean at `SPREAD_COST_FLOOR_MULT=3.0`,
+both fail the same 3 at 1.0). The delta is the §25.5 cross-file module-reload contamination,
+which is order-sensitive and which any new test file perturbs. `test_session_fixes_08_04.py`
+restores both reloaded modules in an autouse fixture so it adds nothing to that debt.
+
+### 28.6 Still open (founder call, not bugs)
+- **`infra.feed_down_at_open` (CRITICAL)** — the token expires ~03:30 IST and nothing
+  auto-reconnects; today's manual reconnect landed 09:34. **The single highest-value
+  operational fix: reconnect before 09:15.** Damping now limits the damage, not the cause.
+- `strategy.persistent_live_loss` ×3 (idx-sensex-putspread −₹4,918/42, rae-range-seller-sensex
+  −₹2,787/16, QG-O4 −₹662/34) — strategy-edge questions, not pipeline bugs.
+- `score_not_predictive`: `regime_confidence` INVERTED (IC −0.18), `contract_edge_score` and
+  `edgemath_conviction` DECORATION — already neutralised for sizing by `SCORE_SIZE_NEUTRAL`
+  (§24.1); they remain as monitoring signals.
+- **Directional concentration** (§28.4) and the `blocked_margin` float residue (6.2e-11).
