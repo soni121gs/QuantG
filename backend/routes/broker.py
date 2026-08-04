@@ -789,10 +789,18 @@ async def upstox_token_status(user=Depends(get_current_user)):
         "now_ist": now_ist.isoformat(),
         "auto_request_at_ist": f"{AUTH_REQUEST_MINUTE_IST // 60:02d}:{AUTH_REQUEST_MINUTE_IST % 60:02d}",
         "alarm_at_ist": f"{AUTH_ALARM_MINUTE_IST // 60:02d}:{AUTH_ALARM_MINUTE_IST % 60:02d}",
+        # `notifier_url` is what UPSTOX has on file for this app, echoed back in the
+        # step-1 response. It is the diagnostic that matters when a token never
+        # arrives: if this is null or points somewhere else, the approval was fine
+        # and the delivery had nowhere to go — register the URL below in the Upstox
+        # developer dashboard. Nothing else in the flow reveals this.
+        "expected_notifier_url": f"{os.environ.get('PUBLIC_BASE_URL', 'https://quantgtrade.com').rstrip('/')}/api/broker/upstox/notifier",
         "last_auth_request": {
             "requested_at": (last_req or {}).get("requested_at"),
             "ok": (last_req or {}).get("ok"),
             "source": (last_req or {}).get("source"),
+            "http_status": (last_req or {}).get("http_status"),
+            "notifier_url_on_file_at_upstox": (last_req or {}).get("notifier_url"),
             "token_received_at": (last_req or {}).get("token_received_at"),
         } if last_req else None,
     }
