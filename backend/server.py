@@ -154,6 +154,13 @@ if len(JWT_SECRET.encode()) < 32:
 JWT_ALG = "HS256"
 ACCESS_TOKEN_MINUTES = 60 * 24 * 7  # 7 days for trader convenience
 SIGNAL_CONFIDENCE_MIN = float(os.environ.get("SIGNAL_CONFIDENCE_MIN", "45"))
+# Minutes the live index capture may miss at the open before the fine regime's
+# confidence is damped. Every intraday feature is anchored on the FIRST captured
+# bar, so a late feed silently re-anchors the whole day's read (2026-08-04: token
+# expired ~03:35 IST, feed back at 09:34, 19 minutes gone). 3 minutes of slack
+# covers ordinary connect jitter.
+_REGIME_TRUNCATED_OPEN_TOLERANCE_MIN = int(
+    os.environ.get("REGIME_TRUNCATED_OPEN_TOLERANCE_MIN", "3"))
 APP_VERSION = "12.0"
 START_TIME = datetime.now(timezone.utc)
 
@@ -16985,10 +16992,40 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         if len(_bars) < 3:
                             continue
                         _snap = _rae_classify(_bars)
+                        # TRUNCATED-OPEN DAMPING (2026-08-04). Every intraday feature
+                        # is anchored on bars[0] — ret_pct, efficiency and the opening
+                        # range all measure FROM the first bar we captured. When the
+                        # feed is late that bar is not the open, so the classifier is
+                        # confidently describing a session it only partly saw, and
+                        # `maturity` cannot tell: it counts bars, and 26 bars from
+                        # 09:34 look exactly as mature as 26 bars from 09:15.
+                        # On 2026-08-04 the token expired ~03:35 IST and the feed only
+                        # returned at 09:34 — 19 minutes, including the true open,
+                        # missing from every regime read of the day.
+                        # We cannot recover the missing bars here, so we do the honest
+                        # thing instead: say we are less sure. The router already gates
+                        # on confidence (FINE_MIN_CONF, and 0.90 for a trend call), so
+                        # damping is what actually reduces risk.
+                        _conf = float(_snap.confidence)
+                        _lost = 0
+                        try:
+                            _fb = str((_bars[0] or {}).get("timestamp_ist") or "")
+                            _fb_m = int(_fb[11:13]) * 60 + int(_fb[14:16])
+                            _lost = max(0, _fb_m - session_times.OPEN_MINUTE)
+                        except Exception:
+                            _lost = 0
+                        if _lost > _REGIME_TRUNCATED_OPEN_TOLERANCE_MIN:
+                            _conf *= max(0.25, 1.0 - (_lost / 60.0))
+                            logger.warning(
+                                "regime %s: first bar is %d min after the open — "
+                                "confidence damped %.3f -> %.3f (feed late at open)",
+                                _u, _lost, float(_snap.confidence), _conf)
                         await db.market_regime_state.update_one(
                             {"index": _u},
                             {"$set": {"regime_fine": _snap.label,
-                                      "regime_fine_confidence": round(float(_snap.confidence), 3),
+                                      "regime_fine_confidence": round(_conf, 3),
+                                      "regime_fine_confidence_raw": round(float(_snap.confidence), 3),
+                                      "regime_fine_lost_open_minutes": _lost,
                                       "regime_fine_at": ist.isoformat()}},
                             upsert=True,
                         )

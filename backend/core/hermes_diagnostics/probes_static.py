@@ -111,6 +111,20 @@ async def reward_risk_geometry(ctx: ProbeContext) -> List[Finding]:
         o = _opts(strat)
         if str(o.get("structure")) != "credit_spread" or not _is_active(strat):
             continue
+        # A HOLD-TO-EXPIRY spread has no TP/SL geometry at all — its outcome is
+        # decided by settlement, and the sleeve deliberately OMITS credit_tp_frac /
+        # credit_sl_mult (§25.5: present-but-0 reads as ambiguous exit intent).
+        # Substituting the global env defaults for those missing fields invents a
+        # reward:risk that does not exist and reports a break-even win rate for a
+        # mechanism the strategy does not use. That is what this probe did to
+        # QG-O1 and the HTE sleeve on 2026-08-04 — HIGH severity, 12 and 6
+        # occurrences, both pure noise, on the two strategies that were the day's
+        # only clean winners. Same category error as exec.specialist_regime_fit
+        # measuring a coarse regime against fine ownership.
+        _risk = (strat.get("visual_config") or {}).get("risk") or {}
+        if (str(o.get("exit_mode") or "").lower() == "expiry"
+                or str(_risk.get("exit_mode") or "").lower() == "hold_to_expiry"):
+            continue
         tp = o.get("credit_tp_frac")
         sl = o.get("credit_sl_mult")
         tp = float(tp) if tp is not None else _DEF_TP

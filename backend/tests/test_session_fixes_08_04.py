@@ -240,3 +240,44 @@ def test_tail_hedge_seed_carries_the_window_and_single_entry():
     assert mod.HEDGE_OPTIONS["min_dte_days"] == 5
     assert mod.HEDGE_OPTIONS["max_dte_days"] == 15
     assert mod.HEDGE_RISK["max_trades_day"] == 1
+
+
+# ── 6. residual-audit fixes (probe category error + truncated open) ────────────
+
+@pytest.mark.asyncio
+async def test_reward_risk_geometry_skips_hold_to_expiry():
+    """A hold-to-expiry spread has NO TP/SL geometry — it settles. Substituting the
+    global env defaults for its deliberately-omitted credit_tp_frac/credit_sl_mult
+    invented a 88.9% break-even win rate and filed it HIGH against QG-O1 and the
+    HTE sleeve (12 and 6 occurrences), the two strategies that were 2026-08-04's
+    only clean winners. Same category error as measuring a coarse regime against
+    fine ownership."""
+    from core.hermes_diagnostics.probes_static import reward_risk_geometry
+    from core.hermes_diagnostics.probe_sdk import ProbeContext
+    hte = {"id": "hte", "status": "live", "visual_config": {
+        "options": {"structure": "credit_spread", "exit_mode": "expiry"},
+        "risk": {"exit_mode": "hold_to_expiry"}}}
+    intraday = {"id": "scalp", "status": "live", "visual_config": {
+        "options": {"structure": "credit_spread", "exit_mode": "",
+                    "credit_tp_frac": 0.25, "credit_sl_mult": 2.0}}}
+    ctx = ProbeContext(db=None, user_id="u", date_str="2026-08-04",
+                       strategies=[hte, intraday])
+    out = await reward_risk_geometry(ctx)
+    ids = {f.entity for f in out}
+    assert "hte" not in ids, "hold-to-expiry has no TP/SL geometry to judge"
+    assert "scalp" in ids, "a real intraday 0.25:2.0 geometry must still be flagged"
+
+
+def test_truncated_open_damping_arithmetic():
+    """The damping the server applies when the feed is late. Pinned here because the
+    call site is inside a scheduler loop: 19 minutes lost (2026-08-04) must
+    materially cut confidence, and ordinary jitter must not."""
+    tol = 3
+
+    def damp(conf, lost):
+        return conf * max(0.25, 1.0 - (lost / 60.0)) if lost > tol else conf
+
+    assert damp(0.90, 0) == 0.90              # on time
+    assert damp(0.90, 2) == 0.90              # inside tolerance
+    assert damp(0.90, 19) == pytest.approx(0.6150)   # the real 08-04 case
+    assert damp(0.90, 120) == pytest.approx(0.225)   # floored at 0.25x
