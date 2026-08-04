@@ -319,13 +319,61 @@ async def upstox_option_chain(
     }
 
 
+async def _handle_upstox_postback(request: Request, *, secret: Optional[str]) -> Dict[str, Any]:
+    """Upstox ORDER-UPDATE postback (distinct from the token notifier).
+
+    This is broker TRUTH about order state: apply_broker_truth_event writes the
+    canonical status/fill price onto db.orders keyed by broker_order_id. Upstox
+    does not sign postbacks and the endpoint must be publicly reachable, so
+    without a shared secret ANY anonymous POST can mark an order FILLED at a price
+    of its choosing. Verified 2026-08-04: an unauthenticated probe was accepted and
+    returned status=FILLED. Blast radius was 0 only because paper orders carry no
+    broker_order_id and no live orders exist yet — i.e. it becomes real on the day
+    live trading is enabled, which is exactly when the postback is wanted.
+
+    Defence is a secret path segment, the standard answer for an unsignable
+    webhook: configure UPSTOX_POSTBACK_SECRET and register the URL as
+    .../api/upstox/webhook/<secret>. Once a secret is set the bare path is refused,
+    so enabling the secret CLOSES the old hole rather than leaving it beside a new
+    door. With no secret configured the previous behaviour is preserved (so this
+    cannot silently break an existing deployment) but every hit is logged as a
+    warning.
+    """
+    from server import apply_broker_truth_event, logger
+
+    expected = os.environ.get("UPSTOX_POSTBACK_SECRET", "").strip()
+    if expected:
+        if not secret or not _secrets.compare_digest(str(secret), expected):
+            logger.warning("Upstox postback rejected: bad or missing path secret")
+            return {"ok": False, "reason": "unauthorized"}
+    else:
+        logger.warning(
+            "Upstox postback accepted WITHOUT a path secret — set UPSTOX_POSTBACK_SECRET "
+            "and register .../api/upstox/webhook/<secret> in the Upstox dashboard.")
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "reason": "invalid json"}
+    if not isinstance(payload, dict):
+        return {"ok": False, "reason": "payload is not a JSON object"}
+
+    try:
+        result = await apply_broker_truth_event(db, payload, source="webhook")
+    except Exception as exc:  # noqa: BLE001 — a 500 makes Upstox retry a bad event
+        logger.warning("Upstox postback processing failed: %s", exc)
+        return {"ok": False, "reason": "processing error"}
+    return {"ok": True, **result}
+
+
 @router.post("/upstox/webhook")
 async def upstox_webhook(request: Request):
-    from server import apply_broker_truth_event
+    return await _handle_upstox_postback(request, secret=None)
 
-    payload = await request.json()
-    result = await apply_broker_truth_event(db, payload, source="webhook")
-    return {"ok": True, **result}
+
+@router.post("/upstox/webhook/{secret}")
+async def upstox_webhook_secured(secret: str, request: Request):
+    return await _handle_upstox_postback(request, secret=secret)
 
 
 @router.get("/upstox/reconciliation")
