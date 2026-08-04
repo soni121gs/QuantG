@@ -747,6 +747,19 @@ async def _edge_math_spread_size(
     if _router_on:
         lots = int(round(lots * _routing.size_mult))
 
+    # Book-wide per-trade rupee ceiling (2026-08-04). A strategy's own
+    # required_capital has no upper bound, so one row can size to several times
+    # the book's normal risk — the mean-reversion sleeve did exactly that and lost
+    # 129% of a day in one trade. Only trims a position that is ALREADY going to
+    # trade: a 0 here is a stand-down from the router/EdgeMath above and must stay 0.
+    if lots >= 1:
+        from core.spread_builder import cap_lots_by_risk
+        _pre_cap = lots
+        lots = cap_lots_by_risk(lots, float(spread.get("max_loss") or 0), lot_size)
+        if lots != _pre_cap:
+            logger.info("risk cap: %s lots %d -> %d (max_loss/unit=%.2f lot=%d)",
+                        sid, _pre_cap, lots, float(spread.get("max_loss") or 0), lot_size)
+
     # RES-2 signal E — EVENT-RISK GATE (fat-tail gate). Don't sell cheap insurance
     # into a scheduled bomb (expiry / RBI / Budget / FOMC / results). This does NOT
     # predict direction — it reads a table of KNOWN dates and fades size, so it is
@@ -1326,6 +1339,16 @@ async def _dispatch_signal_via_unified_engine(
         _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
         if _db_specialist and _rae_enabled_db() and _db_routing.size_mult != 1.0:
             _spread_lots = max(1, int(round(_spread_lots * _db_routing.size_mult)))
+        # Book-wide per-trade rupee ceiling — see the credit path. THIS is the leg
+        # that mattered on 2026-08-04: the debit sleeve's required_capital of
+        # 20,000 sized it to five lots and Rs15,811 of risk on one 0-DTE spread.
+        from core.spread_builder import cap_lots_by_risk as _cap_lots
+        _pre_cap_lots = _spread_lots
+        _spread_lots = _cap_lots(_spread_lots, float(_spread.get("max_loss") or 0), lot_size)
+        if _spread_lots != _pre_cap_lots:
+            logger.info("risk cap (debit): %s lots %d -> %d (max_loss/unit=%.2f lot=%d)",
+                        sig.get("strategy_id"), _pre_cap_lots, _spread_lots,
+                        float(_spread.get("max_loss") or 0), lot_size)
         return await open_debit_spread(
             db, user_id=user_id, strategy_id=sig["strategy_id"], underlying=symbol,
             spread=_spread, lots=_spread_lots, lot_size=lot_size, mode=mode,

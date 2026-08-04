@@ -132,23 +132,34 @@ def _sb(monkeypatch, cap: str):
 def test_risk_cap_trims_the_mean_reversion_outlier(monkeypatch):
     """IDX NIFTY Mean-Reversion Fade: max_loss 48.65/unit, lot 65 => Rs3,162/lot.
     At its configured 20,000 budget that is 6 lots / ~Rs19k of risk (it took 5 and
-    lost Rs8,077). The cap holds it to 2 lots."""
+    lost Rs8,077). The cap holds it to 2 lots / ~Rs6.3k."""
     sb = _sb(monkeypatch, "8000")
-    assert sb.lots_for_risk(48.65, 65, 20000) == 2
+    assert sb.lots_for_risk(48.65, 65, 20000) == 6            # unchanged, still pure
+    assert sb.cap_lots_by_risk(6, 48.65, 65) == 2
 
 
-def test_risk_cap_leaves_one_lot_strategies_alone(monkeypatch):
-    """The cap must not stand the book down. Every 1-lot seller already returns 0
-    or 1 here and the caller floors at 1, so their behaviour is unchanged."""
+def test_risk_cap_never_stands_a_strategy_down(monkeypatch):
+    """THE REASON THIS IS NOT INSIDE lots_for_risk. Defined risk per LOT varies
+    hugely by design (Rs491 tail hedge, Rs12,873 SENSEX seller, Rs30,673 HTE). A
+    ceiling that could return 0 would permanently stand those sleeves down — a
+    trading decision disguised as a sizing one. It floors at 1 lot always.
+    """
     sb = _sb(monkeypatch, "8000")
-    assert sb.lots_for_risk(643.66, 20, 13000) == 0     # SENSEX seller, floored to 1 by caller
-    assert sb.lots_for_risk(165.16, 65, 11000) == 0     # QG-O1, same
-    assert sb.lots_for_risk(9.25, 65, 4000) == 6        # tail hedge, budget below the cap
+    assert sb.cap_lots_by_risk(1, 643.66, 20) == 1     # SENSEX seller, 12.9k/lot
+    assert sb.cap_lots_by_risk(1, 165.16, 65) == 1     # QG-O1, 10.7k/lot
+    assert sb.cap_lots_by_risk(1, 471.89, 65) == 1     # HTE sleeve, 30.7k/lot
+    # and lots_for_risk itself keeps its pure contract (existing invariants rely on it)
+    assert sb.lots_for_risk(630.79, 20, 13000.0) >= 1
+
+
+def test_risk_cap_leaves_small_positions_untouched(monkeypatch):
+    sb = _sb(monkeypatch, "8000")
+    assert sb.cap_lots_by_risk(6, 9.25, 65) == 6       # tail hedge: 6 lots = Rs3.6k
 
 
 def test_risk_cap_disabled_restores_old_behaviour(monkeypatch):
     sb = _sb(monkeypatch, "0")
-    assert sb.lots_for_risk(48.65, 65, 20000) == 6
+    assert sb.cap_lots_by_risk(6, 48.65, 65) == 6
 
 
 # ── 4. router cross-checks every seller-permissive fine label ──────────────────

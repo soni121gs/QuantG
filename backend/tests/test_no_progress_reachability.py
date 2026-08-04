@@ -63,9 +63,29 @@ def test_window_floor_still_applies():
     assert _call(dte_days=0.1, held_minutes=1.0) is None
 
 
-def test_missing_dte_preserves_the_old_behaviour():
-    """A position with no expiry recorded must not silently become un-cuttable."""
-    assert _call(dte_days=None) == "spread-no-progress"
+def test_missing_dte_suppresses_the_rule_and_does_not_bypass_the_gate():
+    """INVERTED 2026-08-04 — this test used to assert the opposite, and asserting
+    the opposite is what made the whole fix inert in production.
+
+    It read `test_missing_dte_preserves_the_old_behaviour`, on the reasoning that a
+    position with no expiry "must not silently become un-cuttable". Reasonable in
+    the abstract; catastrophic here, because in production the DTE was ALWAYS
+    missing. `expiry` is persisted as a bare date string, the caller parsed it with
+    parse_iso_dt into a NAIVE datetime, subtracting an aware utcnow raised
+    TypeError, and a bare `except` turned that into dte=None. So every real
+    position took this branch: the day after the fix shipped, all 8 spreads were
+    cut at the flat 20-minute window for -Rs2,337, with the guard deployed,
+    enabled, and doing nothing. The test passed the whole time.
+
+    The correct contract is fail-CLOSED: an input we cannot resolve disables the
+    RULE, not the SAFEGUARD. If we cannot tell whether the bar was reachable we
+    have no business judging a trade against it. The original concern is met by
+    the caller instead — position_monitor now resolves DTE with the date-robust
+    dte_policy.dte_from_expiry, and logs a WARNING when it still cannot, so the
+    case is loud rather than silent. The position also remains cuttable by every
+    other exit: TP, SL, trailing lock, time recycle and the square-off.
+    """
+    assert _call(dte_days=None) is None
 
 
 def test_gate_is_env_reversible(monkeypatch):

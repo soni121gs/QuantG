@@ -27,10 +27,16 @@ from core import dynamic_exit as de
 
 
 def test_dead_trade_is_cut_after_the_window():
-    """Held 25 min, peak never cleared 8% of a 1300-rupee credit (Rs104) -> cut."""
+    """Held 25 min, peak never cleared 8% of a 1300-rupee credit (Rs104) -> cut.
+
+    dte_days is now REQUIRED for the rule to fire (2026-08-04): the reachability
+    gate fails closed, because an unresolvable DTE used to skip it entirely and
+    silently restore the flat 20-minute window. 0 DTE here keeps this test's
+    original intent — near expiry, 25 minutes IS enough decay to judge on.
+    """
     r = de.no_progress_exit(peak_pnl=20.0, held_minutes=25.0,
                             net_credit=20.0, qty=65, lot_size=65, lots=1,
-                            leg_premium_sum=70.0)
+                            leg_premium_sum=70.0, dte_days=0)
     assert r == "spread-no-progress"
 
 
@@ -53,9 +59,11 @@ def test_threshold_is_floored_at_real_friction():
     """A thin-credit spread must not be cut for failing a rupee bar it never could
     clear — the fraction floors at real round-trip friction, not below."""
     # credit_money = 2*65 = 130; 8% = Rs10.4, but friction floor is higher.
+    # dte_days=0 (near expiry) so the reachability gate lets the rule be applied —
+    # see test_dead_trade_is_cut_after_the_window.
     r = de.no_progress_exit(peak_pnl=30.0, held_minutes=30.0,
                             net_credit=2.0, qty=65, lot_size=65, lots=1,
-                            leg_premium_sum=70.0)
+                            leg_premium_sum=70.0, dte_days=0)
     # NIFTY friction ~Rs46 > Rs30 peak -> still judged lifeless
     assert r == "spread-no-progress"
 

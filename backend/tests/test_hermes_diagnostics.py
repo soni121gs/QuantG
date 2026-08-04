@@ -93,10 +93,33 @@ async def test_exit_mix_with_price_exit_is_silent():
 
 @pytest.mark.asyncio
 async def test_specialist_off_regime_detected():
+    """Judged on regime_fine_at_entry — the label the ROUTER gates on, and the one
+    `owned_regimes` is written in.
+
+    Changed 2026-08-04: this used to pass `regime_at_entry`, which is the COARSE
+    regime (RANGE/TREND_UP/TREND_DOWN/CRASH/MELTUP). `owned_regimes` is the RAE
+    FINE taxonomy — it has INSIDE_QUIET and HIGH_VOL_CHOP and no CRASH/MELTUP.
+    Comparing the two is a category error: the probe fired on every coarse
+    TREND_DOWN even when the router had legitimately allowed the trade on a fine
+    INSIDE_QUIET (14 occurrences of pure noise), and it could never see a real
+    fine-regime violation.
+    """
     strat = {"id": "rae-bn", "owned_regimes": ["RANGE", "INSIDE_QUIET"]}
-    pos = {"strategy_id": "rae-bn", "regime_at_entry": "TREND_UP", "symbol": "BANKNIFTY"}
+    pos = {"strategy_id": "rae-bn", "regime_fine_at_entry": "TREND_UP",
+           "regime_at_entry": "TREND_UP", "symbol": "BANKNIFTY"}
     out = await specialist_regime_fit(_ctx(strategies=[strat], closed_today=[pos]))
     assert len(out) == 1 and out[0].evidence["entry_regime"] == "TREND_UP"
+
+
+@pytest.mark.asyncio
+async def test_specialist_regime_fit_ignores_a_coarse_only_disagreement():
+    """The 2026-08-04 false positive: coarse says TREND_DOWN, fine says
+    INSIDE_QUIET, which the strategy owns and the router allowed. That is a
+    regime-organ DISAGREEMENT (its own probe) — not an off-regime entry."""
+    strat = {"id": "idx-sensex", "owned_regimes": ["RANGE", "INSIDE_QUIET"]}
+    pos = {"strategy_id": "idx-sensex", "regime_at_entry": "TREND_DOWN",
+           "regime_fine_at_entry": "INSIDE_QUIET", "symbol": "SENSEX"}
+    assert await specialist_regime_fit(_ctx(strategies=[strat], closed_today=[pos])) == []
 
 
 @pytest.mark.asyncio

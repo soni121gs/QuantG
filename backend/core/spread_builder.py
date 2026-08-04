@@ -84,19 +84,15 @@ SPREAD_MIN_TP_REACHABILITY = float(os.environ.get("SPREAD_MIN_TP_REACHABILITY", 
 SPREAD_ENFORCE_REACHABILITY = os.environ.get(
     "SPREAD_ENFORCE_REACHABILITY", "true").strip().lower() == "true"
 
-# Book-wide ceiling on the risk budget any ONE trade may size against, in rupees.
-# See lots_for_risk(). 8,000 is chosen from the live book: it is above every
-# strategy's per-LOT defined risk that already trades at 1 lot (SENSEX sellers
-# ~12.9k/lot, QG-O1 ~10.7k/lot, HTE ~30.7k/lot all size to 1 lot and are
-# unaffected because the caller floors at 1), and below the 20,000 that let the
-# mean-reversion sleeve take FIVE lots and Rs15,811 of risk on one 0-DTE spread.
-# 0 disables.
+# Book-wide ceiling on the defined risk any ONE trade may carry, in rupees.
+# Applied by cap_lots_by_risk() at the sizing call sites; see that function for
+# the reasoning and for why it floors at one lot rather than zero. 0 disables.
 #
-# LIMITATION, stated because someone will assume otherwise: callers floor lots at
-# 1 (`min(max(1, capital_cap), ...)`), so this bounds MULTI-LOT scaling, not the
-# absolute risk of a single lot. A one-lot spread with a very wide wing can still
-# exceed it. Capping that requires refusing the trade outright, which is a
-# different decision from sizing it.
+# LIMITATION, stated because someone will assume otherwise: this bounds MULTI-LOT
+# scaling, not the absolute risk of a single lot. A one-lot spread with a very
+# wide wing (the hold-to-expiry sleeve runs ~Rs30.7k/lot by design) still exceeds
+# it. Refusing such a trade outright is a different decision from sizing it, and
+# belongs to the cost-floor / reachability laws.
 MAX_RISK_PER_TRADE_RUPEES = float(os.environ.get("MAX_RISK_PER_TRADE_RUPEES", "8000"))
 
 
@@ -678,24 +674,51 @@ def settle_legs_at_intrinsic(
 def lots_for_risk(max_loss_per_unit: float, lot_size: int, risk_budget: float) -> int:
     """Number of lots whose total defined risk stays within risk_budget.
 
-    Also enforces the BOOK-WIDE absolute ceiling on rupee risk per trade
-    (MAX_RISK_PER_TRADE_RUPEES). `risk_budget` is the strategy's own
-    `required_capital`, which is per-strategy config with no upper bound — so a
-    single row can quietly take many times the book's normal per-trade risk. On
-    2026-08-04 `IDX NIFTY Mean-Reversion Fade` carried required_capital 20,000
-    against 4,000-13,000 everywhere else, put Rs15,811 of defined risk on ONE
-    0-DTE debit spread, and lost Rs8,077 — 129% of that day's entire loss.
-
-    The cap belongs here because this is the single choke point every sized
-    structure passes through (credit and debit, EdgeMath and plain capital cap),
-    so no strategy config and no future caller can route around it. Set
-    MAX_RISK_PER_TRADE_RUPEES=0 to disable.
+    PURE and deliberately un-capped: this answers only "how many lots fit this
+    budget". The book-wide per-trade ceiling is applied separately by
+    cap_lots_by_risk() at the sizing call sites, because this function is allowed
+    to return 0 (callers floor at 1) and a ceiling that can return 0 would
+    silently stand a strategy down instead of trimming it — the SENSEX sellers
+    need 12.9k for a single lot and would have gone to zero.
     """
     per_lot = float(max_loss_per_unit) * int(lot_size)
     if per_lot <= 0 or risk_budget <= 0:
         return 0
-    budget = float(risk_budget)
-    cap = MAX_RISK_PER_TRADE_RUPEES
-    if cap > 0:
-        budget = min(budget, cap)
-    return max(0, int(budget // per_lot))
+    return max(0, int(risk_budget // per_lot))
+
+
+def cap_lots_by_risk(
+    lots: int,
+    max_loss_per_unit: float,
+    lot_size: int,
+    *,
+    cap: Optional[float] = None,
+) -> int:
+    """Trim `lots` so the position's total defined risk fits the BOOK-WIDE
+    per-trade ceiling (MAX_RISK_PER_TRADE_RUPEES). Never returns less than 1.
+
+    Why this exists (2026-08-04). `risk_budget` is the strategy's own
+    `required_capital` — per-strategy config with no upper bound — so one row can
+    quietly take several times the book's normal per-trade risk. `IDX NIFTY
+    Mean-Reversion Fade` carried 20,000 against 4,000-13,000 everywhere else,
+    sized to FIVE lots, put Rs15,811 of defined risk on a single 0-DTE debit
+    spread and lost Rs8,077: 129% of that day's entire loss, from one trade.
+
+    Why it floors at 1 rather than 0. Defined risk per LOT varies enormously
+    across the book (Rs491 for the tail hedge, Rs12,873 for a SENSEX seller,
+    Rs30,673 for the hold-to-expiry sleeve — wing widths differ by design). A
+    ceiling that could return 0 would stand those sleeves down permanently, which
+    is a trading decision disguised as a sizing one. This bounds multi-lot
+    SCALING only; refusing a single wide-winged lot is a separate judgement and
+    belongs to the cost-floor / reachability laws, not here.
+
+    Set MAX_RISK_PER_TRADE_RUPEES=0 to disable.
+    """
+    n = max(1, int(lots or 1))
+    ceiling = MAX_RISK_PER_TRADE_RUPEES if cap is None else float(cap)
+    if ceiling <= 0:
+        return n
+    per_lot = float(max_loss_per_unit or 0) * int(lot_size or 0)
+    if per_lot <= 0:
+        return n
+    return max(1, min(n, int(ceiling // per_lot)))
