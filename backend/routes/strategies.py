@@ -1063,6 +1063,24 @@ async def update_strategy_runtime_settings(sid: str, req: StrategyRuntimeSetting
             visual_config["options"]["spread_width"] = max(1, int(req.spread_width))
         if req.short_delta is not None:
             visual_config["options"]["short_delta"] = max(0.05, min(0.95, float(req.short_delta)))
+    # DTE window (2026-08-05). Sending an explicit -1 CLEARS the field, because a
+    # window that cannot be removed is a trap: the resolver stands the strategy
+    # down when nothing qualifies, so a mis-set window silently stops it trading.
+    if req.min_dte_days is not None or req.max_dte_days is not None:
+        if "options" not in visual_config:
+            visual_config["options"] = {}
+        for _field, _val in (("min_dte_days", req.min_dte_days), ("max_dte_days", req.max_dte_days)):
+            if _val is None:
+                continue
+            if int(_val) < 0:
+                visual_config["options"].pop(_field, None)
+            else:
+                visual_config["options"][_field] = max(0, int(_val))
+        _lo = visual_config["options"].get("min_dte_days")
+        _hi = visual_config["options"].get("max_dte_days")
+        if _lo is not None and _hi is not None and int(_lo) > int(_hi):
+            raise HTTPException(status_code=400,
+                                detail=f"min_dte_days ({_lo}) cannot exceed max_dte_days ({_hi})")
     if req.broker is not None:
         update_fields["broker"] = "upstox"
         row["broker"] = "upstox"

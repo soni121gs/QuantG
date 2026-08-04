@@ -25,6 +25,8 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
     structure: s.visual_config?.options?.structure ?? "single_leg",
     spread_width: s.visual_config?.options?.spread_width ?? 2,
     short_delta: s.visual_config?.options?.short_delta ?? 0.30,
+    min_dte_days: s.visual_config?.options?.min_dte_days ?? "",
+    max_dte_days: s.visual_config?.options?.max_dte_days ?? "",
   });
 
   useEffect(() => {
@@ -49,6 +51,8 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
       structure: s.visual_config?.options?.structure ?? "single_leg",
       spread_width: s.visual_config?.options?.spread_width ?? 2,
       short_delta: s.visual_config?.options?.short_delta ?? 0.30,
+      min_dte_days: s.visual_config?.options?.min_dte_days ?? "",
+      max_dte_days: s.visual_config?.options?.max_dte_days ?? "",
     });
   }, [s]);
 
@@ -74,6 +78,11 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
       structure: form.structure,
       spread_width: (form.spread_width !== "" && form.spread_width != null) ? parseInt(form.spread_width) : null,
       short_delta: (form.short_delta !== "" && form.short_delta != null) ? parseFloat(form.short_delta) : null,
+      // Blank sends -1, which the backend treats as CLEAR. Sending null would mean
+      // "leave unchanged", so a window could never be removed once set — and a
+      // mis-set window stands the strategy down entirely.
+      min_dte_days: form.min_dte_days !== "" && form.min_dte_days != null ? parseInt(form.min_dte_days) : -1,
+      max_dte_days: form.max_dte_days !== "" && form.max_dte_days != null ? parseInt(form.max_dte_days) : -1,
     };
     onSubmit(payload);
   };
@@ -323,6 +332,33 @@ export const RuntimeSettingsForm = ({ s, saving, onSubmit }) => {
               </div>
             </>
           )}
+          <div className="col-span-2 pt-2 mt-1 border-t border-[var(--qd-border)]">
+            <label className="block font-mono text-[11px] uppercase tracking-wider text-[var(--qd-text-3)] mb-1">
+              Expiry window (DTE)
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min="0" max="90" placeholder="min"
+                value={form.min_dte_days}
+                onChange={(e) => setForm({ ...form, min_dte_days: e.target.value })}
+                className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
+                data-testid="settings-min-dte"
+              />
+              <span className="font-mono text-[11px] text-[var(--qd-text-3)]">to</span>
+              <input
+                type="number" min="0" max="90" placeholder="max"
+                value={form.max_dte_days}
+                onChange={(e) => setForm({ ...form, max_dte_days: e.target.value })}
+                className="w-full bg-[var(--qd-surface-2)] border border-[var(--qd-border)] rounded px-2 py-1 text-[11px] text-[var(--qd-text)]"
+                data-testid="settings-max-dte"
+              />
+            </div>
+            <p className="mt-1 font-mono text-[10px] leading-snug text-[var(--qd-text-3)]">
+              {form.min_dte_days === "" && form.max_dte_days === ""
+                ? "Blank = nearest expiry. On a Monday or Tuesday that is the 0-1 DTE weekly."
+                : `Takes the nearest expiry between ${form.min_dte_days || 0} and ${form.max_dte_days || 90} days out, and STANDS DOWN if none qualifies (rather than trading a tenor this strategy did not ask for).`}
+            </p>
+          </div>
         </div>
       )}
 

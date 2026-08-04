@@ -493,6 +493,12 @@ class StrategyRuntimeSettingsReq(BaseModel):
     structure: Optional[str] = None
     spread_width: Optional[int] = None   # short→long strike distance, in # of strike intervals
     short_delta: Optional[float] = None  # target |delta| for the spread's short leg
+    # DTE window: the resolver picks the NEAREST expiry inside [min, max] and stands
+    # down when nothing qualifies. Both null = positional expiry_offset (nearest),
+    # which is what every strategy without a window does. Exposed in the UI because
+    # it was silently ignored until 2026-08-05 and nothing on screen said so.
+    min_dte_days: Optional[int] = None
+    max_dte_days: Optional[int] = None
 
 
 class ProfileUpdateReq(BaseModel):

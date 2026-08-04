@@ -68,6 +68,11 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
   const cardOpts = s.visual_config?.options || {};
   const isOptionStrat = !!cardOpts.enabled;
   const isSpreadCard = cardOpts.structure === "credit_spread" || cardOpts.structure === "debit_spread";
+  const holdsToExpiry = String(cardOpts.exit_mode || "").toLowerCase() === "expiry";
+  const minDte = cardOpts.min_dte_days;
+  const maxDte = cardOpts.max_dte_days;
+  const dteWindow =
+    minDte != null || maxDte != null ? `${minDte ?? 0}-${maxDte ?? "∞"}` : null;
   const maxTd = s.visual_config?.risk?.max_trades_day;
   const tradesToday = s.order_count_today ?? 0;
   // Day-level stand-down (profit_lock / loss_killswitch). Only flag when the lock
@@ -140,6 +145,29 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
         {isOptionStrat && (
           <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border ${isSpreadCard ? "bg-[rgba(0,122,255,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-accent)]" : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
             {cardOpts.structure === "debit_spread" ? "DEBIT" : cardOpts.structure === "credit_spread" ? "CREDIT" : "SINGLE"}
+          </span>
+        )}
+        {/* Holding horizon. A "hold to expiry" strategy that silently buys the
+            0-DTE weekly is an intraday trade wearing the label — which is exactly
+            what HTE did on 2026-08-04 while configured for 5-15 DTE. Showing the
+            declared tenor next to the badge makes that visible without opening
+            settings. */}
+        {isOptionStrat && holdsToExpiry && (
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border bg-[rgba(191,90,242,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-text-2)]"
+            title={dteWindow
+              ? `Held to expiry. Opens the nearest expiry ${dteWindow} days out; stands down if none qualifies.`
+              : "Held to expiry, but NO expiry window is set — it will take the nearest expiry, which on a Mon/Tue is the 0-1 DTE weekly."}
+          >
+            HOLD-TO-EXPIRY{dteWindow ? ` ${dteWindow}D` : ""}
+          </span>
+        )}
+        {isOptionStrat && !holdsToExpiry && dteWindow && (
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"
+            title={`Opens the nearest expiry ${dteWindow} days out; stands down if none qualifies.`}
+          >
+            {dteWindow}D
           </span>
         )}
         {maxTd != null && (

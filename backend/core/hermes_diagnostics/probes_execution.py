@@ -572,3 +572,71 @@ async def regime_organ_disagreement(ctx: ProbeContext) -> List[Finding]:
                        "(§26.1) before touching either classifier — three of the last "
                        "four regime incidents were bad INPUT, not bad logic."),
     )]
+
+
+@register("exec.hold_to_expiry_tenor", kind="dynamic")
+async def hold_to_expiry_tenor(ctx: ProbeContext) -> List[Finding]:
+    """A hold-to-expiry strategy must actually hold something.
+
+    2026-08-05: the HTE sleeve was configured `min_dte_days: 5, max_dte_days: 15`
+    and opened 0-DTE spreads, because the runner's InstrumentResolver ignored the
+    window entirely and took whatever expiry Upstox returned by default. That is a
+    same-session trade wearing a hold-to-expiry label — and it was being graded
+    against OOS evidence drawn from multi-day holds.
+
+    The resolver now honours the window, so this probe is the permanent guard: it
+    compares the DTE the strategy ASKED for against the DTE it actually opened at.
+    Silent when no window is configured (nearest-expiry is then the declared
+    intent, not a defect).
+    """
+    from core.dte_policy import dte_from_expiry
+
+    out: List[Finding] = []
+    reported: set = set()
+    for pos in ctx.closed_today:
+        sid = str(pos.get("strategy_id"))
+        if sid in reported:
+            continue
+        strat = ctx.strategy_by_id(sid) or {}
+        opts = (strat.get("visual_config") or {}).get("options") or {}
+        if str(opts.get("exit_mode") or "").lower() != "expiry":
+            continue
+        lo, hi = opts.get("min_dte_days"), opts.get("max_dte_days")
+        if lo is None and hi is None:
+            continue                       # no window declared -> nothing to violate
+        expiry = pos.get("expiry") or next(
+            (l.get("expiry") for l in (pos.get("legs") or []) if l.get("expiry")), None)
+        opened = str(pos.get("created_at") or "")[:10]
+        if not expiry or not opened:
+            continue
+        try:
+            from datetime import date as _date
+            actual = dte_from_expiry(expiry, today=_date.fromisoformat(opened))
+        except Exception:  # noqa: BLE001
+            continue
+        if actual is None:
+            continue
+        if (lo is not None and actual < int(lo)) or (hi is not None and actual > int(hi)):
+            reported.add(sid)
+            out.append(Finding(
+                probe_id="exec.hold_to_expiry_tenor", domain=Domain.EXECUTION,
+                severity=Severity.HIGH, entity=sid,
+                title=(f"Hold-to-expiry strategy opened at {actual} DTE, outside its "
+                       f"configured [{lo},{hi}] window"),
+                detail=("The strategy declares it holds to expiry and asks for a specific "
+                        "tenor, but the contract it actually opened sits outside that "
+                        "window. At 0-1 DTE a 'hold to expiry' sleeve is really a "
+                        "same-session trade, and its OOS evidence came from multi-day "
+                        "holds — so the live record and the backtest describe different "
+                        "strategies. Check that the resolver received the window."),
+                evidence={"strategy_id": sid, "name": strat.get("name"),
+                          "configured_min_dte": lo, "configured_max_dte": hi,
+                          "actual_dte_at_entry": actual, "expiry": str(expiry)[:10],
+                          "opened_on": opened, "target_symbol": pos.get("target_symbol"),
+                          "realized_pnl": pos.get("realized_pnl")},
+                reproduction=("closed positions today: dte_from_expiry(position.expiry, "
+                              "today=position.created_at) vs options.min/max_dte_days"),
+                suggested_fix=("core/instrument_resolver._target_expiry — the window must "
+                               "reach resolve_instrument_with_source(min_dte=, max_dte=)."),
+            ))
+    return out

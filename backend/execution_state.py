@@ -267,6 +267,25 @@ class ExecutionStateManager:
                     "max_loss_total": row.get("max_loss_total"),
                     "legs": row.get("legs") or [],
                 })
+            # Expiry + DTE on every open option position (2026-08-05). A
+            # hold-to-expiry spread is meant to sit across days, so "which contract
+            # is this and how long has it got" is the first thing you need when one
+            # is still open after the close — and nothing on screen showed it. Also
+            # the fastest way to spot a sleeve that says hold-to-expiry and is
+            # actually holding a 0-DTE weekly.
+            _exp = row.get("expiry") or next(
+                (l.get("expiry") for l in (row.get("legs") or []) if l.get("expiry")), None)
+            if _exp:
+                pos_out["expiry"] = str(_exp)[:10]
+                try:
+                    from datetime import timedelta as _td
+
+                    from core.dte_policy import dte_from_expiry
+                    _today_ist = datetime.now(timezone.utc).astimezone(
+                        timezone(_td(hours=5, minutes=30))).date()
+                    pos_out["dte"] = dte_from_expiry(_exp, today=_today_ist)
+                except Exception:  # noqa: BLE001 — display only, never break the snapshot
+                    pos_out["dte"] = None
             out.append(pos_out)
         return out
 

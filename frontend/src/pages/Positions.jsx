@@ -157,6 +157,27 @@ export default function Positions() {
                             {p.structure === "debit_spread" ? `debit ₹${formatINR(p.net_debit)}` : `credit ₹${formatINR(p.net_credit)}`}{maxLossTotal != null ? ` · max loss ₹${formatINR(maxLossTotal)}` : ""}
                           </div>
                         )}
+                        {/* Expiry + DTE. A hold-to-expiry position is supposed to sit
+                            across days, so "which contract, how long has it got" is the
+                            first question when one is still open — and nothing showed it.
+                            0 DTE is highlighted because it settles today. */}
+                        {p.expiry && (
+                          <div className="text-[11px] mt-0.5" data-testid="expiry-chip">
+                            <span className="text-[var(--qd-text-3)]">exp {p.expiry}</span>
+                            {p.dte != null && (
+                              <span
+                                className={`ml-1.5 px-1 py-0.5 rounded-sm font-mono text-[10px] uppercase tracking-wider border ${
+                                  p.dte <= 0
+                                    ? "bg-[rgba(255,159,10,0.12)] border-[var(--qd-warn)]/30 text-[var(--qd-warn)]"
+                                    : "bg-[var(--qd-surface-2)] border-[var(--qd-border)] text-[var(--qd-text-3)]"
+                                }`}
+                                title={p.dte <= 0 ? "Expires today — settles at intrinsic against the closing underlying." : `${p.dte} day(s) to expiry`}
+                              >
+                                {p.dte <= 0 ? "0 DTE" : `${p.dte}D`}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {!isSpread && p.greeks && p.greeks.delta != null && (
                           <div className="text-[11px] text-[var(--qd-text-3)] mt-0.5">
                             δ {Number(p.greeks.delta).toFixed(2)}
