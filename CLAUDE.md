@@ -2321,3 +2321,103 @@ even written to `upstox_broker_events`, so the audit collection cannot be floode
 The notifier has two layers (constant-time `client_id` + live token verification,
 §29.3); the postback has the path secret. A webhook that "only Upstox knows about"
 is not a defence — the URL is in a dashboard, a config file and this document.
+
+---
+
+## 30. Hold-to-expiry: how it works, and the DTE window that wasn't (2026-08-05)
+
+### 30.1 The mechanism, end to end
+Declared by ONE field: `visual_config.options.exit_mode = "expiry"`
+(`position_monitor._strategy_holds_to_expiry`, cached per strategy).
+`risk.exit_mode = "hold_to_expiry"` is set alongside it but the monitor does not
+read that one.
+
+```
+intraday        ordinary spread row, marked live off the WS feed
+15:35 / 15:25   monitor: if hold_to_expiry and not _spread_past_expiry(pos): return
+15:36 / 15:26   EOD backstop: _hold_to_expiry_positions_due() -> skip unless a
+                position has ACTUALLY reached expiry            <- was the §22.3 bug
+overnight       row simply stays status=OPEN; nothing runs
+restart         _subscribe_open_position_tokens_on_startup re-subscribes legs[]
+expiry day      _spread_past_expiry -> close, exit_reason="expiry-settlement",
+                priced at INTRINSIC vs the underlying (§28.2), settlement price
+                and source persisted on the position
+```
+
+Four guards had to be exempted, each of which had silently made the sleeve
+untradeable: the **kill-switch** (sleeve-scoped, skips defined-risk hold-to-expiry),
+the **DTE stand-down policy**, the **§21.2 theta-reachability veto** (waived for
+`exit_mode="expiry"` — theta gets its full life), and the **time recycle**
+(`time_exit_minutes = 0`).
+
+**Structural blind spot, unchanged:** hold-to-expiry losses do not realise until
+settlement, so `daily_loss_limit` and every day-P&L governor are blind to such a
+sleeve while it carries an unrealised loss. The bought wing is the real bound.
+
+### 30.2 Evidence to date
+8 expiry settlements ever: **2 genuinely held overnight** (opened 08-03, settled
+08-04), 6 opened and settled the same day at 0 DTE.
+
+### 30.3 The bug: `min_dte_days`/`max_dte_days` were decorative on the live path
+There are **TWO** option resolvers, and §25.4b fixed the wrong one.
+`server.py:18168` states it outright: *"This is the runner's real resolver —
+`_resolve_option_for_strategy`, fixed separately, is only used by manual routes."*
+
+The runner resolves through `InstrumentResolver`, whose
+`_lookup_index_option_chain` called `get_option_chain(spot_key, **None**)` — take
+whatever expiry Upstox returns by default — while `expiry_rule` was passed only
+into a *diagnostic*. So on the path that actually trades, **both `expiry_offset`
+and the DTE window did nothing.** The HTE sleeve was configured 5–15 DTE and
+opened 0-DTE spreads: a same-session trade wearing a hold-to-expiry label, graded
+against OOS evidence drawn from multi-day holds. Third instance of the
+decorative-config trap after `target_dte_days` (§21.5) and `owned_regimes` (§26.3).
+
+**Fix:** the expiry is resolved ONCE, before any fallback, via
+`dte_policy.select_expiry` — the same function the manual path uses, so the two
+cannot drift again.
+
+**The load-bearing part is that it FAILS CLOSED.** An unsatisfiable window used to
+fall through to `_search_index_option` (whose candidates start at `current_week`)
+and then to the paper simulator, either of which returns precisely the near-expiry
+contract the window exists to refuse — the fix would have looked applied and
+changed nothing, which is how the original bug survived. Both fallbacks are now
+skipped when a window is configured, and an expiry list that cannot be read is a
+refusal rather than a guess. A strategy with **no** window is completely unaffected.
+
+Verified live against the real chain: Tail Hedge and HTE now pick **2026-08-11
+(DTE 7)**; all seven no-window NIFTY strategies still take the nearest expiry.
+
+### 30.4 Surfaced, because invisibility is half of why it went unnoticed
+- `RuntimeSettingsForm`: an **Expiry window (DTE)** min/max row, with copy stating
+  the real behaviour — blank = nearest expiry (on a Mon/Tue that is the 0–1 DTE
+  weekly); a set window **stands down** rather than substituting another tenor.
+  Blank sends `-1`, which the route treats as CLEAR: a window that cannot be
+  removed is a trap, because an unsatisfiable one stops the strategy trading.
+- `StrategyCard`: a **HOLD-TO-EXPIRY** badge carrying the declared tenor, and a
+  warning tooltip when a hold-to-expiry strategy has **no** window.
+- `Positions`: expiry + DTE per row, 0 DTE highlighted (it settles today).
+  `execution_state` now projects `expiry`/`dte` onto every open option position.
+- Probe **`exec.hold_to_expiry_tenor`**: compares the DTE a strategy ASKED for
+  against the DTE it actually opened at; silent when no window is declared.
+
+### 30.5 Open, founder's call
+**QG-O1 is hold-to-expiry with NO window**, so it takes the nearest expiry — on a
+Monday or Tuesday that is the 0–1 DTE weekly. Its §15.5 OOS pass (QuantG's only
+one) was for a *held* 3% OTM put spread, so the same label/tenor mismatch applies,
+just unconfigured rather than ignored. Setting a window changes which contract it
+trades, which is an alpha change and is not being done unasked. The new card badge
+now shows this state rather than leaving it silent.
+
+**Also noted, not traced:** QG-O1's 08-03 position had `spread_tp_value: 26.87`
+stamped, crossed it comfortably, and did not exit — riding to settlement instead.
+Better outcome here, but it suggests priced exits do not fire on hold-to-expiry
+rows. Worth confirming the mechanism before calling it intended.
+
+### 30.6 Test-suite note
+10 failed / 1217 passed, env-pinned — identical failure set to before this work,
++41 passing. Separately fixed a **time-of-day flake**:
+`test_reachability_vetoes_a_far_expiry_intraday_seller` asserted `dte_days == 6`,
+adding six WHOLE days to today's date while the builder measures FRACTIONAL days
+from `now`, so it read 6 just after 00:00 UTC and 5 for the rest of the day. The
+suite passed in the morning and failed in the afternoon regardless of any change.
+Confirmed pre-existing by running it at `05a86a5`.
