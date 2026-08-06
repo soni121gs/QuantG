@@ -170,8 +170,24 @@ def token_is_fresh(obtained_at_iso: Optional[str], *, now_ist) -> bool:
         return False
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_tz.utc)
-    obtained_ist = dt.astimezone(_tz(timedelta(hours=5, minutes=30)))
-    boundary = now_ist.replace(hour=3, minute=30, second=0, microsecond=0)
-    if now_ist < boundary:                      # before 03:30, the boundary was yesterday
+    _IST = _tz(timedelta(hours=5, minutes=30))
+    obtained_ist = dt.astimezone(_IST)
+
+    # Interpret now_ist's WALL CLOCK as IST regardless of the tzinfo label it carries.
+    #
+    # server.py's `_ist_now()` returns `datetime.now(utc) + 5:30` — IST wall-clock fields
+    # with tzinfo still UTC. Building the boundary off that produced 03:30 *UTC* = 09:00
+    # IST, so every token obtained before 09:00 IST was judged stale. The 08:45 scheduled
+    # request lands ~08:46, so the flow WORKING AS DESIGNED tripped the 09:05 CRITICAL
+    # "token not refreshed" alarm every single day — while printing the very timestamp
+    # that should have silenced it (observed 2026-08-06: stored 08:46:36 IST, alarm 09:05).
+    #
+    # Normalising on wall-clock fields is correct for BOTH callers: a genuine IST-aware
+    # datetime keeps its own fields, and the UTC-labelled one is read as the IST it
+    # actually represents. An alarm that cries wolf daily is worse than no alarm — this
+    # is the one alert that has to be trustworthy at 09:05.
+    now_wall = now_ist.replace(tzinfo=_IST)
+    boundary = now_wall.replace(hour=3, minute=30, second=0, microsecond=0)
+    if now_wall < boundary:                     # before 03:30, the boundary was yesterday
         boundary = boundary - timedelta(days=1)
     return obtained_ist >= boundary

@@ -12563,13 +12563,41 @@ async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
     start, end = get_trading_day_window_ist()
     now = datetime.now(timezone.utc).isoformat()
 
+    # A hold-to-expiry sleeve carries overnight BY DESIGN, so "position from a previous
+    # trading day" is its normal state, not staleness. Quarantining it put the position in
+    # STALE_NEEDS_REVIEW — a status position_monitor never scans — so for the WHOLE session
+    # it was never marked, never exit-checked, and could never reach expiry-settlement
+    # (settlement fires during the session, which is exactly when it was frozen). The EOD
+    # sweep resurrects it at 15:26, so it ping-ponged: frozen 08:50->15:26, every day held.
+    #
+    # Measured 2026-08-06: 3 positions frozen 4h07m (updated_at 03:20:34 while every genuinely
+    # open position was marked at 07:27:07), holding Rs56,389 of blocked margin invisible to
+    # the risk layer — and they belonged to the only two strategies making money.
+    #
+    # Fourth instance of the CLAUDE.md §25.4 law: a gate calibrated on intraday behaviour must
+    # exempt genuine hold-to-expiry. §22.3 exempted the EOD backstop; this, one layer up, was
+    # never audited for the same defect.
+    _hte_strategy_ids = await db.strategies.distinct("id", {
+        "$or": [
+            {"visual_config.options.exit_mode": "expiry"},
+            {"visual_config.risk.exit_mode": "hold_to_expiry"},
+        ],
+    })
+    _stale_match: Dict[str, Any] = {
+        "user_id": user_id,
+        "mode": "paper",
+        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+        "$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}],
+    }
+    if _hte_strategy_ids:
+        _stale_match["strategy_id"] = {"$nin": list(_hte_strategy_ids)}
+        logger.info(
+            "daily paper lifecycle: sparing %d hold-to-expiry strategy(ies) from the stale sweep",
+            len(_hte_strategy_ids),
+        )
+
     stale_strategy_positions = await db.strategy_positions.update_many(
-        {
-            "user_id": user_id,
-            "mode": "paper",
-            "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
-            "$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}],
-        },
+        _stale_match,
         {
             "$set": {
                 "status": "STALE_NEEDS_REVIEW",
@@ -12585,15 +12613,23 @@ async def _daily_paper_lifecycle_for_user(user_id: str) -> Dict[str, int]:
             },
         },
     )
+    # Same hold-to-expiry exemption on the UI mirror, so Positions does not show a
+    # quarantined row for a sleeve the canonical ledger is correctly still holding.
+    # ($nin also matches docs with no strategy_id, so mirror rows that lack it are
+    # swept exactly as before.)
+    _mirror_match: Dict[str, Any] = {
+        "user_id": user_id,
+        "$and": [
+            {"$or": [{"mode": "paper"}, {"broker": "paper"}]},
+            {"$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}]},
+        ],
+        "status": {"$nin": ["CLOSED", "STALE_NEEDS_REVIEW"]},
+    }
+    if _hte_strategy_ids:
+        _mirror_match["strategy_id"] = {"$nin": list(_hte_strategy_ids)}
+
     stale_positions = await db.positions.update_many(
-        {
-            "user_id": user_id,
-            "$and": [
-                {"$or": [{"mode": "paper"}, {"broker": "paper"}]},
-                {"$or": [{"created_at": {"$lt": start}}, {"entry_time": {"$lt": start}}]},
-            ],
-            "status": {"$nin": ["CLOSED", "STALE_NEEDS_REVIEW"]},
-        },
+        _mirror_match,
         {"$set": {
             "status": "STALE_NEEDS_REVIEW",
             "stale": True,
@@ -18238,7 +18274,30 @@ async def startup():
                             (strategy or {}).get("risk_style")
                             or ((strategy or {}).get("visual_config") or {}).get("risk", {}).get("risk_style")
                         )
-                        _tgt = target_delta_for_style(_rstyle)
+                        # A strategy's OWN configured short_delta wins over the risk-style
+                        # table. It was read only inside the credit/debit-spread branch
+                        # below, so for single_leg it was decorative — the fourth instance
+                        # of that trap after target_dte_days (§21.5), owned_regimes (§26.3)
+                        # and the DTE window (§30.3).
+                        #
+                        # It mattered: the three RAE "Trend Delta-1" riders are configured
+                        # short_delta 0.80 (deep ITM, ~zero theta — the entire premise of
+                        # RAE-3c, which exists BECAUSE every OTM buyer QuantG built died
+                        # five times). They were selected by target_delta_for_style
+                        # ("momentum" -> 0.40) and measurably bought delta 0.39-0.42, then
+                        # lost 5 of 7 trades to theta-decay exits. A delta-1 rider has
+                        # near-zero theta by construction, so that exit reason was itself
+                        # proof the instrument was wrong.
+                        _cfg_delta = ((strategy or {}).get("visual_config") or {}).get(
+                            "options", {}).get("short_delta")
+                        _tgt = None
+                        if _cfg_delta not in (None, ""):
+                            try:
+                                _tgt = max(0.05, min(0.95, float(_cfg_delta)))
+                            except (TypeError, ValueError):
+                                _tgt = None
+                        if _tgt is None:
+                            _tgt = target_delta_for_style(_rstyle)
                         _delta_pick = pick_delta_strike(_nodes, _otype, _tgt)
                         if _delta_pick and _delta_pick.get("strike"):
                             _sel_strike = int(float(_delta_pick["strike"]))
