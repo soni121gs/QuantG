@@ -2512,3 +2512,41 @@ comparison fed from it is suspect.** Also backfilled the missing 2026-08-05 bhav
 **Standing caveat:** none of this creates edge. F1/F2/F5 remove defects, F3 is mitigation,
 F4 narrows to the bucket the evidence supports. Every strategy still owes the §13.5 ladder.
 `CORE_ENGINE_LIVE_ENABLED=false` unchanged.
+
+### 31.6 Retire vs re-gate — decided per strategy, not book-wide (2026-08-06)
+Decomposed every closed trade by DTE **per strategy**. The shapes are opposite, and that is
+the whole decision:
+
+| strategy | n | P&L | DTE buckets +ve | verdict |
+|---|---|---|---|---|
+| RAE SENSEX Range Seller | 30 | −₹6,413 | **0 of 4** | **ARCHIVED** |
+| IDX SENSEX VRP Put-Spread | 51 | −₹8,830 | 1 of 4 (n=9 noise) | **ARCHIVED** |
+| QG-O1 NIFTY Put Spread | 34 | −₹3,258 | 3 of 4 — DTE 6+ = −₹6,498 IS the loss | re-gate [0,5] |
+| RAE NIFTY Range Seller | 18 | −₹700 | 3 of 4 — DTE 6+ = −₹1,736 IS the loss | re-gate [0,5] |
+| QG-O4 SENSEX Call Spread | 19 | **+₹1,768** | DTE 0/1-2 +₹5,702, 3+ −₹3,934 | keep [0,2] |
+
+**The rule this gives you: a strategy is salvageable iff its loss is CONCENTRATED in a
+bucket a gate can exclude.** If every bucket is negative there is nothing to gate toward and
+geometry cannot help — at the new 0.25/0.45 shape break-even is 64.3% and both archived rows
+run 45–47%.
+
+**Per-strategy evidence beats aggregate evidence — and here they disagreed.** The book-wide
+`[0,2]` window set earlier the same day comes from the 259-trade aggregate (where DTE 0 is
+the best bucket). For the two SENSEX sellers it is exactly the WRONG gate: their losses live
+*inside* DTE 0–2 (−₹1,702 and −₹6,735). Applying an aggregate gradient to a strategy whose
+own record contradicts it would have looked like a fix and changed nothing.
+
+**Why QG-O4 is the one winner: payoff, not accuracy.** It is the only seller with `b > 1`
+(avg win ₹815 vs avg loss ₹328, b=2.48, break-even 29%) and it wins at only 37%. Every loser
+sits at b≈0.40–0.64, i.e. losses are ~2× wins, needing 61–72% accuracy. **Diagnose a seller
+by payoff first — win rate on a credit spread is high by construction and says nothing.**
+
+Mechanics: `status="archived"` + `founder_forced_live=False` + `manual_paused=True` (a
+founder-forced row is otherwise re-woken). History kept, never deleted (§13.6). **Open
+positions of an archived strategy keep being managed** — the monitor keys on positions, not
+strategy status — verified live (marks at age 0 s, 0 new signals, runner still alive).
+
+**Honest limit:** the two re-gates rest on DTE 6+ buckets of n=2–3. The direction is
+corroborated by the 259-trade gradient and independently by QG-O4, but they are fitted to
+past trades and owe the §13.5 ladder. Book is now 11 live rows. Nothing here creates edge —
+it removes two proven negatives and stops two others reaching the bucket that killed them.
