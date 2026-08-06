@@ -196,6 +196,8 @@ async def test_daily_paper_lifecycle_resets_today_and_marks_stale_positions():
     mock_db.positions.update_many = AsyncMock(return_value=result(modified=1))
     mock_db.orders.update_many = AsyncMock(return_value=result(modified=5))
     mock_db.strategies.update_many = AsyncMock(return_value=result(modified=3))
+    # 2026-08-06: the sweep now asks which strategies hold to expiry so it can spare them.
+    mock_db.strategies.distinct = AsyncMock(return_value=["hte-sleeve", "tail-hedge"])
     mock_db.strategy_loss_streaks.update_many = AsyncMock(return_value=result(modified=0))
     mock_db.paper_session_state.update_one = AsyncMock()
 
@@ -209,9 +211,17 @@ async def test_daily_paper_lifecycle_resets_today_and_marks_stale_positions():
         "strategies_reset": 3,
         "loss_streaks_reset": 0,
     }
-    stale_update = mock_db.strategy_positions.update_many.await_args.args[1]
+    stale_filter, stale_update = mock_db.strategy_positions.update_many.await_args.args[:2]
     assert stale_update["$set"]["status"] == "STALE_NEEDS_REVIEW"
     assert stale_update["$unset"]["active_strategy_instrument_side_key"] == ""
+
+    # A hold-to-expiry sleeve carries overnight BY DESIGN. Quarantining it parked the
+    # position in a status position_monitor never scans, so it was frozen for the whole
+    # session and could never reach expiry-settlement (CLAUDE.md §25.4, 4th instance).
+    assert stale_filter["strategy_id"] == {"$nin": ["hte-sleeve", "tail-hedge"]}
+    mirror_filter = mock_db.positions.update_many.await_args.args[0]
+    assert mirror_filter["strategy_id"] == {"$nin": ["hte-sleeve", "tail-hedge"]}, (
+        "the UI mirror must agree with the ledger")
 
 
 def test_sl_tp_prices_come_from_strategy_config_not_global_defaults():
