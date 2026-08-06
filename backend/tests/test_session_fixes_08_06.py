@@ -103,10 +103,16 @@ def test_exempt_set_is_only_applied_when_non_empty():
 
 # ----------------------------------------------------- F2: single-leg short_delta read
 
-def _delta_block() -> str:
+def _delta_block(code_only: bool = False) -> str:
     src = SERVER.read_text(encoding="utf-8", errors="replace")
     i = src.index("if OPTION_DELTA_SELECTION_ENABLED:")
-    return src[i:i + 2600]
+    block = src[i:i + 2600]
+    if code_only:
+        # Order assertions must read CODE, not prose — the explanatory comment names
+        # target_delta_for_style before the code touches short_delta.
+        block = "\n".join(l for l in block.splitlines()
+                          if not l.lstrip().startswith("#"))
+    return block
 
 
 def test_single_leg_delta_selection_prefers_configured_short_delta():
@@ -114,11 +120,13 @@ def test_single_leg_delta_selection_prefers_configured_short_delta():
     decorative: the three RAE "Trend Delta-1" riders configured 0.80 (deep ITM, ~zero
     theta) measurably bought delta 0.39-0.42 and lost 5 of 7 trades to theta-decay
     exits — an exit reason a real delta-1 rider cannot produce."""
-    body = _delta_block()
+    body = _delta_block(code_only=True)
     assert '"short_delta"' in body, "single-leg path still ignores the configured delta"
     assert "target_delta_for_style" in body, "style table must remain the fallback"
     assert body.index('"short_delta"') < body.index("target_delta_for_style"), (
         "configured short_delta must be consulted BEFORE the risk-style default")
+    # The fallback must be conditional, not unconditional reassignment.
+    assert "if _tgt is None:" in body
 
 
 def test_configured_short_delta_is_clamped_and_survives_junk():
