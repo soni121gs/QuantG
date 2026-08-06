@@ -2421,3 +2421,94 @@ adding six WHOLE days to today's date while the builder measures FRACTIONAL days
 from `now`, so it read 6 just after 00:00 UTC and 5 for the rest of the day. The
 suite passed in the morning and failed in the afternoon regardless of any change.
 Confirmed pre-existing by running it at `05a86a5`.
+
+---
+
+## 31. The 2026-08-06 audit — five defects, deployed in-session (2026-08-06)
+
+Full-stack audit requested on the premise that live trading was on. **It was not** —
+`CORE_ENGINE_LIVE_ENABLED=false`, all 1,782 orders and 705 positions `mode="paper"`,
+all 13 strategies paper. **Always verify that claim before reasoning about risk**; the
+answer changes the severity of everything else. Deployed during market hours at explicit
+founder direction (feed outage ~15 s; `up -d --no-deps backend`).
+
+### 31.1 F1 (CRITICAL) — the morning reset quarantined hold-to-expiry, every day
+`_daily_paper_lifecycle_for_user` (server.py ~12566) swept **any** paper position carried
+from a previous trading day into `STALE_NEEDS_REVIEW` — a status `position_monitor` never
+scans. Hold-to-expiry sleeves carry overnight BY DESIGN, so they were frozen for the
+**whole session, every session**: never marked, never exit-checked, and **unable to reach
+`expiry-settlement`** (settlement fires during the session, exactly when they were frozen).
+The EOD sweep resurrects `STALE_NEEDS_REVIEW` at 15:26, so it ping-ponged invisibly.
+
+Measured live: 3 positions frozen **4 h 07 m** (`updated_at` 03:20:34 while every genuinely
+open position read 07:27:07), holding **₹56,389** of blocked margin invisible to the risk
+layer — and they belonged to the **only two strategies making money** (HTE +₹2,664,
+tail hedge +₹4,121 since the 30 Jul re-cut).
+
+**Fourth instance of the §25.4 law.** §22.3 exempted the EOD backstop and nobody audited the
+morning sweep for the same defect. Fixed on both `strategy_positions` and the `db.positions`
+mirror. **Diagnostic tell: compare `updated_at` across positions — a marked book agrees to
+the second, so any row hours behind is not being managed at all.**
+
+### 31.2 F2 (HIGH) — `short_delta` was decorative for single-leg
+Read only inside the credit/debit-spread branch (server.py ~18323). Single-leg strike
+selection used `target_delta_for_style(risk_style)` — `"momentum"` → **0.40**. The three RAE
+**"Trend Delta-1"** riders configure **0.80** (deep ITM, ~zero theta — the entire premise of
+RAE-3c, which exists *because* every OTM buyer died five times) and measurably bought
+**delta 0.39–0.42**, losing **5 of 7** trades to `theta-decay-8m/10m` exits. *A real delta-1
+rider has near-zero theta, so that exit reason was itself proof the instrument was wrong.*
+**Fourth decorative-config trap** after `target_dte_days` (§21.5), `owned_regimes` (§26.3)
+and the DTE window (§30.3). Single-leg now prefers the configured delta (clamped 0.05–0.95,
+junk falls back to the style table).
+
+### 31.3 F3/F4 — geometry and per-strategy DTE (`scripts/fix_seller_geometry_and_dte_08_06.py`)
+- **F3** `credit_sl_mult` 0.60 → **0.45** on all 5 intraday sellers: break-even **70.6% →
+  64.3%**. The 30 Jul retune halved TP (0.50→0.25, correctly — only 12% of trades ever
+  reached 0.50) but cut SL by a third, **changing one side of a ratio**. Founder chose this
+  over pausing. **MITIGATION, NOT A CURE:** realized is 30–43% (IDX SENSEX n=33 WR 30%
+  −₹9,966 — past the n≥30 bar). The sleeve owes a judge run.
+- **F4 — founder-directed pattern: per-strategy guards, not blanket env gates.** Rather
+  than flipping `SELLER_DTE_POLICY_ENABLED` globally (which vetoes indiscriminately —
+  why it was turned off on 31 Jul), each seller got its own `min_dte_days`/`max_dte_days`
+  = **[0,2]**, honoured by `dte_policy.select_expiry`. Blocks the DTE 3+ bucket
+  (−₹35k/147 trades) while coverage survives via staggered expiries: **NIFTY Mon/Tue**
+  (Tuesday weekly), **SENSEX Tue–Thu** (Thursday weekly). Verified live: on a Thursday
+  NIFTY correctly **stands down** ("available: 5d, 12d, 19d") while SENSEX trades at 0 DTE,
+  and no-window strategies are byte-identical. **This is the preferred shape for future
+  guards — global env flags are the blunt instrument that got them all switched off.**
+- The `backend/.env` override remains as the founder set it. **Code templates were NOT
+  touched: they read tp 0.45 / sl 0.9 — a THIRD value, drifted since the DB-only 30 Jul
+  retune. Template sync is disabled (§20.1) so the DB is authoritative; a reseed would
+  resurrect the wrong geometry.**
+
+### 31.4 F5 — the daily token alarm was a tz-label bug, and cried wolf every day
+`_ist_now()` returns `datetime.now(utc) + 5:30` — **IST wall clock with UTC tzinfo**.
+`token_is_fresh` built its 03:30 IST boundary from that, so the boundary landed at
+**03:30 UTC = 09:00 IST**: any token obtained before 09:00 IST read as stale. The 08:45
+scheduled flow lands ~08:46, so **the flow working exactly as designed tripped the 09:05
+CRITICAL alarm daily**, while printing the very timestamp that should have silenced it.
+Now normalised on wall-clock fields, correct for both caller shapes. Verified in-container
+against the real stored value. **`_ist_now()` is used widely — any other tz-aware
+comparison fed from it is suspect.** Also backfilled the missing 2026-08-05 bhavcopy
+(cron has now skipped twice: 07-31, 08-05).
+
+### 31.5 Process notes
+- **Baseline before blaming yourself, and before absolving yourself.** Suite went 8→7
+  failures; the one that named my edited function **was mine** (the mock lacked
+  `strategies.distinct`). The other 7 were proven pre-existing by running them at
+  `0b42b33` in a worktree — baseline had **10** in those same files.
+- **A source-order assertion must read code, not comments** — my own explanatory comment
+  named `target_delta_for_style` before the code touched `short_delta`, failing the test.
+- `pytest` is **not** in the runtime image: `docker run --rm … bash -lc 'pip install -q
+  pytest pytest-asyncio; python -m pytest …'`. `tests/test_hermes_sidecar.py` errors at
+  collection and aborts the run — `--ignore` it.
+- **A transient `unhealthy` after a deploy is not automatically a crash.** Four
+  healthchecks failed over ~90 s while 12 positions were REST-leg-priced at once; CPU 3%,
+  memory 886 MB/6 GB, `RestartCount=0`, signals processing throughout, then it recovered.
+  Check `/api/` latency, restart count and memory before reacting.
+- Fixing F1 does not heal already-quarantined rows — they were resurrected explicitly
+  (same `$set` the EOD backstop uses). Guards: `tests/test_session_fixes_08_06.py` (24).
+
+**Standing caveat:** none of this creates edge. F1/F2/F5 remove defects, F3 is mitigation,
+F4 narrows to the bucket the evidence supports. Every strategy still owes the §13.5 ladder.
+`CORE_ENGINE_LIVE_ENABLED=false` unchanged.
