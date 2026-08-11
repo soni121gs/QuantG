@@ -125,6 +125,8 @@ async def process_restarts(ctx: ProbeContext) -> List[Finding]:
     starts = sorted(str(r.get("started_at") or "") for r in rows)
     # 03:45–10:00 UTC == 09:15–15:30 IST. started_at is stored UTC.
     in_session = [s for s in starts if "03:45" <= s[11:16] <= "10:00"]
+    if not in_session:
+        return []
     sev = Severity.CRITICAL if in_session else Severity.HIGH
     return [Finding(
         probe_id="infra.process_restarts", domain=Domain.INFRA, severity=sev, entity="backend",

@@ -36,6 +36,8 @@ async def persistent_live_loss(ctx: ProbeContext) -> List[Finding]:
         if trades < _MIN_TRADES_FOR_LOSS_CALL or pnl >= 0:
             continue
         strat = ctx.strategy_by_id(sid) or {}
+        if str(strat.get("status")) not in ("live", "active"):
+            continue
         wr = (r.get("wins", 0) / trades) if trades else 0
         # Split the sample at the strategy's last MATERIAL geometry change. A
         # trailing loss is only evidence against the CURRENT machine; if the
