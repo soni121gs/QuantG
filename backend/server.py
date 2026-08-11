@@ -15684,6 +15684,7 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         feed_status_str = "disconnected"
 
     # Token expiration and refresh details
+    refresh_token_available = bool(refresh_token)
     token_expired = token_present and not token_valid
 
     reconnect_message = (
@@ -15772,8 +15773,14 @@ async def get_user_upstox_status(user_id: str) -> Dict[str, Any]:
         "rest_status": rest_status,
         "feed_status_str": feed_status_str,
         "token_expired": token_expired,
-        "refresh_token_available": False,
-        "daily_reconnect_required": True,
+        "refresh_token_available": refresh_token_available,
+        "daily_reconnect_required": not token_valid,
+        "daily_approval_required": not token_valid and not refresh_token_available,
+        "next_action": (
+            "approve_upstox_daily_notification"
+            if token_present and not token_valid and not refresh_token_available
+            else "reconnect_upstox" if not token_valid else "none"
+        ),
         "user_message": (
             "Upstox connected. Upstox requires a fresh login daily before market hours."
             if token_valid else reconnect_message

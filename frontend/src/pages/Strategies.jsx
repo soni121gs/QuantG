@@ -247,7 +247,7 @@ export default function Strategies() {
         eyebrow="Strategy Catalog"
         title="Standardized Strategies"
         subtitle="Filterable option systems with explicit capital, strategy type, broker state, and live AI confidence."
-        badge={<AppStatusBadge tone={upstoxStatus.connected ? "healthy" : "warning"}>{upstoxStatus.connected ? "Upstox Connected" : "Upstox Check"}</AppStatusBadge>}
+        badge={<AppStatusBadge tone={upstoxStatus.token_valid || upstoxStatus.connected ? "healthy" : "warning"}>{upstoxStatus.token_valid || upstoxStatus.connected ? "Upstox Connected" : upstoxStatus.daily_approval_required ? "Upstox Approval Due" : "Upstox Check"}</AppStatusBadge>}
         actions={
           <>
             <Button onClick={load} variant="outline" size="sm" data-testid="refresh-strategies">

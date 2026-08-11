@@ -148,6 +148,8 @@ async def funds(user=Depends(get_current_user)):
     from core.paper_broker import PaperWallet
     _pw = PaperWallet(db)
     wallet_doc = await _pw.get_or_initialize(user["id"])
+    margin_audit = await _pw.audit_blocked_margin(user["id"])
+    wallet_doc = await _pw.get_or_initialize(user["id"])
     paper_capital = float(wallet_doc.get("balance", 500000.0))
     initial_balance = float(wallet_doc.get("initial_balance", 500000.0))
     blocked_margin = float(wallet_doc.get("blocked_margin", 0.0))
@@ -167,6 +169,7 @@ async def funds(user=Depends(get_current_user)):
         "available_cash": round(paper_capital - blocked_margin, 2),
         "account_balance": round(paper_capital, 2),
         "blocked_margin": round(blocked_margin, 2),
+        "blocked_margin_audit": margin_audit,
         "opening_balance": initial_balance,
         "intraday_payin": 0.0,
         "used_margin": round(blocked_margin + deployed, 2),

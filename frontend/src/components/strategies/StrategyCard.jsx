@@ -114,7 +114,16 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
   };
 
   const getBrokerStatus = () => {
-    return { name: "Upstox", connected: upstoxStatus?.connected };
+    const connected = Boolean(upstoxStatus?.token_valid || upstoxStatus?.connected);
+    return {
+      name: "Upstox",
+      connected,
+      label: connected
+        ? "online"
+        : upstoxStatus?.daily_approval_required
+          ? "approve daily login"
+          : upstoxStatus?.token_state || "offline",
+    };
   };
 
   const broker = getBrokerStatus();
@@ -221,7 +230,7 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
       <div className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--qd-text-3)] relative z-10">
         <span>{broker.name}</span>
         <span className={`w-1.5 h-1.5 rounded-full ${broker.connected ? "bg-emerald-400 animate-pulse" : "bg-rose-500"}`} />
-        <span className="uppercase tracking-wider">{broker.connected ? "online" : "offline"}</span>
+        <span className="uppercase tracking-wider">{broker.label}</span>
       </div>
 
       {notice && (

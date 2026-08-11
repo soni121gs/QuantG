@@ -245,7 +245,7 @@ async def hermes_diagnostics_run(date: Optional[str] = None, user=Depends(get_cu
     Runs all probes, persists findings, and narrates. Read-only w.r.t. trading."""
     from core.hermes_diagnostics import run_diagnostics
     from core.hermes_diagnostics.narrator import narrate_findings
-    res = await run_diagnostics(db, user["id"], date)
+    res = await run_diagnostics(db, user["id"], date, persist=True)
     narrative = await narrate_findings(db, user["id"], res["date"], res.get("findings", []))
     return {**res, "narrative": narrative}
 

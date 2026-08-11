@@ -33,6 +33,7 @@ QUANTG_OPERATOR_PASSWORD = os.getenv("QUANTG_OPERATOR_PASSWORD")
 HEALTH_PATH = os.getenv("HERMES_HEALTH_PATH", "/tmp/hermes_health.json")
 _telegram_failures = 0
 _error_log_at = {}
+_error_log_counts = {}
 
 # Rate limit watchdog alerts: alert once per hour per type
 last_alert_sent = {}
@@ -52,9 +53,14 @@ def _safe_error(exc):
 
 def _log_error(key, message):
     now = time.time()
-    if now - _error_log_at.get(key, 0) >= 60:
-        print(message)
+    _error_log_counts[key] = _error_log_counts.get(key, 0) + 1
+    if now - _error_log_at.get(key, 0) >= 300:
+        suffix = ""
+        if _error_log_counts[key] > 1:
+            suffix = f" (suppressed {_error_log_counts[key] - 1} repeats)"
+        print(f"{message}{suffix}")
         _error_log_at[key] = now
+        _error_log_counts[key] = 0
 
 
 def _write_health():

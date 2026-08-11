@@ -392,7 +392,7 @@ async def _run_eod_aggregation(db, report_date: str | None = None) -> None:
                     from core.hermes_diagnostics.narrator import narrate_findings
                     # auto_oos=True: EOD-only — replay edge-doubt strategies over the
                     # real stored data and attach OOS verdicts to their hypotheses.
-                    _diag = await run_diagnostics(db, user_id, today_str, auto_oos=True)
+                    _diag = await run_diagnostics(db, user_id, today_str, persist=True, auto_oos=True)
                     await narrate_findings(db, user_id, today_str, _diag.get("findings", []))
                     _sev = _diag.get("summary", {}).get("by_severity", {})
                     if _sev.get("critical") or _sev.get("high"):
@@ -470,7 +470,19 @@ async def _compile_eod_memory(db, user_id: str, date_str: str, report_doc: dict)
     # Prose fact list (for hermes_memory embeddings + the wiki note body). Derived from
     # the structured observations; falls back to the legacy prose distiller, then a
     # default, so the memory note never comes out empty.
-    facts = [o["claim"] for o in observations if o.get("claim")]
+    def _evidence_honest_claim(o: dict) -> str:
+        claim = str(o.get("claim") or "").strip()
+        if not claim:
+            return ""
+        try:
+            sample_size = int(o.get("sample_size") or 0)
+        except (TypeError, ValueError):
+            sample_size = 0
+        if sample_size and sample_size < 30 and not claim.lower().startswith("insufficient evidence"):
+            return f"Insufficient evidence (n={sample_size}): {claim}"
+        return claim
+
+    facts = [claim for claim in (_evidence_honest_claim(o) for o in observations) if claim]
     if not facts:
         summary_data = f"""
 Daily Report for {date_str}:

@@ -299,6 +299,55 @@ class PaperWallet:
         return {"ok": True, "healed": bool(auto_heal), "drift": drift,
                 "balance": balance, "truth": truth, "closed_positions": n}
 
+    async def audit_blocked_margin(self, user_id: str, *, drift_tol: float = 1.0,
+                                   alert: bool = True) -> Dict[str, Any]:
+        """Compare wallet blocked margin against open-position capital truth.
+
+        Open books cannot be balance-healed safely, but margin drift is still
+        actionable because the UI's available cash is based on this number.
+        """
+        from core.capital_model import position_capital_blocked
+
+        wallet = await self.get_or_initialize(user_id)
+        open_rows = await self.db.strategy_positions.find(
+            {"user_id": user_id,
+             "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING"]},
+             "open_quantity": {"$gt": 0}},
+            {"_id": 0},
+        ).to_list(500)
+        expected = round(sum(position_capital_blocked(row) for row in open_rows), 2)
+        actual = round(float(wallet.get("blocked_margin") or 0.0), 2)
+        drift = round(actual - expected, 2)
+        ok = abs(drift) <= drift_tol
+        now = datetime.now(timezone.utc).isoformat()
+        result = {
+            "ok": ok,
+            "open_positions": len(open_rows),
+            "blocked_margin": actual,
+            "expected_blocked_margin": expected,
+            "drift": drift,
+            "checked_at": now,
+        }
+        await self.db.paper_wallets.update_one(
+            {"user_id": user_id},
+            {"$set": {"blocked_margin_audit": result, "updated_at": now}},
+        )
+        if not ok:
+            logger.critical(
+                "PAPER MARGIN DRIFT user=%s blocked_margin=%.2f expected=%.2f drift=%.2f",
+                user_id, actual, expected, drift,
+            )
+            if alert:
+                await self.db.app_alerts.update_one(
+                    {"user_id": user_id, "kind": "paper_margin_reconciliation_mismatch",
+                     "status": "open"},
+                    {"$set": {"severity": "critical", "updated_at": now,
+                              "detail": result},
+                     "$setOnInsert": {"id": f"paper-margin-{user_id}", "created_at": now}},
+                    upsert=True,
+                )
+        return result
+
     def summary(self, wallet: Dict[str, Any]) -> Dict[str, Any]:
         """Return a clean summary dict for the API response."""
         balance = float(wallet.get("balance", PAPER_INITIAL_BALANCE))
@@ -316,6 +365,7 @@ class PaperWallet:
             # the funds actually free to deploy after it.
             "blocked_margin": round(blocked, 2),
             "available_balance": round(balance - blocked, 2),
+            "blocked_margin_audit": wallet.get("blocked_margin_audit"),
             "utilization_pct": round((1 - balance / initial) * 100, 1) if initial > 0 else 0.0,
             "updated_at": wallet.get("updated_at"),
         }
