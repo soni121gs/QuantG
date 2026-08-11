@@ -245,6 +245,13 @@ async def score_not_predictive(ctx: ProbeContext) -> List[Finding]:
     leans on such a score is sizing on noise. Reads the latest db.score_ic_runs
     written by scripts/run_score_ic.py. Silent when no run exists (thin evidence →
     silence, §19). INVERTED is HIGH (actively harmful); DECORATION is MEDIUM."""
+    try:
+        from core.regime_router import score_size_neutral
+        if score_size_neutral():
+            return []
+    except Exception:
+        if os.environ.get("SCORE_SIZE_NEUTRAL", "true").lower() == "true":
+            return []
     run = await ctx.db.score_ic_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
     if not run:
         return []
