@@ -54,6 +54,17 @@ TRAIL_HONOUR_COST_FLOOR = os.environ.get(
 # banked amount clears friction with margin.
 TRAIL_ARM_COST_MULT = float(os.environ.get("DYN_EXIT_TRAIL_ARM_COST_MULT", "1.5"))
 
+# Universal profit-protection layer. This is deliberately separate from the
+# normal trailing lock: it protects any spread that has already been meaningfully
+# green from round-tripping into a red close, including hold-to-expiry spreads
+# that otherwise bypass intraday TP/SL/trailing.
+PROTECT_GREEN_ENABLED = os.environ.get(
+    "DYN_EXIT_PROTECT_GREEN_ENABLED", "true").strip().lower() == "true"
+PROTECT_GREEN_ARM_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_ARM_FRAC", "0.15"))
+PROTECT_GREEN_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_GIVEBACK_FRAC", "0.70"))
+PROTECT_GREEN_MIN_RUPEES = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_MIN_RUPEES", "300"))
+PROTECT_GREEN_MIN_LOCK_RUPEES = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_MIN_LOCK_RUPEES", "50"))
+
 # ── "never went green" early cut (2026-07-30) ────────────────────────────────
 # Measured over 94 closed spreads: 54% of LOSERS were never meaningfully green
 # (peak <= Rs50) — they go straight against the position. And `spread-time-exit`
@@ -178,6 +189,65 @@ def update_peak_pnl(prev_peak: Optional[float], current_pnl: float) -> float:
     return max(float(prev_peak), cur)
 
 
+def _spread_profit_capacity(position: Dict[str, Any]) -> float:
+    qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    if qty <= 0:
+        return 0.0
+    structure = str(position.get("structure") or "")
+    if structure == "debit_spread":
+        net_debit = float(position.get("net_debit") or position.get("average_buy_price") or 0.0)
+        width = float(position.get("max_loss") or 0.0) + net_debit
+        return max(0.0, width - net_debit) * qty
+    net_credit = float(position.get("net_credit") or position.get("average_buy_price") or 0.0)
+    return max(0.0, net_credit) * qty
+
+
+def green_profit_protection_levels(
+    position: Dict[str, Any],
+    peak_pnl: Optional[float],
+    *,
+    arm_frac: float = PROTECT_GREEN_ARM_FRAC,
+    giveback_frac: float = PROTECT_GREEN_GIVEBACK_FRAC,
+) -> Dict[str, Any]:
+    """Return the universal green-to-red guard levels for a spread position."""
+    capacity = _spread_profit_capacity(position)
+    if capacity <= 0:
+        return {"armed": False, "arm_level": None, "lock_level": None,
+                "capacity": capacity, "reason": "no_capacity"}
+    arm_level = min(capacity, max(PROTECT_GREEN_MIN_RUPEES, capacity * float(arm_frac)))
+    armed = peak_pnl is not None and float(peak_pnl) >= arm_level
+    lock_level = None
+    if armed:
+        lock_level = max(PROTECT_GREEN_MIN_LOCK_RUPEES,
+                         float(peak_pnl) * (1.0 - float(giveback_frac)))
+        lock_level = min(lock_level, float(peak_pnl))
+    return {"armed": bool(armed), "arm_level": arm_level, "lock_level": lock_level,
+            "capacity": capacity, "reason": "armed" if armed else "not_armed"}
+
+
+def green_profit_protection_exit(
+    *,
+    position: Dict[str, Any],
+    current_pnl: float,
+    peak_pnl: Optional[float],
+    arm_frac: float = PROTECT_GREEN_ARM_FRAC,
+    giveback_frac: float = PROTECT_GREEN_GIVEBACK_FRAC,
+) -> Optional[str]:
+    """Protect a meaningful open profit from becoming a red close.
+
+    The caller should check hard take-profit first, then this guard, then hard
+    stop/no-progress. If a tick jumps straight through the lock into red, this
+    still closes immediately rather than waiting for the full stop.
+    """
+    if not PROTECT_GREEN_ENABLED:
+        return None
+    lv = green_profit_protection_levels(
+        position, peak_pnl, arm_frac=arm_frac, giveback_frac=giveback_frac)
+    if lv["armed"] and float(current_pnl) <= float(lv["lock_level"]):
+        return "profit-protect"
+    return None
+
+
 def trailing_lock_levels(
     net_credit: float,
     qty: int,
@@ -250,25 +320,33 @@ def evaluate_spread_exit(
 ) -> Optional[str]:
     """Exit reason for a credit spread, or None to hold. Priority:
 
-      1. `spread-sl`   — hard stop (loss): current spread value ≥ sl_value
-      2. `spread-tp`   — take-profit target: current value ≤ tp_value
-      3. `trail-lock`  — armed AND profit retraced past the giveback (bank the
+      1. `spread-tp`   — take-profit target: current value ≤ tp_value
+      2. `profit-protect` — was meaningfully green, now retraced to lock level
+      3. `spread-sl`   — hard stop (loss): current spread value ≥ sl_value
+      4. `trail-lock`  — armed AND profit retraced past the giveback (bank the
                          fading winner before it round-trips to red)
 
-    1 and 2 reproduce the existing `spread_exit_reason` exactly (so behaviour is
-    unchanged when trailing doesn't fire); 3 is the new dynamic layer.
+    The profit-protection layers sit before full stop-loss liquidation so a
+    winner that fades does not need to become a full loser before exit.
     """
     tp_value = position.get("spread_tp_value")
     sl_value = position.get("spread_sl_value")
 
-    # 1) hard stop first — never let the trailing layer mask a loss stop
-    if sl_value is not None and float(current_value) >= float(sl_value):
-        return "spread-sl"
-    # 2) take-profit target
+    # 1) take-profit target
     if tp_value is not None and float(current_value) <= float(tp_value):
         return "spread-tp"
+    # 2) universal green-to-red guard. This may fire before the hard stop, because
+    # a trade that already earned a meaningful profit should not wait for the full
+    # stop just because it missed the formal TP by a tick.
+    protected = green_profit_protection_exit(
+        position=position, current_pnl=current_pnl, peak_pnl=peak_pnl)
+    if protected:
+        return protected
+    # 3) hard stop
+    if sl_value is not None and float(current_value) >= float(sl_value):
+        return "spread-sl"
 
-    # 3) trailing lock
+    # 4) trailing lock
     net_credit = float(position.get("net_credit") or position.get("average_buy_price") or 0.0)
     qty = int(position.get("open_quantity") or position.get("quantity") or 0)
     # Contract context so the arm floor can be the real (premium-proportional)

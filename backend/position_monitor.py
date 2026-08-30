@@ -38,9 +38,14 @@ from core.profit_lock import evaluate_and_apply_locks
 from core.loss_killswitch import evaluate_loss_killswitch
 from core.spread_lifecycle import (
     value_credit_spread, spread_exit_reason, close_credit_spread,
-    value_debit_spread, debit_spread_exit_reason, close_debit_spread,
+    value_debit_spread, close_debit_spread,
 )
-from core.dynamic_exit import update_peak_pnl, evaluate_spread_exit, no_progress_exit
+from core.dynamic_exit import (
+    update_peak_pnl,
+    evaluate_spread_exit,
+    no_progress_exit,
+    green_profit_protection_exit,
+)
 
 logger = logging.getLogger("quantg.position_monitor")
 
@@ -1013,14 +1018,46 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
                                           short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
-    # Hold-to-expiry: no intraday tp/sl — the defined risk (wing width) is the stop and
-    # weekly expiry is the exit, exactly as the OOS backtest validated.
+    # Hold-to-expiry keeps the original no-intraday-stop contract, but it no
+    # longer ignores real money sitting on the table. If the formal TP is hit, or
+    # a meaningful green peak retraces, book it instead of letting it round-trip
+    # to a red expiry.
     if hold_to_expiry:
+        reason = None
+        if structure == "debit_spread":
+            _tp = pos.get("spread_tp_value")
+            if _tp is not None and float(v["value"]) >= float(_tp):
+                reason = "spread-tp"
+        else:
+            _tp = pos.get("spread_tp_value")
+            if _tp is not None and float(v["value"]) <= float(_tp):
+                reason = "spread-tp"
+        if reason is None:
+            reason = green_profit_protection_exit(
+                position=pos, current_pnl=v["pnl"], peak_pnl=peak_pnl)
+        if reason:
+            logger.info("spread monitor hte profit exit pos=%s reason=%s value=%.2f pnl=%.2f peak=%.2f",
+                        pos.get("id"), reason, v["value"], v["pnl"], peak_pnl or 0.0)
+            if structure == "debit_spread":
+                await close_debit_spread(db, pos, reason=reason,
+                                         short_ltp=short_ltp, long_ltp=long_ltp)
+            else:
+                await close_credit_spread(db, pos, reason=reason,
+                                          short_ltp=short_ltp, long_ltp=long_ltp)
         return
 
     # Price-based exit first: SL / TP / trailing-lock (credit) or TP/SL (debit).
     if structure == "debit_spread":
-        reason = debit_spread_exit_reason(pos, v["value"])
+        reason = None
+        _tp = pos.get("spread_tp_value")
+        _sl = pos.get("spread_sl_value")
+        if _tp is not None and float(v["value"]) >= float(_tp):
+            reason = "spread-tp"
+        if reason is None:
+            reason = green_profit_protection_exit(
+                position=pos, current_pnl=v["pnl"], peak_pnl=peak_pnl)
+        if reason is None and _sl is not None and float(v["value"]) <= float(_sl):
+            reason = "spread-sl"
     else:
         # RES-3 dynamic exit: hard stop + take-profit (unchanged) PLUS a trailing
         # lock that banks a faded winner before it round-trips to red. RAE-5 tunes

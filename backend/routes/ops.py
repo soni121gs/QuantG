@@ -986,6 +986,114 @@ async def ops_rae_live_readiness(user=Depends(get_current_user)):
     })
 
 
+@router.get("/profit-giveback")
+async def ops_profit_giveback(days: int = 28, user=Depends(get_current_user)):
+    """Recent trades that were green at some point but closed red.
+
+    Read-only. Uses `strategy_positions.peak_pnl`, which the position monitor
+    stamps from live spread marks, to quantify profit left unbooked.
+    """
+    uid = user["id"]
+    days = max(1, min(int(days or 28), 120))
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    since_iso = since_dt.isoformat()
+    match = {
+        "user_id": uid,
+        "status": "CLOSED",
+        "$or": [
+            {"closed_at": {"$gte": since_iso}},
+            {"closed_at": {"$gte": since_dt}},
+        ],
+    }
+
+    by_strategy = await db.strategy_positions.aggregate([
+        {"$match": match},
+        {"$addFields": {
+            "_pnl": {"$ifNull": ["$realized_pnl", 0]},
+            "_peak": {"$ifNull": ["$peak_pnl", 0]},
+        }},
+        {"$group": {
+            "_id": "$strategy_id",
+            "trades": {"$sum": 1},
+            "pnl": {"$sum": "$_pnl"},
+            "losers": {"$sum": {"$cond": [{"$lt": ["$_pnl", 0]}, 1, 0]}},
+            "green_then_loss": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]}, 1, 0]}},
+            "peak_given": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]}, "$_peak", 0]}},
+            "loss_after_peak": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]},
+                {"$subtract": ["$_peak", "$_pnl"]}, 0]}},
+            "max_peak_loser": {"$max": {"$cond": [{"$lt": ["$_pnl", 0]}, "$_peak", 0]}},
+        }},
+        {"$project": {
+            "_id": 0, "strategy_id": "$_id", "trades": 1, "losers": 1,
+            "green_then_loss": 1, "pnl": {"$round": ["$pnl", 2]},
+            "peak_given": {"$round": ["$peak_given", 2]},
+            "loss_after_peak": {"$round": ["$loss_after_peak", 2]},
+            "max_peak_loser": {"$round": ["$max_peak_loser", 2]},
+            "pct_losers_were_green": {"$round": [
+                {"$cond": [{"$gt": ["$losers", 0]},
+                           {"$divide": ["$green_then_loss", "$losers"]}, 0]}, 3]},
+        }},
+        {"$sort": {"loss_after_peak": -1}},
+    ]).to_list(500)
+
+    by_exit = await db.strategy_positions.aggregate([
+        {"$match": match},
+        {"$addFields": {
+            "_pnl": {"$ifNull": ["$realized_pnl", 0]},
+            "_peak": {"$ifNull": ["$peak_pnl", 0]},
+        }},
+        {"$group": {
+            "_id": "$exit_reason",
+            "trades": {"$sum": 1},
+            "pnl": {"$sum": "$_pnl"},
+            "losers": {"$sum": {"$cond": [{"$lt": ["$_pnl", 0]}, 1, 0]}},
+            "green_then_loss": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]}, 1, 0]}},
+            "peak_given": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]}, "$_peak", 0]}},
+            "loss_after_peak": {"$sum": {"$cond": [
+                {"$and": [{"$lt": ["$_pnl", 0]}, {"$gt": ["$_peak", 0]}]},
+                {"$subtract": ["$_peak", "$_pnl"]}, 0]}},
+        }},
+        {"$project": {
+            "_id": 0, "exit_reason": {"$ifNull": ["$_id", "unknown"]},
+            "trades": 1, "losers": 1, "green_then_loss": 1,
+            "pnl": {"$round": ["$pnl", 2]},
+            "peak_given": {"$round": ["$peak_given", 2]},
+            "loss_after_peak": {"$round": ["$loss_after_peak", 2]},
+        }},
+        {"$sort": {"loss_after_peak": -1}},
+    ]).to_list(500)
+
+    worst = await db.strategy_positions.find(
+        {
+            **match,
+            "realized_pnl": {"$lt": 0},
+            "peak_pnl": {"$gt": 0},
+        },
+        {
+            "_id": 0, "id": 1, "strategy_id": 1, "target_symbol": 1,
+            "structure": 1, "created_at": 1, "closed_at": 1, "expiry": 1,
+            "exit_reason": 1, "realized_pnl": 1, "peak_pnl": 1,
+            "spread_tp_value": 1, "spread_sl_value": 1, "net_credit": 1,
+            "net_debit": 1,
+        },
+    ).sort("peak_pnl", -1).limit(50).to_list(50)
+
+    return _json_safe({
+        "kind": "profit_giveback",
+        "days": days,
+        "since": since_iso,
+        "by_strategy": by_strategy,
+        "by_exit_reason": by_exit,
+        "worst_green_then_loss": worst,
+        "note": "peak_pnl is the best open profit seen before close; loss_after_peak = peak_pnl - realized_pnl for trades that were green then closed red.",
+    })
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data

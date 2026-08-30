@@ -407,6 +407,89 @@ async def exit_below_cost_floor(ctx: ProbeContext) -> List[Finding]:
     )]
 
 
+@register("exec.profit_giveback", kind="dynamic")
+async def profit_giveback(ctx: ProbeContext) -> List[Finding]:
+    """Detect trades that were meaningfully green and still closed red.
+
+    This is the founder-observed failure mode: a position has time to book a
+    profit, keeps holding, then exits on stop/no-progress/expiry as a loss. The
+    monitor persists `peak_pnl`; compare it with realized P&L to quantify the
+    giveback deterministically.
+    """
+    rows: List[Dict[str, Any]] = []
+    by_strategy: Dict[str, Dict[str, Any]] = {}
+    losers = 0
+    green_then_loss = 0
+    peak_given = 0.0
+    loss_after_peak = 0.0
+    for p in ctx.closed_today:
+        pnl = float(p.get("realized_pnl") or 0)
+        peak = float(p.get("peak_pnl") or 0)
+        if pnl >= 0:
+            continue
+        losers += 1
+        if peak <= 0:
+            continue
+        green_then_loss += 1
+        peak_given += peak
+        loss_after_peak += peak - pnl
+        sid = str(p.get("strategy_id") or "unknown")
+        b = by_strategy.setdefault(
+            sid, {"strategy_id": sid, "losers": 0, "green_then_loss": 0,
+                  "peak_given": 0.0, "loss_after_peak": 0.0})
+        b["losers"] += 1
+        b["green_then_loss"] += 1
+        b["peak_given"] += peak
+        b["loss_after_peak"] += peak - pnl
+        rows.append({
+            "position_id": p.get("id"),
+            "strategy_id": sid,
+            "target_symbol": p.get("target_symbol"),
+            "exit_reason": p.get("exit_reason"),
+            "peak_pnl": round(peak, 2),
+            "realized_pnl": round(pnl, 2),
+            "profit_given_back": round(peak - pnl, 2),
+        })
+    if green_then_loss < 3:
+        return []
+    frac = green_then_loss / max(1, losers)
+    if frac < 0.5 and loss_after_peak < 5000:
+        return []
+    strategies = []
+    for b in by_strategy.values():
+        strategies.append({
+            **b,
+            "peak_given": round(float(b["peak_given"]), 2),
+            "loss_after_peak": round(float(b["loss_after_peak"]), 2),
+        })
+    strategies.sort(key=lambda r: r["loss_after_peak"], reverse=True)
+    rows.sort(key=lambda r: r["profit_given_back"], reverse=True)
+    return [Finding(
+        probe_id="exec.profit_giveback", domain=Domain.EXECUTION,
+        severity=Severity.HIGH, entity="spread-book",
+        title=(f"{green_then_loss}/{losers} losing trades were green first; "
+               f"Rs{loss_after_peak:,.0f} from peak to final loss"),
+        detail=("Open-position profit was available, but the exits did not book it. "
+                "These trades later closed red through stop, no-progress, expiry or "
+                "square-off. This means the book's profit-taking/trailing layer is "
+                "too late or bypassed for the affected structures."),
+        evidence={
+            "losers": losers,
+            "green_then_loss": green_then_loss,
+            "fraction": round(frac, 3),
+            "peak_profit_available": round(peak_given, 2),
+            "loss_after_peak": round(loss_after_peak, 2),
+            "by_strategy": strategies[:10],
+            "positions": rows[:10],
+        },
+        reproduction=("db.strategy_positions.find({closed_at:/^%s/, status:'CLOSED', "
+                      "realized_pnl:{$lt:0}, peak_pnl:{$gt:0}})" % ctx.date_str),
+        suggested_fix=("core.dynamic_exit.green_profit_protection_exit and "
+                       "position_monitor._process_spread_position must protect "
+                       "meaningful green peaks, including hold-to-expiry spreads."),
+    )]
+
+
 @register("exec.squareoff_after_segment_close", kind="dynamic")
 async def squareoff_after_segment_close(ctx: ProbeContext) -> List[Finding]:
     """A position must never be squared off AFTER its own exchange has closed.
