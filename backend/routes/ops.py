@@ -1094,6 +1094,19 @@ async def ops_profit_giveback(days: int = 28, user=Depends(get_current_user)):
     })
 
 
+@router.get("/strategy-governor")
+async def ops_strategy_governor(days: int = 30, user=Depends(get_current_user)):
+    """Read-only strategy promotion/demotion evidence.
+
+    Computes scale/observe/pause labels from recent realized P&L, profit factor,
+    peak giveback, and sample size. It never mutates strategy state.
+    """
+    from core.strategy_governor import build_strategy_governor_report
+    return _json_safe(await build_strategy_governor_report(
+        db, user["id"], days=days,
+    ))
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data

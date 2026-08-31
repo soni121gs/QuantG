@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from execution_bridge import normalize_order_row, segment_from_exchange
 from order_lifecycle import ORDER_ACTIVE_STATUSES, ORDER_TERMINAL_STATUSES, LEGACY_OPEN_STATUSES, LEGACY_TERMINAL_STATUSES
 from core.capital_model import position_capital_blocked
+from core.dynamic_exit import green_profit_protection_levels
 
 logger = logging.getLogger("quantg.execution_state")
 
@@ -255,6 +256,10 @@ class ExecutionStateManager:
                 "capital_blocked": position_capital_blocked(row),
             }
             if is_spread:
+                protection = green_profit_protection_levels(
+                    row,
+                    row.get("peak_pnl"),
+                )
                 pos_out.update({
                     "structure": structure,
                     "symbol": row.get("target_symbol") or pos_out["symbol"],
@@ -265,6 +270,8 @@ class ExecutionStateManager:
                     "net_debit": row.get("net_debit"),
                     "max_loss": row.get("max_loss"),
                     "max_loss_total": row.get("max_loss_total"),
+                    "peak_pnl": row.get("peak_pnl"),
+                    "profit_protection": protection,
                     "legs": row.get("legs") or [],
                 })
             # Expiry + DTE on every open option position (2026-08-05). A

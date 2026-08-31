@@ -89,6 +89,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_intraday_oos",
     "get_regime_status",
     "get_edge_math_advice",
+    "get_strategy_governor",
     "query_data_store",
 ]
 
@@ -473,6 +474,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             from routes.ops import ops_risk_scorecard
             data = await ops_risk_scorecard(user=user)
             source = "routes.ops.ops_risk_scorecard"
+        elif name == "get_strategy_governor":
+            from core.strategy_governor import build_strategy_governor_report
+            data = await build_strategy_governor_report(db, user["id"], days=30)
+            source = "core.strategy_governor"
+            warnings.append("Read-only governor: labels are evidence for operator approval, not automatic strategy changes.")
         elif name == "get_backtest_summary":
             from routes.ops import ops_eod_options_backtest as ops_options_backtest
             strategy_id = None
@@ -1369,6 +1375,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_intraday_oos": "Intraday 1-minute OOS verdicts for option BUYERS/scalps (QG-O5..O10).",
     "get_regime_status": "RAE ensemble watch: current market regime per index, which live strategy the router would ACTIVATE vs STAND DOWN now, and realized P&L by entry-regime.",
     "get_edge_math_advice": "EdgeMath observe-only sizing advice: per-strategy rolling expectancy and suggested risk multiplier (never applied automatically).",
+    "get_strategy_governor": "Read-only promotion/demotion governor for all strategies over the recent window: labels scale_candidate/observe/pause/kill_candidate from realized P&L, profit factor, green-then-loss giveback, sample size, and worst-loss risk.",
     "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
 
@@ -1806,6 +1813,15 @@ def classify_playbook_by_query(query: str) -> List[str]:
     if any(w in q for w in ["edgemath", "edge math", "sizing", "size up", "size down",
                             "risk multiplier", "kelly", "position size", "ratchet"]):
         matched_tools.add("get_edge_math_advice")
+        has_matches = True
+
+    if any(w in q for w in ["strategy governor", "governor", "promote", "demote",
+                            "pause strategy", "pause strategies", "scale strategy",
+                            "profitable strategies", "profitability", "green then loss",
+                            "giveback"]):
+        matched_tools.add("get_strategy_governor")
+        matched_tools.add("get_strategy_scorecard")
+        matched_tools.add("get_hermes_diagnostics")
         has_matches = True
 
     # P5-K6: raw research-store questions — realized vol, option chains, daily OHLC,

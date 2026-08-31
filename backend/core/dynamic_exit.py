@@ -60,10 +60,13 @@ TRAIL_ARM_COST_MULT = float(os.environ.get("DYN_EXIT_TRAIL_ARM_COST_MULT", "1.5"
 # that otherwise bypass intraday TP/SL/trailing.
 PROTECT_GREEN_ENABLED = os.environ.get(
     "DYN_EXIT_PROTECT_GREEN_ENABLED", "true").strip().lower() == "true"
-PROTECT_GREEN_ARM_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_ARM_FRAC", "0.15"))
-PROTECT_GREEN_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_GIVEBACK_FRAC", "0.70"))
+PROTECT_GREEN_ARM_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_ARM_FRAC", "0.12"))
+PROTECT_GREEN_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_GIVEBACK_FRAC", "0.45"))
 PROTECT_GREEN_MIN_RUPEES = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_MIN_RUPEES", "300"))
 PROTECT_GREEN_MIN_LOCK_RUPEES = float(os.environ.get("DYN_EXIT_PROTECT_GREEN_MIN_LOCK_RUPEES", "50"))
+DEBIT_PROTECT_GREEN_ARM_R_MULT = float(os.environ.get("DYN_EXIT_DEBIT_PROTECT_ARM_R", "0.75"))
+DEBIT_PROTECT_GREEN_GIVEBACK_FRAC = float(os.environ.get("DYN_EXIT_DEBIT_PROTECT_GIVEBACK_FRAC", "0.35"))
+DEBIT_TAKE_PROFIT_R_MULT = float(os.environ.get("DYN_EXIT_DEBIT_TAKE_PROFIT_R", "0.75"))
 
 # ── "never went green" early cut (2026-07-30) ────────────────────────────────
 # Measured over 94 closed spreads: 54% of LOSERS were never meaningfully green
@@ -196,10 +199,28 @@ def _spread_profit_capacity(position: Dict[str, Any]) -> float:
     structure = str(position.get("structure") or "")
     if structure == "debit_spread":
         net_debit = float(position.get("net_debit") or position.get("average_buy_price") or 0.0)
-        width = float(position.get("max_loss") or 0.0) + net_debit
+        width = float(position.get("max_profit") or 0.0) + net_debit
+        if width <= net_debit:
+            legs = position.get("legs") or []
+            strikes = []
+            for leg in legs:
+                try:
+                    strikes.append(float(leg.get("strike")))
+                except (TypeError, ValueError):
+                    pass
+            if len(strikes) >= 2:
+                width = abs(strikes[0] - strikes[1])
+        if width <= net_debit:
+            width = float(position.get("max_loss") or 0.0) + net_debit
         return max(0.0, width - net_debit) * qty
     net_credit = float(position.get("net_credit") or position.get("average_buy_price") or 0.0)
     return max(0.0, net_credit) * qty
+
+
+def _debit_money(position: Dict[str, Any]) -> float:
+    qty = int(position.get("open_quantity") or position.get("quantity") or 0)
+    debit = float(position.get("net_debit") or position.get("average_buy_price") or 0.0)
+    return max(0.0, debit) * max(0, qty)
 
 
 def green_profit_protection_levels(
@@ -214,7 +235,14 @@ def green_profit_protection_levels(
     if capacity <= 0:
         return {"armed": False, "arm_level": None, "lock_level": None,
                 "capacity": capacity, "reason": "no_capacity"}
-    arm_level = min(capacity, max(PROTECT_GREEN_MIN_RUPEES, capacity * float(arm_frac)))
+    structure = str(position.get("structure") or "")
+    if structure == "debit_spread":
+        debit_money = _debit_money(position)
+        debit_arm = debit_money * DEBIT_PROTECT_GREEN_ARM_R_MULT if debit_money > 0 else 0.0
+        arm_level = min(capacity, max(PROTECT_GREEN_MIN_RUPEES, debit_arm))
+        giveback_frac = DEBIT_PROTECT_GREEN_GIVEBACK_FRAC
+    else:
+        arm_level = min(capacity, max(PROTECT_GREEN_MIN_RUPEES, capacity * float(arm_frac)))
     armed = peak_pnl is not None and float(peak_pnl) >= arm_level
     lock_level = None
     if armed:
@@ -245,6 +273,29 @@ def green_profit_protection_exit(
         position, peak_pnl, arm_frac=arm_frac, giveback_frac=giveback_frac)
     if lv["armed"] and float(current_pnl) <= float(lv["lock_level"]):
         return "profit-protect"
+    return None
+
+
+def evaluate_debit_spread_exit(
+    *,
+    position: Dict[str, Any],
+    current_value: float,
+    current_pnl: float,
+    peak_pnl: Optional[float],
+) -> Optional[str]:
+    tp_value = position.get("spread_tp_value")
+    sl_value = position.get("spread_sl_value")
+    if tp_value is not None and float(current_value) >= float(tp_value):
+        return "spread-tp"
+    debit_money = _debit_money(position)
+    if debit_money > 0 and float(current_pnl) >= debit_money * DEBIT_TAKE_PROFIT_R_MULT:
+        return "debit-payback-tp"
+    protected = green_profit_protection_exit(
+        position=position, current_pnl=current_pnl, peak_pnl=peak_pnl)
+    if protected:
+        return protected
+    if sl_value is not None and float(current_value) <= float(sl_value):
+        return "spread-sl"
     return None
 
 

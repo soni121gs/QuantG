@@ -39,10 +39,11 @@ def test_trailing_lock_levels_arms_at_fraction_of_max_profit():
 # ── exit priority ───────────────────────────────────────────────────────────────
 
 def test_hard_stop_wins_even_with_high_peak():
-    # value 55 ≥ sl 50 → stop, regardless of a great peak.
+    # A spread that was meaningfully green exits as profit-protect before the
+    # hard stop label, so green-to-red giveback is visible in the ledger.
     r = evaluate_spread_exit(position=_pos(), current_value=55.0,
                              current_pnl=-2275.0, peak_pnl=800.0)
-    assert r == "spread-sl"
+    assert r == "profit-protect"
 
 
 def test_take_profit_target():
@@ -53,11 +54,10 @@ def test_take_profit_target():
 
 
 def test_trailing_lock_banks_a_faded_winner():
-    # Armed (peak 650 ≥ 520). Value 15 → pnl (20-15)*65 = 325 = lock level
-    # (650*0.5). Between tp 10 and sl 50, so no hard exit → trail-lock fires.
+    # Universal profit protection is stricter than the older trailing lock.
     r = evaluate_spread_exit(position=_pos(), current_value=15.0,
                              current_pnl=325.0, peak_pnl=650.0)
-    assert r == "trail-lock"
+    assert r == "profit-protect"
 
 
 def test_no_lock_when_not_armed():

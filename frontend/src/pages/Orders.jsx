@@ -322,6 +322,11 @@ export default function Orders() {
                                   <span>{p.structure === "debit_spread" ? `Net debit ₹${formatINR(p.net_debit)}` : `Net credit ₹${formatINR(p.net_credit)}`}</span>
                                   {maxLossTotal != null && <span>Max loss ₹{formatINR(maxLossTotal)}</span>}
                                   <span>Value {p.ltp != null ? `₹${formatINR(p.ltp)}` : "-"} - TP {p.take_profit != null ? `₹${formatINR(p.take_profit)}` : "-"} - SL {p.stop_loss != null ? `₹${formatINR(p.stop_loss)}` : "-"}</span>
+                                  {p.profit_protection && (
+                                    <span className={p.profit_protection.armed ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-3)]"}>
+                                      Peak {p.peak_pnl != null ? `₹${formatINR(p.peak_pnl)}` : "-"} - Lock {p.profit_protection.lock_level != null ? `₹${formatINR(p.profit_protection.lock_level)}` : "-"} - Arm {p.profit_protection.arm_level != null ? `₹${formatINR(p.profit_protection.arm_level)}` : "-"}
+                                    </span>
+                                  )}
                                   <span className={(p.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>P&L ₹{formatINR(p.pnl)}</span>
                                 </div>
                               </div>

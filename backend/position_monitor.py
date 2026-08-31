@@ -45,6 +45,7 @@ from core.dynamic_exit import (
     evaluate_spread_exit,
     no_progress_exit,
     green_profit_protection_exit,
+    evaluate_debit_spread_exit,
 )
 
 logger = logging.getLogger("quantg.position_monitor")
@@ -1025,14 +1026,14 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
     if hold_to_expiry:
         reason = None
         if structure == "debit_spread":
-            _tp = pos.get("spread_tp_value")
-            if _tp is not None and float(v["value"]) >= float(_tp):
-                reason = "spread-tp"
+            reason = evaluate_debit_spread_exit(
+                position=pos, current_value=v["value"],
+                current_pnl=v["pnl"], peak_pnl=peak_pnl)
         else:
             _tp = pos.get("spread_tp_value")
             if _tp is not None and float(v["value"]) <= float(_tp):
                 reason = "spread-tp"
-        if reason is None:
+        if reason is None and structure != "debit_spread":
             reason = green_profit_protection_exit(
                 position=pos, current_pnl=v["pnl"], peak_pnl=peak_pnl)
         if reason:
@@ -1048,16 +1049,9 @@ async def _process_spread_position(db, pos, in_hours, squareoff, quote_ltp_fn) -
 
     # Price-based exit first: SL / TP / trailing-lock (credit) or TP/SL (debit).
     if structure == "debit_spread":
-        reason = None
-        _tp = pos.get("spread_tp_value")
-        _sl = pos.get("spread_sl_value")
-        if _tp is not None and float(v["value"]) >= float(_tp):
-            reason = "spread-tp"
-        if reason is None:
-            reason = green_profit_protection_exit(
-                position=pos, current_pnl=v["pnl"], peak_pnl=peak_pnl)
-        if reason is None and _sl is not None and float(v["value"]) <= float(_sl):
-            reason = "spread-sl"
+        reason = evaluate_debit_spread_exit(
+            position=pos, current_value=v["value"],
+            current_pnl=v["pnl"], peak_pnl=peak_pnl)
     else:
         # RES-3 dynamic exit: hard stop + take-profit (unchanged) PLUS a trailing
         # lock that banks a faded winner before it round-trips to red. RAE-5 tunes
