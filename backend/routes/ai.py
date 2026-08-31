@@ -90,6 +90,10 @@ READ_ONLY_AGENT_TOOLS = [
     "get_regime_status",
     "get_edge_math_advice",
     "get_strategy_governor",
+    "get_strategy_dossier",
+    "search_knowledge_layer",
+    "get_daily_learning_report",
+    "get_promotion_dashboard",
     "query_data_store",
 ]
 
@@ -479,6 +483,64 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await build_strategy_governor_report(db, user["id"], days=30)
             source = "core.strategy_governor"
             warnings.append("Read-only governor: labels are evidence for operator approval, not automatic strategy changes.")
+        elif name == "get_strategy_dossier":
+            from core.knowledge_layer import build_strategy_dossier
+            strategy_id = None
+            if query:
+                strats = await db.strategies.find(
+                    {"user_id": user["id"]},
+                    {"_id": 0, "id": 1, "name": 1},
+                ).to_list(1000)
+                ql = query.lower()
+                for s in strats:
+                    sid = str(s.get("id") or "")
+                    nm = str(s.get("name") or "")
+                    if sid and sid.lower() in ql:
+                        strategy_id = sid
+                        break
+                    if nm and nm.lower() in ql:
+                        strategy_id = sid
+                        break
+                if not strategy_id and strats:
+                    strategy_id = strats[0].get("id")
+            data = await build_strategy_dossier(db, user["id"], strategy_id or "", days=30)
+            source = "core.knowledge_layer.strategy_dossier"
+            warnings.append("Read-only dossier: combines DB/OOS/wiki evidence but does not mutate strategy state.")
+        elif name == "search_knowledge_layer":
+            from core.knowledge_layer import search_wiki_knowledge
+            data = await search_wiki_knowledge(db, user["id"], query or "", limit=12)
+            source = "core.knowledge_layer.search_wiki_knowledge"
+            warnings.append("Wiki knowledge is context; DB fills, positions, risk, and OOS validators are trading truth.")
+        elif name == "get_daily_learning_report":
+            from core.knowledge_layer import build_daily_learning_report
+            data = await build_daily_learning_report(db, user["id"])
+            source = "core.knowledge_layer.daily_learning_report"
+            warnings.append("Daily learning report is read-only and does not change strategy state.")
+        elif name == "get_promotion_dashboard":
+            from core.strategy_governor import build_strategy_governor_report
+            from core.knowledge_layer import promotion_stage
+            gov = await build_strategy_governor_report(db, user["id"], days=30)
+            rows = []
+            for r in gov.get("strategies", []):
+                rows.append({
+                    "strategy_id": r.get("strategy_id"),
+                    "name": r.get("name"),
+                    "pnl": r.get("pnl"),
+                    "closed": r.get("closed"),
+                    "win_rate": r.get("win_rate"),
+                    "profit_factor": r.get("profit_factor"),
+                    "green_then_loss": r.get("green_then_loss"),
+                    "governor": r.get("governor"),
+                    "promotion": promotion_stage(
+                        (r.get("governor") or {}).get("label", "observe"),
+                        None,
+                        int(r.get("closed") or 0),
+                        float(r.get("pnl") or 0.0),
+                    ),
+                })
+            data = {"kind": "promotion_dashboard", "summary": gov.get("summary"), "strategies": rows}
+            source = "core.knowledge_layer.promotion_stage / core.strategy_governor"
+            warnings.append("Promotion dashboard is read-only; live promotion remains founder-gated.")
         elif name == "get_backtest_summary":
             from routes.ops import ops_eod_options_backtest as ops_options_backtest
             strategy_id = None
@@ -1376,6 +1438,10 @@ TOOL_SPECS: Dict[str, str] = {
     "get_regime_status": "RAE ensemble watch: current market regime per index, which live strategy the router would ACTIVATE vs STAND DOWN now, and realized P&L by entry-regime.",
     "get_edge_math_advice": "EdgeMath observe-only sizing advice: per-strategy rolling expectancy and suggested risk multiplier (never applied automatically).",
     "get_strategy_governor": "Read-only promotion/demotion governor for all strategies over the recent window: labels scale_candidate/observe/pause/kill_candidate from realized P&L, profit factor, green-then-loss giveback, sample size, and worst-loss risk.",
+    "get_strategy_dossier": "One strategy's living dossier: config, governor label, promotion ladder, recent attribution, latest OOS verdict, and related wiki notes.",
+    "search_knowledge_layer": "Search wiki notes through the truth-aware knowledge layer, with explicit separation between context notes and DB/OOS trading evidence.",
+    "get_daily_learning_report": "Daily learning report: trade attribution, best/worst trades, open P&L, green-then-red count, and governor actions.",
+    "get_promotion_dashboard": "Compact read-only promotion/demotion dashboard for all strategies: idea/backtested/forward-paper/limited-paper/candidate-live/paused/kill stages.",
     "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
 
@@ -1820,8 +1886,24 @@ def classify_playbook_by_query(query: str) -> List[str]:
                             "profitable strategies", "profitability", "green then loss",
                             "giveback"]):
         matched_tools.add("get_strategy_governor")
+        matched_tools.add("get_promotion_dashboard")
         matched_tools.add("get_strategy_scorecard")
         matched_tools.add("get_hermes_diagnostics")
+        has_matches = True
+
+    if any(w in q for w in ["strategy dossier", "dossier", "living dossier",
+                            "why is this strategy", "strategy page", "strategy notes"]):
+        matched_tools.add("get_strategy_dossier")
+        matched_tools.add("search_knowledge_layer")
+        matched_tools.add("get_strategy_governor")
+        has_matches = True
+
+    if any(w in q for w in ["daily learning", "learning report", "what did we learn",
+                            "today's learning", "todays learning", "save learning",
+                            "eod learning"]):
+        matched_tools.add("get_daily_learning_report")
+        matched_tools.add("get_trade_attribution")
+        matched_tools.add("get_promotion_dashboard")
         has_matches = True
 
     # P5-K6: raw research-store questions — realized vol, option chains, daily OHLC,
@@ -1843,6 +1925,7 @@ def classify_playbook_by_query(query: str) -> List[str]:
         
     if any(w in q for w in wiki_keywords):
         matched_tools.add("search_wiki")
+        matched_tools.add("search_knowledge_layer")
         has_matches = True
 
     # Knowledge-map / graph "view" questions: how notes interconnect, hubs, orphans.

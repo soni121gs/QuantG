@@ -1107,6 +1107,65 @@ async def ops_strategy_governor(days: int = 30, user=Depends(get_current_user)):
     ))
 
 
+@router.get("/strategy-dossier/{strategy_id}")
+async def ops_strategy_dossier(strategy_id: str, days: int = 30, user=Depends(get_current_user)):
+    """Read-only joined dossier: strategy config, governor, attribution, OOS, wiki."""
+    from core.knowledge_layer import build_strategy_dossier
+    return _json_safe(await build_strategy_dossier(db, user["id"], strategy_id, days=days))
+
+
+@router.get("/wiki-knowledge")
+async def ops_wiki_knowledge(q: str = "", limit: int = 12, user=Depends(get_current_user)):
+    """Search wiki notes as context, with an explicit warning that DB/OOS remain truth."""
+    try:
+        from routes.wiki import sync_wiki_directory
+        await sync_wiki_directory(user=user)
+    except Exception:
+        pass
+    from core.knowledge_layer import search_wiki_knowledge
+    return _json_safe(await search_wiki_knowledge(db, user["id"], q, limit=limit))
+
+
+@router.get("/daily-learning")
+async def ops_daily_learning(date: str | None = None, persist: bool = False, user=Depends(get_current_user)):
+    """Daily learning report for Hermes/wiki: P&L, attribution, governor actions."""
+    from core.knowledge_layer import build_daily_learning_report
+    return _json_safe(await build_daily_learning_report(db, user["id"], date=date, persist=persist))
+
+
+@router.get("/promotion-dashboard")
+async def ops_promotion_dashboard(days: int = 30, user=Depends(get_current_user)):
+    """Compact strategy ladder surface for UI: promote/observe/pause/kill evidence."""
+    from core.knowledge_layer import build_strategy_dossier
+    from core.strategy_governor import build_strategy_governor_report
+
+    gov = await build_strategy_governor_report(db, user["id"], days=days)
+    rows = []
+    for row in gov.get("strategies", []):
+        dossier = await build_strategy_dossier(db, user["id"], row.get("strategy_id"), days=days)
+        rows.append({
+            "strategy_id": row.get("strategy_id"),
+            "name": row.get("name"),
+            "status": row.get("status"),
+            "enabled": row.get("enabled"),
+            "pnl": row.get("pnl"),
+            "closed": row.get("closed"),
+            "win_rate": row.get("win_rate"),
+            "profit_factor": row.get("profit_factor"),
+            "green_then_loss": row.get("green_then_loss"),
+            "governor": row.get("governor"),
+            "promotion": dossier.get("promotion"),
+        })
+    return _json_safe({
+        "kind": "promotion_dashboard",
+        "days": days,
+        "summary": gov.get("summary"),
+        "generated_at": gov.get("generated_at"),
+        "strategies": rows,
+        "note": "Read-only. Strategy stage changes require founder approval and separate deploy evidence.",
+    })
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data

@@ -135,6 +135,12 @@ def _build_record(trade: Dict[str, Any], pos: Dict[str, Any], user_id: str,
     exit_price = float(trade.get("exit_price") or 0)
     realized_pnl = float(trade.get("realized_pnl") if trade.get("realized_pnl") is not None
                          else trade.get("net_pnl") or 0)
+    peak_pnl = None
+    if pos.get("peak_pnl") is not None:
+        try:
+            peak_pnl = float(pos.get("peak_pnl"))
+        except Exception:
+            peak_pnl = None
 
     entry_ist = _to_ist(trade.get("entry_time") or pos.get("entry_time"))
     exit_ist = _to_ist(trade.get("exit_time") or pos.get("closed_at"))
@@ -172,6 +178,9 @@ def _build_record(trade: Dict[str, Any], pos: Dict[str, Any], user_id: str,
         "exit_price": round(exit_price, 4),
         "quantity": qty,
         "realized_pnl": round(realized_pnl, 2),
+        "peak_pnl": round(peak_pnl, 2) if peak_pnl is not None else None,
+        "profit_giveback": round(peak_pnl - realized_pnl, 2) if peak_pnl is not None else None,
+        "green_then_red": bool(peak_pnl is not None and peak_pnl > 0 and realized_pnl < 0),
         "planned_risk": round(planned_risk, 2) if planned_risk else None,
         "R_multiple": r_multiple,
         "is_win": realized_pnl > 0,

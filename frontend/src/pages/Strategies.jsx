@@ -3,6 +3,7 @@ import { usePolling } from "../hooks/usePolling";
 import { Link } from "react-router-dom";
 import {
   Activity,
+  BarChart3,
   Blocks,
   Bot,
   CheckCircle2,
@@ -63,6 +64,7 @@ const noticeFor = (s) => {
 export default function Strategies() {
   const [list, setList] = useState([]);
   const [scores, setScores] = useState({});
+  const [promotion, setPromotion] = useState(null);
   const [testing, setTesting] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -78,16 +80,18 @@ export default function Strategies() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [strategiesRes, scoresRes, uRes, marginRes] = await Promise.all([
+      const [strategiesRes, scoresRes, uRes, marginRes, promotionRes] = await Promise.all([
         api.get("/strategies"),
         api.get("/ai/strategy-scores").catch(() => ({ data: { scores: [] } })),
         api.get("/upstox/status").catch(() => ({ data: { connected: false } })),
         api.get("/strategies/margin-estimates").catch(() => ({ data: { estimates: {} } })),
+        api.get("/ops/promotion-dashboard").catch(() => ({ data: null })),
       ]);
       setList(strategiesRes.data || []);
       setScores(Object.fromEntries((scoresRes.data?.scores || []).map((row) => [row.strategy_id, row])));
       setUpstoxStatus(uRes.data || { connected: false });
       setMarginEstimates(marginRes.data?.estimates || {});
+      setPromotion(promotionRes.data || null);
     } finally {
       setLoading(false);
     }
@@ -173,6 +177,23 @@ export default function Strategies() {
     });
     return groups;
   }, [filtered]);
+
+  const promotionRows = useMemo(() => {
+    const rows = promotion?.strategies || [];
+    const rank = { kill_candidate: 0, pause: 1, observe: 2, scale_candidate: 3 };
+    return [...rows].sort((a, b) => {
+      const la = a.governor?.label || "observe";
+      const lb = b.governor?.label || "observe";
+      return (rank[la] ?? 9) - (rank[lb] ?? 9) || (b.closed ?? 0) - (a.closed ?? 0);
+    }).slice(0, 8);
+  }, [promotion]);
+
+  const labelTone = (label) => {
+    if (label === "scale_candidate") return "text-[var(--qd-profit)]";
+    if (label === "kill_candidate") return "text-[var(--qd-loss)]";
+    if (label === "pause") return "text-amber-300";
+    return "text-[var(--qd-text-2)]";
+  };
 
   const toggle = async (id) => {
     await api.post(`/strategies/${id}/toggle`);
@@ -330,6 +351,55 @@ export default function Strategies() {
           </select>
         </div>
       </section>
+
+      {promotionRows.length > 0 && (
+        <section className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface)]">
+          <div className="flex flex-col gap-2 border-b border-[var(--qd-border)] px-3 py-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 size={15} className="text-[var(--qd-accent)]" />
+              <h2 className="font-head text-sm font-semibold text-[var(--qd-text)]">Promotion Governor</h2>
+              <span className="font-mono text-[11px] text-[var(--qd-text-3)]">read-only evidence</span>
+            </div>
+            <div className="flex flex-wrap gap-2 font-mono text-[11px] text-[var(--qd-text-2)]">
+              {Object.entries(promotion?.summary || {}).map(([k, v]) => (
+                <span key={k} className={`${labelTone(k)} uppercase`}>{k.replace("_", " ")} {v}</span>
+              ))}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left">
+              <thead className="border-b border-[var(--qd-border)] font-mono text-[10px] uppercase tracking-wider text-[var(--qd-text-3)]">
+                <tr>
+                  <th className="px-3 py-2">Strategy</th>
+                  <th className="px-3 py-2">Stage</th>
+                  <th className="px-3 py-2">Gov</th>
+                  <th className="px-3 py-2 text-right">P&L</th>
+                  <th className="px-3 py-2 text-right">N</th>
+                  <th className="px-3 py-2 text-right">PF</th>
+                  <th className="px-3 py-2">Blocker</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--qd-border)] text-xs">
+                {promotionRows.map((row) => {
+                  const label = row.governor?.label || "observe";
+                  const blocker = row.promotion?.blockers?.[0] || row.governor?.reasons?.[0] || "No blocker in read-only ladder";
+                  return (
+                    <tr key={row.strategy_id} className="hover:bg-[var(--qd-surface-2)]">
+                      <td className="px-3 py-2 font-mono text-[var(--qd-text)]">{row.name || row.strategy_id}</td>
+                      <td className="px-3 py-2 font-mono uppercase text-[var(--qd-text-2)]">{(row.promotion?.stage || "observe").replace("_", " ")}</td>
+                      <td className={`px-3 py-2 font-mono uppercase ${labelTone(label)}`}>{label.replace("_", " ")}</td>
+                      <td className={`px-3 py-2 text-right font-mono ${Number(row.pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{money(row.pnl)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-[var(--qd-text-2)]">{row.closed ?? 0}</td>
+                      <td className="px-3 py-2 text-right font-mono text-[var(--qd-text-2)]">{row.profit_factor ?? "-"}</td>
+                      <td className="max-w-[260px] truncate px-3 py-2 text-[var(--qd-text-3)]" title={blocker}>{blocker}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {!list.length ? (
         <div className="qd-card mx-auto max-w-4xl p-8 md:p-12">

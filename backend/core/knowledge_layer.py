@@ -1,0 +1,273 @@
+"""Read-only QuantG knowledge layer for Hermes, wiki, and strategy governance.
+
+This module joins strategy config, live/paper trade evidence, attribution,
+governor labels, and wiki notes into deterministic records. It never mutates
+orders, broker state, strategy status, or live flags.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from core.strategy_governor import build_strategy_governor_report
+from core.trade_attribution import attribution_rollup, compile_trade_attribution
+
+
+def _f(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _date_ist(days_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
+def _regex_words(text: str) -> List[Dict[str, Any]]:
+    words = [w for w in re.split(r"\W+", str(text or "")) if len(w) > 2]
+    clauses = []
+    for word in words[:8]:
+        esc = re.escape(word)
+        clauses.append({
+            "$or": [
+                {"title": {"$regex": esc, "$options": "i"}},
+                {"topic": {"$regex": esc, "$options": "i"}},
+                {"content": {"$regex": esc, "$options": "i"}},
+                {"tags": {"$regex": esc, "$options": "i"}},
+            ]
+        })
+    return clauses
+
+
+def promotion_stage(governor_label: str, oos_status: Optional[str], forward_n: int, forward_pnl: float) -> Dict[str, Any]:
+    """Truthful strategy ladder: idea -> OOS -> forward-paper -> live candidate."""
+    status = str(oos_status or "").upper()
+    label = str(governor_label or "observe")
+    blockers: List[str] = []
+
+    if status and status not in {"CANDIDATE_EDGE", "PASS", "HISTORICAL_PASS"}:
+        blockers.append(f"OOS verdict is {status}, not a pass")
+    if forward_n < 30:
+        blockers.append(f"forward-paper sample too thin: {forward_n} closes (<30)")
+    if forward_pnl <= 0:
+        blockers.append(f"forward-paper P&L is not positive: {forward_pnl:.2f}")
+    if label in {"pause", "kill_candidate"}:
+        blockers.append(f"governor label is {label}")
+
+    if label == "kill_candidate":
+        stage = "kill_candidate"
+    elif label == "pause":
+        stage = "paused_for_review"
+    elif blockers:
+        stage = "forward_paper"
+    elif label == "scale_candidate":
+        stage = "candidate_live"
+    else:
+        stage = "limited_paper"
+    return {
+        "stage": stage,
+        "governor_label": label,
+        "oos_status": status or None,
+        "forward_closes": forward_n,
+        "forward_pnl": round(forward_pnl, 2),
+        "blockers": blockers,
+        "note": "Read-only ladder. Founder approval and deploy proof are required before live capital.",
+    }
+
+
+async def search_wiki_knowledge(db: Any, user_id: str, query: str, *, limit: int = 12) -> Dict[str, Any]:
+    match: Dict[str, Any] = {"user_id": user_id}
+    clauses = _regex_words(query)
+    if clauses:
+        match["$and"] = clauses
+    rows = await db.wiki_docs.find(
+        match,
+        {"_id": 0, "title": 1, "topic": 1, "tags": 1, "content": 1, "links": 1, "backlinks": 1},
+    ).to_list(max(1, min(limit, 30)))
+    out = []
+    for row in rows:
+        content = str(row.get("content") or "")
+        out.append({
+            "title": row.get("title"),
+            "topic": row.get("topic"),
+            "tags": row.get("tags") or [],
+            "links": row.get("links") or [],
+            "backlinks": row.get("backlinks") or [],
+            "excerpt": content[:700],
+        })
+    return {
+        "kind": "wiki_knowledge_search",
+        "query": query,
+        "count": len(out),
+        "notes": out,
+        "warning": "Wiki notes are context and decisions. Trading truth still comes from DB fills, positions, OOS validators, and risk gates.",
+    }
+
+
+async def build_strategy_dossier(db: Any, user_id: str, strategy_id: str, *, days: int = 30) -> Dict[str, Any]:
+    days = max(1, min(int(days or 30), 180))
+    strategy = await db.strategies.find_one(
+        {"user_id": user_id, "id": strategy_id},
+        {"_id": 0, "python_code": 0, "user_id": 0},
+    ) or {"id": strategy_id, "name": strategy_id}
+
+    gov = await build_strategy_governor_report(db, user_id, days=days)
+    gov_row = next((r for r in gov.get("strategies", []) if r.get("strategy_id") == strategy_id), None)
+    since = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=days)).strftime("%Y-%m-%d")
+    attr_rows = await db.trade_attribution.find(
+        {"user_id": user_id, "strategy_id": strategy_id, "date_ist": {"$gte": since}},
+        {"_id": 0, "user_id": 0},
+    ).sort("exit_time", -1).to_list(250)
+
+    exits = Counter(str(r.get("exit_reason") or "unknown") for r in attr_rows)
+    regimes = Counter(str(r.get("regime_at_entry") or "UNKNOWN") for r in attr_rows)
+    oos = await db.edge_research_runs.find_one(
+        {"$or": [{"strategy_id": strategy_id}, {"strategy": strategy_id}]},
+        {"_id": 0},
+        sort=[("generated_at", -1), ("created_at", -1)],
+    )
+    if not oos:
+        oos = await db.hermes_hypothesis_tests.find_one(
+            {"user_id": user_id, "$or": [{"strategy_id": strategy_id}, {"dimension": strategy_id}]},
+            {"_id": 0},
+            sort=[("tested_at", -1), ("created_at", -1)],
+        )
+
+    wiki_query = f"{strategy.get('name') or strategy_id} {strategy_id}"
+    wiki = await search_wiki_knowledge(db, user_id, wiki_query, limit=8)
+    forward_pnl = _f(gov_row.get("pnl") if gov_row else 0)
+    forward_n = int(gov_row.get("closed") or 0) if gov_row else 0
+    oos_status = None
+    if isinstance(oos, dict):
+        oos_status = oos.get("verdict") or oos.get("status") or (oos.get("overall") or {}).get("verdict")
+
+    return {
+        "kind": "strategy_dossier",
+        "strategy": strategy,
+        "window_days": days,
+        "governor": gov_row,
+        "promotion": promotion_stage((gov_row or {}).get("governor", {}).get("label", "observe"), oos_status, forward_n, forward_pnl),
+        "attribution": {
+            "since": since,
+            "closed_rows": len(attr_rows),
+            "by_exit_reason": dict(exits.most_common()),
+            "by_regime": dict(regimes.most_common()),
+            "recent": attr_rows[:20],
+        },
+        "oos": oos,
+        "wiki": wiki,
+        "generated_at": _iso_now(),
+        "note": "Dossier is read-only evidence for review; it does not wake, pause, scale, or trade.",
+    }
+
+
+def strategy_dossier_markdown(dossier: Dict[str, Any]) -> str:
+    strategy = dossier.get("strategy") or {}
+    gov = dossier.get("governor") or {}
+    label = ((gov.get("governor") or {}).get("label")) or "observe"
+    promo = dossier.get("promotion") or {}
+    lines = [
+        "---",
+        "claim_type: measured",
+        f"verified: {dossier.get('generated_at')}",
+        "source: QuantG knowledge layer",
+        "---",
+        "",
+        f"# {strategy.get('name') or strategy.get('id')}",
+        "",
+        "## Current Verdict",
+        f"- Governor: {label}",
+        f"- Promotion stage: {promo.get('stage')}",
+        f"- Forward-paper closes: {promo.get('forward_closes')}",
+        f"- Forward-paper P&L: Rs {promo.get('forward_pnl')}",
+        f"- OOS status: {promo.get('oos_status') or 'not found'}",
+        "",
+        "## Evidence",
+        f"- Window: {dossier.get('window_days')} days",
+        f"- Profit factor: {gov.get('profit_factor')}",
+        f"- Win rate: {gov.get('win_rate')}",
+        f"- Worst loss: Rs {gov.get('worst')}",
+        f"- Green-then-loss: {gov.get('green_then_loss')}",
+        f"- Exit reasons: {gov.get('exit_reasons')}",
+        "",
+        "## Blockers",
+    ]
+    blockers = promo.get("blockers") or []
+    lines.extend([f"- {b}" for b in blockers] or ["- None from the read-only ladder"])
+    lines.extend([
+        "",
+        "## Related Wiki Notes",
+    ])
+    for note in (dossier.get("wiki") or {}).get("notes", [])[:8]:
+        lines.append(f"- [[{note.get('title')}]] ({note.get('topic')})")
+    lines.extend([
+        "",
+        "## Safety",
+        "Hermes may explain and draft actions from this dossier, but strategy promotion, pausing, sizing, live flags, and broker actions require explicit founder approval.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+async def build_daily_learning_report(db: Any, user_id: str, *, date: Optional[str] = None, persist: bool = False) -> Dict[str, Any]:
+    date = date or _date_ist(0)
+    try:
+        await compile_trade_attribution(db, user_id, date)
+    except Exception:
+        pass
+    since = date
+    attr = await db.trade_attribution.find(
+        {"user_id": user_id, "date_ist": date},
+        {"_id": 0, "user_id": 0},
+    ).sort("realized_pnl", 1).to_list(2000)
+    open_positions = await db.strategy_positions.find(
+        {"user_id": user_id, "status": "OPEN"},
+        {"_id": 0, "id": 1, "strategy_id": 1, "symbol": 1, "structure": 1, "unrealized_pnl": 1, "peak_pnl": 1},
+    ).to_list(500)
+    gov = await build_strategy_governor_report(db, user_id, days=30)
+    total = round(sum(_f(r.get("realized_pnl")) for r in attr), 2)
+    best = max(attr, key=lambda r: _f(r.get("realized_pnl")), default=None)
+    worst = min(attr, key=lambda r: _f(r.get("realized_pnl")), default=None)
+    green_then_red = [
+        r for r in attr
+        if _f(r.get("realized_pnl")) < 0 and _f(r.get("peak_pnl")) > 0
+    ]
+    report = {
+        "kind": "daily_learning_report",
+        "date": date,
+        "generated_at": _iso_now(),
+        "realized_pnl": total,
+        "closed_trades": len(attr),
+        "open_positions": len(open_positions),
+        "open_unrealized_pnl": round(sum(_f(p.get("unrealized_pnl")) for p in open_positions), 2),
+        "best_trade": best,
+        "worst_trade": worst,
+        "rollups": {
+            "by_strategy": await attribution_rollup(db, user_id, since, "strategy"),
+            "by_structure": await attribution_rollup(db, user_id, since, "structure"),
+            "by_exit_reason": await attribution_rollup(db, user_id, since, "exit_reason"),
+            "by_regime": await attribution_rollup(db, user_id, since, "regime"),
+        },
+        "governor_summary": gov.get("summary"),
+        "governor_actions": [
+            {"strategy_id": r.get("strategy_id"), "name": r.get("name"), "label": (r.get("governor") or {}).get("label"), "reasons": (r.get("governor") or {}).get("reasons")}
+            for r in gov.get("strategies", [])
+            if (r.get("governor") or {}).get("label") in {"pause", "kill_candidate", "scale_candidate"}
+        ],
+        "green_then_red_count": len(green_then_red),
+        "note": "Daily learning report is read-only. It can be saved as a wiki draft, but it never changes strategy state.",
+    }
+    if persist:
+        await db.daily_learning_reports.update_one(
+            {"user_id": user_id, "date": date},
+            {"$set": {**report, "user_id": user_id}},
+            upsert=True,
+        )
+    return report
