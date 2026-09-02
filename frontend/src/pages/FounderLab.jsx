@@ -20,6 +20,13 @@ import { toast } from "sonner";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 const pct = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+const textOf = (value, fallback = "-") => {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map((item) => textOf(item, "")).filter(Boolean).join(", ") || fallback;
+  if (typeof value === "object") return value.status || value.label || value.summary || value.title || fallback;
+  return fallback;
+};
 
 const dateTime = (value) => {
   if (!value) return "-";
@@ -93,16 +100,16 @@ const ActionCard = ({ action, index }) => {
               {(action.theme || "review").replaceAll("_", " ")}
             </span>
           </div>
-          <h3 className="mt-2 text-base font-semibold text-[var(--qd-text)]">{action.title || "Review item"}</h3>
-          <p className="mt-2 text-sm text-[var(--qd-text-2)]">{action.why || "-"}</p>
+          <h3 className="mt-2 text-base font-semibold text-[var(--qd-text)]">{textOf(action.title, "Review item")}</h3>
+          <p className="mt-2 text-sm text-[var(--qd-text-2)]">{textOf(action.why)}</p>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
               <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Next move</div>
-              <div className="mt-1 text-sm text-[var(--qd-text)]">{action.recommended_action || "-"}</div>
+              <div className="mt-1 text-sm text-[var(--qd-text)]">{textOf(action.recommended_action)}</div>
             </div>
             <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
               <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Expected benefit</div>
-              <div className="mt-1 text-sm text-[var(--qd-text)]">{action.expected_benefit || "-"}</div>
+              <div className="mt-1 text-sm text-[var(--qd-text)]">{textOf(action.expected_benefit)}</div>
             </div>
           </div>
         </div>
@@ -149,8 +156,8 @@ const FounderBrief = ({ brief }) => {
             <div className="mt-3 space-y-3">
               {(brief?.open_findings || []).slice(0, 5).map((finding, i) => (
                 <div key={`${finding.probe_id || "finding"}-${i}`} className="border-l-2 border-[var(--qd-border-strong)] pl-3">
-                  <div className="text-sm font-semibold text-[var(--qd-text)]">{finding.title || finding.probe_id || "Open finding"}</div>
-                  <div className="mt-1 line-clamp-2 text-xs text-[var(--qd-text-2)]">{finding.suggested_fix || finding.summary || finding.domain || "-"}</div>
+                  <div className="text-sm font-semibold text-[var(--qd-text)]">{textOf(finding.title || finding.probe_id, "Open finding")}</div>
+                  <div className="mt-1 line-clamp-2 text-xs text-[var(--qd-text-2)]">{textOf(finding.suggested_fix || finding.summary || finding.domain)}</div>
                 </div>
               ))}
               {!(brief?.open_findings || []).length && <div className="text-sm text-[var(--qd-text-2)]">No open Hermes findings.</div>}
@@ -163,10 +170,10 @@ const FounderBrief = ({ brief }) => {
             <div className="mt-3 space-y-3">
               {(brief?.research_hypotheses || []).slice(0, 5).map((h, i) => (
                 <div key={h.hypothesis_id || i} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
-                  <div className="text-sm font-semibold text-[var(--qd-text)]">{h.hypothesis || h.hypothesis_id}</div>
+                  <div className="text-sm font-semibold text-[var(--qd-text)]">{textOf(h.hypothesis || h.hypothesis_id)}</div>
                   <div className="mt-2 flex flex-wrap gap-2 font-mono text-[10px] uppercase text-[var(--qd-text-3)]">
-                    <span>{h.status || "open"}</span>
-                    <span>{h.verdict || "unjudged"}</span>
+                    <span>{textOf(h.status, "open")}</span>
+                    <span>{textOf(h.verdict, "unjudged")}</span>
                   </div>
                 </div>
               ))}
@@ -227,9 +234,9 @@ const GivebackLab = ({ lab }) => {
             <tbody className="divide-y divide-[var(--qd-border)]">
               {(lab?.worst_trades || []).slice(0, 12).map((row, i) => (
                 <tr key={row.position_id || i} className="text-sm text-[var(--qd-text-2)]">
-                  <td className="px-4 py-3 font-mono text-[var(--qd-text)]">{row.strategy_id}</td>
-                  <td className="px-4 py-3">{row.target_symbol || "-"}</td>
-                  <td className="px-4 py-3">{row.exit_reason || "unknown"}</td>
+                  <td className="px-4 py-3 font-mono text-[var(--qd-text)]">{textOf(row.strategy_id)}</td>
+                  <td className="px-4 py-3">{textOf(row.target_symbol)}</td>
+                  <td className="px-4 py-3">{textOf(row.exit_reason, "unknown")}</td>
                   <td className="px-4 py-3 text-right font-mono text-[var(--qd-profit)]">{money(row.peak_pnl)}</td>
                   <td className="px-4 py-3 text-right font-mono text-[var(--qd-loss)]">{money(row.realized_pnl)}</td>
                   <td className="px-4 py-3 text-right font-mono text-[var(--qd-loss)]">{money(row.profit_given_back)}</td>
@@ -311,7 +318,7 @@ const Dossiers = ({ brief, lab }) => {
           <div className="mt-4 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
             <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Review instruction</div>
             <div className="mt-1 text-sm text-[var(--qd-text)]">
-              {row.action?.recommended_action || row.recommended_action || "Replay this strategy's exit path before adding capital."}
+              {textOf(row.action?.recommended_action || row.recommended_action, "Replay this strategy's exit path before adding capital.")}
             </div>
           </div>
         </div>
@@ -344,10 +351,10 @@ const Hypotheses = ({ brief }) => {
           {rows.map((row, i) => (
             <div key={row.hypothesis_id || i} className={`${cardClass} p-4`}>
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                <h3 className="font-head text-base font-semibold text-[var(--qd-text)]">{row.hypothesis || row.hypothesis_id}</h3>
+                <h3 className="font-head text-base font-semibold text-[var(--qd-text)]">{textOf(row.hypothesis || row.hypothesis_id)}</h3>
                 <div className="flex flex-wrap gap-2">
-                  <span className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--qd-text-2)]">{row.status || "open"}</span>
-                  <span className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--qd-text-2)]">{row.verdict || "unjudged"}</span>
+                  <span className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--qd-text-2)]">{textOf(row.status, "open")}</span>
+                  <span className="rounded border border-[var(--qd-border)] bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--qd-text-2)]">{textOf(row.verdict, "unjudged")}</span>
                 </div>
               </div>
               <div className="mt-3 font-mono text-[11px] text-[var(--qd-text-3)]">Updated {dateTime(row.updated_at)}</div>
@@ -443,7 +450,7 @@ export default function FounderLab() {
 
       <div className="flex items-start gap-2 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 text-xs text-[var(--qd-text-2)]">
         <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-[var(--qd-profit)]" />
-        <span>{brief?.note || lab?.note || "Read-only analytics surface. Strategy and trading changes remain founder-approved."}</span>
+        <span>{textOf(brief?.note || lab?.note, "Read-only analytics surface. Strategy and trading changes remain founder-approved.")}</span>
       </div>
     </div>
   );
