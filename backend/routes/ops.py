@@ -1133,6 +1133,27 @@ async def ops_daily_learning(date: str | None = None, persist: bool = False, use
     return _json_safe(await build_daily_learning_report(db, user["id"], date=date, persist=persist))
 
 
+@router.get("/daily-founder-brief")
+async def ops_daily_founder_brief(
+    date: str | None = None,
+    days: int = 30,
+    persist: bool = False,
+    user=Depends(get_current_user),
+):
+    """Founder decision brief: ranked actions across exits, data, regime, and strategy health."""
+    from core.knowledge_layer import build_daily_founder_brief
+    return _json_safe(await build_daily_founder_brief(
+        db, user["id"], date=date, days=days, persist=persist,
+    ))
+
+
+@router.get("/profit-giveback-lab")
+async def ops_profit_giveback_lab(days: int = 30, user=Depends(get_current_user)):
+    """Founder-facing profit-giveback lab with ranked strategy/exit leaks."""
+    from core.knowledge_layer import build_profit_giveback_lab
+    return _json_safe(await build_profit_giveback_lab(db, user["id"], days=days))
+
+
 @router.get("/promotion-dashboard")
 async def ops_promotion_dashboard(days: int = 30, user=Depends(get_current_user)):
     """Compact strategy ladder surface for UI: promote/observe/pause/kill evidence."""

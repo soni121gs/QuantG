@@ -1,7 +1,9 @@
 import pytest
 
 from core.knowledge_layer import (
+    build_daily_founder_brief,
     build_daily_learning_report,
+    build_profit_giveback_lab,
     build_strategy_dossier,
     promotion_stage,
     search_wiki_knowledge,
@@ -62,6 +64,9 @@ class FakeDB:
             {"id": "p1", "strategy_id": "s1", "status": "CLOSED", "realized_pnl": 500,
              "peak_pnl": 700, "exit_reason": "spread-tp", "created_at": "2099-01-01T00:00:00+00:00",
              "closed_at": "2099-01-01T01:00:00+00:00"},
+            {"id": "p-loss-1", "strategy_id": "s1", "status": "CLOSED", "realized_pnl": -300,
+             "peak_pnl": 450, "exit_reason": "spread-sl", "created_at": "2099-01-01T00:00:00+00:00",
+             "closed_at": "2099-01-01T01:30:00+00:00", "target_symbol": "NIFTY 24000/23800 PE CREDIT"},
             {"id": "p2", "strategy_id": "s1", "status": "OPEN", "unrealized_pnl": 100,
              "created_at": "2099-01-01T00:00:00+00:00"},
         ])
@@ -76,8 +81,19 @@ class FakeDB:
         ])
         self.edge_research_runs = FakeCollection([], {"strategy_id": "s1", "verdict": "CANDIDATE_EDGE"})
         self.hermes_hypothesis_tests = FakeCollection([])
+        self.hermes_findings = FakeCollection([
+            {"probe_id": "data.store_coverage", "domain": "data", "status": "open",
+             "title": "earnings_dates (event calendar): stale", "suggested_fix": "refresh earnings"},
+            {"probe_id": "exec.regime_organ_disagreement", "domain": "execution", "status": "open",
+             "title": "Coarse and fine regime disagreed", "suggested_fix": "run regime replay"},
+        ])
+        self.research_hypotheses = FakeCollection([
+            {"hypothesis_id": "rh_1", "hypothesis": "NIFTY premium selling only when IV rich",
+             "status": "draft", "updated_at": "2099-01-01T00:00:00+00:00"}
+        ])
         self.trades = FakeCollection([])
         self.daily_learning_reports = FakeCollection([])
+        self.daily_founder_briefs = FakeCollection([])
 
 
 def test_promotion_stage_blocks_thin_negative_strategy():
@@ -123,3 +139,26 @@ async def test_daily_learning_report_is_read_only_and_persistable():
     assert data["closed_trades"] == 1
     assert data["governor_summary"]
     assert db.daily_learning_reports.updated
+
+
+@pytest.mark.asyncio
+async def test_profit_giveback_lab_ranks_green_then_red_leaks():
+    data = await build_profit_giveback_lab(FakeDB(), "u1", days=30)
+    assert data["kind"] == "profit_giveback_lab"
+    assert data["summary"]["green_then_loss"] == 1
+    assert data["summary"]["loss_after_peak"] == 750
+    assert data["by_strategy"][0]["strategy_id"] == "s1"
+    assert "exit replay" in data["next_action"].lower()
+
+
+@pytest.mark.asyncio
+async def test_daily_founder_brief_combines_actions_and_persists():
+    db = FakeDB()
+    data = await build_daily_founder_brief(db, "u1", date="2099-01-01", persist=True)
+    assert data["kind"] == "daily_founder_brief"
+    themes = {row["theme"] for row in data["recommended_actions"]}
+    assert "profit_giveback" in themes
+    assert "data_freshness" in themes
+    assert "regime_disagreement" in themes
+    assert data["research_hypotheses"][0]["hypothesis_id"] == "rh_1"
+    assert db.daily_founder_briefs.updated

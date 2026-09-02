@@ -12,6 +12,7 @@ from routes.ai import (
     _run_agent_tool,
     ai_strategy_scores,
     ai_training_context,
+    classify_playbook_by_query,
     READ_ONLY_AGENT_TOOLS,
 )
 
@@ -64,6 +65,17 @@ def test_build_research_context_marks_retired_domains():
     assert context["stale"] is False
     assert context["domain"]["broker"] == "Upstox V3"
     assert "commodities" in context["domain"]["retired_domains"]
+
+
+def test_founder_brief_and_giveback_tools_are_read_only_and_routed():
+    assert "get_daily_founder_brief" in READ_ONLY_AGENT_TOOLS
+    assert "get_profit_giveback_lab" in READ_ONLY_AGENT_TOOLS
+
+    brief_tools = classify_playbook_by_query("show me the daily founder brief")
+    assert "get_daily_founder_brief" in brief_tools
+
+    giveback_tools = classify_playbook_by_query("open the profit giveback lab")
+    assert "get_profit_giveback_lab" in giveback_tools
 
 
 @pytest.mark.anyio

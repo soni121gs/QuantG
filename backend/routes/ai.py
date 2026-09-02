@@ -93,6 +93,8 @@ READ_ONLY_AGENT_TOOLS = [
     "get_strategy_dossier",
     "search_knowledge_layer",
     "get_daily_learning_report",
+    "get_daily_founder_brief",
+    "get_profit_giveback_lab",
     "get_promotion_dashboard",
     "query_data_store",
 ]
@@ -516,6 +518,16 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await build_daily_learning_report(db, user["id"])
             source = "core.knowledge_layer.daily_learning_report"
             warnings.append("Daily learning report is read-only and does not change strategy state.")
+        elif name == "get_daily_founder_brief":
+            from core.knowledge_layer import build_daily_founder_brief
+            data = await build_daily_founder_brief(db, user["id"], days=30)
+            source = "core.knowledge_layer.daily_founder_brief"
+            warnings.append("Founder brief is read-only; it recommends work but never trades, pauses, scales, or edits config.")
+        elif name == "get_profit_giveback_lab":
+            from core.knowledge_layer import build_profit_giveback_lab
+            data = await build_profit_giveback_lab(db, user["id"], days=30)
+            source = "core.knowledge_layer.profit_giveback_lab"
+            warnings.append("Profit Giveback Lab is read-only; use it to choose an exit replay or governed strategy review.")
         elif name == "get_promotion_dashboard":
             from core.strategy_governor import build_strategy_governor_report
             from core.knowledge_layer import promotion_stage
@@ -1441,6 +1453,8 @@ TOOL_SPECS: Dict[str, str] = {
     "get_strategy_dossier": "One strategy's living dossier: config, governor label, promotion ladder, recent attribution, latest OOS verdict, and related wiki notes.",
     "search_knowledge_layer": "Search wiki notes through the truth-aware knowledge layer, with explicit separation between context notes and DB/OOS trading evidence.",
     "get_daily_learning_report": "Daily learning report: trade attribution, best/worst trades, open P&L, green-then-red count, and governor actions.",
+    "get_daily_founder_brief": "Founder decision brief: ranked actions across profit giveback, stale data, regime disagreement, strategy governor, and research hypotheses.",
+    "get_profit_giveback_lab": "Profit Giveback Lab: ranks strategies, exit reasons, and trades where open profit was available but final close was worse.",
     "get_promotion_dashboard": "Compact read-only promotion/demotion dashboard for all strategies: idea/backtested/forward-paper/limited-paper/candidate-live/paused/kill stages.",
     "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
@@ -1886,6 +1900,7 @@ def classify_playbook_by_query(query: str) -> List[str]:
                             "profitable strategies", "profitability", "green then loss",
                             "giveback"]):
         matched_tools.add("get_strategy_governor")
+        matched_tools.add("get_profit_giveback_lab")
         matched_tools.add("get_promotion_dashboard")
         matched_tools.add("get_strategy_scorecard")
         matched_tools.add("get_hermes_diagnostics")
@@ -1900,10 +1915,18 @@ def classify_playbook_by_query(query: str) -> List[str]:
 
     if any(w in q for w in ["daily learning", "learning report", "what did we learn",
                             "today's learning", "todays learning", "save learning",
-                            "eod learning"]):
+                            "eod learning", "founder brief", "decision brief",
+                            "daily founder", "daily decision", "what should i do"]):
+        matched_tools.add("get_daily_founder_brief")
         matched_tools.add("get_daily_learning_report")
         matched_tools.add("get_trade_attribution")
         matched_tools.add("get_promotion_dashboard")
+        has_matches = True
+
+    if any(w in q for w in ["profit giveback lab", "giveback lab", "profit left",
+                            "book profit", "green to red", "green-then-red"]):
+        matched_tools.add("get_profit_giveback_lab")
+        matched_tools.add("get_hermes_diagnostics")
         has_matches = True
 
     # P5-K6: raw research-store questions — realized vol, option chains, daily OHLC,
