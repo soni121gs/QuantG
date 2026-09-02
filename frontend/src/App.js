@@ -25,6 +25,7 @@ const MarketHub = React.lazy(() => import("./pages/MarketHub"));
 const Calendar = React.lazy(() => import("./pages/Calendar"));
 const Wiki = React.lazy(() => import("./pages/Wiki"));
 const Analytics = React.lazy(() => import("./pages/Analytics"));
+const FounderLab = React.lazy(() => import("./pages/FounderLab"));
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -67,6 +68,7 @@ export default function App() {
             <Route path="/orders" element={<Protected><Orders /></Protected>} />
             <Route path="/positions" element={<Protected><Positions /></Protected>} />
             <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
+            <Route path="/founder" element={<Protected><FounderLab /></Protected>} />
             <Route path="/market-hub" element={<Protected><MarketHub /></Protected>} />
             <Route path="/broker-keys" element={<Protected><ApiKeys /></Protected>} />
             <Route path="/profile" element={<Protected><Profile /></Protected>} />
