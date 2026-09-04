@@ -97,6 +97,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_profit_giveback_lab",
     "get_promotion_dashboard",
     "get_profitable_machine",
+    "get_execution_quality",
     "query_data_store",
 ]
 
@@ -535,6 +536,10 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             gov = await build_strategy_governor_report(db, user["id"], days=30)
             rows = []
             for r in gov.get("strategies", []):
+                eq_n = await db.execution_quality.count_documents({
+                    "user_id": user["id"],
+                    "strategy_id": r.get("strategy_id"),
+                })
                 rows.append({
                     "strategy_id": r.get("strategy_id"),
                     "name": r.get("name"),
@@ -549,6 +554,7 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                         None,
                         int(r.get("closed") or 0),
                         float(r.get("pnl") or 0.0),
+                        eq_n,
                     ),
                 })
             data = {"kind": "promotion_dashboard", "summary": gov.get("summary"), "strategies": rows}
@@ -559,6 +565,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await build_profitable_machine_blueprint(db, user["id"], days=30)
             source = "core.profitable_machine"
             warnings.append("Profitable Machine blueprint is read-only; it plans upgrades but never trades or edits config.")
+        elif name == "get_execution_quality":
+            from core.execution_quality import execution_quality_report
+            data = await execution_quality_report(db, user["id"], days=30)
+            source = "core.execution_quality"
+            warnings.append("Execution Quality is read-only telemetry; it records costs but never changes routing.")
         elif name == "get_backtest_summary":
             from routes.ops import ops_eod_options_backtest as ops_options_backtest
             strategy_id = None
@@ -1463,6 +1474,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_profit_giveback_lab": "Profit Giveback Lab: ranks strategies, exit reasons, and trades where open profit was available but final close was worse.",
     "get_promotion_dashboard": "Compact read-only promotion/demotion dashboard for all strategies: idea/backtested/forward-paper/limited-paper/candidate-live/paused/kill stages.",
     "get_profitable_machine": "Read-only 1-9 blueprint for making QuantG a stricter edge factory: alpha factory, purged OOS, execution-quality ledger, ML ranker, execution optimizer, graduation board, breadth expansion, LLM analyst, and SEBI/audit readiness.",
+    "get_execution_quality": "Read-only execution-quality report: expected vs actual fill price, modeled slippage, charges, fill delay, expensive fills, missed fills, and by-strategy execution cost.",
     "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
 
@@ -1910,6 +1922,7 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_profit_giveback_lab")
         matched_tools.add("get_promotion_dashboard")
         matched_tools.add("get_profitable_machine")
+        matched_tools.add("get_execution_quality")
         matched_tools.add("get_strategy_scorecard")
         matched_tools.add("get_hermes_diagnostics")
         has_matches = True
@@ -1921,6 +1934,16 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_profitable_machine")
         matched_tools.add("get_research_hypotheses")
         matched_tools.add("get_promotion_dashboard")
+        matched_tools.add("get_execution_quality")
+        has_matches = True
+
+    if any(w in q for w in ["execution quality", "fill quality", "slippage",
+                            "brokerage", "charges", "paper realism",
+                            "realistic fill", "missed fill", "expensive fill",
+                            "live ready", "live readiness"]):
+        matched_tools.add("get_execution_quality")
+        matched_tools.add("get_profitable_machine")
+        matched_tools.add("get_live_readiness")
         has_matches = True
 
     if any(w in q for w in ["strategy dossier", "dossier", "living dossier",

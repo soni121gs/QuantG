@@ -116,10 +116,12 @@ async def build_profitable_machine_blueprint(
 
     days = max(1, min(int(days or 30), 180))
     from core.knowledge_layer import build_profit_giveback_lab
+    from core.execution_quality import execution_quality_report
     from core.strategy_governor import build_strategy_governor_report
 
     governor = await build_strategy_governor_report(db, user_id, days=days)
     giveback = await build_profit_giveback_lab(db, user_id, days=days)
+    execution_quality = await execution_quality_report(db, user_id, days=days)
     hypotheses = await db.research_hypotheses.find(
         {"user_id": user_id},
         {"_id": 0, "hypothesis_id": 1, "status": 1, "verdict": 1, "updated_at": 1},
@@ -164,12 +166,14 @@ async def build_profitable_machine_blueprint(
             "open_hermes_findings": len(open_findings),
             "strategy_governor": governor.get("summary"),
             "profit_giveback": giveback.get("summary"),
+            "execution_quality": execution_quality.get("summary"),
         },
         "evidence": {
             "latest_alpha_beta": alpha_beta,
             "latest_score_ic": score_ic,
             "recent_hypotheses": hypotheses[:12],
             "open_findings": open_findings[:12],
+            "execution_quality_by_strategy": execution_quality.get("by_strategy", [])[:12],
         },
         "live_flags": live_flags,
         "blockers": blockers,

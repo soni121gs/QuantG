@@ -47,7 +47,13 @@ def _regex_words(text: str) -> List[Dict[str, Any]]:
     return clauses
 
 
-def promotion_stage(governor_label: str, oos_status: Optional[str], forward_n: int, forward_pnl: float) -> Dict[str, Any]:
+def promotion_stage(
+    governor_label: str,
+    oos_status: Optional[str],
+    forward_n: int,
+    forward_pnl: float,
+    execution_quality_n: int = 0,
+) -> Dict[str, Any]:
     """Truthful strategy ladder: idea -> OOS -> forward-paper -> live candidate."""
     status = str(oos_status or "").upper()
     label = str(governor_label or "observe")
@@ -61,6 +67,8 @@ def promotion_stage(governor_label: str, oos_status: Optional[str], forward_n: i
         blockers.append(f"forward-paper P&L is not positive: {forward_pnl:.2f}")
     if label in {"pause", "kill_candidate"}:
         blockers.append(f"governor label is {label}")
+    if forward_n > 0 and execution_quality_n <= 0:
+        blockers.append("execution-quality evidence is missing for this strategy")
 
     if label == "kill_candidate":
         stage = "kill_candidate"
@@ -363,6 +371,10 @@ async def build_strategy_dossier(db: Any, user_id: str, strategy_id: str, *, day
         {"user_id": user_id, "strategy_id": strategy_id, "date_ist": {"$gte": since}},
         {"_id": 0, "user_id": 0},
     ).sort("exit_time", -1).to_list(250)
+    execution_quality_n = await db.execution_quality.count_documents({
+        "user_id": user_id,
+        "strategy_id": strategy_id,
+    })
 
     exits = Counter(str(r.get("exit_reason") or "unknown") for r in attr_rows)
     regimes = Counter(str(r.get("regime_at_entry") or "UNKNOWN") for r in attr_rows)
@@ -391,7 +403,13 @@ async def build_strategy_dossier(db: Any, user_id: str, strategy_id: str, *, day
         "strategy": strategy,
         "window_days": days,
         "governor": gov_row,
-        "promotion": promotion_stage((gov_row or {}).get("governor", {}).get("label", "observe"), oos_status, forward_n, forward_pnl),
+        "promotion": promotion_stage(
+            (gov_row or {}).get("governor", {}).get("label", "observe"),
+            oos_status,
+            forward_n,
+            forward_pnl,
+            execution_quality_n,
+        ),
         "attribution": {
             "since": since,
             "closed_rows": len(attr_rows),

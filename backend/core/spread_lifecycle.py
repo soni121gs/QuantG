@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from core.paper_broker import PaperWallet
+from core.execution_quality import record_execution_quality
 
 logger = logging.getLogger("quantg.spread_lifecycle")
 
@@ -218,6 +219,11 @@ async def open_credit_spread(
         vol_ratio=spread.get("vol_ratio"),
     )
 
+    quoted_entry_by_role = {
+        "short": float(spread["short_leg"].get("premium") or 0.0),
+        "long": float(spread["long_leg"].get("premium") or 0.0),
+    }
+
     for leg, side in ((short, "SELL"), (long, "BUY")):
         leg["qty"] = qty
         leg["entry_price"] = leg["premium"]
@@ -291,7 +297,7 @@ async def open_credit_spread(
 
     # Audit: one order row per leg (FILLED — fills are confirmed before this point).
     for leg in (short, long):
-        await db.orders.insert_one({
+        order_doc = {
             "id": f"ord_{uuid.uuid4().hex[:12]}",
             "user_id": user_id,
             "strategy_id": strategy_id,
@@ -304,7 +310,7 @@ async def open_credit_spread(
             "lot_size": int(lot_size),
             "filled_qty": qty,
             "price": leg["premium"],
-            "requested_price": leg["premium"],
+            "requested_price": quoted_entry_by_role.get(leg["role"], leg["premium"]),
             "status": "FILLED",
             "execution_status": "FILLED",
             "mode": mode,
@@ -315,7 +321,13 @@ async def open_credit_spread(
             "idempotency_key": f"{idempotency_key}:{leg['role']}",
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        await db.orders.insert_one(order_doc)
+        await record_execution_quality(
+            db, order=order_doc, position=position_doc, event="spread_entry",
+            expected_price=quoted_entry_by_role.get(leg["role"], leg["premium"]),
+            actual_price=leg["premium"], quantity=qty, status="FILLED",
+        )
 
     logger.info(
         "Spread OPEN %s %s %s credit=%.2f max_loss=%.2f qty=%d tp_val=%.2f sl_val=%.2f",
@@ -358,7 +370,7 @@ async def _record_spread_exit_orders(
         exit_side = "BUY" if role == "short" else "SELL"
         price = exit_price_by_role.get(role)
         try:
-            await db.orders.insert_one({
+            order_doc = {
                 "id": f"ord_{uuid.uuid4().hex[:12]}",
                 "user_id": user_id,
                 "strategy_id": strategy_id,
@@ -389,7 +401,12 @@ async def _record_spread_exit_orders(
                 "idempotency_key": f"exit:{pos_id}:{role}",
                 "created_at": closed_at,
                 "updated_at": closed_at,
-            })
+            }
+            await db.orders.insert_one(order_doc)
+            await record_execution_quality(
+                db, order=order_doc, position=position, event="spread_exit",
+                expected_price=price, actual_price=price, quantity=qty, status="FILLED",
+            )
         except Exception as exc:  # noqa: BLE001 — audit row must never break the close
             logger.error("Spread exit order row failed pos=%s role=%s: %s", pos_id, role, exc)
 
@@ -729,7 +746,7 @@ async def open_debit_spread(
     await db.strategy_positions.insert_one(position_doc)
 
     for leg in (short, long):
-        await db.orders.insert_one({
+        order_doc = {
             "id": f"ord_{uuid.uuid4().hex[:12]}",
             "user_id": user_id,
             "strategy_id": strategy_id,
@@ -752,7 +769,13 @@ async def open_debit_spread(
             "idempotency_key": f"{idempotency_key}:{leg['role']}",
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        await db.orders.insert_one(order_doc)
+        await record_execution_quality(
+            db, order=order_doc, position=position_doc, event="spread_entry",
+            expected_price=leg["premium"], actual_price=leg["premium"],
+            quantity=qty, status="FILLED",
+        )
 
     logger.info(
         "Spread (debit) OPEN %s %s %s debit=%.2f max_loss=%.2f qty=%d tp_val=%.2f sl_val=%.2f",

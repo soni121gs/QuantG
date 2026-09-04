@@ -39,7 +39,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
   **Verify:** runner can stop/resume; every verdict includes family, parameters, trial count, sample size, net expectancy, cost model, and rejection reason.
 - [ ] **P6-2** (T3) Purged/embargoed OOS validation. Add leakage-resistant split logic and PBO-style reporting for overlapping holds and adaptive research sweeps.
   **Verify:** synthetic leakage case fails after embargo; existing HAC/DSR verdict fields remain compatible.
-- [ ] **P6-3** (T3) Execution Quality Ledger. Persist expected mid/bid/ask proxy, actual fill, modeled vs realized slippage, fill delay, missed-fill reason, and leg-sequence evidence for paper/live orders.
+- [x] **P6-3** (T3) Execution Quality Ledger. Persist expected mid/bid/ask proxy, actual fill, modeled vs realized slippage, fill delay, missed-fill reason, and leg-sequence evidence for paper/live orders. Implemented `db.execution_quality`, `/ops/execution-quality`, Hermes `get_execution_quality`, Founder Machine cost metric, and promotion blockers for missing fill-quality evidence. Commit: pending.
   **Verify:** no order-routing behavior changes; paper fills record executable-edge diagnostics; strategy graduation blocks missing fill-quality evidence.
 - [ ] **P6-4** (T3) ML setup ranker in observe-only mode. Train calibrated tabular models for TP-before-SL probability, expected P&L, drawdown risk, and time-to-target using frozen point-in-time features.
   **Verify:** model reports OOS IC, calibration/Brier, leakage audit, and cost-adjusted utility; no sizing or entry impact until founder flips a separate observe-to-advice gate.

@@ -12369,6 +12369,20 @@ async def _apply_paper_fill_to_position(order_doc: Dict[str, Any], fill_price: f
         "position_before_qty": before_qty,
         "position_after_qty": after_qty,
     })
+    try:
+        from core.execution_quality import record_execution_quality
+        await record_execution_quality(
+            db,
+            order=updated or locked,
+            fill=fill_doc,
+            event="legacy_paper_fill",
+            expected_price=expected,
+            actual_price=float(fill_price or 0),
+            quantity=qty,
+            status=ORDER_PAPER_FILLED,
+        )
+    except Exception as exc:
+        logger.debug("Legacy paper fill execution-quality telemetry failed order=%s: %s", order_id, exc)
     return updated or locked
 
 
@@ -12471,6 +12485,20 @@ async def _book_live_fill_from_order(
         })
         fill_doc["gross_realized_pnl"] = gross_realized
         fill_doc["realized_pnl"] = net_realized
+        try:
+            from core.execution_quality import record_execution_quality
+            await record_execution_quality(
+                db,
+                order=order_doc,
+                fill=fill_doc,
+                event="live_fill",
+                expected_price=expected,
+                actual_price=price,
+                quantity=qty,
+                status="FILLED",
+            )
+        except Exception as exc:
+            logger.debug("Live fill execution-quality telemetry failed order=%s: %s", order_id, exc)
         return fill_doc
 
     return None
@@ -17744,6 +17772,9 @@ async def startup():
         ("trade_fills", [("user_id", 1), ("filled_at", -1)], {}),
         ("trade_fills", [("user_id", 1), ("broker_order_id", 1)], {}),
         ("trade_fills", [("strategy_id", 1), ("mode", 1), ("filled_at", -1)], {}),
+        ("execution_quality", "dedupe_key", {"unique": True}),
+        ("execution_quality", [("user_id", 1), ("created_at", -1)], {}),
+        ("execution_quality", [("user_id", 1), ("strategy_id", 1), ("created_at", -1)], {}),
         ("trades", [("user_id", 1), ("closed_at", -1)], {}),
         ("order_events", [("order_id", 1), ("created_at", 1)], {}),
         ("order_events", [("user_id", 1), ("created_at", -1)], {}),

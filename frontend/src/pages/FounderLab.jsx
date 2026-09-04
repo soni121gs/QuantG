@@ -190,7 +190,7 @@ const GivebackLab = ({ lab }) => {
   const summary = lab?.summary || {};
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard label="Closed Trades" value={summary.closed_trades || 0} icon={ClipboardList} sub={`${summary.losers || 0} losing closes`} />
         <MetricCard label="Green First Losers" value={summary.green_then_loss || 0} icon={TrendingDown} tone="text-[var(--qd-loss)]" sub={`${pct(summary.pct_losers_green_first)} of losers`} />
         <MetricCard label="Open Profit Available" value={money(summary.peak_profit_available)} icon={Target} tone="text-[var(--qd-profit)]" />
@@ -376,6 +376,7 @@ const ProfitableMachine = ({ machine }) => {
   const summary = machine?.summary || {};
   const flags = machine?.live_flags || {};
   const giveback = summary.profit_giveback || {};
+  const executionQuality = summary.execution_quality || {};
   const program = machine?.program || [];
   return (
     <div className="space-y-4">
@@ -398,6 +399,7 @@ const ProfitableMachine = ({ machine }) => {
         <MetricCard label="Research Ideas" value={summary.research_hypotheses || 0} icon={FlaskConical} sub="ledger cards available" />
         <MetricCard label="Hermes Findings" value={summary.open_hermes_findings || 0} icon={Bot} sub="open diagnostics" />
         <MetricCard label="Giveback Risk" value={giveback.green_then_loss || 0} icon={TrendingDown} tone="text-[var(--qd-loss)]" sub={`${money(giveback.loss_after_peak)} lost after peak`} />
+        <MetricCard label="Execution Cost" value={money(executionQuality.total_cost_amount)} icon={Gauge} sub={`${executionQuality.fills || 0} quality rows`} />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-3">

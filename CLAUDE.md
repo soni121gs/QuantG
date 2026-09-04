@@ -18,6 +18,10 @@ QuantG is an NSE/BSE options algo-trading platform.
 ### Current Mode
 Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=false` in docker-compose.yml.
 
+### Session changes (2026-09-04) — P6 Profitable Machine + Execution Quality
+- **Profitable Machine blueprint** (`10b8b10`): Phase 6 in `TASKS.md` turns the founder's 1-9 upgrade map into a read-only build plan. `/ops/profitable-machine`, Hermes `get_profitable_machine`, and Founder Lab's Machine tab summarize alpha factory, purged OOS, execution quality, ML ranker, execution optimizer, graduation, breadth, analyst, and audit lanes. This is planning/intelligence only: no strategy wake, live flag, broker route, order placement, or P&L math change.
+- **Execution Quality Ledger** (P6-3): `backend/core/execution_quality.py` writes best-effort records to `db.execution_quality` for expected price, actual fill, signed/adverse slippage, charges, cost bps, fill delay, missed-fill reason, and quality grade. Capture points include `ExecutionRouter` paper fills/rejections, legacy paper fills, live fill booking, and spread entry/exit audit orders. New read surfaces: `/ops/execution-quality`, Hermes `get_execution_quality`, and the Profitable Machine summary. Promotion logic now blocks live-candidate display when forward-paper rows exist but fill-quality evidence is missing. **Rule:** execution-quality writes must never block fills or change routing; they are evidence for realism and readiness only.
+
 ### Current Operational State (updated 2026-07-05)
 - **The data wall is BROKEN and the current book has NO PROVEN EDGE.** As of 2026-07-04 we can backtest option strategies on 2 years of real NSE prices (see §13). The OOS validator's verdict: **0 of 11 option strategies show an out-of-sample edge** — every real-sample strategy is `NO_EDGE_NEGATIVE` (e.g. NIFTY Theta Credit Spread −₹873/trade over 116 trades, −₹83.6k in 2025 OOS). A 72-config sweep found **0 configs** that cross positive OOS. This corroborates the live book's ~−₹86/trade. The "winning theta cluster" was small-sample illusion. **Do not tune these strategies further — that is the treadmill.**
 - **NEW OPERATING DISCIPLINE (this supersedes daily strategy-tweaking):** hypothesis → **OOS backtest** (§13) → forward-paper → live. Nothing is "working" until it has 30+ trades AND survives out-of-sample. Grade *ideas* on OOS expectancy, not daily paper P&L (which is noise at ~13 trades/day). New strategies must PASS the OOS validator before deploy.
@@ -62,6 +66,7 @@ Paper trading (PAPER). Live trading infra exists but `CORE_ENGINE_LIVE_ENABLED=f
 | **EdgeMath sizing core** (pure Kelly/vol-target/day-governor, §16) | `backend/core/edge_sizer.py` |
 | Position ledger (create/close positions from fills) | `backend/core/portfolio_ledger.py` |
 | Order routing (paper vs live) | `backend/core/execution_router.py` |
+| Execution quality ledger (slippage, charges, fill realism) | `backend/core/execution_quality.py` |
 | Idempotency key generation | `backend/core/order_manager.py` |
 | Market domains (lot sizes, NSE/BSE segments) | `backend/core/market_domains.py` |
 | Strike/contract selection | `backend/core/option_selector_v2.py` |

@@ -371,6 +371,14 @@ class PaperAdapter:
             order_doc["status"] = "REJECTED"
             order_doc["execution_status"] = "REJECTED"
             order_doc["ledger_action"] = action
+            try:
+                from core.execution_quality import record_execution_quality
+                await record_execution_quality(
+                    self.db, order=order_doc, fill=fill_doc, event="paper_fill",
+                    status="REJECTED", reason=action,
+                )
+            except Exception:
+                logger.debug("PaperAdapter: execution-quality telemetry failed for rejected order=%s", order_id)
             logger.warning(
                 "PaperAdapter: ledger rejected fill (%s) for order %s side=%s — no wallet movement",
                 action, order_id, side,
@@ -396,6 +404,14 @@ class PaperAdapter:
                 {"id": order_id},
                 {"$set": {"net_pnl": realized_pnl, "realized_pnl": realized_pnl, "gross_pnl": gross_pnl}},
             )
+        try:
+            from core.execution_quality import record_execution_quality
+            await record_execution_quality(
+                self.db, order=order_doc, fill=fill_doc, event="paper_fill",
+                status=order_doc.get("execution_status"),
+            )
+        except Exception:
+            logger.debug("PaperAdapter: execution-quality telemetry failed for order=%s", order_id)
         return order_doc
 
 class UpstoxLiveAdapter:
