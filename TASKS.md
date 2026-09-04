@@ -34,7 +34,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 
 **Scope law:** this phase upgrades research, validation, execution-quality proof, ML ranking, and audit readiness. It does **not** enable live trading, wake paused rows, place orders, or bypass the OOS-first ladder.
 
-- [x] **P6-0** (T2) Add a read-only Profitable Machine blueprint surface. Backend `/ops/profitable-machine`, Hermes tool `get_profitable_machine`, and Founder UI tab summarize the nine upgrade lanes, current evidence, blockers, and live flags. No trading mutation. Commit: `0ac466b`.
+- [x] **P6-0** (T2) Add a read-only Profitable Machine blueprint surface. Backend `/ops/profitable-machine`, Hermes tool `get_profitable_machine`, and Founder UI tab summarize the nine upgrade lanes, current evidence, blockers, and live flags. No trading mutation. Commit: `10b8b10`.
 - [ ] **P6-1** (T3) Alpha Factory batch runner. Generate candidate families across stock F&O, index regimes, events, overnight gaps, volatility states, and sector dispersion; checkpoint every trial; persist every accepted/rejected idea into `research_hypotheses`.
   **Verify:** runner can stop/resume; every verdict includes family, parameters, trial count, sample size, net expectancy, cost model, and rejection reason.
 - [ ] **P6-2** (T3) Purged/embargoed OOS validation. Add leakage-resistant split logic and PBO-style reporting for overlapping holds and adaptive research sweeps.
