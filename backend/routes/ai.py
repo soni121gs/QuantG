@@ -96,6 +96,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_daily_founder_brief",
     "get_profit_giveback_lab",
     "get_promotion_dashboard",
+    "get_profitable_machine",
     "query_data_store",
 ]
 
@@ -553,6 +554,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = {"kind": "promotion_dashboard", "summary": gov.get("summary"), "strategies": rows}
             source = "core.knowledge_layer.promotion_stage / core.strategy_governor"
             warnings.append("Promotion dashboard is read-only; live promotion remains founder-gated.")
+        elif name == "get_profitable_machine":
+            from core.profitable_machine import build_profitable_machine_blueprint
+            data = await build_profitable_machine_blueprint(db, user["id"], days=30)
+            source = "core.profitable_machine"
+            warnings.append("Profitable Machine blueprint is read-only; it plans upgrades but never trades or edits config.")
         elif name == "get_backtest_summary":
             from routes.ops import ops_eod_options_backtest as ops_options_backtest
             strategy_id = None
@@ -1456,6 +1462,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_daily_founder_brief": "Founder decision brief: ranked actions across profit giveback, stale data, regime disagreement, strategy governor, and research hypotheses.",
     "get_profit_giveback_lab": "Profit Giveback Lab: ranks strategies, exit reasons, and trades where open profit was available but final close was worse.",
     "get_promotion_dashboard": "Compact read-only promotion/demotion dashboard for all strategies: idea/backtested/forward-paper/limited-paper/candidate-live/paused/kill stages.",
+    "get_profitable_machine": "Read-only 1-9 blueprint for making QuantG a stricter edge factory: alpha factory, purged OOS, execution-quality ledger, ML ranker, execution optimizer, graduation board, breadth expansion, LLM analyst, and SEBI/audit readiness.",
     "query_data_store": "Bounded read-only query of the historical bhavcopy F&O store (the data the OOS judges use). Fixed verbs: 'coverage' (how many trading days / which underlyings), 'daily' (an underlying's daily OHLC + realized vol over a date window), 'chain' (an option chain snapshot on a date). Name an underlying (NIFTY/BANKNIFTY/SENSEX or any F&O stock) and optionally dates. Answers new research questions of the raw data — e.g. 'what was RELIANCE's realized vol last month' or 'how many days of NIFTY history exist'.",
 }
 
@@ -1902,8 +1909,18 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_strategy_governor")
         matched_tools.add("get_profit_giveback_lab")
         matched_tools.add("get_promotion_dashboard")
+        matched_tools.add("get_profitable_machine")
         matched_tools.add("get_strategy_scorecard")
         matched_tools.add("get_hermes_diagnostics")
+        has_matches = True
+
+    if any(w in q for w in ["profitable machine", "make better at trading", "better trading",
+                            "alpha factory", "purged oos", "execution quality", "fill quality",
+                            "ml ranker", "machine learning", "reinforcement learning",
+                            "sebi algo", "regulatory readiness"]):
+        matched_tools.add("get_profitable_machine")
+        matched_tools.add("get_research_hypotheses")
+        matched_tools.add("get_promotion_dashboard")
         has_matches = True
 
     if any(w in q for w in ["strategy dossier", "dossier", "living dossier",

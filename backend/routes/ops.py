@@ -1187,6 +1187,18 @@ async def ops_promotion_dashboard(days: int = 30, user=Depends(get_current_user)
     })
 
 
+@router.get("/profitable-machine")
+async def ops_profitable_machine(days: int = 30, user=Depends(get_current_user)):
+    """Read-only 1-9 profitable-machine blueprint.
+
+    Joins current research, strategy-governor, giveback, alpha/beta, IC, and
+    diagnostic evidence into one implementation map. It never mutates strategy
+    state, orders, broker credentials, or live flags.
+    """
+    from core.profitable_machine import build_profitable_machine_blueprint
+    return _json_safe(await build_profitable_machine_blueprint(db, user["id"], days=days))
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data

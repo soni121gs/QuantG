@@ -366,9 +366,109 @@ const Hypotheses = ({ brief }) => {
   );
 };
 
+const stageTone = {
+  partial: "border-[var(--qd-cyan)]/40 text-[var(--qd-cyan)]",
+  needed: "border-[var(--qd-warn)]/40 text-[var(--qd-warn)]",
+  shipped: "border-[var(--qd-profit)]/40 text-[var(--qd-profit)]",
+};
+
+const ProfitableMachine = ({ machine }) => {
+  const summary = machine?.summary || {};
+  const flags = machine?.live_flags || {};
+  const giveback = summary.profit_giveback || {};
+  const program = machine?.program || [];
+  return (
+    <div className="space-y-4">
+      <div className={`${cardClass} p-5`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-widest text-[var(--qd-text-3)]">
+              Profitable Machine Blueprint
+            </div>
+            <h2 className="mt-2 max-w-4xl text-xl font-semibold text-[var(--qd-text)]">
+              {machine?.headline || "Strict edge factory: research first, execution proof next, live last."}
+            </h2>
+          </div>
+          <div className="font-mono text-[11px] text-[var(--qd-text-3)]">Generated {dateTime(machine?.generated_at)}</div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Program Items" value={summary.program_items || program.length} icon={Layers} sub={`${summary.stage_counts?.partial || 0} partial · ${summary.stage_counts?.needed || 0} needed`} />
+        <MetricCard label="Research Ideas" value={summary.research_hypotheses || 0} icon={FlaskConical} sub="ledger cards available" />
+        <MetricCard label="Hermes Findings" value={summary.open_hermes_findings || 0} icon={Bot} sub="open diagnostics" />
+        <MetricCard label="Giveback Risk" value={giveback.green_then_loss || 0} icon={TrendingDown} tone="text-[var(--qd-loss)]" sub={`${money(giveback.loss_after_peak)} lost after peak`} />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        {program.map((item) => (
+          <div key={item.id} className={`${cardClass} p-4`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{item.id}</div>
+                <h3 className="mt-1 font-head text-base font-semibold text-[var(--qd-text)]">{item.title}</h3>
+              </div>
+              <span className={`rounded border bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase ${stageTone[item.stage] || "border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
+                {item.stage}
+              </span>
+            </div>
+            <p className="mt-3 text-sm text-[var(--qd-text-2)]">{item.why}</p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Now</div>
+                <div className="mt-1 text-sm text-[var(--qd-text)]">{item.current_quantg_surface}</div>
+              </div>
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Next build</div>
+                <div className="mt-1 text-sm text-[var(--qd-text)]">{item.next_build}</div>
+              </div>
+              <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
+                <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Hard gate</div>
+                <div className="mt-1 text-sm text-[var(--qd-text)]">{item.hard_gate}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+        <div className={`${cardClass} p-4`}>
+          <div className="flex items-center gap-2 font-head text-sm font-semibold text-[var(--qd-text)]">
+            <ShieldCheck size={15} /> Blocking Truths
+          </div>
+          <div className="mt-3 space-y-2">
+            {(machine?.blockers || []).map((blocker, i) => (
+              <div key={i} className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 text-sm text-[var(--qd-text-2)]">
+                {blocker}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={`${cardClass} p-4`}>
+          <div className="flex items-center gap-2 font-head text-sm font-semibold text-[var(--qd-text)]">
+            <Gauge size={15} /> Live Flags
+          </div>
+          <div className="mt-3 space-y-2">
+            {Object.entries(flags).map(([key, value]) => (
+              <div key={key} className="flex items-center justify-between gap-3 rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3">
+                <span className="font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{key}</span>
+                <span className={`font-mono text-xs font-bold ${value ? "text-[var(--qd-profit)]" : "text-[var(--qd-text-2)]"}`}>
+                  {value ? "true" : "false"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-xs text-[var(--qd-text-2)]">{machine?.note}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function FounderLab() {
   const [brief, setBrief] = useState(null);
   const [lab, setLab] = useState(null);
+  const [machine, setMachine] = useState(null);
   const [activeTab, setActiveTab] = useState("brief");
   const [busy, setBusy] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
@@ -376,12 +476,14 @@ export default function FounderLab() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const [briefRes, labRes] = await Promise.all([
+      const [briefRes, labRes, machineRes] = await Promise.all([
         api.get("/ops/daily-founder-brief", { params: { days: 30 } }),
         api.get("/ops/profit-giveback-lab", { params: { days: 30 } }),
+        api.get("/ops/profitable-machine", { params: { days: 30 } }),
       ]);
       setBrief(briefRes.data);
       setLab(labRes.data);
+      setMachine(machineRes.data);
       setLastRefresh(new Date().toISOString());
     } catch (error) {
       toast.error(error?.response?.data?.detail || "Founder intelligence failed to load");
@@ -397,6 +499,7 @@ export default function FounderLab() {
     { id: "giveback", label: "Giveback Lab", icon: TrendingDown },
     { id: "dossiers", label: "Dossiers", icon: Layers },
     { id: "hypotheses", label: "Hypotheses", icon: FlaskConical },
+    { id: "machine", label: "Machine", icon: Gauge },
   ];
 
   return (
@@ -432,7 +535,7 @@ export default function FounderLab() {
         ))}
       </div>
 
-      {!brief || !lab ? (
+      {!brief || !lab || !machine ? (
         <div className={`${cardClass} flex min-h-[320px] items-center justify-center p-8`}>
           <div className="text-center">
             <RefreshCw size={24} className="mx-auto animate-spin text-[var(--qd-accent)]" />
@@ -445,6 +548,7 @@ export default function FounderLab() {
           {activeTab === "giveback" && <GivebackLab lab={lab} />}
           {activeTab === "dossiers" && <Dossiers brief={brief} lab={lab} />}
           {activeTab === "hypotheses" && <Hypotheses brief={brief} />}
+          {activeTab === "machine" && <ProfitableMachine machine={machine} />}
         </>
       )}
 

@@ -28,6 +28,34 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 
 ---
 
+## PHASE 6 — PROFITABLE MACHINE PROGRAM (added 2026-09-04) ⇦ **NEXT BUILD MAP**
+
+**Source:** founder request to execute the 1-9 improvement map after the 2026-09-04 app + current technology review.
+
+**Scope law:** this phase upgrades research, validation, execution-quality proof, ML ranking, and audit readiness. It does **not** enable live trading, wake paused rows, place orders, or bypass the OOS-first ladder.
+
+- [x] **P6-0** (T2) Add a read-only Profitable Machine blueprint surface. Backend `/ops/profitable-machine`, Hermes tool `get_profitable_machine`, and Founder UI tab summarize the nine upgrade lanes, current evidence, blockers, and live flags. No trading mutation. Commit: `0ac466b`.
+- [ ] **P6-1** (T3) Alpha Factory batch runner. Generate candidate families across stock F&O, index regimes, events, overnight gaps, volatility states, and sector dispersion; checkpoint every trial; persist every accepted/rejected idea into `research_hypotheses`.
+  **Verify:** runner can stop/resume; every verdict includes family, parameters, trial count, sample size, net expectancy, cost model, and rejection reason.
+- [ ] **P6-2** (T3) Purged/embargoed OOS validation. Add leakage-resistant split logic and PBO-style reporting for overlapping holds and adaptive research sweeps.
+  **Verify:** synthetic leakage case fails after embargo; existing HAC/DSR verdict fields remain compatible.
+- [ ] **P6-3** (T3) Execution Quality Ledger. Persist expected mid/bid/ask proxy, actual fill, modeled vs realized slippage, fill delay, missed-fill reason, and leg-sequence evidence for paper/live orders.
+  **Verify:** no order-routing behavior changes; paper fills record executable-edge diagnostics; strategy graduation blocks missing fill-quality evidence.
+- [ ] **P6-4** (T3) ML setup ranker in observe-only mode. Train calibrated tabular models for TP-before-SL probability, expected P&L, drawdown risk, and time-to-target using frozen point-in-time features.
+  **Verify:** model reports OOS IC, calibration/Brier, leakage audit, and cost-adjusted utility; no sizing or entry impact until founder flips a separate observe-to-advice gate.
+- [ ] **P6-5** (T3) Execution optimizer simulator. Research market-vs-limit, retry timing, and spread-leg sequencing policies using historical order/quote context; keep output advisory-only.
+  **Verify:** optimizer suggestions are replayable, audited, and fail closed; live executor behavior unchanged.
+- [ ] **P6-6** (T2) Strategy Graduation Board v2. Extend the existing promotion dashboard with purged-OOS, execution-quality, compliance/audit, and live-readiness blockers.
+  **Verify:** no strategy can display `candidate_live` with missing OOS, forward-paper, cost, fill-quality, or founder-approval evidence.
+- [ ] **P6-7** (T3) Breadth expansion campaigns. Run independent alpha families instead of retuning one spread shape: stock-F&O events, IV/richness reversals, PEAD, overnight momentum, sector dispersion, and participant-OI historical overlays.
+  **Verify:** each family has its own null hypothesis, coverage proof, OOS verdict, and forward-paper plan.
+- [ ] **P6-8** (T2) Hermes weekly research analyst. Use LLMs only to synthesize frozen-source hypothesis cards and falsification tests; deterministic code remains the judge.
+  **Verify:** generated cards include source snapshots, claim type, data window, null, expected edge, failure modes, and required validation command.
+- [ ] **P6-9** (T2) SEBI/algo audit readiness map. Tie every live-candidate strategy to approval events, order/algo tags, immutable evidence, broker readiness, reconciliation, and deploy proof.
+  **Verify:** live readiness endpoint reports audit blockers explicitly while `CORE_ENGINE_LIVE_ENABLED=false` remains unchanged unless founder-approved.
+
+---
+
 ## PHASE 5 — TRUTHFUL INSTRUMENTS & BREADTH (added 2026-07-23) ⇦ **START HERE**
 
 **Source:** full-system audit 2026-07-22/23 (loss post-mortem → Hermes findings → self-audit of that
