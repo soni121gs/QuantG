@@ -27,7 +27,7 @@ _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 def _deterministic_briefing(findings: List[Dict[str, Any]], date_str: str) -> str:
     """A useful daily briefing with zero LLM involvement (the fallback + the floor)."""
     if not findings:
-        return f"Hermes diagnostics {date_str}: no open findings. Book invariants hold."
+        return f"Hermes diagnostics {date_str}: no findings emitted by the completed probes; this is not a full-system certification."
     by_sev: Dict[str, int] = {}
     for f in findings:
         by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
@@ -61,7 +61,7 @@ Write a short daily diagnosis for the founder:
 HARD RULES:
 - Use ONLY the findings below. NEVER invent a finding, number, or file. If you
   suspect something not listed, do not state it as fact — say it needs a new probe.
-- Be blunt and specific. No hedging, no filler. Reference the probe_id in each bullet.
+- Preserve uncertainty. Exit counts cannot prove stop failure or a root cause. Reference the probe_id in each bullet.
 
 Findings JSON:
 {json.dumps(slim, default=str)}
@@ -85,16 +85,15 @@ Findings JSON:
 async def narrate_findings(db, user_id: str, date_str: str,
                            findings: List[Dict[str, Any]]) -> str:
     """Produce and persist the daily narrative. Always returns usable prose."""
-    import asyncio
     confirmed = [f for f in findings if f.get("confidence", "confirmed") == "confirmed"]
     confirmed.sort(key=lambda f: _SEV_ORDER.get(f["severity"], 9))
-    llm = await asyncio.to_thread(_gemini_narrate, confirmed, date_str)
-    narrative = llm or _deterministic_briefing(confirmed, date_str)
+    # Incident severity and causal claims must be reproducible from probe evidence.
+    narrative = _deterministic_briefing(confirmed, date_str)
     try:
         await db.hermes_diagnostic_runs.update_one(
             {"user_id": user_id, "date": date_str},
             {"$set": {"narrative": narrative,
-                      "narrative_source": "llm" if llm else "deterministic"}},
+                      "narrative_source": "deterministic"}},
             upsert=True,
         )
     except Exception as exc:

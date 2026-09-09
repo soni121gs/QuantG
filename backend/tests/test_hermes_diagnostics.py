@@ -277,6 +277,7 @@ class _FakeDB:
 
 
 def _loss_ctx(strat, split_rows):
+    strat = {"status": "active", **strat}
     return _ctx(db=_FakeDB([{"_id": "s1", "pnl": -7720.0, "trades": 35, "wins": 12}],
                            split_rows),
                 strategies=[strat])

@@ -34,6 +34,9 @@ class _Coll:
         self.docs = []
         self.unique_field = unique_field
 
+    async def delete_many(self, query):
+        self.docs = [d for d in self.docs if not _match(d, query)]
+
     async def insert_one(self, doc):
         if self.unique_field is not None:
             uf = doc.get(self.unique_field)
@@ -41,6 +44,13 @@ class _Coll:
                 raise DuplicateKeyError(f"dup {self.unique_field}={uf}")
         self.docs.append(dict(doc))
         return type("R", (), {"inserted_id": doc.get("id")})()
+
+    def find(self, query, proj=None):
+        rows = [dict(d) for d in self.docs if _match(d, query)]
+        class Cursor:
+            async def to_list(self, length):
+                return rows[:length]
+        return Cursor()
 
     async def find_one(self, query, proj=None):
         for d in self.docs:
@@ -84,6 +94,8 @@ class _DB:
         self.trades = _Coll()
         self.trade_fills = _Coll(unique_field="id")
         self.strategies = _Coll()
+        self.strategies.docs.append({"id": "s1", "user_id": "u1", "required_capital": 15000})
+        self.strategy_position_locks = _Coll(unique_field="_id")
         self.positions = _Coll()
         self.paper_wallets = _Coll(unique_field="user_id")
         self.paper_wallet_credits = _Coll(unique_field="order_id")
@@ -209,7 +221,9 @@ def test_open_debits_net_and_creates_position():
     assert after < before - 2250
     assert pos["structure"] == "debit_spread" and pos["position_side"] == "LONG"
     assert len(pos["legs"]) == 2 and pos["open_quantity"] == 50
-    assert pos["spread_tp_value"] == 72.5 and pos["spread_sl_value"] == 22.5
+    assert pos["net_debit"] > 45.0
+    assert pos["spread_tp_value"] == round(pos["net_debit"] + (100 - pos["net_debit"]) * 0.5, 2)
+    assert pos["spread_sl_value"] == round(pos["net_debit"] * 0.5, 2)
 
 
 def test_open_then_close_wallet_equals_realized_pnl_win():

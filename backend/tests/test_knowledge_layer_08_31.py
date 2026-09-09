@@ -44,6 +44,9 @@ class FakeCollection:
     def find(self, *args, **kwargs):
         return FakeCursor(self.rows)
 
+    async def count_documents(self, *args, **kwargs):
+        return len(self.rows)
+
     async def find_one(self, *args, **kwargs):
         return self.one
 
@@ -56,6 +59,7 @@ class FakeCollection:
 
 class FakeDB:
     def __init__(self):
+        self.execution_quality = FakeCollection([])
         self.strategies = FakeCollection([
             {"id": "s1", "name": "QG Test Strategy", "status": "live", "enabled": True,
              "visual_config": {"options": {"structure": "credit_spread"}}}
@@ -104,7 +108,7 @@ def test_promotion_stage_blocks_thin_negative_strategy():
 
 
 def test_promotion_stage_candidate_live_requires_clean_evidence():
-    out = promotion_stage("scale_candidate", "CANDIDATE_EDGE", 42, 2500)
+    out = promotion_stage("scale_candidate", "CANDIDATE_EDGE", 42, 2500, 42)
     assert out["stage"] == "candidate_live"
     assert out["blockers"] == []
 

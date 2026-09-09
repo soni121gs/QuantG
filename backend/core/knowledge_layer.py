@@ -59,8 +59,8 @@ def promotion_stage(
     label = str(governor_label or "observe")
     blockers: List[str] = []
 
-    if status and status not in {"CANDIDATE_EDGE", "PASS", "HISTORICAL_PASS"}:
-        blockers.append(f"OOS verdict is {status}, not a pass")
+    if status not in {"CANDIDATE_EDGE", "PASS", "HISTORICAL_PASS"}:
+        blockers.append(f"OOS verdict is {status or 'MISSING'}, not a pass")
     if forward_n < 30:
         blockers.append(f"forward-paper sample too thin: {forward_n} closes (<30)")
     if forward_pnl <= 0:

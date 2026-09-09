@@ -169,7 +169,7 @@ class PaperWallet:
             return
         now = datetime.now(timezone.utc).isoformat()
         rec = await self.db.paper_margin_blocks.find_one_and_update(
-            {"position_id": position_id, "status": "BLOCKED"},
+            {"position_id": position_id, "user_id": user_id, "status": "BLOCKED"},
             {"$set": {"status": "RELEASED", "released_at": now}},
         )
         if not rec:
@@ -299,6 +299,22 @@ class PaperWallet:
         return {"ok": True, "healed": bool(auto_heal), "drift": drift,
                 "balance": balance, "truth": truth, "closed_positions": n}
 
+    async def release_terminal_margin(self, user_id: str) -> Dict[str, Any]:
+        blocks = await self.db.paper_margin_blocks.find(
+            {"user_id": user_id, "status": "BLOCKED"}, {"_id": 0},
+        ).to_list(10000)
+        released = []
+        for block in blocks:
+            pos = await self.db.strategy_positions.find_one(
+                {"id": block["position_id"], "user_id": user_id, "mode": "paper",
+                 "status": {"$in": ["CLOSED", "CANCELLED", "REJECTED"]}},
+                {"id": 1},
+            )
+            if pos:
+                await self.release_margin(user_id, block["position_id"])
+                released.append(block["position_id"])
+        return {"released_positions": released}
+
     async def audit_blocked_margin(self, user_id: str, *, drift_tol: float = 1.0,
                                    alert: bool = True) -> Dict[str, Any]:
         """Compare wallet blocked margin against open-position capital truth.
@@ -308,6 +324,7 @@ class PaperWallet:
         """
         from core.capital_model import position_capital_blocked
 
+        await self.release_terminal_margin(user_id)
         wallet = await self.get_or_initialize(user_id)
         open_rows = await self.db.strategy_positions.find(
             {"user_id": user_id,
@@ -315,7 +332,9 @@ class PaperWallet:
              "open_quantity": {"$gt": 0}},
             {"_id": 0},
         ).to_list(500)
-        expected = round(sum(position_capital_blocked(row) for row in open_rows), 2)
+        expected = round(sum(position_capital_blocked(row) for row in open_rows
+                             if row.get("structure") == "credit_spread"
+                             and row.get("mode") == "paper"), 2)
         actual = round(float(wallet.get("blocked_margin") or 0.0), 2)
         drift = round(actual - expected, 2)
         ok = abs(drift) <= drift_tol
@@ -346,6 +365,11 @@ class PaperWallet:
                      "$setOnInsert": {"id": f"paper-margin-{user_id}", "created_at": now}},
                     upsert=True,
                 )
+        if ok:
+            await self.db.app_alerts.update_many(
+                {"user_id": user_id, "kind": "paper_margin_reconciliation_mismatch", "status": "open"},
+                {"$set": {"status": "resolved", "resolved_at": now}},
+            )
         return result
 
     def summary(self, wallet: Dict[str, Any]) -> Dict[str, Any]:

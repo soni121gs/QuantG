@@ -38,9 +38,7 @@ async def _build_context(db, user_id: str, date_str: str, now: Optional[datetime
     strategies = await db.strategies.find({"user_id": user_id}).to_list(500)
     closed_today = await db.strategy_positions.find(
         {"user_id": user_id, "status": "CLOSED",
-         "$or": [{"created_at": {"$regex": f"^{date_str}"}},
-                 {"opened_at": {"$regex": f"^{date_str}"}},
-                 {"closed_at": {"$regex": f"^{date_str}"}}]}
+         "closed_at": {"$regex": f"^{date_str}"}}
     ).to_list(1000)
     open_positions = await db.strategy_positions.find(
         {"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "PENDING_BROKER", "EXITING"]}}
@@ -92,7 +90,8 @@ async def _persist(db, user_id: str, date_str: str,
             await db.hermes_findings.update_one(
                 {"user_id": user_id, "key": prev.get("key")},
                 {"$set": {"status": "resolved", "resolved_at": now_iso,
-                          "resolved_date": date_str}},
+                          "resolved_date": date_str,
+                          "resolution_reason": "not_observed_in_current_probe_window"}},
             )
             resolved += 1
     return {"emitted": len(emitted_keys), "resolved": resolved}

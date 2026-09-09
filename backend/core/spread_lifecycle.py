@@ -21,11 +21,15 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import math
+from functools import wraps
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from core.paper_broker import PaperWallet
 from core.execution_quality import record_execution_quality
+from core.spread_builder import cap_lots_by_risk
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("quantg.spread_lifecycle")
 
@@ -61,6 +65,12 @@ def _leg_charges(side: str, price: float, qty: int) -> float:
     stamp = gross * (0.00003 if str(side).upper() == "BUY" else 0.0)
     gst = (brokerage + exchange_txn + sebi) * 0.18
     return round(brokerage + stt + exchange_txn + sebi + stamp + gst, 2)
+
+
+def settlement_charges(long_intrinsic: float, qty: int, expiry: str) -> float:
+    # NSE/FATAX/73524: exercise STT is payable by the long holder, not the writer.
+    rate = 0.0015 if str(expiry)[:10] >= "2026-04-01" else 0.00125
+    return round(max(0.0, float(long_intrinsic)) * int(qty) * rate, 2)
 
 
 def value_credit_spread(position: Dict[str, Any], short_ltp: float, long_ltp: float) -> Dict[str, float]:
@@ -117,6 +127,71 @@ def compute_exit_levels(
     return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
 
 
+def _bounded_entry(fn):
+    @wraps(fn)
+    async def guarded(db, **kwargs):
+        user_id = kwargs["user_id"]
+        sid = kwargs["strategy_id"]
+        mode = kwargs.get("mode", "paper")
+        spread = kwargs["spread"]
+        lots, lot = int(kwargs["lots"]), int(kwargs["lot_size"])
+        rejected = {"ok": False, "status": "SKIPPED", "reason_code": "SPREAD_RISK_BUDGET"}
+        if lots <= 0 or lot <= 0:
+            return {**rejected, "reason": "Risk budget cannot fund one lot"}
+        # A user-wide entry lock serializes manual and runner spread entries.
+        # No timed expiry: an interrupted entry must be reconciled before retrying.
+        lock_id = f"spread-risk:{user_id}:{mode}"
+        owner = uuid.uuid4().hex
+        try:
+            await db.strategy_position_locks.insert_one({
+                "_id": lock_id, "owner": owner, "user_id": user_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except DuplicateKeyError:
+            return {**rejected, "reason": "Spread entry pending; retry after completion or reconcile interrupted entry"}
+        try:
+            strat = await db.strategies.find_one({"id": sid, "user_id": user_id}) or {}
+            vc = strat.get("visual_config") or {}
+            budget = float(strat.get("required_capital") or
+                           (vc.get("risk") or {}).get("required_capital") or
+                           (vc.get("options") or {}).get("required_capital") or 0)
+            short = float((spread.get("short_leg") or {}).get("premium") or 0)
+            long = float((spread.get("long_leg") or {}).get("premium") or 0)
+            credit = fn.__name__ == "open_credit_spread"
+            if mode == "paper":
+                short = _apply_paper_slippage(short, "SELL")
+                long = _apply_paper_slippage(long, "BUY")
+            risk_unit = float(spread.get("width_points") or 0) - (short - long) if credit else long - short
+            risk = round(risk_unit * lot * lots, 2)
+            if not all(math.isfinite(v) and v > 0 for v in (budget, risk_unit, risk)):
+                return {**rejected, "reason": "Missing or invalid spread risk/budget"}
+            if risk > budget or cap_lots_by_risk(lots, risk_unit, lot) < lots:
+                return {**rejected, "reason": f"Spread risk Rs{risk:.2f} exceeds affordable budget/cap Rs{budget:.2f}"}
+            active = await db.strategy_positions.find({
+                "user_id": user_id, "mode": mode,
+                "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING", "STALE_NEEDS_REVIEW"]},
+                "structure": {"$in": ["credit_spread", "debit_spread"]},
+            }).to_list(10000)
+            risks = [float(p.get("max_loss_total") or p.get("planned_risk") or 0)
+                     for p in active if p.get("strategy_id") == sid]
+            if any(not math.isfinite(v) or v <= 0 for v in risks):
+                return {**rejected, "reason": "Existing spread risk missing; reconcile before entry"}
+            held = sum(risks)
+            if held + risk > budget:
+                return {**rejected, "reason": f"Aggregate strategy risk Rs{held + risk:.2f} exceeds Rs{budget:.2f}"}
+            expiry = (spread.get("short_leg") or {}).get("expiry") or spread.get("expiry")
+            for p in active:
+                if (p.get("underlying") == kwargs["underlying"] and
+                        p.get("direction") == spread.get("direction") and p.get("expiry") == expiry):
+                    return {**rejected, "reason_code": "SPREAD_CORRELATED_EXPOSURE",
+                            "reason": "Same underlying, direction and expiry already exposed"}
+            return await fn(db, **kwargs)
+        finally:
+            await db.strategy_position_locks.delete_many({"_id": lock_id, "owner": owner})
+    return guarded
+
+
+@_bounded_entry
 async def open_credit_spread(
     db,
     *,
@@ -310,6 +385,7 @@ async def open_credit_spread(
             "lot_size": int(lot_size),
             "filled_qty": qty,
             "price": leg["premium"],
+            "charges": short_charges if leg["role"] == "short" else long_charges,
             "requested_price": quoted_entry_by_role.get(leg["role"], leg["premium"]),
             "status": "FILLED",
             "execution_status": "FILLED",
@@ -350,6 +426,7 @@ async def _record_spread_exit_orders(
     closed_at: str,
     is_live: bool,
     exit_broker_ids: Optional[Dict[str, Any]] = None,
+    expected_price_by_role: Optional[Dict[str, float]] = None,
 ) -> None:
     """Audit: write one FILLED CLOSE order row per leg so the order ledger shows the
     spread EXIT — mirrors the two entry rows the open path writes. Without this the
@@ -369,7 +446,10 @@ async def _record_spread_exit_orders(
         # short leg was SOLD at open -> BUY to close; long leg was BOUGHT -> SELL to close.
         exit_side = "BUY" if role == "short" else "SELL"
         price = exit_price_by_role.get(role)
+        expected = (expected_price_by_role or exit_price_by_role).get(role)
         try:
+            charges = (_leg_charges(exit_side, price, qty) if reason != "expiry-settlement" else
+                       settlement_charges(price, qty, position.get("expiry", "")) if role == "long" else 0.0)
             order_doc = {
                 "id": f"ord_{uuid.uuid4().hex[:12]}",
                 "user_id": user_id,
@@ -383,7 +463,8 @@ async def _record_spread_exit_orders(
                 "lot_size": lot_size,
                 "filled_qty": qty,
                 "price": price,
-                "requested_price": price,
+                "requested_price": expected,
+                "charges": charges,
                 "status": "FILLED",
                 "execution_status": "FILLED",
                 "mode": mode,
@@ -405,7 +486,7 @@ async def _record_spread_exit_orders(
             await db.orders.insert_one(order_doc)
             await record_execution_quality(
                 db, order=order_doc, position=position, event="spread_exit",
-                expected_price=price, actual_price=price, quantity=qty, status="FILLED",
+                expected_price=expected, actual_price=price, quantity=qty, status="FILLED",
             )
         except Exception as exc:  # noqa: BLE001 — audit row must never break the close
             logger.error("Spread exit order row failed pos=%s role=%s: %s", pos_id, role, exc)
@@ -466,7 +547,8 @@ async def close_credit_spread(
 
     short_ltp = float(short_ltp)
     long_ltp = float(long_ltp)
-    if not is_live:
+    quoted_exit_by_role = {"short": short_ltp, "long": long_ltp}
+    if not is_live and reason != "expiry-settlement":
         # Paper exit crosses the bid/ask too: buy back the short ABOVE mid, sell the
         # long BELOW mid. This widens the close value to a realistic fill so a paper
         # round-trip pays slippage on both ends (live fills at 322-323 are already real).
@@ -476,6 +558,9 @@ async def close_credit_spread(
 
     buyback_charges = _leg_charges("BUY", short_ltp, qty)    # buy back the short
     sell_charges = _leg_charges("SELL", long_ltp, qty)       # sell the long
+    if not is_live and reason == "expiry-settlement":
+        buyback_charges = 0.0
+        sell_charges = settlement_charges(long_ltp, qty, position.get("expiry", ""))
     exit_charges = round(buyback_charges + sell_charges, 2)
 
     wallet = PaperWallet(db)
@@ -585,6 +670,7 @@ async def close_credit_spread(
         db, position, structure="credit_spread",
         exit_price_by_role={"short": short_ltp, "long": long_ltp},
         qty=qty, net_pnl=net_pnl, reason=reason, closed_at=closed_at, is_live=is_live,
+        expected_price_by_role=quoted_exit_by_role,
     )
 
     # strategy.today_pnl / total_pnl is a CACHE field maintained identically by
@@ -632,6 +718,7 @@ def compute_debit_exit_levels(net_debit: float, width: float) -> Dict[str, float
     return {"spread_tp_value": tp_value, "spread_sl_value": sl_value}
 
 
+@_bounded_entry
 async def open_debit_spread(
     db,
     *,
@@ -671,6 +758,10 @@ async def open_debit_spread(
     max_loss = float(spread["max_loss"])
 
     wallet = PaperWallet(db)
+    short["premium"] = _apply_paper_slippage(short["premium"], "SELL")
+    long["premium"] = _apply_paper_slippage(long["premium"], "BUY")
+    net_debit = round(long["premium"] - short["premium"], 2)
+    max_loss = net_debit
     pos_id = f"pos_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
 
@@ -759,7 +850,8 @@ async def open_debit_spread(
             "lot_size": int(lot_size),
             "filled_qty": qty,
             "price": leg["premium"],
-            "requested_price": leg["premium"],
+            "requested_price": spread[f"{leg['role']}_leg"]["premium"],
+            "charges": short_charges if leg["role"] == "short" else long_charges,
             "status": "FILLED",
             "execution_status": "FILLED",
             "mode": mode,
@@ -773,7 +865,7 @@ async def open_debit_spread(
         await db.orders.insert_one(order_doc)
         await record_execution_quality(
             db, order=order_doc, position=position_doc, event="spread_entry",
-            expected_price=leg["premium"], actual_price=leg["premium"],
+            expected_price=spread[f"{leg['role']}_leg"]["premium"], actual_price=leg["premium"],
             quantity=qty, status="FILLED",
         )
 
@@ -812,11 +904,18 @@ async def close_debit_spread(
 
     short_ltp = float(short_ltp)
     long_ltp = float(long_ltp)
+    quoted_exit_by_role = {"short": short_ltp, "long": long_ltp}
+    if reason != "expiry-settlement":
+        short_ltp = _apply_paper_slippage(short_ltp, "BUY")
+        long_ltp = _apply_paper_slippage(long_ltp, "SELL")
     close_value = round(long_ltp - short_ltp, 2)
 
     wallet = PaperWallet(db)
     buyback_charges = _leg_charges("BUY", short_ltp, qty)
     sell_charges = _leg_charges("SELL", long_ltp, qty)
+    if reason == "expiry-settlement":
+        buyback_charges = 0.0
+        sell_charges = settlement_charges(long_ltp, qty, position.get("expiry", ""))
     exit_charges = round(buyback_charges + sell_charges, 2)
 
     # Wallet updates
@@ -917,6 +1016,7 @@ async def close_debit_spread(
         db, position, structure="debit_spread",
         exit_price_by_role={"short": short_ltp, "long": long_ltp},
         qty=qty, net_pnl=net_pnl, reason=reason, closed_at=closed_at, is_live=False,
+        expected_price_by_role=quoted_exit_by_role,
     )
 
     logger.info(

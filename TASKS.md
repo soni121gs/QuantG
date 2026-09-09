@@ -10,6 +10,8 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
 
 ## GOVERNING LAWS (every task inherits these)
 
+- [~] **TASK-AUDIT-0909** (T3, Codex) Founder authorized repair of audit findings 1-7 on 2026-09-09. Files: `backend/signal_manager.py`, `backend/core/spread_builder.py`, `backend/core/spread_lifecycle.py`, `backend/core/paper_broker.py`, `backend/core/hermes_diagnostics/{probes_execution,probes_strategy}.py`, related regression tests, an audited repair script, strategy validation reports, and UI exit-policy wording if required. Enforce affordable and aggregate spread risk, reconcile orphan margin, separate expiry settlement from trading slippage, correct Hermes taxonomy/epochs, deploy pending telemetry/UI work, run available OOS validation and preserve explicit data/forward-paper blockers. Verify focused pytest, startup/public API/UI, production reconciliations and paper-only flags. No unvalidated alpha promotion.
+
 1. **OOS-first ladder** — hypothesis → OOS (regime-/event-conditional) → forward-paper → founder-gated live. Nothing scales on a backtest. Paper P&L proves nothing alone.
 2. **Cost-floor law (Carver)** — reject at DESIGN time any strategy whose expected edge < 3× modeled round-trip friction (≈ never spend >⅓ of expected Sharpe on costs; in practice: no options structure under ~₹250/lot expected edge).
 3. **Breadth law (Grinold-Kahn, IR = IC·√BR)** — prefer many independent bets (events × names × regimes) over more parameterizations of one bet.

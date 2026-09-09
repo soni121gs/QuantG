@@ -11,7 +11,10 @@ from typing import Any, Dict, List, Optional
 from core.hermes_diagnostics.contract import Finding, Domain, Severity, Confidence
 from core.hermes_diagnostics.probe_sdk import register, ProbeContext
 
-_PRICE_EXIT_REASONS = {"spread-tp", "spread-sl", "trail-lock", "dynamic-exit"}
+_PRICE_EXIT_REASONS = {
+    "spread-tp", "spread-sl", "trail-lock", "dynamic-exit", "profit-protect",
+    "debit-payback-tp", "profit-lock-strat-trail", "profit-lock-trail",
+}
 _SPREAD_STRUCTS = {"credit_spread", "debit_spread"}
 
 
@@ -105,11 +108,9 @@ async def exit_reason_mix(ctx: ProbeContext) -> List[Finding]:
             probe_id="exec.exit_reason_mix", domain=Domain.EXECUTION,
             severity=Severity.CRITICAL, entity="spread-book",
             title=f"Stop engine produced 0 price-based exits across {n} spreads today",
-            detail=("Not one spread exited on TP, SL or trailing-lock — every close "
-                    "was a time-exit or the 15:25 square-off. The take-profit / "
-                    "stop-loss / trailing engine is not protecting positions: either "
-                    "spread legs aren't being live-marked, or the thresholds sit "
-                    "beyond reach. Losses ride to a time/bell exit at full damage."),
+            detail=("No recognized price-triggered exit was recorded in this sample. "
+                    "Inspect the exit distribution, holding policy, marks and thresholds. "
+                    "Exit counts alone do not establish a stop-engine failure."),
             evidence={"closed_spreads": n, "price_exits": 0, "exit_distribution": dist},
             reproduction=("db.strategy_positions.aggregate([{$match:{structure:{$in:['credit_spread','debit_spread']},"
                           "status:'CLOSED',created_at:{$regex:'^%s'}}},{$group:{_id:'$exit_reason',n:{$sum:1}}}])"

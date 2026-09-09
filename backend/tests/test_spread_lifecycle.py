@@ -47,6 +47,13 @@ class _Coll:
         self.docs.append(dict(doc))
         return type("R", (), {"inserted_id": doc.get("id")})()
 
+    def find(self, query, proj=None):
+        rows = [dict(d) for d in self.docs if _match(d, query)]
+        class Cursor:
+            async def to_list(self, length):
+                return rows[:length]
+        return Cursor()
+
     async def find_one(self, query, proj=None):
         for d in self.docs:
             if _match(d, query):
@@ -115,6 +122,8 @@ class _DB:
         self.trades = _Coll()
         self.trade_fills = _Coll(unique_field="id")
         self.strategies = _Coll()
+        self.strategies.docs.append({"id": "s1", "user_id": "u1", "required_capital": 15000})
+        self.strategy_position_locks = _Coll(unique_field="_id")
         self.positions = _Coll()
         self.paper_wallets = _Coll(unique_field="user_id")
         self.paper_wallet_credits = _Coll(unique_field="order_id")

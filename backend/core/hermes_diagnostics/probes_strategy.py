@@ -13,6 +13,21 @@ _MIN_TRADES_FOR_LOSS_CALL = 15
 _MIN_TRADES_FOR_EVIDENCE = 30   # CLAUDE.md law: nothing is 'working' under 30 trades
 
 
+def geometry_epoch(strat: Dict[str, Any]) -> Optional[str]:
+    options = (strat.get("visual_config") or {}).get("options") or {}
+    values = [strat.get("geometry_changed_at"), options.get("geometry_changed_at")]
+    parsed = []
+    for value in values:
+        if not value:
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            parsed.append(stamp.replace(tzinfo=stamp.tzinfo or timezone.utc))
+        except (ValueError, TypeError):
+            continue
+    return max(parsed).astimezone(timezone.utc).isoformat() if parsed else None
+
+
 @register("strategy.persistent_live_loss", kind="dynamic")
 async def persistent_live_loss(ctx: ProbeContext) -> List[Finding]:
     """Flag any strategy that is net-negative over a meaningful recent sample —
@@ -90,7 +105,7 @@ async def _epoch_split(ctx: ProbeContext, sid: str, strat: Dict[str, Any]) -> Op
     Returns None when the strategy has never been re-cut, so untouched strategies
     keep the plain blended verdict.
     """
-    changed_at = strat.get("geometry_changed_at")
+    changed_at = geometry_epoch(strat)
     if not changed_at:
         return None
     since = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -188,7 +203,7 @@ async def geometry_vs_realized_wr(ctx: ProbeContext) -> List[Finding]:
         sid = str(strat.get("id"))
         match: Dict[str, Any] = {"user_id": ctx.user_id, "status": "CLOSED",
                                  "strategy_id": sid, "realized_pnl": {"$ne": None}}
-        epoch = strat.get("geometry_changed_at")
+        epoch = geometry_epoch(strat)
         if epoch:
             match["created_at"] = {"$gte": str(epoch)}
         rows = await ctx.db.strategy_positions.aggregate([

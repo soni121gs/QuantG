@@ -672,15 +672,7 @@ def settle_legs_at_intrinsic(
 
 
 def lots_for_risk(max_loss_per_unit: float, lot_size: int, risk_budget: float) -> int:
-    """Number of lots whose total defined risk stays within risk_budget.
-
-    PURE and deliberately un-capped: this answers only "how many lots fit this
-    budget". The book-wide per-trade ceiling is applied separately by
-    cap_lots_by_risk() at the sizing call sites, because this function is allowed
-    to return 0 (callers floor at 1) and a ceiling that can return 0 would
-    silently stand a strategy down instead of trimming it — the SENSEX sellers
-    need 12.9k for a single lot and would have gone to zero.
-    """
+    """Affordable whole lots; zero means the strategy must stand down."""
     per_lot = float(max_loss_per_unit) * int(lot_size)
     if per_lot <= 0 or risk_budget <= 0:
         return 0
@@ -694,31 +686,12 @@ def cap_lots_by_risk(
     *,
     cap: Optional[float] = None,
 ) -> int:
-    """Trim `lots` so the position's total defined risk fits the BOOK-WIDE
-    per-trade ceiling (MAX_RISK_PER_TRADE_RUPEES). Never returns less than 1.
-
-    Why this exists (2026-08-04). `risk_budget` is the strategy's own
-    `required_capital` — per-strategy config with no upper bound — so one row can
-    quietly take several times the book's normal per-trade risk. `IDX NIFTY
-    Mean-Reversion Fade` carried 20,000 against 4,000-13,000 everywhere else,
-    sized to FIVE lots, put Rs15,811 of defined risk on a single 0-DTE debit
-    spread and lost Rs8,077: 129% of that day's entire loss, from one trade.
-
-    Why it floors at 1 rather than 0. Defined risk per LOT varies enormously
-    across the book (Rs491 for the tail hedge, Rs12,873 for a SENSEX seller,
-    Rs30,673 for the hold-to-expiry sleeve — wing widths differ by design). A
-    ceiling that could return 0 would stand those sleeves down permanently, which
-    is a trading decision disguised as a sizing one. This bounds multi-lot
-    SCALING only; refusing a single wide-winged lot is a separate judgement and
-    belongs to the cost-floor / reachability laws, not here.
-
-    Set MAX_RISK_PER_TRADE_RUPEES=0 to disable.
-    """
-    n = max(1, int(lots or 1))
+    """Cap whole lots by maximum risk, including rejecting an unaffordable lot."""
+    n = max(0, int(lots or 0))
     ceiling = MAX_RISK_PER_TRADE_RUPEES if cap is None else float(cap)
     if ceiling <= 0:
         return n
     per_lot = float(max_loss_per_unit or 0) * int(lot_size or 0)
     if per_lot <= 0:
         return n
-    return max(1, min(n, int(ceiling // per_lot)))
+    return max(0, min(n, int(ceiling // per_lot)))

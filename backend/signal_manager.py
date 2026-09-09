@@ -720,7 +720,7 @@ async def _edge_math_spread_size(
         # negative sizes to ZERO instead of being floored to 1 lot.
         lots = 0
     else:
-        lots = min(max(1, capital_cap), max(1, int(round(_scaled))))
+        lots = min(capital_cap, max(1, int(round(_scaled))))
 
     # RAE-4 router: gate/scale by regime OWNERSHIP. A credit spread is the RANGE
     # seller (RAE-3d); the router stands it down (size_mult 0) when the regime is
@@ -1336,9 +1336,9 @@ async def _dispatch_signal_via_unified_engine(
                     pass
                 return {"ok": False, "status": "SKIPPED", "reason": _db_reason,
                         "reason_code": "RAE_ROUTER_STAND_DOWN"}
-        _spread_lots = max(1, lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget))
+        _spread_lots = lots_for_risk(_spread.get("max_loss") or 0, lot_size, _risk_budget)
         if _db_specialist and _rae_enabled_db() and _db_routing.size_mult != 1.0:
-            _spread_lots = max(1, int(round(_spread_lots * _db_routing.size_mult)))
+            _spread_lots = max(0, int(round(_spread_lots * _db_routing.size_mult)))
         # Book-wide per-trade rupee ceiling — see the credit path. THIS is the leg
         # that mattered on 2026-08-04: the debit sleeve's required_capital of
         # 20,000 sized it to five lots and Rs15,811 of risk on one 0-DTE spread.

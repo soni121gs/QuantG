@@ -165,8 +165,8 @@ export const StrategyCard = ({ s, score, toggle, archive, restore, onAbout, exit
           <span
             className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border bg-[rgba(191,90,242,0.12)] border-[var(--qd-accent)]/30 text-[var(--qd-text-2)]"
             title={dteWindow
-              ? `Held to expiry. Opens the nearest expiry ${dteWindow} days out; stands down if none qualifies.`
-              : "Held to expiry, but NO expiry window is set — it will take the nearest expiry, which on a Mon/Tue is the 0-1 DTE weekly."}
+              ? `Credit spreads use profit exits but no intraday stop-loss; maximum spread loss remains at risk. Opens the nearest expiry ${dteWindow} days out; stands down if none qualifies.`
+              : "Credit spreads use profit exits but no intraday stop-loss. NO expiry window is set — it will take the nearest expiry, which on a Mon/Tue is the 0-1 DTE weekly."}
           >
             HOLD-TO-EXPIRY{dteWindow ? ` ${dteWindow}D` : ""}
           </span>
