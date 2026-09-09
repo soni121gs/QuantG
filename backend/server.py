@@ -17012,7 +17012,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _candle_backfill_done_date: Optional[str] = None
     _minute_backfill_done_date: Optional[str] = None
     _feed_open_check_done_date: Optional[str] = None
-    _auth_request_done_date: Optional[str] = None
+    _auth_request_done_slot: Optional[str] = None
     _auth_alarm_done_date: Optional[str] = None
     _schedule_activate_done_date: Optional[str] = None
     _schedule_pause_done_date: Optional[str] = None
@@ -17262,7 +17262,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 except Exception as _bf_err:
                     logger.warning("1-min gap-backfill failed: %s", _bf_err)
 
-            # 08:45 IST — fire Upstox's SCHEDULED-APPROVAL auth request so the
+            # 07:00 and 08:30 IST — fire Upstox's SCHEDULED-APPROVAL request so the
             # daily token is live BEFORE the 09:15 open.
             #
             # The Upstox access token dies at 03:30 IST every day and Upstox issues
@@ -17275,7 +17275,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
             # request, Upstox pushes an in-app/WhatsApp prompt, the founder taps
             # approve, and the token arrives at our notifier webhook. No password or
             # TOTP seed is stored anywhere and the human approval SEBI requires still
-            # happens — it just happens at 08:45 from a phone instead of at 09:34
+            # happens — it just happens before the open from a phone instead of at 09:34
             # from a desktop. Skipped when the stored token is already fresh for
             # today, so an early manual login is never disturbed.
             _mod_ist = hour * 60 + minute
@@ -17283,21 +17283,27 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 from core.upstox_auth_request import (
                     AUTH_ALARM_MINUTE_IST as _AUTH_ALARM_MIN,
                     AUTH_REQUEST_ENABLED as _AUTH_REQ_ON,
-                    AUTH_REQUEST_MINUTE_IST as _AUTH_REQ_MIN,
+                    AUTH_REQUEST_MINUTES_IST as _AUTH_REQ_MINS,
+                    auth_request_trading_day as _auth_trading_day,
                     build_auth_request_url as _build_auth_url,
                     parse_auth_request_response as _parse_auth_resp,
                     token_is_fresh as _tok_fresh,
                 )
             except Exception:  # noqa: BLE001 — never let this break the scheduler
                 _AUTH_REQ_ON = False
-                _AUTH_REQ_MIN = _AUTH_ALARM_MIN = -1
+                _AUTH_REQ_MINS = ()
+                _AUTH_ALARM_MIN = -1
 
-            if (_AUTH_REQ_ON and ist.weekday() < 5 and _mod_ist == _AUTH_REQ_MIN
-                    and _auth_request_done_date != today):
-                _auth_request_done_date = today
+            _auth_slot = f"{today}:{_mod_ist}"
+            if (_AUTH_REQ_ON and ist.weekday() < 5 and _mod_ist in _AUTH_REQ_MINS
+                    and not _is_trading_holiday(ist.date()) and _auth_request_done_slot != _auth_slot):
+                _auth_request_done_slot = _auth_slot
                 try:
                     import requests as _rq
-                    for _row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(50):
+                    _auth_users = []
+                    if await asyncio.to_thread(_auth_trading_day, ist.date()):
+                        _auth_users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(50)
+                    for _row in _auth_users:
                         _uid = _row["id"]
                         _keys = await db.broker_keys.find_one(
                             {"user_id": _uid, "broker": "upstox"})
@@ -17311,6 +17317,15 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         if not _ak or not _as:
                             logger.warning("Upstox auth-request skipped user=%s: no api key/secret", _uid)
                             continue
+                        _request_id = f"scheduled:{_uid}:{_auth_slot}"
+                        _claim = await db.upstox_auth_requests.update_one(
+                            {"_id": _request_id}, {"$setOnInsert": {
+                                "id": str(uuid.uuid4()), "user_id": _uid, "source": "scheduler",
+                                "scheduled_slot": _auth_slot, "ok": False,
+                                "requested_at": datetime.now(timezone.utc).isoformat(),
+                            }}, upsert=True)
+                        if _claim.upserted_id is None:
+                            continue
                         _resp = await asyncio.to_thread(
                             _rq.post, _build_auth_url(_ak),
                             headers={"accept": "application/json",
@@ -17318,14 +17333,13 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                             json={"client_secret": _as}, timeout=20)
                         _body = _resp.json() if _resp.content else {}
                         _parsed = _parse_auth_resp(_body)
-                        await db.upstox_auth_requests.insert_one({
-                            "id": str(uuid.uuid4()), "user_id": _uid,
+                        await db.upstox_auth_requests.update_one({"_id": _request_id}, {"$set": {
                             "requested_at": datetime.now(timezone.utc).isoformat(),
                             "http_status": _resp.status_code, "ok": bool(_parsed["ok"]),
                             "notifier_url": _parsed["notifier_url"],
                             "authorization_expiry": _parsed["authorization_expiry"],
                             "source": "scheduler",
-                        })
+                        }})
                         logger.info(
                             "Upstox auth-request sent user=%s ok=%s — APPROVE THE PROMPT "
                             "IN THE UPSTOX APP to have the token before the open",

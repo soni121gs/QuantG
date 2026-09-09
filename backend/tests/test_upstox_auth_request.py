@@ -154,3 +154,25 @@ def test_unparseable_obtained_at_reads_stale(junk):
     """Fail CLOSED: an unreadable timestamp must mean 'refresh it', never 'assume
     it is fine' — that assumption is what a silent morning outage looks like."""
     assert token_is_fresh(junk, now_ist=datetime(2026, 8, 5, 9, 15, tzinfo=IST)) is False
+
+@pytest.mark.parametrize("day,closed,expected", [
+    ("2026-09-10", [], True),
+    ("2026-09-14", ["NFO", "BFO"], False),
+    ("2026-09-10", ["CDS"], True),
+])
+def test_reminder_trading_calendar(monkeypatch, day, closed, expected):
+    from types import SimpleNamespace
+    from core.upstox_auth_request import auth_request_trading_day, AUTH_REQUEST_MINUTES_IST
+    assert AUTH_REQUEST_MINUTES_IST == (420, 510)
+    response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
+        "status": "success", "data": [{"date": day, "closed_exchanges": closed}]})
+    monkeypatch.setattr("core.upstox_auth_request.requests.get", lambda *a, **kw: response)
+    assert auth_request_trading_day(datetime.fromisoformat(day).date()) is expected
+
+
+def test_reminder_skips_weekend_without_calendar_request(monkeypatch):
+    from core.upstox_auth_request import auth_request_trading_day
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Weekend must not request calendar")
+    monkeypatch.setattr("core.upstox_auth_request.requests.get", unexpected)
+    assert not auth_request_trading_day(datetime(2026, 9, 12).date())

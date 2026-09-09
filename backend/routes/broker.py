@@ -821,7 +821,7 @@ async def upstox_token_status(user=Depends(get_current_user)):
     """Is the stored token valid for TODAY's session? Drives the pre-open check."""
     from datetime import timedelta
     from core.upstox_auth_request import (
-        AUTH_ALARM_MINUTE_IST, AUTH_REQUEST_MINUTE_IST, token_is_fresh)
+        AUTH_ALARM_MINUTE_IST, AUTH_REQUEST_MINUTES_IST, token_is_fresh)
 
     keys = await db.broker_keys.find_one({"user_id": user["id"], "broker": "upstox"}) or {}
     obtained = keys.get("access_token_obtained_at")
@@ -835,7 +835,7 @@ async def upstox_token_status(user=Depends(get_current_user)):
         "access_token_source": keys.get("access_token_source"),
         "expires_at_ist": "03:30 next day (Upstox fixed boundary)",
         "now_ist": now_ist.isoformat(),
-        "auto_request_at_ist": f"{AUTH_REQUEST_MINUTE_IST // 60:02d}:{AUTH_REQUEST_MINUTE_IST % 60:02d}",
+        "auto_request_at_ist": ", ".join(f"{m // 60:02d}:{m % 60:02d}" for m in AUTH_REQUEST_MINUTES_IST),
         "alarm_at_ist": f"{AUTH_ALARM_MINUTE_IST // 60:02d}:{AUTH_ALARM_MINUTE_IST % 60:02d}",
         # `notifier_url` is what UPSTOX has on file for this app, echoed back in the
         # step-1 response. It is the diagnostic that matters when a token never

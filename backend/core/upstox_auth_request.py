@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import requests
 from typing import Any, Dict, Optional, Tuple
 
 # Upstox scheduled-approval endpoints (v3).
@@ -59,9 +60,7 @@ AUTH_TOKEN_REQUEST_URL = os.environ.get(
     "https://api.upstox.com/v3/login/auth/token/request/{client_id}",
 )
 
-# IST minute-of-day at which the daily auth request is fired. 08:45 leaves 30
-# minutes of slack before the 09:15 open for the approval tap to happen.
-AUTH_REQUEST_MINUTE_IST = int(os.environ.get("UPSTOX_AUTH_REQUEST_MINUTE_IST", str(8 * 60 + 45)))
+AUTH_REQUEST_MINUTES_IST = (7 * 60, 8 * 60 + 30)
 # IST minute at which a still-missing token is escalated as a loud failure. 09:05
 # is late enough that the approval has plainly not happened, early enough to act.
 AUTH_ALARM_MINUTE_IST = int(os.environ.get("UPSTOX_AUTH_ALARM_MINUTE_IST", str(9 * 60 + 5)))
@@ -76,6 +75,19 @@ NOTIFIER_PATH_SECRET = os.environ.get("UPSTOX_NOTIFIER_PATH_SECRET", "").strip()
 
 class NotifierRejected(Exception):
     """The notifier payload is not a usable Upstox access-token delivery."""
+
+
+def auth_request_trading_day(day) -> bool:
+    if day.weekday() >= 5:
+        return False
+    response = requests.get(f"https://api.upstox.com/v2/market/holidays/{day.isoformat()}", timeout=10)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") != "success" or not isinstance(payload.get("data"), list):
+        raise ValueError("Upstox holiday calendar unavailable")
+    return not any(row.get("date") == day.isoformat() and
+                   {"NFO", "BFO"}.issubset(set(row.get("closed_exchanges") or []))
+                   for row in payload["data"])
 
 
 def build_auth_request_url(client_id: str) -> str:
