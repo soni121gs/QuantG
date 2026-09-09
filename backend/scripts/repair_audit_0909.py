@@ -19,6 +19,49 @@ from core.hermes_diagnostics.runner import run_diagnostics
 from core.hermes_diagnostics.narrator import narrate_findings
 
 
+VOIDED_IDS = ["pos_84dbc4e84d23", "pos_204a44276c70", "pos_54c4e5550223",
+              "pos_dbb45b5c9913", "pos_5f48e3c15713"]
+
+
+def entry_cashflow(pos):
+    credit = pos.get("structure") == "credit_spread"
+    premium = float(pos["net_credit" if credit else "net_debit"])
+    return round((premium if credit else -premium) * int(pos["quantity"]) - float(pos["entry_charges"]), 2)
+
+
+async def repair_voided_cashflows(db, uid, now):
+    marker = "accounting_repairs.audit0909_voided"
+    wallet = await db.paper_wallets.find_one({"user_id": uid})
+    if (wallet.get("accounting_repairs") or {}).get("audit0909_voided"):
+        return 0.0
+    voided = await db.strategy_positions.find({"user_id": uid, "id": {"$in": VOIDED_IDS}}).to_list(6)
+    if not voided:
+        return 0.0
+    if len(voided) != 5 or any(p.get("status") != "CANCELLED" or p.get("mode") != "paper" for p in voided):
+        raise RuntimeError("Audited cancellation set changed")
+    epoch = wallet.get("epoch_at") or wallet.get("reset_at") or wallet["created_at"]
+    fills = await db.trade_fills.find({"user_id": uid, "mode": "paper", "created_at": {"$gte": epoch}}).to_list(100000)
+    active = await db.strategy_positions.find({"user_id": uid, "mode": "paper", "status": {
+        "$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING", "STALE_NEEDS_REVIEW"]}}).to_list(1000)
+    if any(p.get("status") != "OPEN" or p.get("structure") not in ("credit_spread", "debit_spread") for p in active):
+        raise RuntimeError("Reconcile other active positions before cashflow repair")
+    truth = round(float(wallet["initial_balance"]) + sum(float(f.get("realized_pnl") or 0) for f in fills)
+                  + sum(entry_cashflow(p) for p in active), 2)
+    reversal = round(-sum(entry_cashflow(p) for p in voided), 2)
+    if abs(float(wallet["balance"]) + reversal - truth) > 0.01:
+        raise RuntimeError("Cancelled cashflows do not exactly explain the wallet residual")
+    key = f"audit0909-voided:{uid}"
+    await db.paper_state_audit.update_one({"repair_id": key}, {"$setOnInsert": {
+        "repair_id": key, "user_id": uid, "before": wallet, "positions": VOIDED_IDS,
+        "delta": reversal, "truth": truth, "created_at": now}}, upsert=True)
+    result = await db.paper_wallets.update_one({"user_id": uid, "balance": wallet["balance"], marker: {"$exists": False}}, {
+        "$inc": {"balance": reversal, "total_credited": reversal}, "$set": {marker: key, "updated_at": now}})
+    if result.modified_count != 1:
+        raise RuntimeError("Wallet changed during audited reversal; rerun after reconciliation")
+    await db.paper_state_audit.update_one({"repair_id": key}, {"$set": {"completed_at": now}})
+    return reversal
+
+
 def settlement_plan(pos):
     legs = pos.get("settlement_legs") or {}
     if pos.get("settlement_source") != "intrinsic" or not {"short", "long"} <= legs.keys():
@@ -116,6 +159,8 @@ async def main(args):
         await db.paper_state_audit.update_one({"repair_id": key}, {"$set": {"completed_at": now}})
     users = await db.paper_wallets.distinct("user_id")
     for uid in users:
+        reversal = await repair_voided_cashflows(db, uid, now)
+        print(json.dumps({"voided_entry_cashflow_correction": reversal}))
         wallet = PaperWallet(db)
         released = await wallet.release_terminal_margin(uid)
         audit = await wallet.audit_blocked_margin(uid)

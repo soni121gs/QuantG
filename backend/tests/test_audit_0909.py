@@ -10,13 +10,33 @@ from core.knowledge_layer import promotion_stage
 from core.hermes_diagnostics.probes_execution import exit_reason_mix
 from core.hermes_diagnostics.probes_strategy import geometry_epoch
 from test_spread_lifecycle import _DB, _spread, _balance
-from scripts.repair_audit_0909 import settlement_plan
+from scripts.repair_audit_0909 import settlement_plan, entry_cashflow
+from unittest.mock import AsyncMock, patch
+from fastapi import HTTPException
+from routes.ops import ops_clear_stale_paper_orders
 
 
 def test_risk_ceiling_rejects_one_unaffordable_lot():
     assert cap_lots_by_risk(1, 450, 65, cap=8000) == 0
     assert cap_lots_by_risk(0, 10, 65, cap=8000) == 0
     assert cap_lots_by_risk(10, 100, 65, cap=15000) == 2
+
+
+def test_stale_order_clear_cannot_void_a_filled_position():
+    db = SimpleNamespace(strategy_positions=SimpleNamespace(count_documents=AsyncMock(return_value=1)),
+                         orders=SimpleNamespace(update_many=AsyncMock()))
+    with patch("routes.ops.db", db), pytest.raises(HTTPException) as exc:
+        asyncio.run(ops_clear_stale_paper_orders(user={"id": "u1"}))
+    assert exc.value.status_code == 409
+    db.orders.update_many.assert_not_awaited()
+
+
+def test_cancelled_entry_cashflows_explain_residual_exactly():
+    rows = [("credit_spread", 38.33, 65, 6.98), ("credit_spread", 27.74, 65, 5.02),
+            ("debit_spread", 10.8, 325, 9.28), ("credit_spread", 35.96, 65, 4.74),
+            ("credit_spread", 54.9, 65, 7.05)]
+    assert round(sum(entry_cashflow({"structure": s, "net_credit": p, "net_debit": p,
+                                    "quantity": q, "entry_charges": c}) for s, p, q, c in rows), 2) == 6657.38
 
 
 def test_missing_oos_cannot_promote_even_with_profitable_paper_and_quality():

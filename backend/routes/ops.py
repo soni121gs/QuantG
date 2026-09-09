@@ -1744,41 +1744,24 @@ async def reject_user(user_id: str, user=Depends(get_current_user)):
 
 @router.post("/paper-orders/clear-stale")
 async def ops_clear_stale_paper_orders(req: OpsActionReq = None, user=Depends(get_current_user)):
+    active = await db.strategy_positions.count_documents({
+        "user_id": user["id"], "mode": "paper",
+        "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED", "EXITING", "STALE_NEEDS_REVIEW"]},
+    })
+    if active:
+        raise HTTPException(status_code=409, detail="Close or reconcile active paper positions before clearing stale orders. Use Exit All for filled positions.")
     now = datetime.now(timezone.utc).isoformat()
     from server import ORDER_ACTIVE_STATUSES, LEGACY_OPEN_STATUSES, ORDER_CANCELLED
-    active_statuses = list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)
-    
     res = await db.orders.update_many(
-        {"user_id": user["id"], "mode": "paper", "status": {"$in": active_statuses}},
-        {"$set": {
-            "status": ORDER_CANCELLED,
-            "legacy_status": "CANCELLED",
-            "broker_status": "CANCELLED",
-            "status_message": "Paper order cleared manually via Ops console.",
-            "updated_at": now
-        }}
+        {"user_id": user["id"], "mode": "paper",
+         "status": {"$in": list(ORDER_ACTIVE_STATUSES | LEGACY_OPEN_STATUSES)},
+         "filled_qty": {"$not": {"$gt": 0}},
+         "execution_status": {"$nin": ["FILLED", "PARTIALLY_FILLED"]}},
+        {"$set": {"status": ORDER_CANCELLED, "legacy_status": "CANCELLED",
+                  "broker_status": "CANCELLED", "status_message": "Unfilled paper order cleared manually via Ops console.",
+                  "updated_at": now}},
     )
-    
-    await db.strategy_positions.update_many(
-        {"user_id": user["id"], "status": {"$in": ["RESERVED", "PENDING_OPEN", "PENDING_BROKER", "OPEN", "FILLED"]}, "mode": "paper"},
-        {"$set": {
-            "status": "CANCELLED",
-            "broker_status_message": "Paper position cleared manually via Ops console.",
-            "updated_at": now
-        },
-         "$unset": {"active_instrument_key": "", "active_strategy_key": "", "active_strategy_instrument_side_key": ""}}
-    )
-
-    # Drop the UI position mirror too. The mirror (db.positions) is only
-    # auto-deleted on a full CLOSE — cancelling the strategy_positions above
-    # without this leaves orphaned mirror rows that show up as phantom "ORPHAN"
-    # holdings on the Positions page. All active paper positions were just
-    # cancelled, so no valid paper mirror row remains.
-    mirror_res = await db.positions.delete_many({"user_id": user["id"], "mode": "paper"})
-
-    await db.strategy_position_locks.delete_many({"user_id": user["id"]})
-
-    return {"ok": True, "cleared_orders": res.modified_count, "cleared_position_mirrors": mirror_res.deleted_count}
+    return {"ok": True, "cleared_orders": res.modified_count, "cleared_position_mirrors": 0}
 
 
 @router.post("/accounts/reset-all-trading-state")
