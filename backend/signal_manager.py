@@ -755,7 +755,9 @@ async def _edge_math_spread_size(
     if lots >= 1:
         from core.spread_builder import cap_lots_by_risk
         _pre_cap = lots
-        lots = cap_lots_by_risk(lots, float(spread.get("max_loss") or 0), lot_size)
+        lots = cap_lots_by_risk(
+            lots, float(spread.get("max_loss") or 0), lot_size, cap=risk_budget
+        )
         if lots != _pre_cap:
             logger.info("risk cap: %s lots %d -> %d (max_loss/unit=%.2f lot=%d)",
                         sid, _pre_cap, lots, float(spread.get("max_loss") or 0), lot_size)
@@ -1344,7 +1346,10 @@ async def _dispatch_signal_via_unified_engine(
         # 20,000 sized it to five lots and Rs15,811 of risk on one 0-DTE spread.
         from core.spread_builder import cap_lots_by_risk as _cap_lots
         _pre_cap_lots = _spread_lots
-        _spread_lots = _cap_lots(_spread_lots, float(_spread.get("max_loss") or 0), lot_size)
+        _spread_lots = _cap_lots(
+            _spread_lots, float(_spread.get("max_loss") or 0), lot_size,
+            cap=_risk_budget,
+        )
         if _spread_lots != _pre_cap_lots:
             logger.info("risk cap (debit): %s lots %d -> %d (max_loss/unit=%.2f lot=%d)",
                         sig.get("strategy_id"), _pre_cap_lots, _spread_lots,

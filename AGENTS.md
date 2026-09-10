@@ -166,6 +166,10 @@ if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
 
 # Spread size is set by required_capital (lots_for_risk), NOT the 1-lot cap.
 # The DAILY_CAP gate is trade_frequency._CLASS_CAPS (FREQ_CAP_*), NOT the max_trades_day field.
+# Risk-budget invariant: spread sizing and the final spread-entry guard must both
+# use the strategy's required_capital as cap= for cap_lots_by_risk(). The global
+# MAX_RISK_PER_TRADE_RUPEES ceiling is not a substitute for strategy budget and
+# must not reject a valid one-lot spread that its own required_capital can fund.
 ```
 
 ---
@@ -199,6 +203,16 @@ if str(pos.get("structure")) in ("credit_spread", "debit_spread"):
 | Hermes sidecar engine daemon | `hermes/agent.py` |
 | Hermes deployment runbook | `docs/DEPLOY_HERMES.md` |
 | Existing tests | `backend/tests/` |
+
+### Spread risk-budget invariant
+
+For `credit_spread` and `debit_spread`, `required_capital` is the authoritative
+per-strategy risk budget. Compute affordable lots with `lots_for_risk()` and pass
+that same strategy budget as `cap=` to any later `cap_lots_by_risk()` call. A
+book-wide cap may limit multi-lot sizing only when explicitly intended; it must
+never turn a fundable one-lot strategy into `SPREAD_RISK_BUDGET` skips. Any change
+to this path requires a regression test proving a fundable one-lot spread opens
+and an over-budget spread is rejected.
 
 ---
 
@@ -281,7 +295,7 @@ The **brain / event-bus redesign** mapped in **CLAUDE.md §11** is a parallel ba
 
 ---
 
-*Last updated: 2026-06-30*
+*Last updated: 2026-09-10*
 *Maintained by: platform owner. Update this file when new patterns emerge.*
 
 ---

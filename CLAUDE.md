@@ -137,6 +137,18 @@ cd /opt/QuantG && git pull origin main
 docker-compose build backend && docker-compose up -d backend
 ```
 
+### Deployment reconciliation rule (added 2026-09-10)
+
+Before any VPS deploy, inspect `git status --short --branch`, divergence from
+`origin/main`, and the dirty-file count. If the checkout is dirty or diverged,
+first preserve a recovery bundle containing the Git refs, staged/worktree diffs,
+status, log, and untracked files under `/opt/QuantG-vps-recovery-<UTC stamp>/`.
+Only then may the checkout be reconciled to the intended release. Never use
+`docker-compose down -v`; Mongo data must remain intact. After rebuilding,
+verify container health, public `/api/health`, `/api/version`, paper/live flags,
+and the first post-deploy signal/order records. A clean health response alone is
+not proof that the strategy loop can place a paper order.
+
 > **Known issue — mongo healthcheck flap (2026-06-22):** `quantg-mongo`'s healthcheck (a mongosh ping with a 5s timeout) intermittently reports *unhealthy* even though mongo is fully serving (mongosh sometimes takes >5s to start). Because backend `depends_on` mongo `condition: service_healthy`, `docker-compose up -d backend` can fail with `dependency failed to start: container quantg-mongo is unhealthy`. **Workaround (mongo is genuinely up — verify backend was already connected/healthy):** `docker-compose up -d --no-deps backend`. **Real fix (do OUTSIDE market hours, recreates mongo):** loosen the mongo healthcheck `timeout`/`start_period` in docker-compose.yml. Never `down -v`.
 
 **Frontend change** (JSX, CSS — requires rebuild):
@@ -270,6 +282,7 @@ grep -n "error message text" backend/server.py backend/routes/*.py backend/core/
 | Looking up Upstox quote response by the pipe instrument key | Upstox **REST** `/market-quote/*` returns its `data` dict keyed by `EXCHANGE:SYMBOL` (**colon**, e.g. `NSE_INDEX:Nifty 50`), NOT the pipe key you sent. The **WS V3** feed uses pipe keys. Match both/colon/suffix or you silently get None → fallback (caused the "Simulated feed" bug, fixed 2026-06-22 `822f062`) |
 | Running single-leg staleness/LTP logic on spreads in `position_guardian` | The guardian must **skip** `structure in (credit_spread, debit_spread)` — spreads have no top-level `instrument_key` but DO carry a top-level `option_type`, which trips the single-leg staleness guard → entry-price fallback → force-close at 300s at a loss. `position_monitor._process_spread_position` owns spreads (prices both legs via REST). Fixed 2026-06-22 `635add2` |
 | Spreads are NOT 1-lot capped | Single-leg trades obey the "1 contract" max-lot cap; **spreads bypass it** and size by `required_capital` via `core/spread_builder.lots_for_risk` (lots = budget ÷ per-lot-max-loss). To change spread size edit the strategy's `required_capital`, not the lot cap |
+| Spread entries all skipped with `SPREAD_RISK_BUDGET` | Check both sizing and final entry guards. They must use the strategy's `required_capital` as `cap=`; the global `MAX_RISK_PER_TRADE_RUPEES` ceiling must not reject a valid one-lot spread funded by that strategy budget. Regression coverage must include one fundable and one over-budget spread. Fixed 2026-09-10 `be3eaee3` |
 | Changing the per-strategy DAILY_CAP via `max_trades_day` | The live DAILY_CAP gate is in `trade_frequency.py` `_CLASS_CAPS` (class-based: scalper/momentum/trend/swing/default, env-overridable `FREQ_CAP_*`). The `max_trades_day` field does NOT drive it (red herring). Spread/unclassified strategies = "default" class |
 | Equity intraday candles only fetched via V2 `/historical-candle/intraday` | That endpoint returns **today only** → <20 bars early in the session → silent `mock-5minute` fallback (entries on fake prices). Equity uses **V3 multi-day historical + today's V3 intraday merged** (`get_historical_candles`, clamp lookback ≤25 days — Upstox rejects minute-history >~1 month, `UDAPI1148`). Fixed 2026-06-22 `372751b`/`7e57536` |
 | `parse_iso_dt` used in monitor/guardian without importing it | Import from `core.position_lifecycle` (NameError crashed the staleness path, fixed 2026-06-22 `e406d10`) |

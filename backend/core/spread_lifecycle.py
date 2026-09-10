@@ -165,7 +165,7 @@ def _bounded_entry(fn):
             risk = round(risk_unit * lot * lots, 2)
             if not all(math.isfinite(v) and v > 0 for v in (budget, risk_unit, risk)):
                 return {**rejected, "reason": "Missing or invalid spread risk/budget"}
-            if risk > budget or cap_lots_by_risk(lots, risk_unit, lot) < lots:
+            if risk > budget or cap_lots_by_risk(lots, risk_unit, lot, cap=budget) < lots:
                 return {**rejected, "reason": f"Spread risk Rs{risk:.2f} exceeds affordable budget/cap Rs{budget:.2f}"}
             active = await db.strategy_positions.find({
                 "user_id": user_id, "mode": mode,
