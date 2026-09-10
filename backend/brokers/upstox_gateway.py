@@ -481,7 +481,7 @@ class UpstoxGateway:
         end = to_date or datetime.now().strftime("%Y-%m-%d")
         start = from_date or (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         path = f"/v3/historical-candle/{quote(instrument_key)}/{unit}/{int(interval)}/{end}/{start}"
-        return self._parse_candle_response(self._request("GET", path))
+        return self._parse_candle_response(self._request("GET", path), source="UPSTOX_V3_HISTORICAL")
 
     def get_intraday_candles_v3(
         self,
@@ -493,7 +493,7 @@ class UpstoxGateway:
         from urllib.parse import quote
 
         path = f"/v3/historical-candle/intraday/{quote(instrument_key)}/{unit}/{int(interval)}"
-        return self._parse_candle_response(self._request("GET", path))
+        return self._parse_candle_response(self._request("GET", path), source="UPSTOX_V3_INTRADAY")
 
     @staticmethod
     def _expired_interval_label(unit: str = "minutes", interval: int = 1) -> str:
@@ -538,7 +538,7 @@ class UpstoxGateway:
         )
 
     @staticmethod
-    def _parse_candle_response(res: Any) -> Optional[List[Dict[str, Any]]]:
+    def _parse_candle_response(res: Any, *, source: str = "UPSTOX") -> Optional[List[Dict[str, Any]]]:
         if not isinstance(res, dict) or res.get("status") not in (None, "success"):
             return None
         candles = ((res.get("data") or {}).get("candles") if isinstance(res.get("data"), dict) else None) or []
@@ -554,6 +554,8 @@ class UpstoxGateway:
                     "close": float(c[4] or 0),
                     "volume": int(c[5] or 0) if len(c) > 5 else 0,
                     "oi": float(c[6] or 0) if len(c) > 6 and c[6] not in (None, "") else 0.0,
+                    "source": source,
+                    "provenance": {"source": source, "received_at": datetime.now(timezone.utc).isoformat(), "bar_start": text},
                 })
         return out
 
@@ -860,7 +862,11 @@ class UpstoxGateway:
         keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
         if not keys:
             raise ValueError("At least one Upstox instrument key is required")
-        res = self._request("GET", "/v2/market-quote/ltp", params={"instrument_key": keys})
+        try:
+            res = self._request("GET", "/v3/market-quote/quotes", params={"instrument_key": keys})
+        except Exception as exc:
+            logger.warning("Upstox V3 quote failed; using V2 LTP fallback: %s", exc)
+            res = self._request("GET", "/v2/market-quote/ltp", params={"instrument_key": keys})
         if isinstance(res, dict) and isinstance(res.get("data"), dict):
             received_at = datetime.now(timezone.utc).isoformat()
             with self._lock:
@@ -880,6 +886,14 @@ class UpstoxGateway:
                                 "ltp": val,
                                 "bid": node.get("bid_price") or node.get("bid") or node.get("bp"),
                                 "ask": node.get("ask_price") or node.get("ask") or node.get("ap"),
+                                "volume": node.get("volume") or (node.get("ohlc") or {}).get("volume"),
+                                "oi": node.get("oi") or node.get("open_interest"),
+                                "previous_oi": node.get("previous_oi"),
+                                "prev_close_price": node.get("prev_close_price") or node.get("cp"),
+                                "year_high": node.get("year_high"),
+                                "year_low": node.get("year_low"),
+                                "cas_eligible": node.get("cas_eligible"),
+                                "cas": {k: node.get(k) for k in ("indicative_equilibrium_price", "indicative_equilibrium_quantity", "indicative_imbalance_quantity_total", "indicative_imbalance_quantity_market", "reference_price") if node.get(k) is not None},
                                 "timestamp": node.get("last_trade_time") or node.get("timestamp") or received_at,
                                 "timestamp_source": "broker_quote" if (node.get("last_trade_time") or node.get("timestamp")) else "server_received_at",
                                 "received_at": received_at,
@@ -897,6 +911,22 @@ class UpstoxGateway:
                             self._ticks_by_token[token] = normalized
                             self._ticks_by_symbol[symbol.upper()] = normalized
         return res
+
+    def get_option_greeks(self, instrument_keys: Iterable[str]) -> Dict[str, Any]:
+        keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
+        if not keys:
+            raise ValueError("At least one Upstox instrument key is required")
+        return self._request("GET", "/v3/market-quote/option-greek", params={"instrument_key": keys})
+
+    def get_market_quote_ohlc_v3(self, instrument_keys: Iterable[str], interval: str = "1d") -> Dict[str, Any]:
+        keys = ",".join(str(k).strip() for k in instrument_keys if str(k).strip())
+        if not keys:
+            raise ValueError("At least one Upstox instrument key is required")
+        return self._request("GET", "/v3/market-quote/ohlc", params={"instrument_key": keys, "interval": interval})
+
+    def get_exchange_status(self, segment: Optional[str] = None) -> Dict[str, Any]:
+        params = {"segment": segment} if segment else None
+        return self._request("GET", "/v2/market/status", params=params)
 
     @staticmethod
     def parse_quote_ltp(payload: Any, instrument_key: Optional[str] = None) -> Optional[float]:

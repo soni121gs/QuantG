@@ -2572,3 +2572,5 @@ it removes two proven negatives and stops two others reaching the bucket that ki
 ## Upstox provenance ledger (2026-09-10)
 
 `backend/core/market_provenance.py` defines REST/WebSocket reconciliation and quote-age calculations. `QuoteService` records non-blocking source evidence in `market_data_provenance`. `signal_audits` records queued, vetoed, and execution outcomes with available signal inputs and candidate-contract data. Instrument sync marks the suspended JSON source as degraded when Upstox returns 403; it must not be interpreted as an empty authoritative list.
+
+The gateway now prefers Upstox V3 full quotes and annotates V3 candles with source and receipt provenance. V3 option Greeks and OHLC helpers are available; V2 remains fallback-only for compatibility.
