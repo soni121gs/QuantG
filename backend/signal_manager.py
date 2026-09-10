@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from core.event_store import CoreEventStore
 from pymongo import ReturnDocument
 from trade_frequency import loss_streak_is_current
+from core.signal_audit import write_signal_audit
 
 logger = logging.getLogger("quantg.signal_manager")
 
@@ -1540,6 +1541,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                 continue
 
             for sig in pending:
+                await write_signal_audit(db, sig, stage="QUEUED", decision="PENDING")
                 await _publish_signal_event(
                     db,
                     "SIGNAL_QUEUED",
@@ -1576,6 +1578,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                         validation = await StrategySignalValidator.validate(db, sig, strategy, active_positions)
                         await StrategyMisbehaviorDetector.record_validation(db, sig, validation)
                         if not validation.get("ok"):
+                            await write_signal_audit(db, sig, stage="VALIDATION", decision="FILTERED", reason_code=validation.get("reason_code"), detail=validation)
                             now_str = datetime.now(timezone.utc).isoformat()
                             await db.signals.update_one(
                                 {"id": sig["id"]},
@@ -1604,6 +1607,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                         )
                         if not ok:
                             validation = _signal_validation_result(sig, False, "STRATEGY_SIGNAL_SPAM" if limit_reason == "cooldown-active" else str(limit_reason).upper().replace("-", "_"), limit_reason or "strategy limit failed", "WARNING")
+                            await write_signal_audit(db, sig, stage="STRATEGY_LIMIT", decision="FILTERED", reason_code=validation.get("reason_code"), detail=validation)
                             await StrategyMisbehaviorDetector.record_validation(db, sig, validation)
                             await db.signals.update_one(
                                 {"id": sig["id"]},
@@ -1760,6 +1764,7 @@ async def signal_manager_loop(db, place_order_fn, stop_event: asyncio.Event) -> 
                                 now_str = datetime.now(timezone.utc).isoformat()
                                 order_status = str(order_res.get("status") or "").upper()
                                 final_signal_status = "SKIPPED_SIGNAL" if order_status in {"SKIPPED", "SKIPPED_SIGNAL"} else "PROCESSED"
+                                await write_signal_audit(db, {**sig, "status": final_signal_status}, stage="EXECUTION", decision=final_signal_status, reason_code=order_res.get("reason_code"), detail=order_res)
                                 signal_update = {
                                     "status": final_signal_status,
                                     "order_id": order_res.get("id") if final_signal_status == "PROCESSED" else None,

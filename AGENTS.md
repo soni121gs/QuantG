@@ -310,6 +310,12 @@ The **brain / event-bus redesign** mapped in **CLAUDE.md §11** is a parallel ba
 
 ## 12. Wiki & Auto-Memory Rules
 
+### Provenance and signal-audit law
+
+- Upstox quote decisions must retain source, timestamp, age, and REST/WebSocket reconciliation status in `market_data_provenance`; provenance writes are best-effort and never change order safety decisions.
+- A suspended-instrument fetch failure is not an empty suspended list. Preserve the last known list and expose `UNAVAILABLE`/`UNAVAILABLE_FORBIDDEN` so an operator can distinguish incomplete master truth.
+- Every signal must have audit stages for queue, validation/veto, and execution, including available inputs, candidate contracts, quote age, and structured veto detail. No secret/token fields may enter the audit record.
+
 - A central Knowledge Hub is stored under the `wiki/` directory in the repository root.
 - **Topics**: Subdirectories (`YouTube transcripts/`, `Meeting transcripts/`, `Decisions/`, `Projects/`, `Trading Rules/`) organize context files.
 - **Wikilinks**: Always use double-bracket links `[[Page Title]]` to cross-link concepts.

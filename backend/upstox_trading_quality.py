@@ -121,7 +121,7 @@ async def sync_upstox_instruments(db: Any, *, force: bool = False, sources: Opti
             return {"ok": True, "refreshed": False, "reason": "fresh", "meta": meta}
 
     started = utc_now_iso()
-    totals: Dict[str, Any] = {"ok": True, "refreshed": True, "started_at": started, "sources": {}}
+    totals: Dict[str, Any] = {"ok": True, "refreshed": True, "started_at": started, "sources": {}, "suspended_status": "NOT_REQUESTED"}
     for source in selected:
         url = UPSTOX_INSTRUMENT_URLS.get(source)
         if not url:
@@ -142,8 +142,18 @@ async def sync_upstox_instruments(db: Any, *, force: bool = False, sources: Opti
                     await db.upstox_suspended_instruments.bulk_write(suspended_ops, ordered=False)
             totals["sources"][source] = {"ok": True, "fetched": len(rows), "stored": len(docs)}
         except Exception as exc:
-            totals["ok"] = False
-            totals["sources"][source] = {"ok": False, "error": str(exc)[:500]}
+            error = str(exc)[:500]
+            # Upstox currently returns 403 for the suspended JSON on some hosts.
+            # Never present that as an authoritative empty list: preserve the last
+            # known set and make the degraded truth explicit to callers.
+            if source == "suspended":
+                totals["suspended_status"] = "UNAVAILABLE_FORBIDDEN" if "403" in error or "Forbidden" in error else "UNAVAILABLE"
+                totals["suspended_error"] = error
+                totals["suspended_checked_at"] = utc_now_iso()
+                totals["sources"][source] = {"ok": False, "authoritative": False, "error": error}
+            else:
+                totals["ok"] = False
+                totals["sources"][source] = {"ok": False, "error": error}
             logger.warning("Upstox instrument sync failed source=%s url=%s: %s", source, url, exc)
 
     totals["completed_at"] = utc_now_iso()

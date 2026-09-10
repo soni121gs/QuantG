@@ -2569,3 +2569,6 @@ strategy status — verified live (marks at age 0 s, 0 new signals, runner still
 corroborated by the 259-trade gradient and independently by QG-O4, but they are fitted to
 past trades and owe the §13.5 ladder. Book is now 11 live rows. Nothing here creates edge —
 it removes two proven negatives and stops two others reaching the bucket that killed them.
+## Upstox provenance ledger (2026-09-10)
+
+`backend/core/market_provenance.py` defines REST/WebSocket reconciliation and quote-age calculations. `QuoteService` records non-blocking source evidence in `market_data_provenance`. `signal_audits` records queued, vetoed, and execution outcomes with available signal inputs and candidate-contract data. Instrument sync marks the suspended JSON source as degraded when Upstox returns 403; it must not be interpreted as an empty authoritative list.

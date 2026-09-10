@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 
 from core.models import Quote
+from core.market_provenance import reconcile_quotes, quote_age_seconds
 
 logger = logging.getLogger("quantg.quote_service")
 
@@ -215,6 +216,8 @@ class QuoteService:
                         "source": "UPSTOX_LIVE",
                         "cache_hit": True,
                     }
+                    result["quote_age_sec"] = quote_age_seconds(ts)
+                    await self._record_provenance(symbol, result)
                     await self._store_quote_cache(symbol, result)
                     return result
 
@@ -243,6 +246,8 @@ class QuoteService:
                         "source": "UPSTOX_LIVE",
                         "cache_hit": False,
                     }
+                    result["quote_age_sec"] = quote_age_seconds(result["timestamp"])
+                    await self._record_provenance(symbol, result)
                     await self._store_quote_cache(symbol, result)
                     return result
             get_ltp_method = self._real_method(self.upstox_client, "get_ltp")
@@ -291,6 +296,24 @@ class QuoteService:
             self._diag(quote_reject_reason=f"upstox_ltp_fetch_failed:{e}")
         
         return None
+
+    async def _record_provenance(self, symbol: str, quote: Dict[str, Any]) -> None:
+        """Persist source/age evidence without affecting quote selection."""
+        try:
+            rest = None
+            if quote.get("source") == "UPSTOX_LIVE":
+                method = self._real_method(self.upstox_client, "get_market_quote")
+                if callable(method):
+                    payload = await asyncio.to_thread(method, [symbol])
+                    data = (payload or {}).get("data") or {}
+                    node = data.get(symbol) or next((v for v in data.values() if isinstance(v, dict) and (v.get("instrument_key") == symbol or v.get("instrument_token") == symbol)), {})
+                    if node:
+                        rest = {"ltp": node.get("last_price") or node.get("ltp"), "timestamp": node.get("timestamp")}
+            reconciliation = reconcile_quotes(rest, quote)
+            doc = {"instrument_key": symbol, "recorded_at": datetime.now(timezone.utc).isoformat(), "quote": dict(quote), "rest_quote": rest, "reconciliation": reconciliation}
+            await self.db.market_data_provenance.insert_one(doc)
+        except Exception as exc:
+            logger.debug("Market provenance write skipped for %s: %s", symbol, exc)
     
     async def _get_simulated_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get simulated quote from paper cache for paper mode.
