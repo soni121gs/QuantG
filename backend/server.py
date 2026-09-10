@@ -17068,7 +17068,21 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                     _cap = _get_live_index_capture()
                     for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
                         _bars = _cap.snapshot_minutes(_u, include_open=True) or []
+                        _regime_at = ist.isoformat()
+                        _quality = "OK"
+                        _router_allowed = True
                         if len(_bars) < 3:
+                            await db.market_regime_state.update_one(
+                                {"index": _u},
+                                {"$set": {
+                                    "regime_fine_data_quality": "INSUFFICIENT_BARS",
+                                    "regime_fine_router_allowed": False,
+                                    "regime_fine_bar_count": len(_bars),
+                                    "regime_fine_at": _regime_at,
+                                    "regime_fine_reason": "Need at least 3 live session bars",
+                                }},
+                                upsert=True,
+                            )
                             continue
                         _snap = _rae_classify(_bars)
                         # TRUNCATED-OPEN DAMPING (2026-08-04). Every intraday feature
@@ -17094,18 +17108,25 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                         except Exception:
                             _lost = 0
                         if _lost > _REGIME_TRUNCATED_OPEN_TOLERANCE_MIN:
-                            _conf *= max(0.25, 1.0 - (_lost / 60.0))
+                            _quality = "LATE_OPEN"
+                            _router_allowed = False
                             logger.warning(
                                 "regime %s: first bar is %d min after the open — "
-                                "confidence damped %.3f -> %.3f (feed late at open)",
-                                _u, _lost, float(_snap.confidence), _conf)
+                                "fine-regime routing blocked (feed late at open)",
+                                _u, _lost)
                         await db.market_regime_state.update_one(
                             {"index": _u},
                             {"$set": {"regime_fine": _snap.label,
                                       "regime_fine_confidence": round(_conf, 3),
                                       "regime_fine_confidence_raw": round(float(_snap.confidence), 3),
                                       "regime_fine_lost_open_minutes": _lost,
-                                      "regime_fine_at": ist.isoformat()}},
+                                      "regime_fine_at": _regime_at,
+                                      "regime_fine_data_quality": _quality,
+                                      "regime_fine_router_allowed": _router_allowed,
+                                      "regime_fine_bar_count": len(_bars),
+                                      "regime_fine_first_bar_ist": str((_bars[0] or {}).get("timestamp_ist") or ""),
+                                      "regime_fine_reason": "OK" if _router_allowed else "Opening data incomplete or late",
+                                      "regime_fine_source": "upstox_v3_live_index_capture"}},
                             upsert=True,
                         )
                 except Exception as _fine_err:

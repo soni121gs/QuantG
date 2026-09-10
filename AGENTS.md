@@ -214,6 +214,14 @@ never turn a fundable one-lot strategy into `SPREAD_RISK_BUDGET` skips. Any chan
 to this path requires a regression test proving a fundable one-lot spread opens
 and an over-budget spread is rejected.
 
+### Market-truth and regime invariant
+
+The regime loop must persist bar count, first-bar IST timestamp, source,
+data-quality status, and `regime_fine_router_allowed`. `INSUFFICIENT_BARS` and
+`LATE_OPEN` are explicit stand-down states; they must not leave yesterday's fine
+regime available for today's routing. Fine-regime consumers may use the label
+only when data quality is `OK` and routing is explicitly allowed.
+
 ---
 
 ## 8. Running Tests

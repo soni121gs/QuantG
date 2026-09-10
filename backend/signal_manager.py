@@ -1020,9 +1020,12 @@ async def _dispatch_signal_via_unified_engine(
     try:
         _fine_re = await db.market_regime_state.find_one(
             {"index": str(symbol).upper()},
-            {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1},
+            {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1,
+             "regime_fine_data_quality": 1, "regime_fine_router_allowed": 1},
         )
-        if _fine_re and _fine_re.get("regime_fine"):
+        if (_fine_re and _fine_re.get("regime_fine")
+                and _fine_re.get("regime_fine_data_quality") == "OK"
+                and _fine_re.get("regime_fine_router_allowed") is True):
             _regime_fine_at_entry = str(_fine_re["regime_fine"]).upper()
             _regime_fine_conf = _fine_re.get("regime_fine_confidence")
     except Exception:
@@ -1162,7 +1165,8 @@ async def _dispatch_signal_via_unified_engine(
         try:
             _fine = await db.market_regime_state.find_one(
                 {"index": str(symbol).upper()},
-                {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1, "regime_fine_at": 1},
+                {"_id": 0, "regime_fine": 1, "regime_fine_confidence": 1, "regime_fine_at": 1,
+                 "regime_fine_data_quality": 1, "regime_fine_router_allowed": 1},
             )
             # STALENESS GUARD: the scheduler only ever $sets regime_fine, never clears
             # it, and it skips the write entirely when the capture buffer is short. So
@@ -1173,7 +1177,9 @@ async def _dispatch_signal_via_unified_engine(
             # trusts it. Only honour a fine regime stamped today (IST).
             _fine_at = str((_fine or {}).get("regime_fine_at") or "")
             _today_ist = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-            if _fine and _fine.get("regime_fine") and _fine_at[:10] == _today_ist:
+            if (_fine and _fine.get("regime_fine") and _fine_at[:10] == _today_ist
+                    and _fine.get("regime_fine_data_quality") == "OK"
+                    and _fine.get("regime_fine_router_allowed") is True):
                 _spread["router_regime"] = _fine["regime_fine"]
                 _spread["regime_confidence"] = _fine.get("regime_fine_confidence") or 0.5
         except Exception:
