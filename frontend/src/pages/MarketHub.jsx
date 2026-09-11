@@ -252,12 +252,16 @@ export default function MarketHub() {
         </section>
 
         <section className="qd-card p-4">
-          <h2 className="font-head text-lg text-white flex items-center gap-2 mb-3"><BookOpen size={16} /> Trade Journal</h2>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <Small label="Orders" value={journal?.summary?.orders ?? 0} />
-            <Small label="Skipped" value={journal?.summary?.skipped_signals ?? 0} />
-            <Small label="Win Rate" value={`${journal?.summary?.win_rate ?? 0}%`} />
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h2 className="font-head text-lg text-white flex items-center gap-2"><BookOpen size={16} /> Trade Journal</h2>
+            <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--qd-text-3)]">Today · IST</span>
           </div>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <Small label="Today orders" value={journal?.summary?.orders ?? 0} />
+            <Small label="Today skipped" value={journal?.summary?.skipped_signals ?? 0} />
+            <Small label="Today win rate" value={`${journal?.summary?.win_rate ?? 0}%`} />
+          </div>
+          <div className="mt-2 text-[10px] font-mono text-[var(--qd-text-3)]">Recent order history below · {journal?.summary?.recent_orders_count ?? 0} loaded</div>
           <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
             {(journal?.orders || []).slice(0, 8).map((o) => (
               <div key={o.id} className="border border-[var(--qd-border)] p-2 rounded-sm">

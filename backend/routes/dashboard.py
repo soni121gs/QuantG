@@ -67,30 +67,38 @@ async def trade_journal(user=Depends(get_current_user)):
         ORDER_FILLED, ORDER_CLOSED, get_trading_day_window_ist,
     )
     rows = await db.orders.find({"user_id": user["id"]}, {"_id": 0, "user_id": 0}).sort("created_at", -1).to_list(200)
-    _today_start, _ = get_trading_day_window_ist()
+    _today_start, _today_end = get_trading_day_window_ist()
+    today_rows = await db.orders.find(
+        {"user_id": user["id"], "created_at": {"$gte": _today_start, "$lt": _today_end}},
+        {"_id": 0, "user_id": 0},
+    ).to_list(1000)
     # Reset daily: only show signals skipped during the current trading day.
     skipped = await db.skipped_signals.find({"user_id": user["id"], "last_seen_at": {"$gte": _today_start}}, {"_id": 0, "user_id": 0}).sort("last_seen_at", -1).to_list(200)
-    fill_summary = await _fill_ledger_summary(user["id"])
-    completed = [r for r in rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
-    failed_actual = [r for r in rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
-    wins = fill_summary["wins"]
-    losses = fill_summary["losses"]
-    total_pnl = fill_summary["realized_pnl"]
+    today_fill_summary = await _fill_ledger_summary(
+        user["id"], start=_today_start, end=_today_end,
+    )
+    completed = [r for r in today_rows if canonical_order_status(r.get("status")) in {ORDER_FILLED, ORDER_CLOSED}]
+    failed_actual = [r for r in today_rows if str(r.get("status") or "").upper() in {"FAILED", "REJECTED"}]
+    wins = today_fill_summary["wins"]
+    losses = today_fill_summary["losses"]
+    total_pnl = today_fill_summary["realized_pnl"]
     return {
         "summary": {
-            "orders": len(rows),
+            "orders": len(today_rows),
             "completed": len(completed),
-            "filled_trades": fill_summary["fill_count"],
+            "filled_trades": today_fill_summary["fill_count"],
             "failed_actual_orders": len(failed_actual),
             "skipped_signals": sum(int(row.get("count") or 1) for row in skipped),
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / max(1, wins + losses) * 100, 2),
             "realized_pnl": total_pnl,
-            "realized_pnl_source": fill_summary["source"],
+            "realized_pnl_source": today_fill_summary["source"],
+            "period": "current_trading_day_ist",
+            "recent_orders_count": len(rows),
         },
         "orders": rows,
-        "filled_trades": fill_summary["fills"],
+        "filled_trades": today_fill_summary["fills"],
         "failed_actual_orders": failed_actual,
         "skipped_signals": skipped,
     }
