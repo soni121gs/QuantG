@@ -12,13 +12,15 @@ follow-up; the aggregator + options store already support it once refs are wired
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List
 
 import session_times
 from core.index_minute_store import IndexMinuteStore
-from core.options_minute_capture import MinuteBarAggregator, _minute_floor
+from core.options_minute_capture import MinuteBar, MinuteBarAggregator, _minute_floor
 
 logger = logging.getLogger("quantg.live_index_capture")
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # feed instrument key -> canonical underlying. SENSEX (BSE) is already subscribed
 # as a baseline token, so mapping it here starts aggregating its 1-minute bars too
@@ -134,6 +136,46 @@ class LiveIndexCapture:
                     written, rows, date, len(failed))
         return {"date": date, "underlyings_written": written, "bars": rows,
                 "ticks_seen": self._ticks, "failed": failed}
+
+    def seed_today(self, underlying: str, rows: List[Dict[str, Any]], today: str) -> int:
+        """Seed completed current-session bars after a process restart.
+
+        Rows must come from Upstox historical/intraday data and are filtered to
+        today's completed NSE/BSE session. This restores regime context without
+        fabricating bars; the normal minimum-bar and late-open gates still apply.
+        """
+        u = str(underlying or "").upper()
+        key = next((k for k, value in self.map.items() if value == u), None)
+        if not key:
+            return 0
+        existing = {str(b.minute_ts) for b in self._bars.get(u, [])}
+        seeded = 0
+        for row in rows or []:
+            stamp = str(row.get("date") or row.get("timestamp_ist") or "")
+            if not stamp:
+                continue
+            try:
+                parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=IST)
+                parsed = parsed.astimezone(IST).replace(second=0, microsecond=0)
+                minute_ts = parsed.isoformat()
+                if parsed.date().isoformat() != today or parsed >= datetime.now(IST).replace(second=0, microsecond=0):
+                    continue
+                if not session_times.in_session(parsed.hour, parsed.minute, INDEX_SEGMENTS.get(u, "NSE_FO")):
+                    continue
+                values = [float(row.get(name) or 0) for name in ("open", "high", "low", "close")]
+                if any(value <= 0 for value in values):
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if minute_ts in existing:
+                continue
+            self._bars.setdefault(u, []).append(MinuteBar(key, minute_ts, *values, int(row.get("volume") or 0), 0.0))
+            existing.add(minute_ts)
+            seeded += 1
+        self._bars[u] = sorted(self._bars.get(u, []), key=lambda bar: bar.minute_ts)
+        return seeded
 
     def snapshot_minutes(self, underlying: str = None, include_open: bool = True) -> List[Dict[str, Any]]:
         """Return buffered live bars without mutating the EOD flush buffer."""

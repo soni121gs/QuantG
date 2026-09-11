@@ -17022,6 +17022,7 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
     _earnings_forward_done_week: Optional[str] = None
     _phase4_research_done_week: Optional[str] = None
     _opt_capture_reg_minute: Optional[str] = None
+    _regime_bootstrap_done_date: Optional[str] = None
     logger.info("Daily gateway scheduler started")
     while not stop_event.is_set():
         try:
@@ -17066,6 +17067,33 @@ async def _daily_scheduler_loop(stop_event: asyncio.Event) -> None:
                 try:
                     from core.regime_classifier import classify_intraday as _rae_classify
                     _cap = _get_live_index_capture()
+                    # A backend restart used to erase the in-memory opening
+                    # buffer and permanently force LATE_OPEN for the session.
+                    # Rehydrate only completed current-session bars from the
+                    # Upstox V3 intraday surface; the normal quality gates remain
+                    # authoritative and no synthetic bars are introduced.
+                    if _regime_bootstrap_done_date != today:
+                        _regime_bootstrap_done_date = today
+                        _bootstrap_keys = {
+                            "NIFTY": "NSE_INDEX|Nifty 50",
+                            "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+                            "SENSEX": "BSE_INDEX|SENSEX",
+                        }
+                        _bootstrap_gw = None
+                        for _user_row in await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000):
+                            _candidate_gw = await get_user_upstox_gateway(_user_row.get("id"))
+                            if _candidate_gw and getattr(_candidate_gw, "connected", False):
+                                _bootstrap_gw = _candidate_gw
+                                break
+                        if _bootstrap_gw:
+                            for _bootstrap_u, _bootstrap_key in _bootstrap_keys.items():
+                                try:
+                                    _bootstrap_rows = await asyncio.to_thread(
+                                        _bootstrap_gw.get_historical_candles,
+                                        _bootstrap_key, "1minute", 1)
+                                    _cap.seed_today(_bootstrap_u, _bootstrap_rows or [], today)
+                                except Exception as _bootstrap_err:
+                                    logger.debug("regime restart bootstrap failed for %s: %s", _bootstrap_u, _bootstrap_err)
                     for _u in ("NIFTY", "BANKNIFTY", "SENSEX"):
                         _bars = _cap.snapshot_minutes(_u, include_open=True) or []
                         _regime_at = ist.isoformat()
