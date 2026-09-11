@@ -178,6 +178,40 @@ async def market_feed_comparison(user=Depends(get_current_user)):
     }
 
 
+@router.get("/market/nifty-live")
+async def market_nifty_live(user=Depends(get_current_user)):
+    """Read-only NIFTY spot snapshot and recent 5-minute candles."""
+    from server import get_user_upstox_gateway
+
+    key = "NSE_INDEX|Nifty 50"
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway:
+        return {"available": False, "source": "none", "reason": "Upstox gateway unavailable", "instrument_key": key}
+
+    tick = (gateway.latest_ticks() or {}).get(key) or {}
+    candles = []
+    try:
+        candles = await asyncio.to_thread(gateway.get_historical_candles, key, "5minute", 1) or []
+    except Exception:
+        candles = []
+    ltp = tick.get("ltp")
+    if ltp is None and candles:
+        ltp = candles[-1].get("close")
+    return {
+        "available": ltp is not None,
+        "instrument_key": key,
+        "ltp": round(float(ltp), 2) if ltp is not None else None,
+        "previous_close": tick.get("prev_close_price"),
+        "tick_time": tick.get("timestamp") or tick.get("received_at"),
+        "received_at": tick.get("received_at"),
+        "source": tick.get("feed") or tick.get("source") or ("historical" if candles else "none"),
+        "candles": candles[-78:],
+        "candle_interval": "5minute",
+        "is_live": bool(tick.get("ltp") is not None and tick.get("feed") == "upstox-v3"),
+        "note": "Read-only market display; it does not place or alter orders.",
+    }
+
+
 @router.post("/market/auto-data-broker")
 async def market_auto_data_broker(user=Depends(get_current_user)):
     comparison = await market_feed_comparison(user=user)
