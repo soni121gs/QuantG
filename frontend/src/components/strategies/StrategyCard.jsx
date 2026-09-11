@@ -19,6 +19,13 @@ const timeAgo = (iso) => {
 };
 
 const noticeFor = (s) => {
+  if (s.status === "archived") {
+    return {
+      text: "Archived — excluded from trading",
+      title: "Archived strategy: retained for history/research and cannot be resumed without restore.",
+      kind: "archive",
+    };
+  }
   if (s.last_filter_reason) {
     const r = reasonLabel(s.last_filter_reason);
     // The engine's veto text carries the actual numbers (credit, width, ratio,
