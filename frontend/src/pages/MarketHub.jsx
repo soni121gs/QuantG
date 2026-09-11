@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { PageHeader, StatusBadge } from "../components/ui/app-shell";
 import { useExecutionState } from "../hooks/useExecutionState";
 import { renderMarkdown } from "../lib/markdown";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const BROKER_LABELS = { upstox: "Upstox" };
 
@@ -21,7 +20,6 @@ export default function MarketHub() {
   const [indicators, setIndicators] = useState(null);
   const [marketSession, setMarketSession] = useState(null);
   const [ivRank, setIvRank] = useState(null);
-  const [niftyLive, setNiftyLive] = useState(null);
   const [underlying, setUnderlying] = useState("NIFTY");
   const [busy, setBusy] = useState(false);
   const [analysis, setAnalysis] = useState(null);
@@ -37,7 +35,6 @@ export default function MarketHub() {
       api.get(`/market/indicators/${underlying}`).catch(() => ({ data: null })),
       api.get("/market/session-status").catch(() => ({ data: null })),
       api.get("/market/iv-rank").catch(() => ({ data: null })),
-      api.get("/market/nifty-live").catch(() => ({ data: null })),
     ]);
     if (h.data) setHealth(h.data);
     if (r.data) setRisk(r.data);
@@ -47,7 +44,6 @@ export default function MarketHub() {
     if (ind.data) setIndicators(ind.data);
     if (s.data) setMarketSession(s.data);
     if (iv.data) setIvRank(iv.data);
-    if (nifty.data) setNiftyLive(nifty.data);
   }, [underlying]);
 
   usePolling(load, 60000, { hiddenMs: 0 });
@@ -133,34 +129,6 @@ export default function MarketHub() {
         <Metric label="Risk Left" value={risk?.loss_remaining == null ? "-" : `₹${formatINR(risk.loss_remaining)}`} tone="warn" />
       </div>
 
-      <section className="qd-card p-4" data-testid="nifty-live-card">
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div>
-            <h2 className="font-head text-lg text-white">NIFTY 50 Live</h2>
-            <div className="text-[11px] font-mono text-[var(--qd-text-3)]">Upstox V3 · 5-minute context · read-only</div>
-          </div>
-          <span className={`font-mono text-[10px] uppercase ${niftyLive?.is_live ? "text-[var(--qd-profit)]" : "text-[var(--qd-warn)]"}`}>
-            {niftyLive?.is_live ? "REAL LIVE" : niftyLive?.available ? "HISTORICAL" : "UNAVAILABLE"}
-          </span>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-[220px_1fr] items-center">
-          <div>
-            <div className="font-head text-3xl text-white">{niftyLive?.ltp == null ? "—" : Number(niftyLive.ltp).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-            <div className="mt-2 text-[11px] font-mono text-[var(--qd-text-3)]">{niftyLive?.received_at ? `Received ${niftyLive.received_at}` : (niftyLive?.reason || "Waiting for feed")}</div>
-          </div>
-          <div className="h-40 min-w-0">
-            {niftyLive?.candles?.length ? <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={niftyLive.candles}>
-                <defs><linearGradient id="niftyFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22d3ee" stopOpacity={0.35} /><stop offset="95%" stopColor="#22d3ee" stopOpacity={0} /></linearGradient></defs>
-                <XAxis dataKey="date" hide />
-                <YAxis domain={["auto", "auto"]} hide />
-                <Tooltip contentStyle={{ background: "#111827", border: "1px solid #334155", fontSize: 11 }} formatter={(value) => [Number(value).toLocaleString("en-IN"), "NIFTY"]} labelFormatter={(label) => label} />
-                <Area type="monotone" dataKey="close" stroke="#22d3ee" fill="url(#niftyFill)" strokeWidth={2} dot={false} />
-              </AreaChart>
-            </ResponsiveContainer> : <div className="h-full flex items-center justify-center border border-[var(--qd-border)] text-xs font-mono text-[var(--qd-text-3)]">No chart candles available</div>}
-          </div>
-        </div>
-      </section>
 
       {feed?.simulated_warning && (
         <div className="flex items-center gap-2 rounded border border-[rgba(255,59,48,0.42)] bg-[rgba(255,59,48,0.08)] px-3 py-2 text-xs font-mono text-[var(--qd-loss)]">

@@ -212,6 +212,42 @@ async def market_nifty_live(user=Depends(get_current_user)):
     }
 
 
+@router.get("/market/indices-live")
+async def market_indices_live(user=Depends(get_current_user)):
+    """Read-only live snapshots and recent candles for the three index anchors."""
+    from server import get_user_upstox_gateway
+
+    instruments = {
+        "NIFTY": "NSE_INDEX|Nifty 50",
+        "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+        "SENSEX": "BSE_INDEX|SENSEX",
+    }
+    gateway = await get_user_upstox_gateway(user["id"])
+    if not gateway:
+        return {"available": False, "indices": {}, "reason": "Upstox gateway unavailable"}
+    ticks = gateway.latest_ticks() or {}
+    indices = {}
+    for name, key in instruments.items():
+        tick = ticks.get(key) or {}
+        try:
+            candles = await asyncio.to_thread(gateway.get_historical_candles, key, "5minute", 1) or []
+        except Exception:
+            candles = []
+        ltp = tick.get("ltp")
+        if ltp is None and candles:
+            ltp = candles[-1].get("close")
+        indices[name] = {
+            "instrument_key": key,
+            "ltp": round(float(ltp), 2) if ltp is not None else None,
+            "tick_time": tick.get("timestamp") or tick.get("received_at"),
+            "received_at": tick.get("received_at"),
+            "source": tick.get("feed") or tick.get("source") or ("historical" if candles else "none"),
+            "candles": candles[-78:],
+            "is_live": bool(tick.get("ltp") is not None and tick.get("feed") == "upstox-v3"),
+        }
+    return {"available": any(row["ltp"] is not None for row in indices.values()), "indices": indices, "interval": "5minute", "note": "Read-only market display; it does not place or alter orders."}
+
+
 @router.post("/market/auto-data-broker")
 async def market_auto_data_broker(user=Depends(get_current_user)):
     comparison = await market_feed_comparison(user=user)

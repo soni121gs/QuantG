@@ -23,6 +23,7 @@ import { StrategyPerformanceTable } from "../components/dashboard/StrategyPerfor
 import { StrategyLedgerRow, Field, StatusPill } from "../components/dashboard/StrategyLedgerRow";
 import { HealthScoreList } from "../components/dashboard/HealthScoreList";
 import { AllocationList } from "../components/dashboard/AllocationList";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const money = (value) => `INR ${formatINR(value ?? 0)}`;
 
@@ -77,6 +78,7 @@ export default function Dashboard() {
   const [marketSession, setMarketSession] = useState(null);
   const [strategyAnalytics, setStrategyAnalytics] = useState(null);
   const [optionChain, setOptionChain] = useState(null);
+  const [indicesLive, setIndicesLive] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [busyStrategy, setBusyStrategy] = useState(null);
@@ -84,12 +86,13 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [f, t, c, s, leaderboard] = await Promise.all([
+      const [f, t, c, s, leaderboard, indices] = await Promise.all([
         api.get("/funds"),
         api.get("/v1/dashboard/telemetry"),
         api.get("/market/session-status"),
         api.get("/strategies/leaderboard"),
         api.get("/upstox/option-chain", { params: { underlying: "NIFTY" } }).catch(() => ({ data: null })),
+        api.get("/market/indices-live").catch(() => ({ data: null })),
       ]);
       // Execution/positions/PnL are already kept fresh by the global
       // ExecutionStateContext (15s poll) — no need to re-fetch them here.
@@ -98,6 +101,7 @@ export default function Dashboard() {
       setMarketSession(c.data);
       setStrategyAnalytics(s.data);
       setOptionChain(leaderboard.data);
+      setIndicesLive(indices.data);
       setLoadError("");
     } catch (e) {
       setLoadError(e?.response?.data?.detail || e.message || "Dashboard data could not be loaded");
@@ -315,6 +319,19 @@ export default function Dashboard() {
           <div className="bg-[var(--qd-surface)] px-3 py-2">
             <Field label="Protection" value={`${missingProtectionCount}/${openStrategyPositions.length} missing`} tone={missingProtectionCount ? "text-[var(--qd-loss)]" : "text-[var(--qd-profit)]"} />
           </div>
+        </div>
+      </section>
+
+      <section className="qd-card p-3 sm:p-4" data-testid="dashboard-index-board">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div>
+            <h2 className="font-head text-base font-semibold text-[var(--qd-text)]">Index Board</h2>
+            <div className="text-[10px] font-mono uppercase tracking-widest text-[var(--qd-text-3)]">Upstox V3 · 5-minute context · read-only</div>
+          </div>
+          <span className="font-mono text-[10px] uppercase text-[var(--qd-text-3)]">{indicesLive?.available ? "Feed data" : "Waiting"}</span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {["NIFTY", "BANKNIFTY", "SENSEX"].map((name) => <IndexBoardCard key={name} name={name} data={indicesLive?.indices?.[name]} />)}
         </div>
       </section>
 
@@ -840,3 +857,28 @@ export default function Dashboard() {
     </div>
   );
 }
+
+const IndexBoardCard = ({ name, data }) => {
+  const live = !!data?.is_live;
+  const candles = data?.candles || [];
+  return (
+    <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3 min-w-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[11px] font-semibold text-[var(--qd-text)]">{name}</span>
+        <span className={`font-mono text-[9px] uppercase ${live ? "text-[var(--qd-profit)]" : data?.ltp != null ? "text-[var(--qd-warn)]" : "text-[var(--qd-text-3)]"}`}>{live ? "LIVE" : data?.ltp != null ? "HIST" : "NO DATA"}</span>
+      </div>
+      <div className="mt-1 font-head text-xl text-[var(--qd-text)]">{data?.ltp == null ? "—" : Number(data.ltp).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+      <div className="mt-2 h-16 min-w-0">
+        {candles.length ? <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={candles}>
+            <defs><linearGradient id={`fill-${name}`} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22d3ee" stopOpacity={0.28} /><stop offset="95%" stopColor="#22d3ee" stopOpacity={0} /></linearGradient></defs>
+            <XAxis dataKey="date" hide /><YAxis domain={["auto", "auto"]} hide />
+            <Tooltip contentStyle={{ background: "#111827", border: "1px solid #334155", fontSize: 10 }} formatter={(value) => [Number(value).toLocaleString("en-IN"), name]} />
+            <Area type="monotone" dataKey="close" stroke="#22d3ee" fill={`url(#fill-${name})`} strokeWidth={1.5} dot={false} />
+          </AreaChart>
+        </ResponsiveContainer> : <div className="h-full flex items-center justify-center text-[10px] font-mono text-[var(--qd-text-3)]">No candles</div>}
+      </div>
+      <div className="mt-2 truncate text-[9px] font-mono text-[var(--qd-text-3)]" title={data?.received_at || ""}>{data?.received_at ? `Updated ${data.received_at}` : "Waiting for Upstox feed"}</div>
+    </div>
+  );
+};
