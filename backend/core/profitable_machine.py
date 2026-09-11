@@ -105,6 +105,14 @@ def _counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     return out
 
 
+def _status_item(item: Dict[str, Any], status: str, evidence: str, blockers: List[str]) -> Dict[str, Any]:
+    row = dict(item)
+    row["status"] = status
+    row["evidence"] = evidence
+    row["blockers"] = blockers
+    return row
+
+
 async def build_profitable_machine_blueprint(
     db: Any,
     user_id: str,
@@ -132,6 +140,38 @@ async def build_profitable_machine_blueprint(
     ).sort("last_seen", -1).to_list(50)
     alpha_beta = await db.alpha_beta_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
     score_ic = await db.score_ic_runs.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
+    latest_regime_oos = await db.regime_oos_runs.find_one(
+        {}, {"_id": 0, "generated_at": 1, "verdict_counts": 1, "results": 1, "errors": 1},
+        sort=[("generated_at", -1)],
+    )
+
+    program = [dict(item) for item in PROGRAM_ITEMS]
+    program[1] = _status_item(
+        program[1],
+        "blocked",
+        "Latest regime OOS run is available for inspection, but purge/embargo/PBO proof is not yet present.",
+        ["P6-2 is not implemented", "Current candidate run is data-limited; no promotion decision is allowed"],
+    )
+    eq_summary = execution_quality.get("summary", {})
+    program[2] = _status_item(
+        program[2],
+        "partial" if eq_summary.get("fills", 0) else "blocked",
+        f"{eq_summary.get('fills', 0)} execution-quality rows in the selected window; telemetry is read-only.",
+        [] if eq_summary.get("fills", 0) else ["No fill-quality rows in the selected window"],
+    )
+    ic_verdict = str((score_ic or {}).get("overall_verdict") or (score_ic or {}).get("verdict") or "unavailable")
+    program[3] = _status_item(
+        program[3],
+        "observe-only",
+        f"Latest score-IC evidence: {ic_verdict}; no model is allowed to affect sizing or entries.",
+        ["Calibrated point-in-time model, leakage audit, and cost-adjusted OOS utility are not yet proven"],
+    )
+    program[4] = _status_item(
+        program[4],
+        "observe-only",
+        "Order audit and preflight surfaces exist; no optimizer recommendation changes routing.",
+        ["Historical quote/order replay and founder-approved advisory gate are not yet proven"],
+    )
 
     live_flags: Optional[Dict[str, Any]] = None
     if include_live_flags:
@@ -158,15 +198,16 @@ async def build_profitable_machine_blueprint(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "days": days,
         "headline": "Make QuantG a strict edge factory first: broad ideas, leak-proof validation, execution-quality proof, then founder-gated live.",
-        "program": PROGRAM_ITEMS,
+        "program": program,
         "summary": {
             "program_items": len(PROGRAM_ITEMS),
-            "stage_counts": _counts(PROGRAM_ITEMS),
+            "stage_counts": _counts(program),
             "research_hypotheses": len(hypotheses),
             "open_hermes_findings": len(open_findings),
             "strategy_governor": governor.get("summary"),
             "profit_giveback": giveback.get("summary"),
             "execution_quality": execution_quality.get("summary"),
+            "pm2_latest_oos": latest_regime_oos.get("generated_at") if latest_regime_oos else None,
         },
         "evidence": {
             "latest_alpha_beta": alpha_beta,
@@ -174,6 +215,7 @@ async def build_profitable_machine_blueprint(
             "recent_hypotheses": hypotheses[:12],
             "open_findings": open_findings[:12],
             "execution_quality_by_strategy": execution_quality.get("by_strategy", [])[:12],
+            "pm2_latest_regime_oos": latest_regime_oos,
         },
         "live_flags": live_flags,
         "blockers": blockers,

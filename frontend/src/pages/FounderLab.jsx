@@ -370,6 +370,8 @@ const stageTone = {
   partial: "border-[var(--qd-cyan)]/40 text-[var(--qd-cyan)]",
   needed: "border-[var(--qd-warn)]/40 text-[var(--qd-warn)]",
   shipped: "border-[var(--qd-profit)]/40 text-[var(--qd-profit)]",
+  blocked: "border-[var(--qd-loss)]/40 text-[var(--qd-loss)]",
+  "observe-only": "border-[var(--qd-cyan)]/40 text-[var(--qd-cyan)]",
 };
 
 const ProfitableMachine = ({ machine }) => {
@@ -410,8 +412,8 @@ const ProfitableMachine = ({ machine }) => {
                 <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">{item.id}</div>
                 <h3 className="mt-1 font-head text-base font-semibold text-[var(--qd-text)]">{item.title}</h3>
               </div>
-              <span className={`rounded border bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase ${stageTone[item.stage] || "border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
-                {item.stage}
+              <span className={`rounded border bg-[var(--qd-surface-2)] px-2 py-1 font-mono text-[10px] uppercase ${stageTone[item.status || item.stage] || "border-[var(--qd-border)] text-[var(--qd-text-2)]"}`}>
+                {item.status || item.stage}
               </span>
             </div>
             <p className="mt-3 text-sm text-[var(--qd-text-2)]">{item.why}</p>
@@ -428,6 +430,17 @@ const ProfitableMachine = ({ machine }) => {
                 <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Hard gate</div>
                 <div className="mt-1 text-sm text-[var(--qd-text)]">{item.hard_gate}</div>
               </div>
+              {item.evidence && (
+                <div className="rounded-[var(--qd-radius-sm)] border border-[var(--qd-cyan)]/25 bg-[var(--qd-surface-2)] p-3">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--qd-text-3)]">Current evidence</div>
+                  <div className="mt-1 text-sm text-[var(--qd-text-2)]">{item.evidence}</div>
+                </div>
+              )}
+              {(item.blockers || []).length > 0 && (
+                <div className="space-y-1 text-xs text-[var(--qd-loss)]">
+                  {item.blockers.map((blocker) => <div key={blocker}>• {blocker}</div>)}
+                </div>
+              )}
             </div>
           </div>
         ))}
