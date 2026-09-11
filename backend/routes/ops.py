@@ -398,7 +398,10 @@ async def ops_list_research_hypotheses(
 ):
     from core.research_ledger import list_hypotheses
 
-    return await list_hypotheses(db, user["id"], status=status, limit=limit)
+    # Research records may contain non-finite metrics from empty samples or
+    # divide-by-zero statistics. FastAPI's JSON encoder rejects those values;
+    # expose them as null so the UI remains honest and usable.
+    return _json_safe(await list_hypotheses(db, user["id"], status=status, limit=limit))
 
 
 @router.get("/research/hypotheses/{hypothesis_id}")
@@ -406,7 +409,7 @@ async def ops_get_research_hypothesis(hypothesis_id: str, user=Depends(get_curre
     from core.research_ledger import get_hypothesis
 
     try:
-        return await get_hypothesis(db, user["id"], hypothesis_id)
+        return _json_safe(await get_hypothesis(db, user["id"], hypothesis_id))
     except KeyError:
         raise HTTPException(status_code=404, detail="Research hypothesis not found")
 
