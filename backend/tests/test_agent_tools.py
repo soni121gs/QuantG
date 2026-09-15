@@ -379,6 +379,7 @@ async def test_approve_wiki_note_action():
     })
     mock_db.wiki_docs.find_one = AsyncMock(return_value=None)
     mock_db.wiki_docs.insert_one = AsyncMock()
+    mock_db.hermes_memory.insert_one = AsyncMock()
     mock_db.pending_actions.update_one = AsyncMock()
     mock_db.agent_tool_audit.insert_one = AsyncMock()
     
@@ -394,6 +395,10 @@ async def test_approve_wiki_note_action():
         res = await approve_agent_action(req, user=user)
         
     assert res["status"] == "approved"
+    assert mock_db.hermes_memory.insert_one.await_count == 1
+    memory_doc = mock_db.hermes_memory.insert_one.call_args.args[0]
+    assert memory_doc["type"] == "approved_wiki_note"
+    assert memory_doc["source_refs"][0]["collection"] == "wiki_docs"
     mock_db.wiki_docs.insert_one.assert_called_once()
     doc_inserted = mock_db.wiki_docs.insert_one.call_args[0][0]
     assert doc_inserted["title"] == "Hermes Rules"

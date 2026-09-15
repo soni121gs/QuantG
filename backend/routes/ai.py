@@ -2358,6 +2358,26 @@ async def approve_agent_action(req: ActionDecisionReq, user=Depends(get_current_
         }
         
         await db.wiki_docs.insert_one(doc)
+        # Approved wiki notes are also Hermes long-term memory.  The wiki is the
+        # human-facing source, while recall_memory searches this separate,
+        # embedding-backed collection; writing only wiki_docs made an approval
+        # look successful but invisible to Hermes.
+        try:
+            from core.embeddings import generate_gemini_embedding
+            memory_text = f"{title}\n\n{body_markdown}"
+            embedding = await generate_gemini_embedding(memory_text)
+            await db.hermes_memory.insert_one({
+                "id": "mem_" + str(uuid.uuid4()),
+                "user_id": user["id"],
+                "text": memory_text,
+                "type": "approved_wiki_note",
+                "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "embedding": embedding,
+                "source_refs": [{"collection": "wiki_docs", "id": slug}],
+                "created_at": now_str,
+            })
+        except Exception as exc:
+            logger.error("Failed to index approved wiki note in Hermes memory: %s", exc)
         try:
             save_wiki_to_disk(title, folder, body_markdown, ["hermes-draft"], {"source": "hermes-agent"})
         except Exception as exc:
