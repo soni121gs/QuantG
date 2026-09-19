@@ -6,7 +6,7 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
         {"status": "OPEN", "underlying": "NIFTY", "strategy_id": "s1", "max_loss_total": 1000,
          "pnl": 125, "greeks": {"delta": -0.2, "gamma": 0.01, "theta": 4, "vega": -2}},
         {"status": "CLOSED", "underlying": "NIFTY", "strategy_id": "s1", "max_loss_total": 500, "pnl": 80},
-    ], [{"realized_pnl": -50}], )
+    ], [{"realized_pnl": -50, "strategy_id": "s1", "underlying": "NIFTY"}], )
 
     assert result["read_only"] is True
     assert result["open_positions"] == 1
@@ -16,3 +16,4 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
     assert result["greeks"]["delta"]["value"] == -0.2
     assert result["data_quality"]["missing_greeks"] == []
     assert [alert["code"] for alert in result["risk_alerts"]] == ["UNDERLYING_CONCENTRATION"]
+    assert result["realized_by_strategy"] == [{"name": "S1", "fills": 1, "realized_pnl": -50.0}]

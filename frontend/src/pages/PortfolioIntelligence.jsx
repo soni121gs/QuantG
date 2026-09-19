@@ -99,6 +99,9 @@ export default function PortfolioIntelligence() {
           <div className="overflow-x-auto"><table className="qd-table"><thead><tr><th>Name</th><th>Positions</th><th>Risk</th><th>Open P&L</th></tr></thead><tbody>{(snapshot?.[key] || []).map((row) => <tr key={row.name}><td className="font-semibold">{row.name}</td><td>{row.positions}</td><td>{money(row.risk)}</td><td className={Number(row.unrealized_pnl) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{money(row.unrealized_pnl)}</td></tr>)}</tbody></table>{!snapshot?.[key]?.length && <div className="p-6 text-center text-sm text-[var(--qd-text-2)]">No persisted open positions.</div>}</div>
         </SectionPanel>)}
       </div>
+      <SectionPanel title="Booked P&L attribution" subtitle="Realized fills grouped by strategy; this is performance attribution, not open-risk exposure.">
+        <div className="overflow-x-auto"><table className="qd-table"><thead><tr><th>Strategy</th><th>Fills</th><th>Realized P&L</th></tr></thead><tbody>{(snapshot?.realized_by_strategy || []).map((row) => <tr key={row.name}><td className="font-semibold">{row.name}</td><td>{row.fills}</td><td className={Number(row.realized_pnl) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{money(row.realized_pnl)}</td></tr>)}</tbody></table>{!snapshot?.realized_by_strategy?.length && <div className="p-6 text-center text-sm text-[var(--qd-text-2)]">No persisted fills available for attribution.</div>}</div>
+      </SectionPanel>
     </main>
   );
 }

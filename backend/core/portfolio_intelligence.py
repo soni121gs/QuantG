@@ -57,6 +57,17 @@ def _bucket(rows: Iterable[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
     ]
 
 
+def _pnl_bucket(rows: Iterable[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    grouped: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"name": "UNKNOWN", "fills": 0, "realized_pnl": 0.0})
+    for row in rows:
+        name = str(row.get(key) or "UNKNOWN").upper()
+        item = grouped[name]
+        item["name"] = name
+        item["fills"] += 1
+        item["realized_pnl"] += _num(row.get("realized_pnl") if row.get("realized_pnl") is not None else row.get("pnl"))
+    return [{**item, "realized_pnl": round(item["realized_pnl"], 2)} for item in sorted(grouped.values(), key=lambda x: x["realized_pnl"], reverse=True)]
+
+
 def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[str, Any]], *, now: datetime | None = None) -> Dict[str, Any]:
     """Build a deterministic, read-only whole-book snapshot from persisted rows."""
     now = now or datetime.now(timezone.utc)
@@ -87,6 +98,8 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in open_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(open_rows)} for g in ("delta", "gamma", "theta", "vega")},
         "by_underlying": by_underlying,
         "by_strategy": _bucket(open_rows, "strategy_id"),
+        "realized_by_strategy": _pnl_bucket(fills, "strategy_id"),
+        "realized_by_underlying": _pnl_bucket(fills, "underlying"),
         "risk_alerts": alerts,
         "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": missing_greeks},
         "note": "Read-only derived view. Missing marks or Greeks are reported, never inferred.",
