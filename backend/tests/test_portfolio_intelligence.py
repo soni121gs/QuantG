@@ -15,3 +15,4 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
     assert result["unrealized_pnl"] == 125.0
     assert result["greeks"]["delta"]["value"] == -0.2
     assert result["data_quality"]["missing_greeks"] == []
+    assert [alert["code"] for alert in result["risk_alerts"]] == ["UNDERLYING_CONCENTRATION"]

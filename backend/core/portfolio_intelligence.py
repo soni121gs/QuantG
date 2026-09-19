@@ -64,6 +64,17 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in fills), 2)
     unrealized = round(sum(_num(p.get("pnl") if p.get("pnl") is not None else p.get("unrealized_pnl")) for p in open_rows), 2)
     greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
+    by_underlying = _bucket(open_rows, "underlying")
+    total_risk = book_heat(open_rows)
+    alerts: List[Dict[str, Any]] = []
+    if total_risk > 0 and by_underlying and by_underlying[0]["risk"] / total_risk >= 0.5:
+        lead = by_underlying[0]
+        alerts.append({"severity": "warning", "code": "UNDERLYING_CONCENTRATION", "title": "Risk is concentrated", "detail": f"{lead['name']} carries {lead['risk'] / total_risk:.0%} of defined risk.", "evidence": {"underlying": lead["name"], "risk": lead["risk"], "total_risk": total_risk}})
+    missing_greeks = [g for g, n in greek_coverage.items() if n < len(open_rows)]
+    if missing_greeks and open_rows:
+        alerts.append({"severity": "info", "code": "GREEK_COVERAGE_INCOMPLETE", "title": "Greek coverage is incomplete", "detail": f"Missing persisted coverage for {', '.join(missing_greeks)}.", "evidence": {"missing": missing_greeks, "positions": len(open_rows)}})
+    if realized + unrealized < 0:
+        alerts.append({"severity": "warning", "code": "BOOK_PNL_NEGATIVE", "title": "Book P&L is negative", "detail": f"Realized plus unrealized P&L is {realized + unrealized:.2f}.", "evidence": {"realized_pnl": realized, "unrealized_pnl": unrealized}})
     return {
         "as_of": now.isoformat(),
         "source": {"positions": "db.strategy_positions", "fills": "db.trade_fills"},
@@ -74,9 +85,10 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "total_pnl": round(realized + unrealized, 2),
         "defined_risk": round(book_heat(open_rows), 2),
         "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in open_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(open_rows)} for g in ("delta", "gamma", "theta", "vega")},
-        "by_underlying": _bucket(open_rows, "underlying"),
+        "by_underlying": by_underlying,
         "by_strategy": _bucket(open_rows, "strategy_id"),
-        "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": [g for g, n in greek_coverage.items() if n < len(open_rows)]},
+        "risk_alerts": alerts,
+        "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": missing_greeks},
         "note": "Read-only derived view. Missing marks or Greeks are reported, never inferred.",
     }
 
