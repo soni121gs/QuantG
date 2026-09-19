@@ -88,6 +88,18 @@ def _pnl_bucket(rows: Iterable[Dict[str, Any]], key: str) -> List[Dict[str, Any]
     return [{**item, "realized_pnl": round(item["realized_pnl"], 2)} for item in sorted(grouped.values(), key=lambda x: x["realized_pnl"], reverse=True)]
 
 
+def _asset_bucket(pos: Dict[str, Any]) -> str:
+    structure = str(pos.get("structure") or "").lower()
+    if structure in {"credit_spread", "debit_spread"}:
+        return "SPREAD"
+    asset_type = str(pos.get("asset_type") or pos.get("asset_class") or "").lower()
+    if "option" in asset_type or pos.get("option_type") is not None:
+        return "OPTIONS"
+    if asset_type in {"equity", "stock", "cash_equity"}:
+        return "EQUITIES"
+    return "UNKNOWN"
+
+
 def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[str, Any]], *, now: datetime | None = None,
                              heat_budget: float = PORTFOLIO_HEAT_BUDGET,
                              daily_loss_limit: float = DAILY_LOSS_LIMIT,
@@ -96,11 +108,17 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     now = now or datetime.now(timezone.utc)
     open_rows = [p for p in positions if str(p.get("status") or "").upper() in OPEN_STATUSES]
     realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in fills), 2)
-    daily_fills = [f for f in fills if (_as_utc(f.get("filled_at") or f.get("created_at") or f.get("updated_at")) or now).date() == now.date() and (_as_utc(f.get("filled_at") or f.get("created_at") or f.get("updated_at")) is not None)]
+    daily_fills = []
+    for fill in fills:
+        fill_time = _as_utc(fill.get("filled_at") or fill.get("created_at") or fill.get("updated_at"))
+        if fill_time and fill_time.date() == now.date():
+            daily_fills.append(fill)
     daily_realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in daily_fills), 2)
     unrealized = round(sum(_num(p.get("pnl") if p.get("pnl") is not None else p.get("unrealized_pnl")) for p in open_rows), 2)
     greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
     by_underlying = _bucket(open_rows, "underlying")
+    asset_coverage = {name: sum(1 for p in open_rows if _asset_bucket(p) == name)
+                      for name in ("EQUITIES", "OPTIONS", "SPREAD", "UNKNOWN")}
     total_risk = book_heat(open_rows)
     heat_utilization = round(total_risk / heat_budget, 4) if heat_budget > 0 else None
     loss_used = max(0.0, -daily_realized)
@@ -114,6 +132,8 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         alerts.append({"severity": "info", "code": "GREEK_COVERAGE_INCOMPLETE", "title": "Greek coverage is incomplete", "detail": f"Missing persisted coverage for {', '.join(missing_greeks)}.", "evidence": {"missing": missing_greeks, "positions": len(open_rows)}})
     if realized + unrealized < 0:
         alerts.append({"severity": "warning", "code": "BOOK_PNL_NEGATIVE", "title": "Book P&L is negative", "detail": f"Realized plus unrealized P&L is {realized + unrealized:.2f}.", "evidence": {"realized_pnl": realized, "unrealized_pnl": unrealized}})
+    if asset_coverage["UNKNOWN"]:
+        alerts.append({"severity": "info", "code": "ASSET_CLASS_UNCLASSIFIED", "title": "Some positions lack asset classification", "detail": f"{asset_coverage['UNKNOWN']} open position(s) cannot be classified as equity, option, or spread.", "evidence": {"unknown_positions": asset_coverage["UNKNOWN"]}})
     return {
         "as_of": now.isoformat(),
         "source": {"positions": "db.strategy_positions", "fills": "db.trade_fills"},
@@ -134,6 +154,7 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "realized_by_underlying": _pnl_bucket(fills, "underlying"),
         "risk_alerts": alerts,
         "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": missing_greeks,
+                          "asset_coverage": asset_coverage,
                           "freshness": {"positions": _freshness(open_rows, now, ("updated_at", "marked_at", "created_at")),
                                         "fills": _freshness(fills, now, ("filled_at", "created_at", "updated_at"))}},
         "note": "Read-only derived view. Missing marks or Greeks are reported, never inferred.",

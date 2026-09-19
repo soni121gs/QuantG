@@ -23,7 +23,21 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
     assert result["unrealized_pnl"] == 125.0
     assert result["greeks"]["delta"]["value"] == -0.2
     assert result["data_quality"]["missing_greeks"] == []
-    assert [alert["code"] for alert in result["risk_alerts"]] == ["UNDERLYING_CONCENTRATION"]
+    assert [alert["code"] for alert in result["risk_alerts"]] == ["UNDERLYING_CONCENTRATION", "ASSET_CLASS_UNCLASSIFIED"]
     assert result["realized_by_strategy"] == [{"name": "S1", "fills": 1, "realized_pnl": -50.0}]
     assert result["data_quality"]["freshness"]["positions"]["status"] == "AVAILABLE"
     assert result["data_quality"]["freshness"]["fills"]["status"] == "AVAILABLE"
+
+
+def test_asset_coverage_distinguishes_equity_options_and_spreads():
+    result = build_portfolio_snapshot([
+        {"status": "OPEN", "asset_type": "equity", "max_loss_total": 100},
+        {"status": "OPEN", "asset_type": "option", "option_type": "CE", "max_loss_total": 200},
+        {"status": "OPEN", "structure": "credit_spread", "max_loss_total": 300},
+        {"status": "OPEN", "max_loss_total": 400},
+    ], [], now=datetime(2026, 1, 2, tzinfo=timezone.utc))
+
+    assert result["data_quality"]["asset_coverage"] == {
+        "EQUITIES": 1, "OPTIONS": 1, "SPREAD": 1, "UNKNOWN": 1,
+    }
+    assert any(alert["code"] == "ASSET_CLASS_UNCLASSIFIED" for alert in result["risk_alerts"])
