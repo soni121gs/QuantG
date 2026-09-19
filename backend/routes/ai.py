@@ -1287,6 +1287,12 @@ def _local_agent_summary(tool_results: List[Dict[str, Any]]) -> str:
     risk = next((t.get("data") for t in tool_results if t.get("name") == "get_risk_snapshot" and t.get("status") == "ok"), {})
     market = next((t.get("data") for t in tool_results if t.get("name") == "get_market_data_status" and t.get("status") == "ok"), {})
     log_data = next((t.get("data") for t in tool_results if t.get("name") == "get_logs_errors" and t.get("status") == "ok"), {})
+    portfolio = next((t.get("data") for t in tool_results if t.get("name") == "get_portfolio_snapshot" and t.get("status") == "ok"), None)
+    scenario = next((t.get("data") for t in tool_results if t.get("name") == "get_portfolio_scenario" and t.get("status") == "ok"), None)
+    portfolio_lines = []
+    if portfolio:
+        from core.portfolio_narrator import explain_portfolio
+        portfolio_lines = ["", "Whole-portfolio intelligence:", explain_portfolio(portfolio, scenario)]
 
     return "\n".join([
         "Local read-only summary:",
@@ -1299,6 +1305,7 @@ def _local_agent_summary(tool_results: List[Dict[str, Any]]) -> str:
         f"- Today PnL: {risk.get('total_pnl', 'unavailable')} ({risk.get('mode', 'mode unavailable')})",
         f"- Strategy errors: {len(log_data.get('strategy_errors') or []) if isinstance(log_data, dict) else 0}",
         f"- Rejected orders: {len(log_data.get('recent_rejected_orders') or []) if isinstance(log_data, dict) else 0}",
+        *portfolio_lines,
     ])
 
 
