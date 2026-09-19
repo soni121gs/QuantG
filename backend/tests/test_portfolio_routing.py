@@ -10,3 +10,9 @@ def test_scenario_questions_select_snapshot_and_scenario_tools():
     tools = classify_playbook_by_query("What if NIFTY falls 2% and IV rises 5 points?")
     assert "get_portfolio_snapshot" in tools
     assert "get_portfolio_scenario" in tools
+
+
+def test_portfolio_stress_surface_query_selects_grid():
+    tools = classify_playbook_by_query("show me the portfolio stress matrix")
+    assert "get_portfolio_snapshot" in tools
+    assert "get_portfolio_scenario_grid" in tools

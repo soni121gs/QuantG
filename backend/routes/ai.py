@@ -65,6 +65,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_risk_snapshot",
     "get_portfolio_snapshot",
     "get_portfolio_scenario",
+    "get_portfolio_scenario_grid",
     "get_live_readiness",
     "get_today_fills",
     "get_skipped_signals",
@@ -492,6 +493,13 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             )
             source = "core.portfolio_scenarios"
             warnings.append("Scenario is an approximate read-only Greek stress; incomplete inputs are returned as NOT_COMPUTABLE.")
+        elif name == "get_portfolio_scenario_grid":
+            from core.portfolio_scenarios import load_portfolio_scenario_grid
+            import re
+            day_match = re.search(r"(-?\d+(?:\.\d+)?)\s*days?", str(query or "").lower())
+            data = await load_portfolio_scenario_grid(db, user["id"], days=float(day_match.group(1)) if day_match else 1.0)
+            source = "core.portfolio_scenarios"
+            warnings.append("Scenario grid is an approximate read-only Greek stress surface; it is not a forecast or execution gate.")
         elif name == "get_live_readiness":
             from routes.ops import ops_live_readiness
             data = await ops_live_readiness(user=user)
@@ -1471,6 +1479,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_risk_snapshot": "Kill-switch state, daily loss limit, realized/unrealized P&L, drawdown, capital reservations.",
     "get_portfolio_snapshot": "Read-only whole-portfolio positions, P&L, defined risk, Greeks, and exposure buckets.",
     "get_portfolio_scenario": "Read-only what-if stress estimate using persisted Greeks for a percentage move, IV change, and holding period.",
+    "get_portfolio_scenario_grid": "Read-only two-factor portfolio stress surface across underlying moves and IV shocks.",
     "get_live_readiness": "Pre-flight checklist gating live/paper trading readiness.",
     "get_today_fills": "Fills executed today from the trade_fills ledger.",
     "get_skipped_signals": "Signals that were filtered/skipped and the reason (diagnose 'why no trades').",
@@ -2063,6 +2072,10 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_hermes_brain_health")
         has_matches = True
 
+    if any(w in q for w in ["scenario grid", "stress surface", "stress matrix"]):
+        matched_tools.add("get_portfolio_snapshot")
+        matched_tools.add("get_portfolio_scenario_grid")
+        has_matches = True
     if any(w in q for w in ["scenario", "stress test", "stress-test", "what if", "what-if",
                             "gap down", "gap up", "iv shock", "volatility shock", "portfolio risk"]):
         matched_tools.add("get_portfolio_snapshot")

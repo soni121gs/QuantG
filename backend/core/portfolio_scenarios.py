@@ -47,6 +47,33 @@ def build_portfolio_scenario(positions: List[Dict[str, Any]], *, move_pct: float
     }
 
 
+def build_portfolio_scenario_grid(positions: List[Dict[str, Any]], *, moves: List[float] | None = None,
+                                  iv_changes: List[float] | None = None, days: float = 1.0) -> Dict[str, Any]:
+    """Build a transparent two-factor stress surface from the same estimate engine."""
+    moves = [float(value) for value in (moves if moves is not None else [-0.05, -0.02, 0.0, 0.02, 0.05])]
+    iv_changes = [float(value) for value in (iv_changes if iv_changes is not None else [-10.0, 0.0, 10.0])]
+    cells = []
+    for move_pct in moves:
+        for iv_points in iv_changes:
+            result = build_portfolio_scenario(positions, move_pct=move_pct, iv_points=iv_points, days=days)
+            cells.append({"underlying_move_pct": move_pct, "iv_change_points": iv_points,
+                          "estimated_pnl": result["estimated_pnl"], "status": result["status"],
+                          "coverage": result["coverage"]})
+    computable = [cell for cell in cells if cell["estimated_pnl"] is not None]
+    return {"read_only": True, "status": "ESTIMATE" if len(computable) == len(cells) else "PARTIAL",
+            "holding_days": float(days), "moves": moves, "iv_changes": iv_changes, "cells": cells,
+            "coverage": {"computed": len(computable), "total": len(cells)},
+            "worst_case": min(computable, key=lambda cell: cell["estimated_pnl"]) if computable else None,
+            "best_case": max(computable, key=lambda cell: cell["estimated_pnl"]) if computable else None,
+            "calculation_basis": "Each cell uses the persisted-Greeks delta/gamma/vega/theta approximation.",
+            "warning": "Stress surface only. It is not a forecast, valuation, order recommendation, or execution gate."}
+
+
 async def load_portfolio_scenario(db: Any, user_id: str, *, move_pct: float = 0.0, iv_points: float = 0.0, days: float = 0.0) -> Dict[str, Any]:
     positions = await db.strategy_positions.find({"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "EXITING", "PENDING_OPEN", "PENDING_BROKER", "RESERVED"]}}, {"_id": 0, "user_id": 0}).to_list(5000)
     return build_portfolio_scenario(positions, move_pct=move_pct, iv_points=iv_points, days=days)
+
+
+async def load_portfolio_scenario_grid(db: Any, user_id: str, *, days: float = 1.0) -> Dict[str, Any]:
+    positions = await db.strategy_positions.find({"user_id": user_id, "status": {"$in": ["OPEN", "FILLED", "EXITING", "PENDING_OPEN", "PENDING_BROKER", "RESERVED"]}}, {"_id": 0, "user_id": 0}).to_list(5000)
+    return build_portfolio_scenario_grid(positions, days=days)

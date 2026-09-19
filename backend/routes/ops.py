@@ -1230,6 +1230,13 @@ async def ops_portfolio_scenario(req: PortfolioScenarioReq, user=Depends(get_cur
     return _json_safe(await load_portfolio_scenario(db, user["id"], move_pct=req.move_pct, iv_points=req.iv_points, days=req.days))
 
 
+@router.get("/portfolio-scenario-grid")
+async def ops_portfolio_scenario_grid(days: float = 1.0, user=Depends(get_current_user)):
+    """Read-only two-factor stress surface; never routes or gates an order."""
+    from core.portfolio_scenarios import load_portfolio_scenario_grid
+    return _json_safe(await load_portfolio_scenario_grid(db, user["id"], days=days))
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data
