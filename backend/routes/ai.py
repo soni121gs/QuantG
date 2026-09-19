@@ -2069,6 +2069,11 @@ def classify_playbook_by_query(query: str) -> List[str]:
         matched_tools.add("get_portfolio_scenario")
         has_matches = True
 
+    if any(w in q for w in ["portfolio", "whole book", "whole portfolio", "exposure", "concentration",
+                            "greeks", "delta", "gamma", "theta", "vega", "defined risk"]):
+        matched_tools.add("get_portfolio_snapshot")
+        has_matches = True
+
     # §19 Diagnostician: "what's broken / wrong / any bugs / diagnostics / findings".
     if any(w in q for w in [
         "diagnostic", "diagnostics", "diagnose", "what is wrong", "what's wrong",
