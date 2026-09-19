@@ -1210,6 +1210,13 @@ async def ops_execution_quality(days: int = 30, user=Depends(get_current_user)):
     return _json_safe(await execution_quality_report(db, user["id"], days=days))
 
 
+@router.get("/portfolio-snapshot")
+async def ops_portfolio_snapshot(user=Depends(get_current_user)):
+    """Read-only whole-portfolio truth for the Aladdin-style risk cockpit."""
+    from core.portfolio_intelligence import load_portfolio_snapshot
+    return _json_safe(await load_portfolio_snapshot(db, user["id"]))
+
+
 @router.get("/intraday-oos")
 async def ops_intraday_oos(user=Depends(get_current_user)):
     """IMD-09: latest intraday 1-minute OOS verdicts for QG-O5..QG-O10 + minute-data

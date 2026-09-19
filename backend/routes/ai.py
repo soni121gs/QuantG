@@ -63,6 +63,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_feed_status",
     "get_logs_errors",
     "get_risk_snapshot",
+    "get_portfolio_snapshot",
     "get_live_readiness",
     "get_today_fills",
     "get_skipped_signals",
@@ -470,6 +471,11 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
                 "max_position_size": settings.get("max_position_size"),
             }
             source = "db.orders / db.positions / user_settings"
+        elif name == "get_portfolio_snapshot":
+            from core.portfolio_intelligence import load_portfolio_snapshot
+            data = await load_portfolio_snapshot(db, user["id"])
+            source = "core.portfolio_intelligence"
+            warnings.append("Whole-portfolio snapshot is read-only; missing marks and Greeks are reported, never guessed.")
         elif name == "get_live_readiness":
             from routes.ops import ops_live_readiness
             data = await ops_live_readiness(user=user)
@@ -1440,6 +1446,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_feed_status": "WebSocket tick-feed health: connected state and last-tick age.",
     "get_logs_errors": "Recent backend ERROR / exception log lines.",
     "get_risk_snapshot": "Kill-switch state, daily loss limit, realized/unrealized P&L, drawdown, capital reservations.",
+    "get_portfolio_snapshot": "Read-only whole-portfolio positions, P&L, defined risk, Greeks, and exposure buckets.",
     "get_live_readiness": "Pre-flight checklist gating live/paper trading readiness.",
     "get_today_fills": "Fills executed today from the trade_fills ledger.",
     "get_skipped_signals": "Signals that were filtered/skipped and the reason (diagnose 'why no trades').",
