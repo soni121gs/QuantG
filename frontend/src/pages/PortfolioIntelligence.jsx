@@ -71,6 +71,9 @@ export default function PortfolioIntelligence() {
         <MetricCard label="Total P&L" value={money(snapshot?.total_pnl)} tone={signedTone(snapshot?.total_pnl)} />
         <MetricCard label="Defined risk" value={money(snapshot?.defined_risk)} tone="warning" sub="Persisted position risk" />
       </div>
+      <SectionPanel title="Risk budget utilization" subtitle="Derived from configured portfolio limits; advisory only.">
+        <div className="grid gap-3 p-4 sm:grid-cols-2"><div><div className="flex justify-between text-xs text-[var(--qd-text-2)]"><span>Heat budget</span><span>{snapshot?.risk_budget?.heat_utilization == null ? "UNKNOWN" : `${(snapshot.risk_budget.heat_utilization * 100).toFixed(1)}%`}</span></div><div className="mt-2 h-2 rounded bg-[var(--qd-border)]"><div className="h-2 rounded bg-[var(--qd-accent)]" style={{ width: `${Math.min(100, Number(snapshot?.risk_budget?.heat_utilization || 0) * 100)}%` }} /></div></div><div><div className="flex justify-between text-xs text-[var(--qd-text-2)]"><span>Daily loss limit used</span><span>{snapshot?.risk_budget?.daily_loss_utilization == null ? "UNKNOWN" : `${(snapshot.risk_budget.daily_loss_utilization * 100).toFixed(1)}%`}</span></div><div className="mt-2 h-2 rounded bg-[var(--qd-border)]"><div className="h-2 rounded bg-[var(--qd-warn)]" style={{ width: `${Math.min(100, Number(snapshot?.risk_budget?.daily_loss_utilization || 0) * 100)}%` }} /></div></div></div>
+      </SectionPanel>
 
       <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
         <SectionPanel title="Portfolio Greeks" subtitle="Aggregated from persisted position data; coverage is shown explicitly.">

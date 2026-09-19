@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
-from core.portfolio_risk import book_heat, position_risk
+from core.portfolio_risk import DAILY_LOSS_LIMIT, PORTFOLIO_HEAT_BUDGET, book_heat, position_risk
 
 
 OPEN_STATUSES = {"OPEN", "FILLED", "EXITING", "PENDING_OPEN", "PENDING_BROKER", "RESERVED"}
@@ -97,6 +97,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
     by_underlying = _bucket(open_rows, "underlying")
     total_risk = book_heat(open_rows)
+    heat_utilization = round(total_risk / PORTFOLIO_HEAT_BUDGET, 4) if PORTFOLIO_HEAT_BUDGET > 0 else None
+    loss_used = max(0.0, -realized)
+    loss_utilization = round(loss_used / DAILY_LOSS_LIMIT, 4) if DAILY_LOSS_LIMIT > 0 else None
     alerts: List[Dict[str, Any]] = []
     if total_risk > 0 and by_underlying and by_underlying[0]["risk"] / total_risk >= 0.5:
         lead = by_underlying[0]
@@ -115,6 +118,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "unrealized_pnl": unrealized,
         "total_pnl": round(realized + unrealized, 2),
         "defined_risk": round(book_heat(open_rows), 2),
+        "risk_budget": {"heat_budget": PORTFOLIO_HEAT_BUDGET, "heat_utilization": heat_utilization,
+                        "daily_loss_limit": DAILY_LOSS_LIMIT, "daily_loss_used": round(loss_used, 2),
+                        "daily_loss_utilization": loss_utilization, "source": "environment risk limits"},
         "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in open_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(open_rows)} for g in ("delta", "gamma", "theta", "vega")},
         "by_underlying": by_underlying,
         "by_strategy": _bucket(open_rows, "strategy_id"),

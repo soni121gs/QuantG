@@ -11,6 +11,8 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
     assert result["read_only"] is True
     assert result["open_positions"] == 1
     assert result["defined_risk"] == 1000.0
+    assert result["risk_budget"]["heat_budget"] > 0
+    assert result["risk_budget"]["heat_utilization"] > 0
     assert result["realized_pnl"] == -50.0
     assert result["unrealized_pnl"] == 125.0
     assert result["greeks"]["delta"]["value"] == -0.2
