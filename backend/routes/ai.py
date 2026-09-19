@@ -64,6 +64,7 @@ READ_ONLY_AGENT_TOOLS = [
     "get_logs_errors",
     "get_risk_snapshot",
     "get_portfolio_snapshot",
+    "get_portfolio_scenario",
     "get_live_readiness",
     "get_today_fills",
     "get_skipped_signals",
@@ -476,6 +477,21 @@ async def _run_agent_tool(name: str, user: Dict[str, Any], query: Optional[str] 
             data = await load_portfolio_snapshot(db, user["id"])
             source = "core.portfolio_intelligence"
             warnings.append("Whole-portfolio snapshot is read-only; missing marks and Greeks are reported, never guessed.")
+        elif name == "get_portfolio_scenario":
+            from core.portfolio_scenarios import load_portfolio_scenario
+            import re
+            q = str(query or "").lower()
+            move_match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", q)
+            iv_match = re.search(r"(?:iv|vol(?:atility)?)\s*(?:up|change|shock)?\s*(-?\d+(?:\.\d+)?)", q)
+            day_match = re.search(r"(-?\d+(?:\.\d+)?)\s*days?", q)
+            data = await load_portfolio_scenario(
+                db, user["id"],
+                move_pct=float(move_match.group(1)) / 100.0 if move_match else 0.0,
+                iv_points=float(iv_match.group(1)) if iv_match else 0.0,
+                days=float(day_match.group(1)) if day_match else 0.0,
+            )
+            source = "core.portfolio_scenarios"
+            warnings.append("Scenario is an approximate read-only Greek stress; incomplete inputs are returned as NOT_COMPUTABLE.")
         elif name == "get_live_readiness":
             from routes.ops import ops_live_readiness
             data = await ops_live_readiness(user=user)
@@ -1447,6 +1463,7 @@ TOOL_SPECS: Dict[str, str] = {
     "get_logs_errors": "Recent backend ERROR / exception log lines.",
     "get_risk_snapshot": "Kill-switch state, daily loss limit, realized/unrealized P&L, drawdown, capital reservations.",
     "get_portfolio_snapshot": "Read-only whole-portfolio positions, P&L, defined risk, Greeks, and exposure buckets.",
+    "get_portfolio_scenario": "Read-only what-if stress estimate using persisted Greeks for a percentage move, IV change, and holding period.",
     "get_live_readiness": "Pre-flight checklist gating live/paper trading readiness.",
     "get_today_fills": "Fills executed today from the trade_fills ledger.",
     "get_skipped_signals": "Signals that were filtered/skipped and the reason (diagnose 'why no trades').",
@@ -2037,6 +2054,12 @@ def classify_playbook_by_query(query: str) -> List[str]:
         "what has hermes learned", "confidence", "decayed",
     ]):
         matched_tools.add("get_hermes_brain_health")
+        has_matches = True
+
+    if any(w in q for w in ["scenario", "stress test", "stress-test", "what if", "what-if",
+                            "gap down", "gap up", "iv shock", "volatility shock", "portfolio risk"]):
+        matched_tools.add("get_portfolio_snapshot")
+        matched_tools.add("get_portfolio_scenario")
         has_matches = True
 
     # §19 Diagnostician: "what's broken / wrong / any bugs / diagnostics / findings".

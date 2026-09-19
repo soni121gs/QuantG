@@ -43,6 +43,12 @@ class OpsActionReq(BaseModel):
     confirm: Optional[bool] = False
 
 
+class PortfolioScenarioReq(BaseModel):
+    move_pct: float = 0.0
+    iv_points: float = 0.0
+    days: float = 0.0
+
+
 class ResearchHypothesisReq(BaseModel):
     hypothesis: str
     market_premise: Optional[str] = None
@@ -1215,6 +1221,13 @@ async def ops_portfolio_snapshot(user=Depends(get_current_user)):
     """Read-only whole-portfolio truth for the Aladdin-style risk cockpit."""
     from core.portfolio_intelligence import load_portfolio_snapshot
     return _json_safe(await load_portfolio_snapshot(db, user["id"]))
+
+
+@router.post("/portfolio-scenario")
+async def ops_portfolio_scenario(req: PortfolioScenarioReq, user=Depends(get_current_user)):
+    """Read-only stress estimate; never routes or gates an order."""
+    from core.portfolio_scenarios import load_portfolio_scenario
+    return _json_safe(await load_portfolio_scenario(db, user["id"], move_pct=req.move_pct, iv_points=req.iv_points, days=req.days))
 
 
 @router.get("/intraday-oos")
