@@ -30,6 +30,7 @@ import {
   BookOpen,
   BarChart3,
   ClipboardList,
+  Orbit,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, formatINR } from "../lib/api";
@@ -50,6 +51,7 @@ const NAV_GROUPS = [
       { to: "/orders", icon: ListOrdered, label: "Execution", id: "nav-orders" },
       { to: "/analytics", icon: BarChart3, label: "Analytics", id: "nav-analytics" },
       { to: "/founder", icon: ClipboardList, label: "Founder", id: "nav-founder" },
+      { to: "/portfolio-intelligence", icon: Orbit, label: "Portfolio", id: "nav-portfolio-intelligence" },
     ],
   },
   {
@@ -91,6 +93,7 @@ const MOBILE_NAV = [
   { to: "/strategies", icon: Blocks, label: "Strats", id: "mnav-strategies" },
   { to: "/orders", icon: ListOrdered, label: "Execution", id: "mnav-orders" },
   { to: "/founder", icon: ClipboardList, label: "Founder", id: "mnav-founder" },
+  { to: "/portfolio-intelligence", icon: Orbit, label: "Portfolio", id: "mnav-portfolio" },
   { to: "/ops", icon: ShieldAlert, label: "Risk", id: "mnav-ops" },
 ];
 
