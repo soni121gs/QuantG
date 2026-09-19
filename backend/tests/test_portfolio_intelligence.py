@@ -15,6 +15,9 @@ def test_snapshot_is_read_only_and_aggregates_risk_pnl_and_greeks():
     assert result["defined_risk"] == 1000.0
     assert result["risk_budget"]["heat_budget"] > 0
     assert result["risk_budget"]["heat_utilization"] > 0
+    custom = build_portfolio_snapshot([], [], now=datetime(2026, 1, 2, tzinfo=timezone.utc), daily_loss_limit=1000, risk_limit_source="test")
+    assert custom["risk_budget"]["daily_loss_limit"] == 1000
+    assert custom["risk_budget"]["source"] == "test"
     assert result["realized_pnl"] == -50.0
     assert result["daily_realized_pnl"] == -50.0
     assert result["unrealized_pnl"] == 125.0

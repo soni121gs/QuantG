@@ -88,7 +88,10 @@ def _pnl_bucket(rows: Iterable[Dict[str, Any]], key: str) -> List[Dict[str, Any]
     return [{**item, "realized_pnl": round(item["realized_pnl"], 2)} for item in sorted(grouped.values(), key=lambda x: x["realized_pnl"], reverse=True)]
 
 
-def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[str, Any]], *, now: datetime | None = None) -> Dict[str, Any]:
+def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[str, Any]], *, now: datetime | None = None,
+                             heat_budget: float = PORTFOLIO_HEAT_BUDGET,
+                             daily_loss_limit: float = DAILY_LOSS_LIMIT,
+                             risk_limit_source: str = "environment risk limits") -> Dict[str, Any]:
     """Build a deterministic, read-only whole-book snapshot from persisted rows."""
     now = now or datetime.now(timezone.utc)
     open_rows = [p for p in positions if str(p.get("status") or "").upper() in OPEN_STATUSES]
@@ -99,9 +102,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
     by_underlying = _bucket(open_rows, "underlying")
     total_risk = book_heat(open_rows)
-    heat_utilization = round(total_risk / PORTFOLIO_HEAT_BUDGET, 4) if PORTFOLIO_HEAT_BUDGET > 0 else None
+    heat_utilization = round(total_risk / heat_budget, 4) if heat_budget > 0 else None
     loss_used = max(0.0, -daily_realized)
-    loss_utilization = round(loss_used / DAILY_LOSS_LIMIT, 4) if DAILY_LOSS_LIMIT > 0 else None
+    loss_utilization = round(loss_used / daily_loss_limit, 4) if daily_loss_limit > 0 else None
     alerts: List[Dict[str, Any]] = []
     if total_risk > 0 and by_underlying and by_underlying[0]["risk"] / total_risk >= 0.5:
         lead = by_underlying[0]
@@ -121,9 +124,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "unrealized_pnl": unrealized,
         "total_pnl": round(realized + unrealized, 2),
         "defined_risk": round(book_heat(open_rows), 2),
-        "risk_budget": {"heat_budget": PORTFOLIO_HEAT_BUDGET, "heat_utilization": heat_utilization,
-                        "daily_loss_limit": DAILY_LOSS_LIMIT, "daily_loss_used": round(loss_used, 2),
-                        "daily_loss_utilization": loss_utilization, "source": "environment risk limits"},
+        "risk_budget": {"heat_budget": heat_budget, "heat_utilization": heat_utilization,
+                        "daily_loss_limit": daily_loss_limit, "daily_loss_used": round(loss_used, 2),
+                        "daily_loss_utilization": loss_utilization, "source": risk_limit_source},
         "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in open_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(open_rows)} for g in ("delta", "gamma", "theta", "vega")},
         "by_underlying": by_underlying,
         "by_strategy": _bucket(open_rows, "strategy_id"),
@@ -140,4 +143,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
 async def load_portfolio_snapshot(db: Any, user_id: str, *, now: datetime | None = None) -> Dict[str, Any]:
     positions = await db.strategy_positions.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(5000)
     fills = await db.trade_fills.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).to_list(10000)
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "max_daily_loss": 1})
+    configured_loss = _num((user or {}).get("max_daily_loss"))
+    if configured_loss > 0:
+        return build_portfolio_snapshot(positions, fills, now=now, daily_loss_limit=configured_loss,
+                                        risk_limit_source="user.max_daily_loss + environment heat limit")
     return build_portfolio_snapshot(positions, fills, now=now)
