@@ -24,6 +24,26 @@ def _num(value: Any) -> float:
         return 0.0
 
 
+def _as_utc(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _freshness(rows: Iterable[Dict[str, Any]], now: datetime, fields: tuple[str, ...]) -> Dict[str, Any]:
+    parsed = [dt for row in rows for dt in (_as_utc(next((row.get(field) for field in fields if row.get(field)), None)),) if dt]
+    latest = max(parsed) if parsed else None
+    return {"status": "AVAILABLE" if latest else "UNKNOWN", "latest": latest.isoformat() if latest else None,
+            "age_seconds": round(max(0.0, (now - latest).total_seconds()), 1) if latest else None,
+            "source_timestamps": len(parsed)}
+
+
 def _greek(pos: Dict[str, Any], name: str) -> float | None:
     for source in (pos.get("greeks"), pos.get("greeks_at_signal"), pos):
         if isinstance(source, dict) and source.get(name) is not None:
@@ -101,7 +121,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "realized_by_strategy": _pnl_bucket(fills, "strategy_id"),
         "realized_by_underlying": _pnl_bucket(fills, "underlying"),
         "risk_alerts": alerts,
-        "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": missing_greeks},
+        "data_quality": {"greek_coverage": greek_coverage, "missing_greeks": missing_greeks,
+                          "freshness": {"positions": _freshness(open_rows, now, ("updated_at", "marked_at", "created_at")),
+                                        "fills": _freshness(fills, now, ("filled_at", "created_at", "updated_at"))}},
         "note": "Read-only derived view. Missing marks or Greeks are reported, never inferred.",
     }
 
