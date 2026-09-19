@@ -93,12 +93,14 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     now = now or datetime.now(timezone.utc)
     open_rows = [p for p in positions if str(p.get("status") or "").upper() in OPEN_STATUSES]
     realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in fills), 2)
+    daily_fills = [f for f in fills if (_as_utc(f.get("filled_at") or f.get("created_at") or f.get("updated_at")) or now).date() == now.date() and (_as_utc(f.get("filled_at") or f.get("created_at") or f.get("updated_at")) is not None)]
+    daily_realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in daily_fills), 2)
     unrealized = round(sum(_num(p.get("pnl") if p.get("pnl") is not None else p.get("unrealized_pnl")) for p in open_rows), 2)
     greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
     by_underlying = _bucket(open_rows, "underlying")
     total_risk = book_heat(open_rows)
     heat_utilization = round(total_risk / PORTFOLIO_HEAT_BUDGET, 4) if PORTFOLIO_HEAT_BUDGET > 0 else None
-    loss_used = max(0.0, -realized)
+    loss_used = max(0.0, -daily_realized)
     loss_utilization = round(loss_used / DAILY_LOSS_LIMIT, 4) if DAILY_LOSS_LIMIT > 0 else None
     alerts: List[Dict[str, Any]] = []
     if total_risk > 0 and by_underlying and by_underlying[0]["risk"] / total_risk >= 0.5:
@@ -115,6 +117,7 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "read_only": True,
         "open_positions": len(open_rows),
         "realized_pnl": realized,
+        "daily_realized_pnl": daily_realized,
         "unrealized_pnl": unrealized,
         "total_pnl": round(realized + unrealized, 2),
         "defined_risk": round(book_heat(open_rows), 2),
