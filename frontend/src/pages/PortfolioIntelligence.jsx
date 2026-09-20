@@ -11,16 +11,22 @@ const num = (value, digits = 2) => value === null || value === undefined ? "—"
 export default function PortfolioIntelligence() {
   const [snapshot, setSnapshot] = useState(null);
   const [scenario, setScenario] = useState(null);
+  const [scenarioGrid, setScenarioGrid] = useState(null);
   const [form, setForm] = useState({ move_pct: "-2", iv_points: "5", days: "1" });
   const [loading, setLoading] = useState(true);
   const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [gridLoading, setGridLoading] = useState(false);
   const [error, setError] = useState("");
 
   const loadSnapshot = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get("/ops/portfolio-snapshot");
-      setSnapshot(response.data);
+      const [snapshotResponse, gridResponse] = await Promise.all([
+        api.get("/ops/portfolio-snapshot"),
+        api.get("/ops/portfolio-scenario-grid?days=1"),
+      ]);
+      setSnapshot(snapshotResponse.data);
+      setScenarioGrid(gridResponse.data);
       setError("");
     } catch (err) {
       setError(err.response?.data?.detail || "Portfolio snapshot is unavailable.");
@@ -40,6 +46,13 @@ export default function PortfolioIntelligence() {
     } catch (err) {
       setError(err.response?.data?.detail || "Scenario could not be calculated.");
     } finally { setScenarioLoading(false); }
+  };
+
+  const refreshGrid = async () => {
+    setGridLoading(true);
+    try { setScenarioGrid((await api.get("/ops/portfolio-scenario-grid?days=1")).data); }
+    catch (err) { setError(err.response?.data?.detail || "Stress surface is unavailable."); }
+    finally { setGridLoading(false); }
   };
 
   useEffect(() => { loadSnapshot(); }, [loadSnapshot]);
@@ -75,6 +88,10 @@ export default function PortfolioIntelligence() {
         <div className="grid gap-3 p-4 sm:grid-cols-2"><div><div className="flex justify-between text-xs text-[var(--qd-text-2)]"><span>Heat budget</span><span>{snapshot?.risk_budget?.heat_utilization == null ? "UNKNOWN" : `${(snapshot.risk_budget.heat_utilization * 100).toFixed(1)}%`}</span></div><div className="mt-2 h-2 rounded bg-[var(--qd-border)]"><div className="h-2 rounded bg-[var(--qd-accent)]" style={{ width: `${Math.min(100, Number(snapshot?.risk_budget?.heat_utilization || 0) * 100)}%` }} /></div></div><div><div className="flex justify-between text-xs text-[var(--qd-text-2)]"><span>Daily loss limit used</span><span>{snapshot?.risk_budget?.daily_loss_utilization == null ? "UNKNOWN" : `${(snapshot.risk_budget.daily_loss_utilization * 100).toFixed(1)}%`}</span></div><div className="mt-2 h-2 rounded bg-[var(--qd-border)]"><div className="h-2 rounded bg-[var(--qd-warn)]" style={{ width: `${Math.min(100, Number(snapshot?.risk_budget?.daily_loss_utilization || 0) * 100)}%` }} /></div></div></div>
       </SectionPanel>
 
+      <SectionPanel title="Asset-class coverage" subtitle="Canonical ledger coverage; legacy broker mirrors are not counted a second time.">
+        <div className="grid gap-3 p-4 sm:grid-cols-4">{["EQUITIES", "OPTIONS", "SPREAD", "UNKNOWN"].map((name) => <div key={name} className="rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3"><div className="text-xs text-[var(--qd-text-2)]">{name}</div><div className={`mt-1 font-mono text-xl font-bold ${name === "UNKNOWN" && snapshot?.data_quality?.asset_coverage?.[name] ? "text-[var(--qd-warn)]" : "text-[var(--qd-text)]"}`}>{snapshot?.data_quality?.asset_coverage?.[name] ?? "—"}</div><div className="text-xs text-[var(--qd-text-3)]">open positions</div></div>)}</div>
+      </SectionPanel>
+
       <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
         <SectionPanel title="Portfolio Greeks" subtitle="Aggregated from persisted position data; coverage is shown explicitly.">
           <div className="grid gap-3 p-4 sm:grid-cols-2">
@@ -97,6 +114,11 @@ export default function PortfolioIntelligence() {
           {scenario && <div className="border-t border-[var(--qd-border)] p-4"><div className="flex items-center justify-between"><span className="text-xs text-[var(--qd-text-2)]">Estimated P&L impact</span><span className={`font-mono text-lg font-bold ${Number(scenario.estimated_pnl || 0) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}`}>{scenario.estimated_pnl === null ? "NOT COMPUTABLE" : money(scenario.estimated_pnl)}</span></div><div className="mt-2 text-xs text-[var(--qd-text-3)]">Computed: {scenario.coverage.computed}/{scenario.coverage.total}; missing inputs: {scenario.coverage.missing_inputs}</div></div>}
         </SectionPanel>
       </div>
+
+      <SectionPanel title="Portfolio stress surface" subtitle="Two-factor Greek approximation; cells are estimates, not forecasts or actions." actions={<Button variant="secondary" size="sm" onClick={refreshGrid} disabled={gridLoading}><RefreshCw size={14} className={gridLoading ? "animate-spin" : ""} /> Refresh surface</Button>}>
+        <div className="grid gap-3 p-4 sm:grid-cols-2"><div className="rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3"><div className="text-xs text-[var(--qd-text-2)]">Worst case</div><div className="mt-1 font-mono text-lg font-bold text-[var(--qd-loss)]">{scenarioGrid?.worst_case?.estimated_pnl == null ? "NOT COMPUTABLE" : money(scenarioGrid.worst_case.estimated_pnl)}</div><div className="text-xs text-[var(--qd-text-3)]">{scenarioGrid?.worst_case ? `${num(scenarioGrid.worst_case.underlying_move_pct * 100)}% move / ${num(scenarioGrid.worst_case.iv_change_points)} IV` : "—"}</div></div><div className="rounded-lg border border-[var(--qd-border)] bg-[var(--qd-surface-2)] p-3"><div className="text-xs text-[var(--qd-text-2)]">Best case</div><div className="mt-1 font-mono text-lg font-bold text-[var(--qd-profit)]">{scenarioGrid?.best_case?.estimated_pnl == null ? "NOT COMPUTABLE" : money(scenarioGrid.best_case.estimated_pnl)}</div><div className="text-xs text-[var(--qd-text-3)]">{scenarioGrid?.best_case ? `${num(scenarioGrid.best_case.underlying_move_pct * 100)}% move / ${num(scenarioGrid.best_case.iv_change_points)} IV` : "—"}</div></div></div>
+        <div className="overflow-x-auto px-4 pb-4"><table className="qd-table"><thead><tr><th>Move</th><th>IV shock</th><th>Estimated P&L</th><th>Status</th></tr></thead><tbody>{(scenarioGrid?.cells || []).map((cell) => <tr key={`${cell.underlying_move_pct}-${cell.iv_change_points}`}><td>{num(cell.underlying_move_pct * 100)}%</td><td>{num(cell.iv_change_points)} pts</td><td className={cell.estimated_pnl == null ? "text-[var(--qd-text-3)]" : Number(cell.estimated_pnl) >= 0 ? "text-[var(--qd-profit)]" : "text-[var(--qd-loss)]"}>{cell.estimated_pnl == null ? "NOT COMPUTABLE" : money(cell.estimated_pnl)}</td><td>{cell.status}</td></tr>)}</tbody></table></div>
+      </SectionPanel>
 
       <div className="grid gap-5 xl:grid-cols-2">
         {[['by_underlying', 'Risk by underlying'], ['by_strategy', 'Risk by strategy']].map(([key, title]) => <SectionPanel key={key} title={title} subtitle="Sorted by defined risk; no sizing recommendation.">
