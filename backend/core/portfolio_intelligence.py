@@ -115,7 +115,8 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
             daily_fills.append(fill)
     daily_realized = round(sum(_num(f.get("realized_pnl") if f.get("realized_pnl") is not None else f.get("pnl")) for f in daily_fills), 2)
     unrealized = round(sum(_num(p.get("pnl") if p.get("pnl") is not None else p.get("unrealized_pnl")) for p in open_rows), 2)
-    greek_coverage = {g: sum(1 for p in open_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
+    greek_rows = [p for p in open_rows if _asset_bucket(p) in {"OPTIONS", "SPREAD"}]
+    greek_coverage = {g: sum(1 for p in greek_rows if _greek(p, g) is not None) for g in ("delta", "gamma", "theta", "vega")}
     by_underlying = _bucket(open_rows, "underlying")
     asset_coverage = {name: sum(1 for p in open_rows if _asset_bucket(p) == name)
                       for name in ("EQUITIES", "OPTIONS", "SPREAD", "UNKNOWN")}
@@ -127,9 +128,9 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
     if total_risk > 0 and by_underlying and by_underlying[0]["risk"] / total_risk >= 0.5:
         lead = by_underlying[0]
         alerts.append({"severity": "warning", "code": "UNDERLYING_CONCENTRATION", "title": "Risk is concentrated", "detail": f"{lead['name']} carries {lead['risk'] / total_risk:.0%} of defined risk.", "evidence": {"underlying": lead["name"], "risk": lead["risk"], "total_risk": total_risk}})
-    missing_greeks = [g for g, n in greek_coverage.items() if n < len(open_rows)]
-    if missing_greeks and open_rows:
-        alerts.append({"severity": "info", "code": "GREEK_COVERAGE_INCOMPLETE", "title": "Greek coverage is incomplete", "detail": f"Missing persisted coverage for {', '.join(missing_greeks)}.", "evidence": {"missing": missing_greeks, "positions": len(open_rows)}})
+    missing_greeks = [g for g, n in greek_coverage.items() if n < len(greek_rows)]
+    if missing_greeks and greek_rows:
+        alerts.append({"severity": "info", "code": "GREEK_COVERAGE_INCOMPLETE", "title": "Greek coverage is incomplete", "detail": f"Missing persisted coverage for {', '.join(missing_greeks)} on option/spread positions.", "evidence": {"missing": missing_greeks, "positions": len(greek_rows)}})
     if realized + unrealized < 0:
         alerts.append({"severity": "warning", "code": "BOOK_PNL_NEGATIVE", "title": "Book P&L is negative", "detail": f"Realized plus unrealized P&L is {realized + unrealized:.2f}.", "evidence": {"realized_pnl": realized, "unrealized_pnl": unrealized}})
     if asset_coverage["UNKNOWN"]:
@@ -147,7 +148,7 @@ def build_portfolio_snapshot(positions: List[Dict[str, Any]], fills: List[Dict[s
         "risk_budget": {"heat_budget": heat_budget, "heat_utilization": heat_utilization,
                         "daily_loss_limit": daily_loss_limit, "daily_loss_used": round(loss_used, 2),
                         "daily_loss_utilization": loss_utilization, "source": risk_limit_source},
-        "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in open_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(open_rows)} for g in ("delta", "gamma", "theta", "vega")},
+        "greeks": {g: {"value": round(sum(_greek(p, g) or 0.0 for p in greek_rows), 6), "covered_positions": greek_coverage[g], "total_positions": len(greek_rows)} for g in ("delta", "gamma", "theta", "vega")},
         "by_underlying": by_underlying,
         "by_strategy": _bucket(open_rows, "strategy_id"),
         "realized_by_strategy": _pnl_bucket(fills, "strategy_id"),
