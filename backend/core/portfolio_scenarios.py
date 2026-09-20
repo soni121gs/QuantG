@@ -1,6 +1,7 @@
 """Read-only portfolio stress scenarios based on persisted Greeks."""
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Dict, List
 
 
@@ -25,21 +26,33 @@ def scenario_position(pos: Dict[str, Any], *, move_pct: float, iv_points: float,
     delta, gamma, theta, vega = (_greek(pos, x) for x in ("delta", "gamma", "theta", "vega"))
     missing = [name for name, value in (("spot", spot), ("delta", delta), ("gamma", gamma), ("theta", theta), ("vega", vega)) if value is None]
     if missing:
-        return {"position_id": pos.get("id"), "status": "NOT_COMPUTABLE", "missing": missing}
+        return {"position_id": pos.get("id"), "underlying": pos.get("underlying") or "UNKNOWN",
+                "strategy_id": pos.get("strategy_id") or "UNKNOWN", "status": "NOT_COMPUTABLE", "missing": missing}
     quantity = _num(pos.get("open_quantity") if pos.get("open_quantity") is not None else pos.get("quantity")) or 1.0
     move = spot * float(move_pct)
     per_unit = delta * move + 0.5 * gamma * move * move + vega * float(iv_points) + theta * float(days)
-    return {"position_id": pos.get("id"), "status": "ESTIMATE", "estimated_pnl": round(per_unit * quantity, 2), "quantity": quantity, "missing": []}
+    return {"position_id": pos.get("id"), "underlying": pos.get("underlying") or "UNKNOWN",
+            "strategy_id": pos.get("strategy_id") or "UNKNOWN", "status": "ESTIMATE",
+            "estimated_pnl": round(per_unit * quantity, 2), "quantity": quantity, "missing": []}
 
 
 def build_portfolio_scenario(positions: List[Dict[str, Any]], *, move_pct: float = 0.0, iv_points: float = 0.0, days: float = 0.0) -> Dict[str, Any]:
     rows = [scenario_position(p, move_pct=move_pct, iv_points=iv_points, days=days) for p in positions]
     estimates = [r["estimated_pnl"] for r in rows if r["status"] == "ESTIMATE"]
+    grouped = {"underlying": defaultdict(float), "strategy_id": defaultdict(float)}
+    for row in rows:
+        if row["status"] == "ESTIMATE":
+            for key in grouped:
+                grouped[key][str(row[key]).upper()] += row["estimated_pnl"]
+    breakdown = {key: [{"name": name, "estimated_pnl": round(value, 2)}
+                       for name, value in sorted(values.items(), key=lambda item: item[1], reverse=True)]
+                 for key, values in grouped.items()}
     return {
         "read_only": True,
         "status": "ESTIMATE" if len(estimates) == len(rows) else "PARTIAL",
         "scenario": {"underlying_move_pct": float(move_pct), "iv_change_points": float(iv_points), "holding_days": float(days)},
         "estimated_pnl": round(sum(estimates), 2) if estimates else None,
+        "breakdown": breakdown,
         "positions": rows,
         "coverage": {"computed": len(estimates), "total": len(rows), "missing_inputs": sum(1 for r in rows if r["status"] == "NOT_COMPUTABLE")},
         "calculation_basis": "Persisted Greeks approximation: delta*dS + 0.5*gamma*dS^2 + vega*dIV + theta*days.",

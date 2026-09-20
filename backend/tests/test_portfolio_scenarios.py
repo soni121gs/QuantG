@@ -12,6 +12,7 @@ def test_scenario_computes_explicit_greek_estimate_and_reports_missing_inputs():
     assert result["estimated_pnl"] == 28.0
     assert result["coverage"] == {"computed": 1, "total": 2, "missing_inputs": 1}
     assert result["positions"][1]["status"] == "NOT_COMPUTABLE"
+    assert result["breakdown"]["underlying"] == [{"name": "UNKNOWN", "estimated_pnl": 28.0}]
 
 
 def test_scenario_grid_reports_worst_and_best_without_side_effects():
