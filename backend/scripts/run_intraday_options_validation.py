@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from core.intraday_options_backtest import IntradayCosts, run_day
 from core.intraday_options_oos import INSUFFICIENT_DATA, evaluate_strategy
-from core.options_minute_store import OptionsMinuteStore
+from core.options_minute_store import OptionsMinuteStore, expected_minutes
 
 logger = logging.getLogger("quantg.intraday_oos")
 
@@ -97,10 +97,16 @@ def validate_strategy(
         if not umin:
             missing_days += 1
             continue
+        option_series = option_series_fn(underlying, date)
+        expected_bars = len(expected_minutes(date))
+        incomplete = [rows for rows in option_series.values() if rows and len(rows) < expected_bars * 0.95]
+        if not option_series or incomplete:
+            missing_days += 1
+            continue
         trades = run_day(
             underlying=underlying, date=date, underlying_minutes=umin,
             signal_fn=signal_fn, chain_at=chain_at_fn(underlying, date),
-            option_series=option_series_fn(underlying, date), costs=costs,
+            option_series=option_series, costs=costs,
         )
         all_trades.extend(t.__dict__ for t in trades)
 

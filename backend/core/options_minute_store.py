@@ -200,6 +200,24 @@ class OptionsMinuteStore:
         have = {r["timestamp_ist"] for r in rows}
         return [ts for ts in expected_minutes(date) if ts not in have]
 
+    def day_quality(self, source: str, underlying: str, date: str, *, min_coverage: float = 0.95) -> Dict[str, Any]:
+        """Return deterministic coverage quality for a replay day.
+
+        A day with materially incomplete option candles is not suitable for an
+        OOS verdict; callers should quarantine it rather than infer prices.
+        """
+        expected = len(expected_minutes(date))
+        files = self._iter_day_files(source, underlying, date)
+        contracts = []
+        for path in files:
+            rows = self._read_file(path)
+            if rows:
+                contracts.append({"instrument_key": rows[0].get("expired_instrument_key") or path,
+                                  "bars": len(rows), "coverage": round(len(rows) / max(1, expected), 4)})
+        gaps = [r for r in contracts if r["coverage"] < min_coverage]
+        return {"ok": bool(contracts) and not gaps, "expected_minutes": expected,
+                "contracts": len(contracts), "gaps": gaps}
+
     # -- coverage -------------------------------------------------------------
     def trading_days(self, source: str = "upstox", underlying: Optional[str] = None) -> List[str]:
         days = set()

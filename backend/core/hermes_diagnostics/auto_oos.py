@@ -113,10 +113,16 @@ def _run_intraday(strat: Dict[str, Any]) -> Dict[str, Any]:
         if not umin:
             missing += 1
             continue
+        option_series = store.all_series_for_day(source, u, d)
+        from core.options_minute_store import expected_minutes
+        expected_bars = len(expected_minutes(d))
+        if not option_series or any(len(rows) < expected_bars * 0.95 for rows in option_series.values() if rows):
+            missing += 1
+            continue
         trades = run_day(
             underlying=u, date=d, underlying_minutes=umin, signal_fn=signal_fn,
             chain_at=(lambda ts, _u=u, _d=d: store.get_chain_at_time(source, _u, _d, ts)),
-            option_series=store.all_series_for_day(source, u, d),
+            option_series=option_series,
         )
         all_trades.extend(t.__dict__ for t in trades)
     missing_rate = missing / len(days) if days else 1.0

@@ -251,6 +251,10 @@ def option_entry_quality_score(
         warnings.append("LOW_VOLUME")
     if premium <= 0:
         warnings.append("MISSING_PREMIUM")
+    # A last-traded premium without executable/depth evidence must not look like
+    # a strong contract merely because ATM and premium-range components score well.
+    if depth_missing:
+        score = 0
     readiness = "NO_DEPTH" if premium > 0 and depth_missing else "PASS" if score >= 65 and "QUOTE_STALE" not in warnings else "WARN" if score >= 45 else "BLOCK"
     return {
         "score": max(0, min(100, score)),

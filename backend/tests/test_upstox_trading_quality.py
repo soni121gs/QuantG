@@ -50,7 +50,7 @@ def test_option_quality_reports_no_depth_separately_from_block():
         pcr=0.9,
     )
     assert scored["readiness"] == "NO_DEPTH"
-    assert scored["score"] >= 45
+    assert scored["score"] == 0
 
 
 def test_feed_health_marks_missing_snapshot_unready():

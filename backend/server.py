@@ -12517,6 +12517,9 @@ async def _fill_ledger_summary(
         query["mode"] = mode
     if strategy_id:
         query["strategy_id"] = strategy_id
+    # Entry fills carry execution cashflow fields but are not realized P&L.
+    # Only close/reduce rows can contribute to realized performance summaries.
+    query["action"] = {"$in": ["CLOSE", "REDUCE"]}
     if start is not None or end is not None:
         window: Dict[str, Any] = {}
         if start is not None:
