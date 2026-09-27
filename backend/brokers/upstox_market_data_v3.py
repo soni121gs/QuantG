@@ -652,7 +652,7 @@ class UpstoxMarketDataFeedV3:
                 )
                 max_delay = (900.0 if "token_refresh_unavailable" in detail
                              else _RECONNECT_AUTH_MAX_DELAY if is_auth else _RECONNECT_MAX_DELAY)
-                delay = min(max(delay, _RECONNECT_BASE_DELAY) * 1.5, max_delay)
+                delay = max_delay if "token_refresh_unavailable" in detail else min(max(delay, _RECONNECT_BASE_DELAY) * 1.5, max_delay)
                 jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)
                 sleep_for = max(0.5, delay + jitter)
                 # Throttle: detail on the first few failures, then only a periodic
