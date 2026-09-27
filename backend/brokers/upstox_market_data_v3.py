@@ -581,7 +581,8 @@ class UpstoxMarketDataFeedV3:
                             if url:
                                 logger.info("Upstox feed authorize succeeded after token refresh")
                                 return str(url)
-            raise RuntimeError(f"Upstox feed authorize failed {response.status_code}: {payload}")
+            refresh_note = " token_refresh_unavailable" if self._refresh_token_callback is not None and not refreshed else ""
+            raise RuntimeError(f"Upstox feed authorize failed {response.status_code}:{refresh_note} {payload}")
         url = ((payload.get("data") or {}).get("authorized_redirect_uri") if isinstance(payload, dict) else None)
         if not url:
             raise RuntimeError("Upstox feed authorize did not return authorized_redirect_uri")
@@ -649,7 +650,8 @@ class UpstoxMarketDataFeedV3:
                     marker in detail
                     for marker in ("access token is missing", "authorize failed 4", "Unauthorized", "Invalid token", "401")
                 )
-                max_delay = _RECONNECT_AUTH_MAX_DELAY if is_auth else _RECONNECT_MAX_DELAY
+                max_delay = (900.0 if "token_refresh_unavailable" in detail
+                             else _RECONNECT_AUTH_MAX_DELAY if is_auth else _RECONNECT_MAX_DELAY)
                 delay = min(max(delay, _RECONNECT_BASE_DELAY) * 1.5, max_delay)
                 jitter = delay * _RECONNECT_JITTER_FACTOR * (2 * random.random() - 1)
                 sleep_for = max(0.5, delay + jitter)
