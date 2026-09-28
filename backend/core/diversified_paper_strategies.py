@@ -15,7 +15,9 @@ PEAD_CODE = '''def run(data):
     vols = [float(x.get('volume') or 0) for x in data]
     if not closes[-1] or not vols[-1]:
         return []
-    # Earnings proxy: an opening gap followed by a close above the event-day close.
+    if not d.get('event_date'):
+        return []
+    # Verified earnings event: an opening gap followed by continuation.
     prev = float(data[-2].get('close') or 0)
     op = float(d.get('open') or d.get('close') or 0)
     baseline = sum(closes[-21:-1]) / 20.0
@@ -34,6 +36,13 @@ CROSS_SECTIONAL_MOMENTUM_CODE = '''def run(data):
     if len(data) < 40:
         return []
     d = data[-1]
+    ctx = d.get('strategy_context') or {}
+    universe = ctx.get('universe') or []
+    if not ctx.get('universe_complete') or len(universe) < 10:
+        return []
+    rank = next((i for i, x in enumerate(universe) if x.get('symbol') == 'RELIANCE'), len(universe))
+    if rank >= max(1, len(universe) // 5):
+        return []
     c = [float(x.get('close') or 0) for x in data]
     if not c[-1] or not c[-21] or not c[-40]:
         return []
@@ -98,21 +107,23 @@ OVERNIGHT_GAP_CODE = '''def run(data):
         return []
     d = data[-1]
     clock = str(d.get('date', ''))[11:16]
-    if clock and clock < '14:45':
+    # The first official NSE bar is the only valid overnight-gap observation.
+    if clock and not ('09:15' <= clock < '09:20'):
         return []
     c = [float(x.get('close') or 0) for x in data]
-    if not c[-1] or not c[-2]:
+    op = float(d.get('open') or 0)
+    if not op or not c[-2]:
         return []
-    gap = (c[-1] - c[-2]) / c[-2]
+    gap = (op - c[-2]) / c[-2]
     vol = sum(abs(c[i] / c[i-1] - 1.0) for i in range(len(c)-10, len(c))) / 10.0
     if abs(gap) < 0.006 or abs(gap) < vol * 1.25:
         return []
-    # Carry the gap direction overnight with a defined-risk debit spread.
+    # Trade the gap direction only after the official open is observed.
     direction = 'CE' if gap > 0 else 'PE'
     return [{'date': d['date'], 'action': 'BUY' if gap > 0 else 'SELL',
              'direction': direction, 'confidence': 68.0,
              'setup_type': 'overnight_gap_continuation',
-             'entry_reason': 'late-session gap impulse exceeded recent noise; overnight debit',
+             'entry_reason': 'official 09:15 open gap exceeded recent noise; defined-risk debit',
              'signal_version': 'gap-paper-v1'}]
 '''
 
@@ -120,21 +131,21 @@ OVERNIGHT_GAP_CODE = '''def run(data):
 STRATEGIES = [
     {"id": "paper-pead-reliance", "name": "Paper PEAD Stock Follow-Through",
      "symbol": "RELIANCE", "exchange": "NSE", "code": PEAD_CODE,
-     "options": {"enabled": False}, "risk": {"max_hold_days": 3, "max_trades_day": 1}},
+     "options": {"enabled": False, "candle_interval": "1day", "requires_event_data": True, "event_symbol": "RELIANCE"}, "risk": {"max_hold_days": 3, "max_trades_day": 1}},
     {"id": "paper-cross-sectional-nifty", "name": "Paper Cross-Sectional Momentum",
      "symbol": "NIFTY", "exchange": "NFO", "code": CROSS_SECTIONAL_MOMENTUM_CODE,
-     "options": {"enabled": True, "underlying": "NIFTY", "structure": "single_leg", "strike_mode": "ITM_BUY", "itm_offset_pct": 0.02},
+     "options": {"enabled": True, "underlying": "NIFTY", "structure": "single_leg", "strike_mode": "ITM_BUY", "itm_offset_pct": 0.02, "candle_interval": "1day", "universe_symbols": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "LT", "AXISBANK", "BHARTIARTL", "ITC", "KOTAKBANK", "MARUTI", "SUNPHARMA", "TATAMOTORS", "ADANIENT"]},
      "risk": {"target_pct": 45.0, "stoploss_pct": 25.0, "max_hold_days": 3, "max_trades_day": 1}},
     {"id": "paper-vol-breakout-nifty", "name": "Paper Volatility Breakout Debit Spread",
      "symbol": "NIFTY", "exchange": "NFO", "code": VOL_BREAKOUT_DEBIT_CODE,
-     "options": {"enabled": True, "underlying": "NIFTY", "structure": "debit_spread", "strike_mode": "OTM_BUY", "spread_width": 10, "wing_width": 10, "min_dte_days": 2, "max_dte_days": 10},
+     "options": {"enabled": True, "underlying": "NIFTY", "structure": "debit_spread", "strike_mode": "OTM_BUY", "spread_width": 10, "wing_width": 10, "min_dte_days": 2, "max_dte_days": 10, "candle_interval": "1minute"},
      "risk": {"target_pct": 60.0, "stoploss_pct": 45.0, "max_hold_days": 2, "max_trades_day": 1}},
     {"id": "paper-iv-term-nifty", "name": "Paper IV Term-Structure Calendar",
      "symbol": "NIFTY", "exchange": "NFO", "code": IV_TERM_STRUCTURE_CODE,
-     "options": {"enabled": True, "underlying": "NIFTY", "structure": "calendar_spread", "strike_mode": "ATM_BUY", "min_dte_days": 2, "max_dte_days": 10},
+     "options": {"enabled": True, "underlying": "NIFTY", "structure": "calendar_spread", "strike_mode": "ATM_BUY", "min_dte_days": 2, "max_dte_days": 10, "candle_interval": "5minute", "requires_iv_surface": True, "max_abs_delta": 0.20, "min_term_iv_gap": 0.01},
      "risk": {"target_pct": 35.0, "stoploss_pct": 35.0, "max_hold_days": 7, "max_trades_day": 1}},
     {"id": "paper-overnight-gap-nifty", "name": "Paper Overnight Gap Debit Spread",
      "symbol": "NIFTY", "exchange": "NFO", "code": OVERNIGHT_GAP_CODE,
-     "options": {"enabled": True, "underlying": "NIFTY", "structure": "debit_spread", "strike_mode": "OTM_BUY", "spread_width": 10, "wing_width": 10, "min_dte_days": 2, "max_dte_days": 10},
+     "options": {"enabled": True, "underlying": "NIFTY", "structure": "debit_spread", "strike_mode": "OTM_BUY", "spread_width": 10, "wing_width": 10, "min_dte_days": 2, "max_dte_days": 10, "candle_interval": "5minute", "session_boundary": "15:00"},
      "risk": {"target_pct": 50.0, "stoploss_pct": 50.0, "max_hold_days": 2, "max_trades_day": 1}},
 ]

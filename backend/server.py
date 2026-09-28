@@ -18640,6 +18640,20 @@ async def startup():
                                         near_chain_nodes=_nodes, far_chain_nodes=_far_nodes,
                                         direction=_direction, long_delta=_sdelta,
                                     )
+                                    if _spread.get("ok"):
+                                        _near_iv = float((_spread.get("short_leg") or {}).get("iv") or 0)
+                                        _far_iv = float((_spread.get("long_leg") or {}).get("iv") or 0)
+                                        _near_delta = float((_spread.get("short_leg") or {}).get("delta") or 0)
+                                        _far_delta = float((_spread.get("long_leg") or {}).get("delta") or 0)
+                                        _iv_gap = float(_opts_cfg.get("min_term_iv_gap") or 0.01)
+                                        _max_delta = float(_opts_cfg.get("max_abs_delta") or 0.20)
+                                        _net_delta = abs(_far_delta - _near_delta)
+                                        if _near_iv <= 0 or _far_iv <= 0:
+                                            _spread = {"ok": False, "reason": "calendar IV unavailable"}
+                                        elif _near_iv - _far_iv < _iv_gap:
+                                            _spread = {"ok": False, "reason": f"near/far IV gap {_near_iv - _far_iv:.4f} below {_iv_gap:.4f}"}
+                                        elif _net_delta > _max_delta:
+                                            _spread = {"ok": False, "reason": f"calendar net delta {_net_delta:.3f} exceeds {_max_delta:.3f}"}
                                 else:
                                     _spread = build_debit_spread(
                                         chain_nodes=_nodes, direction=_direction,

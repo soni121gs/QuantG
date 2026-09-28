@@ -468,6 +468,54 @@ def _generic_reason(strategy: Dict[str, Any], text: str) -> Dict[str, Any]:
     return out
 
 
+async def _augment_strategy_context(strategy: Dict[str, Any], data: List[dict],
+                                    get_price_history, *, user_id: str) -> List[dict]:
+    """Attach only verified event/universe context requested by the strategy.
+
+    The strategy sandbox remains read-only; this adapter is the single place where
+    multi-symbol and event data enter it. Missing required context is explicit and
+    causes the strategy code to return no signal instead of silently using a proxy.
+    """
+    vc = strategy.get("visual_config") or {}
+    opts = vc.get("options") or {}
+    out = [dict(row) for row in (data or [])]
+    if not out:
+        return out
+    context = {}
+    symbols = [str(x).upper() for x in (opts.get("universe_symbols") or []) if x]
+    if symbols:
+        rows = []
+        for sym in symbols:
+            try:
+                hist = await get_price_history(user_id, sym, days=90, strategy=strategy)
+                candles = hist.get("data") if isinstance(hist, dict) else hist
+                closes = [float(x.get("close") or 0) for x in (candles or [])]
+                if len(closes) >= 61 and closes[-1] and closes[-21] and closes[-61]:
+                    rows.append({"symbol": sym, "return_20d": closes[-1] / closes[-21] - 1.0,
+                                 "return_60d": closes[-1] / closes[-61] - 1.0})
+            except Exception as exc:
+                logger.info("universe context unavailable symbol=%s: %s", sym, str(exc)[:120])
+        rows.sort(key=lambda x: (x["return_20d"], x["return_60d"]), reverse=True)
+        context["universe"] = rows
+        context["universe_count"] = len(rows)
+        context["universe_complete"] = len(rows) == len(symbols)
+    event_symbol = str(opts.get("event_symbol") or vc.get("symbol") or "").upper()
+    if opts.get("requires_event_data") and event_symbol:
+        try:
+            from core.earnings_calendar import events_for
+            dates = {str(e.get("date"))[:10] for e in events_for(event_symbol, "2000-01-01", "2100-12-31")}
+            context["event_dates"] = sorted(dates)
+            context["event_symbol"] = event_symbol
+        except Exception as exc:
+            logger.warning("event context unavailable symbol=%s: %s", event_symbol, str(exc)[:120])
+            context["event_dates"] = []
+    for row in out:
+        day = str(row.get("date") or "")[:10]
+        row["strategy_context"] = context
+        row["event_date"] = day in set(context.get("event_dates") or [])
+    return out
+
+
 def _contract_resolution_update(
     eval_set: Dict[str, Any],
     inc_set: Dict[str, Any],
@@ -758,6 +806,7 @@ async def runner_loop(db, get_price_history, place_order_fn, stop_event: asyncio
                                                    {"$set": {**eval_set, "last_error": error}, "$inc": inc_set})
                     continue
                 data = _enrich_tod_ratios(data)
+                data = await _augment_strategy_context(s, data, get_price_history, user_id=s["user_id"])
 
                 # ── Regime refresh (MUST run before any signal gate) ──────────
                 # 2026-08-03: this used to live below, AFTER the `not signals` /
