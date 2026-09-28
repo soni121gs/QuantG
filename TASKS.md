@@ -56,6 +56,21 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · ⛔ blocked on prerequi
   **Verify:** generated cards include source snapshots, claim type, data window, null, expected edge, failure modes, and required validation command.
 - [ ] **P6-9** (T2) SEBI/algo audit readiness map. Tie every live-candidate strategy to approval events, order/algo tags, immutable evidence, broker readiness, reconciliation, and deploy proof.
   **Verify:** live readiness endpoint reports audit blockers explicitly while `CORE_ENGINE_LIVE_ENABLED=false` remains unchanged unless founder-approved.
+
+## PHASE 7 — FOUNDER-APPROVED PAPER STRATEGY SLEEVES
+
+These are executable paper-only sleeves. They must remain disabled from live routing and must pass the OOS-first ladder before any paper-book wake or promotion.
+
+- [ ] **P7-1** (T3) Cross-sectional stock momentum paper sleeve. Add deterministic ranking, sector/beta caps, weekly rebalance, paper fills, attribution, and a purged OOS judge.
+  **Verify:** stock universe and instrument master are point-in-time valid; paper orders carry `strategy_id=cross-sectional-momentum-v1`; no live route; OOS reports turnover-adjusted expectancy and DSR.
+- [ ] **P7-2** (T3) Stock-level PEAD paper sleeve. Add timestamped earnings-event join, surprise-quality gates, event embargo, defined-risk stock-F&O route, and event attribution.
+  **Verify:** no future consensus leakage; event timestamps and symbol history are preserved; paper-only order path; OOS report separates gap, sector, and post-event drift.
+- [ ] **P7-3** (T3) Overnight gap paper sleeve. Add continuation/fade variants as separate hypotheses, opening-range/VWAP confirmation, open-slippage model, and forced intraday exit.
+  **Verify:** no signal before the official session boundary; event-day and expiry-day buckets separate; paper-only; OOS report includes open slippage.
+- [ ] **P7-4** (T3) Volatility-breakout debit-spread paper sleeve. Add same-expiry verified legs, quote-age/bid-ask gates, leg-sequence audit, and defined-risk exits.
+  **Verify:** mismatched expiry/underlying/option-type is rejected; both legs have fresh Upstox provenance; paper fills record execution quality; no naked option route.
+- [ ] **P7-5** (T3) IV calendar/term-structure paper sleeve. Add same-strike/type two-expiry validation, IV z-score signal, vega/delta limits, and pre-expiry exit.
+  **Verify:** both legs are verified instrument-master contracts; missing surface data stands down; OOS report includes convergence, costs, and event exclusions.
 - [~] **P6-10** (T3) Aladdin-style whole-portfolio intelligence (Codex). Build a read-only canonical portfolio snapshot for stocks, options and spreads; then add deterministic scenario/risk analytics, Hermes explanations, and an approval-gated cockpit in separate verified slices. **Landed slices:** `core.portfolio_intelligence`, `/ops/portfolio-snapshot`, Hermes `get_portfolio_snapshot`, pure aggregation tests, `core.portfolio_scenarios`, `/ops/portfolio-scenario` with explicit missing-input handling, the `/portfolio-intelligence` read-only cockpit, and deterministic Hermes portfolio narration. No order, wallet, strategy, broker, or live-mode mutation is permitted.
 
 ---
