@@ -16,13 +16,7 @@ router = APIRouter(tags=["Market"])
 async def watchlist(user=Depends(get_current_user)):
     from server import INDEX_WATCHLIST, _upstox_watchlist_rows
 
-    upstox_rows = await _upstox_watchlist_rows(user["id"])
-    if upstox_rows:
-        return upstox_rows
-    return [
-        {"symbol": s["symbol"], "name": s["name"], "price": s["base"], "change": 0.0, "pct": 0.0, "source": "fallback"}
-        for s in INDEX_WATCHLIST
-    ]
+    return await _upstox_watchlist_rows(user["id"])
 
 
 @router.get("/market/iv-rank")
@@ -100,16 +94,17 @@ async def commodity_watchlist(user=Depends(get_current_user)):
 
 @router.get("/market/quote/{symbol}")
 async def quote(symbol: str, user=Depends(get_current_user)):
-    from server import REMOVED_COMMODITY_UNDERLYINGS, SYMBOLS, historical_series, live_price
+    from server import REMOVED_COMMODITY_UNDERLYINGS, INDEX_WATCHLIST, _upstox_watchlist_rows
 
     if symbol.upper() in REMOVED_COMMODITY_UNDERLYINGS:
         raise HTTPException(status_code=410, detail="MCX commodity symbols have been removed from QuantG.")
-    found = next((srow for srow in SYMBOLS if srow["symbol"] == symbol.upper()), None)
+    found = next((srow for srow in INDEX_WATCHLIST if srow["symbol"] == symbol.upper()), None)
     if not found:
         raise HTTPException(status_code=404, detail="Symbol not found")
-    idx = SYMBOLS.index(found)
-    lp = live_price(found["base"], idx)
-    return {"symbol": found["symbol"], "name": found["name"], **lp, "series": historical_series(found["base"], 60), "source": "mock"}
+    row = next((r for r in await _upstox_watchlist_rows(user["id"]) if r["symbol"] == found["symbol"]), None)
+    if not row or row.get("price") is None:
+        raise HTTPException(status_code=503, detail="Verified Upstox quote unavailable; no fallback price is shown.")
+    return {**row, "verified": True, "quote_timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @router.get("/options/preview")
@@ -326,47 +321,23 @@ async def market_session():
 
 @router.get("/option-chain/{underlying}")
 async def option_chain(underlying: str, width: int = 5, user=Depends(get_current_user)):
-    from server import UpstoxGateway, get_user_upstox_gateway, logger
+    from server import get_user_upstox_gateway
 
     underlying = underlying.upper()
     if underlying not in options_helper.SUPPORTED:
         raise HTTPException(status_code=400, detail=f"Underlying must be one of {options_helper.SUPPORTED}")
-    width = max(1, min(int(width or 5), 10))
-    spot = {"NIFTY": 24500.0, "BANKNIFTY": 54000.0, "SENSEX": 80500.0}.get(underlying, 100.0)
     gw = await get_user_upstox_gateway(user["id"])
     spot_key = {
         "NIFTY": "NSE_INDEX|Nifty 50",
         "BANKNIFTY": "NSE_INDEX|Nifty Bank",
         "SENSEX": "BSE_INDEX|SENSEX",
     }.get(underlying)
-    if gw and gw.connected and spot_key:
-        try:
-            quote = await asyncio.to_thread(gw.get_market_quote, [spot_key])
-            spot = float(UpstoxGateway.parse_quote_ltp(quote, spot_key) or spot)
-        except Exception as exc:
-            logger.warning("Upstox spot quote failed for option-chain preview %s: %s", underlying, exc)
-    interval = options_helper.STRIKE_INTERVALS[underlying]
-    atm = options_helper.round_to_strike(float(spot), interval)
-    strikes = [atm + (i * interval) for i in range(-width, width + 1)]
-    exchange = options_helper.OPT_EXCHANGE[underlying]
-    source = "upstox-preview" if gw and gw.connected else "preview"
-
-    return {
-        "underlying": underlying,
-        "spot": round(float(spot), 2),
-        "atm": atm,
-        "exchange": exchange,
-        "expiry": None,
-        "source": source,
-        "rows": [
-            {
-                "strike": strike,
-                "ce": {"symbol": f"{underlying}{strike}CE", "ltp": round(max(1, (spot - strike) + spot * 0.01), 2)},
-                "pe": {"symbol": f"{underlying}{strike}PE", "ltp": round(max(1, (strike - spot) + spot * 0.01), 2)},
-            }
-            for strike in strikes
-        ],
-    }
+    if not gw or not gw.connected or not spot_key:
+        raise HTTPException(status_code=503, detail="Verified Upstox option-chain data unavailable; no synthetic prices are shown.")
+    raise HTTPException(
+        status_code=410,
+        detail="Synthetic option-chain preview removed. Use /api/upstox/option-chain for broker quotes.",
+    )
 
 
 @router.get("/market/regime")

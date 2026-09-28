@@ -8701,9 +8701,18 @@ async def _upstox_watchlist_rows(user_id: str) -> List[Dict[str, Any]]:
             except Exception as exc:
                 logger.warning("Upstox watchlist REST failed for %s: %s", s["key"], exc)
 
-        # 4 — Base price fallback
+        # Never present the configured/base price as a current market quote.
+        # A missing broker quote must remain visibly unavailable.
         if ltp is None:
-            ltp = s["base"]
+            out.append({
+                "symbol": s["symbol"],
+                "name": s["name"],
+                "price": None,
+                "change": None,
+                "pct": None,
+                "source": "no-data",
+            })
+            continue
 
         change = round(ltp - s["base"], 2)
         pct = round((change / s["base"]) * 100, 2) if s["base"] else 0.0
