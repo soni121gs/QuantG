@@ -18329,7 +18329,7 @@ async def startup():
             ((strategy or {}).get("visual_config") or {}).get("options", {}).get("structure")
             or (strategy or {}).get("structure") or ""
         ).lower()
-        if _declared_struct_early in ("credit_spread", "debit_spread"):
+        if _declared_struct_early in ("credit_spread", "debit_spread", "calendar_spread"):
             contract_payload["spread_veto"] = {
                 "reason": "spread build not attempted (option chain never fetched)",
                 "law": None, "stage": "not_attempted",
@@ -18485,12 +18485,12 @@ async def startup():
                         from core.spread_builder import (
                             build_credit_spread, build_credit_spread_by_offset, CREDIT_SPREADS_ENABLED,
                             CREDIT_SPREAD_SHORT_DELTA, CREDIT_SPREAD_WIDTH_STRIKES,
-                            build_debit_spread, DEBIT_SPREADS_ENABLED,
+                            build_debit_spread, build_calendar_spread, DEBIT_SPREADS_ENABLED,
                         )
                         from core.dynamic_contract_selector import select_dynamic_credit_spread
                         _opts_cfg = ((strategy or {}).get("visual_config") or {}).get("options", {}) or {}
                         _struct = str(_opts_cfg.get("structure") or (strategy or {}).get("structure") or "single_leg")
-                        if _struct in ("credit_spread", "debit_spread") and _nodes:
+                        if _struct in ("credit_spread", "debit_spread", "calendar_spread") and _nodes:
                             _intervals = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50,
                                           "MIDCPNIFTY": 75, "SENSEX": 100, "BANKEX": 100}
                             _u = str(instrument.underlying or underlying).upper()
@@ -18498,7 +18498,7 @@ async def startup():
                             _sdelta = float(_opts_cfg.get("short_delta") or (CREDIT_SPREAD_SHORT_DELTA if _struct == "credit_spread" else 0.50))
                             _direction = "bullish" if action_u == "BUY" else "bearish"
                             if ((_struct == "credit_spread" and not CREDIT_SPREADS_ENABLED)
-                                    or (_struct == "debit_spread" and not DEBIT_SPREADS_ENABLED)):
+                                    or (_struct in ("debit_spread", "calendar_spread") and not DEBIT_SPREADS_ENABLED)):
                                 contract_payload["spread_veto"] = {
                                     "reason": "{}s are disabled by env flag".format(_struct),
                                     "law": None, "stage": "structure_disabled",
@@ -18623,11 +18623,28 @@ async def startup():
                                         "stage": "builder_veto",
                                     }
                                     logger.info("spread-build (credit) skipped (%s): %s", _u, _spread.get("reason"))
-                            elif _struct == "debit_spread" and DEBIT_SPREADS_ENABLED:
-                                _spread = build_debit_spread(
-                                    chain_nodes=_nodes, direction=_direction,
-                                    width_points=_intervals.get(_u, 50) * _wstrikes, long_delta=_sdelta,
-                                )
+                            elif _struct in ("debit_spread", "calendar_spread") and DEBIT_SPREADS_ENABLED:
+                                if _struct == "calendar_spread":
+                                    _near_expiry = str(instrument.expiry)[:10]
+                                    _next_expiry = None
+                                    if upstox_gw and _sk:
+                                        _contract_response = await asyncio.to_thread(upstox_gw.get_option_contracts, _sk)
+                                        _expiries = sorted({str(x.get("expiry"))[:10] for x in ((_contract_response or {}).get("data") or []) if x.get("expiry")})
+                                        _next_expiry = next((x for x in _expiries if x > _near_expiry), None)
+                                    _far_nodes = []
+                                    if _next_expiry and upstox_gw and _sk:
+                                        _far_response = await asyncio.to_thread(upstox_gw.get_option_chain, _sk, _next_expiry)
+                                        if _far_response and _far_response.get("status") == "success":
+                                            _far_nodes = _far_response.get("data") or []
+                                    _spread = build_calendar_spread(
+                                        near_chain_nodes=_nodes, far_chain_nodes=_far_nodes,
+                                        direction=_direction, long_delta=_sdelta,
+                                    )
+                                else:
+                                    _spread = build_debit_spread(
+                                        chain_nodes=_nodes, direction=_direction,
+                                        width_points=_intervals.get(_u, 50) * _wstrikes, long_delta=_sdelta,
+                                    )
                                 if _spread.get("ok"):
                                     contract_payload["structure"] = "debit_spread"
                                     contract_payload["spread"] = _spread

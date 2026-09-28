@@ -79,7 +79,7 @@ class ConfigValidation(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
-_SPREAD = ("credit_spread", "debit_spread")
+_SPREAD = ("credit_spread", "debit_spread", "calendar_spread")
 
 
 # ERP Phase 0 source of truth for the book cutover. Kept rows are paused until

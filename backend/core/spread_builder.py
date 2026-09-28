@@ -550,6 +550,34 @@ def build_credit_spread_by_offset(
 DEBIT_SPREADS_ENABLED = os.environ.get("DEBIT_SPREADS_ENABLED", "true").strip().lower() == "true"
 DEBIT_SPREAD_LONG_DELTA = float(os.environ.get("DEBIT_SPREAD_LONG_DELTA", "0.50"))
 
+def build_calendar_spread(*, near_chain_nodes: List[Dict[str, Any]], far_chain_nodes: List[Dict[str, Any]], direction: str, long_delta: float = 0.50) -> Dict[str, Any]:
+    """Build a same-strike calendar: sell near expiry, buy farther expiry."""
+    direction = str(direction or "").lower()
+    if direction not in ("bullish", "bearish"):
+        return {"ok": False, "reason": "direction must be bullish or bearish"}
+    option_type = "CE" if direction == "bullish" else "PE"
+    pick = pick_delta_strike(near_chain_nodes, option_type, long_delta)
+    if not pick or pick.get("strike") is None:
+        return {"ok": False, "reason": "no calendar strike near target delta"}
+    strike = float(pick["strike"])
+    near = _find_node_by_strike(near_chain_nodes, strike, option_type)
+    far = _find_node_by_strike(far_chain_nodes, strike, option_type)
+    near_leg = _leg_from_node(near, option_type, "SELL") if near else None
+    far_leg = _leg_from_node(far, option_type, "BUY") if far else None
+    if not near_leg or not far_leg:
+        return {"ok": False, "reason": "calendar requires the same strike in both expiries"}
+    near_expiry = str(near_leg.get("expiry") or near.get("expiry") or "")[:10]
+    far_expiry = str(far_leg.get("expiry") or far.get("expiry") or "")[:10]
+    if not near_expiry or not far_expiry or near_expiry >= far_expiry:
+        return {"ok": False, "reason": "calendar expiries are missing or not ordered"}
+    debit = round(float(far_leg["premium"]) - float(near_leg["premium"]), 2)
+    if debit <= 0:
+        return {"ok": False, "reason": f"non-positive calendar debit ({debit})"}
+    return {"ok": True, "reason": "ok", "structure": "calendar_spread", "structure_variant": "calendar_spread",
+            "direction": direction, "option_type": option_type, "short_leg": near_leg, "long_leg": far_leg,
+            "net_debit": debit, "max_loss": debit, "max_profit": None, "width_points": debit,
+            "near_expiry": near_expiry, "far_expiry": far_expiry}
+
 
 def build_debit_spread(
     *,

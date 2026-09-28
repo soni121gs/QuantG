@@ -1138,7 +1138,7 @@ async def _dispatch_signal_via_unified_engine(
     _declared_struct = str(
         ((strategy.get("visual_config") or {}).get("options") or {}).get("structure") or ""
     ).lower()
-    if _declared_struct in ("credit_spread", "debit_spread") and not _oc.get("spread"):
+    if _declared_struct in ("credit_spread", "debit_spread", "calendar_spread") and not _oc.get("spread"):
         _sd = _spread_stand_down_result(_declared_struct, _oc.get("spread_veto") or {})
         try:
             await db.strategies.update_one(
